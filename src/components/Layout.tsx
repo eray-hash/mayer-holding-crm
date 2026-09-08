@@ -1,0 +1,135 @@
+import { useState, type ReactNode } from 'react'
+import { NavLink, useNavigate } from 'react-router-dom'
+import { Menu, X, Building2, Briefcase, RotateCcw, User } from 'lucide-react'
+import { useApp } from '../context/AppContext'
+import { SidebarBeratung } from './SidebarBeratung'
+import { SidebarImmobilien } from './SidebarImmobilien'
+
+export function Layout({ children }: { children: ReactNode }) {
+  const { state, dispatch } = useApp()
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const navigate = useNavigate()
+
+  function chooseBereich(b: 'beratung' | 'immobilien') {
+    dispatch({ type: 'SET_BEREICH', bereich: b })
+    setDrawerOpen(false)
+    navigate(b === 'beratung' ? '/beratung' : '/immobilien')
+  }
+
+  function resetData() {
+    if (confirm('Alle Demo-Daten zurücksetzen? Änderungen gehen verloren.')) {
+      dispatch({ type: 'RESET' })
+    }
+  }
+
+  return (
+    <div className="flex h-screen flex-col bg-slate-50">
+      {/* Topbar */}
+      <header className="flex h-14 flex-shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4">
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setDrawerOpen(true)}
+            className="rounded-md p-2 text-slate-500 hover:bg-slate-100"
+            aria-label="Bereichsmenü öffnen"
+          >
+            <Menu size={20} />
+          </button>
+          <span className="text-sm font-semibold tracking-tight text-slate-800">Mayer Holding CRM</span>
+          <span className="ml-2 hidden items-center gap-1 rounded-full bg-accent-50 px-2.5 py-1 text-xs font-medium text-accent-700 sm:inline-flex">
+            {state.bereich === 'beratung' ? <Briefcase size={12} /> : <Building2 size={12} />}
+            {state.bereich === 'beratung' ? 'Unternehmensberatung' : 'Immobilien'}
+          </span>
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={resetData}
+            className="hidden items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-50 sm:inline-flex"
+            title="Daten zurücksetzen"
+          >
+            <RotateCcw size={13} /> Daten zurücksetzen
+          </button>
+          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-200 text-slate-500">
+            <User size={16} />
+          </div>
+        </div>
+      </header>
+
+      <div className="flex min-h-0 flex-1">
+        {/* Sidebar */}
+        <aside
+          className={`flex-shrink-0 border-r border-slate-200 bg-white transition-all duration-150 ${
+            sidebarCollapsed ? 'w-14' : 'w-60'
+          }`}
+        >
+          {state.bereich === 'beratung' ? (
+            <SidebarBeratung collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed((c) => !c)} />
+          ) : (
+            <SidebarImmobilien collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed((c) => !c)} />
+          )}
+        </aside>
+
+        {/* Main */}
+        <main className="min-w-0 flex-1 overflow-y-auto">
+          <div className="mx-auto max-w-[1400px] px-6 py-6">{children}</div>
+        </main>
+      </div>
+
+      {/* Sandwich Drawer */}
+      {drawerOpen && (
+        <div className="fixed inset-0 z-50 flex">
+          <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-[1px]" onClick={() => setDrawerOpen(false)} />
+          <div className="relative z-10 flex h-full w-full max-w-md flex-col bg-white p-6 shadow-2xl">
+            <div className="mb-6 flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-slate-800">Bereich wählen</h2>
+              <button onClick={() => setDrawerOpen(false)} className="rounded-md p-1.5 text-slate-400 hover:bg-slate-100">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <button
+                onClick={() => chooseBereich('beratung')}
+                className={`group flex flex-col items-center gap-3 rounded-2xl border p-8 text-center transition ${
+                  state.bereich === 'beratung'
+                    ? 'border-accent-400 bg-accent-50 ring-2 ring-accent-200'
+                    : 'border-slate-200 hover:border-accent-300 hover:bg-slate-50'
+                }`}
+              >
+                <Briefcase size={36} className="text-accent-600" />
+                <span className="text-base font-semibold text-slate-800">Unternehmensberatung</span>
+                <span className="text-xs text-slate-500">Kunden, Mandate, Rechnungen &amp; Mahnwesen</span>
+              </button>
+              <button
+                onClick={() => chooseBereich('immobilien')}
+                className={`group flex flex-col items-center gap-3 rounded-2xl border p-8 text-center transition ${
+                  state.bereich === 'immobilien'
+                    ? 'border-accent-400 bg-accent-50 ring-2 ring-accent-200'
+                    : 'border-slate-200 hover:border-accent-300 hover:bg-slate-50'
+                }`}
+              >
+                <Building2 size={36} className="text-accent-600" />
+                <span className="text-base font-semibold text-slate-800">Immobilien</span>
+                <span className="text-xs text-slate-500">Objekte, Dokumente &amp; Finanzierungen</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+export function NavItem({ to, children }: { to: string; children: ReactNode }) {
+  return (
+    <NavLink
+      to={to}
+      className={({ isActive }) =>
+        `block rounded-lg px-3 py-2 text-sm font-medium transition ${
+          isActive ? 'bg-accent-50 text-accent-700' : 'text-slate-600 hover:bg-slate-50'
+        }`
+      }
+    >
+      {children}
+    </NavLink>
+  )
+}
