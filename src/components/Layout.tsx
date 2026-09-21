@@ -1,12 +1,15 @@
 import { useState, type ReactNode } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
-import { Menu, X, Building2, Briefcase, RotateCcw, User } from 'lucide-react'
+import { Menu, X, Building2, Briefcase, RotateCcw, User, ExternalLink, LogOut } from 'lucide-react'
 import { useApp } from '../context/AppContext'
+import { useAuth } from '../context/AuthContext'
+import { isSupabaseConfigured } from '../lib/supabaseClient'
 import { SidebarBeratung } from './SidebarBeratung'
 import { SidebarImmobilien } from './SidebarImmobilien'
 
 export function Layout({ children }: { children: ReactNode }) {
   const { state, dispatch } = useApp()
+  const { session, mitarbeiter, signOut } = useAuth()
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const navigate = useNavigate()
@@ -42,6 +45,15 @@ export function Layout({ children }: { children: ReactNode }) {
           </span>
         </div>
         <div className="flex items-center gap-3">
+          <a
+            href="#/portal/login"
+            target="_blank"
+            rel="noreferrer"
+            className="hidden items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-50 sm:inline-flex"
+            title="Investoren-Portal in neuem Tab öffnen"
+          >
+            <ExternalLink size={13} /> Kundenportal (Demo)
+          </a>
           <button
             onClick={resetData}
             className="hidden items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-50 sm:inline-flex"
@@ -49,6 +61,18 @@ export function Layout({ children }: { children: ReactNode }) {
           >
             <RotateCcw size={13} /> Daten zurücksetzen
           </button>
+          {isSupabaseConfigured && session && (
+            <>
+              <span className="hidden text-xs text-slate-500 sm:inline">{mitarbeiter?.name ?? session.user.email}</span>
+              <button
+                onClick={signOut}
+                className="rounded-lg border border-slate-200 p-1.5 text-slate-400 hover:bg-slate-50"
+                title="Abmelden"
+              >
+                <LogOut size={15} />
+              </button>
+            </>
+          )}
           <div className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-200 text-slate-500">
             <User size={16} />
           </div>
