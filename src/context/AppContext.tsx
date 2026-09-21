@@ -22,7 +22,8 @@ import { seedObjekte, seedFinanzierungen } from '../data/seedImmobilien'
 import { seedVorlagenImmobilien } from '../data/seedVorlagenImmobilien'
 import { seedFondsInvestoren, seedFondsDokumenteAllgemein } from '../data/seedFonds'
 import { seedProjekte } from '../data/seedProjekte'
-import { getNextMainStep, BERATUNG_STATUS, IMMOBILIEN_STATUS } from '../data/statusNetworks'
+import { seedErbenMandanten, seedVorlagenErben } from '../data/seedErben'
+import { getNextMainStep, BERATUNG_STATUS, IMMOBILIEN_STATUS, ERBEN_STATUS } from '../data/statusNetworks'
 import { uid, today } from '../lib/dates'
 import { CURRENT_USER } from '../data/constants'
 
@@ -43,6 +44,8 @@ export type AppData = {
   fondsInvestoren: FondsInvestor[]
   fondsDokumenteAllgemein: FondsDokument[]
   projekte: Projekt[]
+  erbenMandanten: Kunde[]
+  vorlagenErben: Vorlage[]
 }
 
 const STORAGE_KEY = 'mayer-holding-crm-data-v1'
@@ -63,6 +66,8 @@ function buildSeed(): AppData {
     fondsInvestoren: seedFondsInvestoren,
     fondsDokumenteAllgemein: seedFondsDokumenteAllgemein,
     projekte: seedProjekte,
+    erbenMandanten: seedErbenMandanten,
+    vorlagenErben: seedVorlagenErben,
   }
 }
 
@@ -77,6 +82,8 @@ function loadInitial(): AppData {
         if (!Array.isArray(parsed.fondsDokumenteAllgemein)) parsed.fondsDokumenteAllgemein = seedFondsDokumenteAllgemein
         if (parsed.rolle === undefined) parsed.rolle = null
         if (!Array.isArray(parsed.projekte)) parsed.projekte = seedProjekte
+        if (!Array.isArray(parsed.erbenMandanten)) parsed.erbenMandanten = seedErbenMandanten
+        if (!Array.isArray(parsed.vorlagenErben)) parsed.vorlagenErben = seedVorlagenErben
         return parsed
       }
     }
@@ -110,6 +117,11 @@ type Action =
   | { type: 'ADD_AUFGABE'; projektId: string; meilensteinId: string; aufgabe: Aufgabe }
   | { type: 'UPDATE_AUFGABE'; projektId: string; meilensteinId: string; aufgabeId: string; patch: Partial<Aufgabe> }
   | { type: 'MOVE_AUFGABE'; projektId: string; meilensteinId: string; aufgabeId: string; status: AufgabenStatus }
+  | { type: 'ADD_ERBEN_MANDANT'; kunde: Kunde }
+  | { type: 'UPDATE_ERBEN_MANDANT'; id: string; patch: Partial<Kunde> }
+  | { type: 'SET_ERBEN_STATUS'; id: string; status: string; followUp?: FollowUp }
+  | { type: 'SET_ERBEN_FOLLOWUP'; id: string; followUp: FollowUp }
+  | { type: 'SET_ERBEN_PRIORITAET'; id: string; prioritaet: Prioritaet }
 
 function reducer(state: AppData, action: Action): AppData {
   switch (action.type) {
@@ -282,6 +294,46 @@ function reducer(state: AppData, action: Action): AppData {
         ),
       }
     }
+    case 'ADD_ERBEN_MANDANT':
+      return { ...state, erbenMandanten: [action.kunde, ...state.erbenMandanten] }
+    case 'UPDATE_ERBEN_MANDANT':
+      return {
+        ...state,
+        erbenMandanten: state.erbenMandanten.map((k) => (k.id === action.id ? { ...k, ...action.patch } : k)),
+      }
+    case 'SET_ERBEN_STATUS': {
+      return {
+        ...state,
+        erbenMandanten: state.erbenMandanten.map((k) => {
+          if (k.id !== action.id) return k
+          const oldLabel = ERBEN_STATUS[k.status]?.label ?? k.status
+          const newLabel = ERBEN_STATUS[action.status]?.label ?? action.status
+          const activity = {
+            id: uid('act'),
+            date: today(),
+            text: `Status: ${oldLabel} → ${newLabel} am ${today()} durch ${CURRENT_USER}`,
+            user: CURRENT_USER,
+          }
+          return {
+            ...k,
+            status: action.status,
+            followUp: action.followUp ?? k.followUp,
+            letzteAktivitaet: today(),
+            activities: [activity, ...k.activities],
+          }
+        }),
+      }
+    }
+    case 'SET_ERBEN_FOLLOWUP':
+      return {
+        ...state,
+        erbenMandanten: state.erbenMandanten.map((k) => (k.id === action.id ? { ...k, followUp: action.followUp } : k)),
+      }
+    case 'SET_ERBEN_PRIORITAET':
+      return {
+        ...state,
+        erbenMandanten: state.erbenMandanten.map((k) => (k.id === action.id ? { ...k, prioritaet: action.prioritaet } : k)),
+      }
     default:
       return state
   }
@@ -334,6 +386,15 @@ export function useAdvanceStatus() {
     },
     setObjektStatus(id: string, status: string, followUp?: FollowUp) {
       dispatch({ type: 'SET_OBJEKT_STATUS', id, status, followUp })
+    },
+    advanceErbenMandant(id: string, followUp?: FollowUp) {
+      const mandant = state.erbenMandanten.find((k) => k.id === id)
+      if (!mandant) return
+      const next = getNextMainStep('erben', mandant.status)
+      if (next) dispatch({ type: 'SET_ERBEN_STATUS', id, status: next, followUp })
+    },
+    setErbenStatus(id: string, status: string, followUp?: FollowUp) {
+      dispatch({ type: 'SET_ERBEN_STATUS', id, status, followUp })
     },
   }
 }

@@ -15,6 +15,9 @@ import { ObjektListe } from './pages/immobilien/ObjektListe'
 import { ObjektDetail } from './pages/immobilien/ObjektDetail'
 import { Finanzierungen } from './pages/immobilien/Finanzierungen'
 import { VorlagenPageImmobilien } from './pages/immobilien/VorlagenPageImmobilien'
+import { ErbenListe } from './pages/erben/ErbenListe'
+import { ErbenDetail } from './pages/erben/ErbenDetail'
+import { VorlagenPageErben } from './pages/erben/VorlagenPageErben'
 import { HeuteScreen } from './pages/heute/HeuteScreen'
 import { ProjekteListe } from './pages/projekte/ProjekteListe'
 import { PortalLogin } from './pages/portal/PortalLogin'
@@ -46,6 +49,11 @@ function AdminRoutesContent() {
         <Route path="/immobilien/finanzierungen" element={<Finanzierungen />} />
         <Route path="/immobilien/vorlagen/:kind" element={<VorlagenPageImmobilien />} />
         <Route path="/immobilien/projekte" element={<ProjekteListe />} />
+
+        <Route path="/erben" element={<ErbenListe />} />
+        <Route path="/erben/mandanten/:id" element={<ErbenDetail />} />
+        <Route path="/erben/vorlagen/:kind" element={<VorlagenPageErben />} />
+        <Route path="/erben/projekte" element={<ProjekteListe />} />
 
         <Route path="*" element={<RootRedirect />} />
       </Routes>

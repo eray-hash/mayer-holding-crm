@@ -1,6 +1,6 @@
 // Zentrale Typdefinitionen für das Mayer Holding CRM
 
-export type Bereich = 'beratung' | 'immobilien'
+export type Bereich = 'beratung' | 'immobilien' | 'erben'
 
 export type Prioritaet = 'Hoch' | 'Mittel' | 'Niedrig'
 
@@ -84,6 +84,7 @@ export type Kunde = {
   verantwortlich: string
   letzteAktivitaet: string
   activities: ActivityEntry[]
+  unterlagenCheckliste?: Record<string, boolean>
 }
 
 export type Vorlage = {

@@ -1,11 +1,26 @@
 import { useState, type ReactNode } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
-import { Menu, X, Building2, Briefcase, RotateCcw, User, ExternalLink, LogOut, Users } from 'lucide-react'
+import { Menu, X, Building2, Briefcase, RotateCcw, User, ExternalLink, LogOut, Users, ScrollText } from 'lucide-react'
+import type { Bereich } from '../types'
 import { useApp } from '../context/AppContext'
 import { useAuth } from '../context/AuthContext'
 import { isSupabaseConfigured } from '../lib/supabaseClient'
 import { SidebarBeratung } from './SidebarBeratung'
 import { SidebarImmobilien } from './SidebarImmobilien'
+import { SidebarErben } from './SidebarErben'
+
+const BEREICHE: {
+  id: Bereich
+  label: string
+  beschreibung: string
+  icon: typeof Briefcase
+  pfad: string
+  Sidebar: typeof SidebarBeratung
+}[] = [
+  { id: 'beratung', label: 'Unternehmensberatung', beschreibung: 'Kunden, Mandate, Rechnungen & Mahnwesen', icon: Briefcase, pfad: '/beratung', Sidebar: SidebarBeratung },
+  { id: 'immobilien', label: 'Immobilien', beschreibung: 'Objekte, Dokumente & Finanzierungen', icon: Building2, pfad: '/immobilien', Sidebar: SidebarImmobilien },
+  { id: 'erben', label: 'Erben', beschreibung: 'Mandanten, Vermögens- & Nachfolgeplanung', icon: ScrollText, pfad: '/erben', Sidebar: SidebarErben },
+]
 
 export function Layout({ children }: { children: ReactNode }) {
   const { state, dispatch } = useApp()
@@ -14,10 +29,12 @@ export function Layout({ children }: { children: ReactNode }) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const navigate = useNavigate()
 
-  function chooseBereich(b: 'beratung' | 'immobilien') {
+  const aktuellerBereich = BEREICHE.find((b) => b.id === state.bereich) ?? BEREICHE[0]
+
+  function chooseBereich(b: Bereich) {
     dispatch({ type: 'SET_BEREICH', bereich: b })
     setDrawerOpen(false)
-    navigate(b === 'beratung' ? '/beratung' : '/immobilien')
+    navigate(BEREICHE.find((x) => x.id === b)!.pfad)
   }
 
   function resetData() {
@@ -44,8 +61,8 @@ export function Layout({ children }: { children: ReactNode }) {
           </button>
           <span className="text-sm font-semibold tracking-tight text-slate-800">Mayer Holding CRM</span>
           <span className="ml-2 hidden items-center gap-1 rounded-full bg-accent-50 px-2.5 py-1 text-xs font-medium text-accent-700 sm:inline-flex">
-            {state.bereich === 'beratung' ? <Briefcase size={12} /> : <Building2 size={12} />}
-            {state.bereich === 'beratung' ? 'Unternehmensberatung' : 'Immobilien'}
+            <aktuellerBereich.icon size={12} />
+            {aktuellerBereich.label}
           </span>
         </div>
         <div className="flex items-center gap-3">
@@ -99,11 +116,7 @@ export function Layout({ children }: { children: ReactNode }) {
             sidebarCollapsed ? 'w-14' : 'w-60'
           }`}
         >
-          {state.bereich === 'beratung' ? (
-            <SidebarBeratung collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed((c) => !c)} />
-          ) : (
-            <SidebarImmobilien collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed((c) => !c)} />
-          )}
+          <aktuellerBereich.Sidebar collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed((c) => !c)} />
         </aside>
 
         {/* Main */}
@@ -124,30 +137,21 @@ export function Layout({ children }: { children: ReactNode }) {
               </button>
             </div>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <button
-                onClick={() => chooseBereich('beratung')}
-                className={`group flex flex-col items-center gap-3 rounded-2xl border p-8 text-center transition ${
-                  state.bereich === 'beratung'
-                    ? 'border-accent-400 bg-accent-50 ring-2 ring-accent-200'
-                    : 'border-slate-200 hover:border-accent-300 hover:bg-slate-50'
-                }`}
-              >
-                <Briefcase size={36} className="text-accent-600" />
-                <span className="text-base font-semibold text-slate-800">Unternehmensberatung</span>
-                <span className="text-xs text-slate-500">Kunden, Mandate, Rechnungen &amp; Mahnwesen</span>
-              </button>
-              <button
-                onClick={() => chooseBereich('immobilien')}
-                className={`group flex flex-col items-center gap-3 rounded-2xl border p-8 text-center transition ${
-                  state.bereich === 'immobilien'
-                    ? 'border-accent-400 bg-accent-50 ring-2 ring-accent-200'
-                    : 'border-slate-200 hover:border-accent-300 hover:bg-slate-50'
-                }`}
-              >
-                <Building2 size={36} className="text-accent-600" />
-                <span className="text-base font-semibold text-slate-800">Immobilien</span>
-                <span className="text-xs text-slate-500">Objekte, Dokumente &amp; Finanzierungen</span>
-              </button>
+              {BEREICHE.map((b) => (
+                <button
+                  key={b.id}
+                  onClick={() => chooseBereich(b.id)}
+                  className={`group flex flex-col items-center gap-3 rounded-2xl border p-8 text-center transition ${
+                    state.bereich === b.id
+                      ? 'border-accent-400 bg-accent-50 ring-2 ring-accent-200'
+                      : 'border-slate-200 hover:border-accent-300 hover:bg-slate-50'
+                  }`}
+                >
+                  <b.icon size={36} className="text-accent-600" />
+                  <span className="text-base font-semibold text-slate-800">{b.label}</span>
+                  <span className="text-xs text-slate-500">{b.beschreibung}</span>
+                </button>
+              ))}
             </div>
           </div>
         </div>

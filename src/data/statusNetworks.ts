@@ -214,16 +214,111 @@ export const IMMOBILIEN_HAUPTPFAD = [
   'archiv',
 ]
 
-export function getStatusMap(bereich: 'beratung' | 'immobilien'): Record<string, StatusNode> {
-  return bereich === 'beratung' ? BERATUNG_STATUS : IMMOBILIEN_STATUS
+// ==========================================================================
+// STATUSNETZ — ERBEN
+// ==========================================================================
+
+export const ERBEN_STATUS: Record<string, StatusNode> = {
+  erstkontakt: {
+    id: 'erstkontakt',
+    label: 'Erstkontakt',
+    color: 'bg-slate-100 text-slate-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['bedarfsanalyse', 'wiedervorlage', 'verloren'],
+  },
+  bedarfsanalyse: {
+    id: 'bedarfsanalyse',
+    label: 'Bedarfsanalyse / Erstgespräch',
+    color: 'bg-sky-100 text-sky-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['unterlagen_angefordert', 'wiedervorlage', 'verloren'],
+  },
+  unterlagen_angefordert: {
+    id: 'unterlagen_angefordert',
+    label: 'Unterlagen/Mandantenfragebogen angefordert',
+    color: 'bg-cyan-100 text-cyan-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['konzept_erstellt', 'wiedervorlage', 'verloren'],
+  },
+  konzept_erstellt: {
+    id: 'konzept_erstellt',
+    label: 'Mandantenmemo/Konzept erstellt',
+    color: 'bg-indigo-100 text-indigo-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['beratungsgespraech', 'wiedervorlage', 'verloren'],
+  },
+  beratungsgespraech: {
+    id: 'beratungsgespraech',
+    label: 'Beratungsgespräch geführt',
+    color: 'bg-violet-100 text-violet-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['umsetzung', 'wiedervorlage', 'verloren'],
+  },
+  umsetzung: {
+    id: 'umsetzung',
+    label: 'Umsetzung (Testament/Vollmacht/Stiftung)',
+    color: 'bg-amber-100 text-amber-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['abgeschlossen', 'wiedervorlage'],
+  },
+  abgeschlossen: {
+    id: 'abgeschlossen',
+    label: 'Abgeschlossen',
+    color: 'bg-emerald-100 text-emerald-700',
+    isTerminal: true,
+    isMainPath: true,
+    next: [],
+  },
+  wiedervorlage: {
+    id: 'wiedervorlage',
+    label: 'Wiedervorlage / On Hold',
+    color: 'bg-orange-100 text-orange-700',
+    isTerminal: false,
+    isMainPath: false,
+    next: ['erstkontakt', 'bedarfsanalyse', 'unterlagen_angefordert', 'konzept_erstellt', 'beratungsgespraech', 'umsetzung', 'verloren'],
+  },
+  verloren: {
+    id: 'verloren',
+    label: 'Verloren / Kein Interesse',
+    color: 'bg-rose-100 text-rose-700',
+    isTerminal: true,
+    isMainPath: false,
+    next: [],
+  },
 }
 
-export function getHauptpfad(bereich: 'beratung' | 'immobilien'): string[] {
-  return bereich === 'beratung' ? BERATUNG_HAUPTPFAD : IMMOBILIEN_HAUPTPFAD
+export const ERBEN_HAUPTPFAD = [
+  'erstkontakt',
+  'bedarfsanalyse',
+  'unterlagen_angefordert',
+  'konzept_erstellt',
+  'beratungsgespraech',
+  'umsetzung',
+  'abgeschlossen',
+]
+
+type StatusBereich = 'beratung' | 'immobilien' | 'erben'
+
+export function getStatusMap(bereich: StatusBereich): Record<string, StatusNode> {
+  if (bereich === 'beratung') return BERATUNG_STATUS
+  if (bereich === 'immobilien') return IMMOBILIEN_STATUS
+  return ERBEN_STATUS
+}
+
+export function getHauptpfad(bereich: StatusBereich): string[] {
+  if (bereich === 'beratung') return BERATUNG_HAUPTPFAD
+  if (bereich === 'immobilien') return IMMOBILIEN_HAUPTPFAD
+  return ERBEN_HAUPTPFAD
 }
 
 // Ermittelt den nächsten Hauptpfad-Knoten für den "Weiter →"-Button
-export function getNextMainStep(bereich: 'beratung' | 'immobilien', currentId: string): string | null {
+export function getNextMainStep(bereich: StatusBereich, currentId: string): string | null {
   const pfad = getHauptpfad(bereich)
   const map = getStatusMap(bereich)
   const idx = pfad.indexOf(currentId)

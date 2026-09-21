@@ -12,7 +12,7 @@ export function ProjekteListe() {
   const { state, dispatch } = useApp()
   const [addOpen, setAddOpen] = useState(false)
 
-  const bereich: ProjektBereich = state.bereich === 'immobilien' ? 'immobilien' : 'beratung'
+  const bereich: ProjektBereich = state.bereich
 
   const projekte = useMemo(() => state.projekte.filter((p) => p.bereich === bereich), [state.projekte, bereich])
 
