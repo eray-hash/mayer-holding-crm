@@ -166,3 +166,49 @@ export type Objekt = {
   activities: ActivityEntry[]
   dokumente: Partial<Record<DokumentOrdnerName, Dokument[]>>
 }
+
+// ---------- Investorenportal (Investitionsfonds) ----------
+
+export type FondsZeichnungStatus = 'Zeichnung eingegangen' | 'Kapital eingezahlt' | 'Allokiert' | 'Aktiv'
+
+export type FondsZeichnung = {
+  id: string
+  investorId: string
+  betrag: number
+  datum: string
+  laufzeitJahre: number
+  status: FondsZeichnungStatus
+}
+
+export type FondsAusschuettungStatus = 'Geplant' | 'Ausgezahlt'
+
+export type FondsAusschuettung = {
+  id: string
+  investorId: string
+  datum: string
+  betrag: number
+  turnus: 'Halbjährlich' | 'Jährlich'
+  status: FondsAusschuettungStatus
+}
+
+export type FondsDokumentKategorie = 'Zeichnungsschein' | 'Quartalsreport' | 'Prospekt' | 'Steuerbescheinigung' | 'Sonstiges'
+
+export type FondsDokument = {
+  id: string
+  investorId?: string // fehlt = für alle Investoren sichtbar (z.B. Prospekt)
+  name: string
+  kategorie: FondsDokumentKategorie
+  datum: string
+  groesse: string
+}
+
+export type FondsInvestor = {
+  id: string
+  name: string
+  email: string
+  telefon: string
+  seit: string
+  zeichnungen: FondsZeichnung[]
+  ausschuettungen: FondsAusschuettung[]
+  dokumente: FondsDokument[]
+}

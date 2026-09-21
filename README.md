@@ -63,6 +63,18 @@ src/
   types/         Zentrale TypeScript-Typen
 ```
 
+## Investoren-Portal (Investitionsfonds 2026)
+
+Zusätzlich zur internen CRM-Ansicht gibt es unter `#/portal/login` einen separaten, kundenseitigen
+Bereich für den AMH Investitionsfonds 2026 (eigenes Layout, eigener Login, kein Zugriff auf die
+interne Sidebar). Investoren sehen dort ihre Zeichnungen, die Wertentwicklung entlang des
+Zielrenditepfads, geplante/ausgezahlte Ausschüttungen und ihre Dokumente.
+
+- Daten: `src/data/seedFonds.ts` (Mock-Investoren), Renditepfad/Berechnung in `src/lib/fonds.ts`
+- Auth: rein clientseitiger Demo-Login per E-Mail-Abgleich (`src/context/PortalAuthContext.tsx`),
+  kein echtes Backend – auf der Login-Seite stehen Demo-Zugänge zum Ein-Klick-Übernehmen bereit
+- Von der internen CRM-Ansicht gelangt man über den Button „Kundenportal (Demo)" in der Topbar dorthin
+
 ## Statuslogik
 
 Beide Bereiche nutzen ein typisiertes Statusnetz (`src/data/statusNetworks.ts`) mit erlaubten

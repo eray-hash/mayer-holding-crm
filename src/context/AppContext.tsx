@@ -13,16 +13,22 @@ import type {
   DokumentOrdnerName,
   FollowUp,
   Prioritaet,
+  FondsInvestor,
+  FondsDokument,
 } from '../types'
 import { seedKunden, seedRechnungen, seedProtokolle, seedKonzepte, seedVertraege, seedVorlagen } from '../data/seedBeratung'
 import { seedObjekte, seedFinanzierungen } from '../data/seedImmobilien'
 import { seedVorlagenImmobilien } from '../data/seedVorlagenImmobilien'
+import { seedFondsInvestoren, seedFondsDokumenteAllgemein } from '../data/seedFonds'
 import { getNextMainStep, BERATUNG_STATUS, IMMOBILIEN_STATUS } from '../data/statusNetworks'
 import { uid, today } from '../lib/dates'
 import { CURRENT_USER } from '../data/constants'
 
+export type Rolle = 'geschaeftsfuehrung' | 'mitarbeiter'
+
 export type AppData = {
   bereich: Bereich
+  rolle: Rolle | null
   kunden: Kunde[]
   rechnungen: Rechnung[]
   protokolle: Protokoll[]
@@ -32,6 +38,8 @@ export type AppData = {
   objekte: Objekt[]
   finanzierungen: Finanzierung[]
   vorlagenImmobilien: Vorlage[]
+  fondsInvestoren: FondsInvestor[]
+  fondsDokumenteAllgemein: FondsDokument[]
 }
 
 const STORAGE_KEY = 'mayer-holding-crm-data-v1'
@@ -39,6 +47,7 @@ const STORAGE_KEY = 'mayer-holding-crm-data-v1'
 function buildSeed(): AppData {
   return {
     bereich: 'beratung',
+    rolle: null,
     kunden: seedKunden,
     rechnungen: seedRechnungen,
     protokolle: seedProtokolle,
@@ -48,6 +57,8 @@ function buildSeed(): AppData {
     objekte: seedObjekte,
     finanzierungen: seedFinanzierungen,
     vorlagenImmobilien: seedVorlagenImmobilien,
+    fondsInvestoren: seedFondsInvestoren,
+    fondsDokumenteAllgemein: seedFondsDokumenteAllgemein,
   }
 }
 
@@ -57,6 +68,10 @@ function loadInitial(): AppData {
     if (raw) {
       const parsed = JSON.parse(raw) as AppData
       if (parsed && Array.isArray(parsed.kunden) && Array.isArray(parsed.objekte)) {
+        // Ältere localStorage-Stände kennen den Fonds-Investorenbereich noch nicht
+        if (!Array.isArray(parsed.fondsInvestoren)) parsed.fondsInvestoren = seedFondsInvestoren
+        if (!Array.isArray(parsed.fondsDokumenteAllgemein)) parsed.fondsDokumenteAllgemein = seedFondsDokumenteAllgemein
+        if (parsed.rolle === undefined) parsed.rolle = null
         return parsed
       }
     }
@@ -68,6 +83,7 @@ function loadInitial(): AppData {
 
 type Action =
   | { type: 'SET_BEREICH'; bereich: Bereich }
+  | { type: 'SET_ROLLE'; rolle: Rolle | null }
   | { type: 'RESET' }
   | { type: 'ADD_KUNDE'; kunde: Kunde }
   | { type: 'UPDATE_KUNDE'; id: string; patch: Partial<Kunde> }
@@ -89,6 +105,8 @@ function reducer(state: AppData, action: Action): AppData {
   switch (action.type) {
     case 'SET_BEREICH':
       return { ...state, bereich: action.bereich }
+    case 'SET_ROLLE':
+      return { ...state, rolle: action.rolle }
     case 'RESET':
       return buildSeed()
     case 'ADD_KUNDE':

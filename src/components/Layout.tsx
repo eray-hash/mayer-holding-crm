@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
-import { Menu, X, Building2, Briefcase, RotateCcw, User, ExternalLink, LogOut } from 'lucide-react'
+import { Menu, X, Building2, Briefcase, RotateCcw, User, ExternalLink, LogOut, Users } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { useAuth } from '../context/AuthContext'
 import { isSupabaseConfigured } from '../lib/supabaseClient'
@@ -24,6 +24,10 @@ export function Layout({ children }: { children: ReactNode }) {
     if (confirm('Alle Demo-Daten zurücksetzen? Änderungen gehen verloren.')) {
       dispatch({ type: 'RESET' })
     }
+  }
+
+  function rolleWechseln() {
+    dispatch({ type: 'SET_ROLLE', rolle: null })
   }
 
   return (
@@ -54,12 +58,21 @@ export function Layout({ children }: { children: ReactNode }) {
           >
             <ExternalLink size={13} /> Kundenportal (Demo)
           </a>
+          {state.rolle === 'geschaeftsfuehrung' && (
+            <button
+              onClick={resetData}
+              className="hidden items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-50 sm:inline-flex"
+              title="Daten zurücksetzen"
+            >
+              <RotateCcw size={13} /> Daten zurücksetzen
+            </button>
+          )}
           <button
-            onClick={resetData}
+            onClick={rolleWechseln}
             className="hidden items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-50 sm:inline-flex"
-            title="Daten zurücksetzen"
+            title="Rolle wechseln"
           >
-            <RotateCcw size={13} /> Daten zurücksetzen
+            <Users size={13} /> {state.rolle === 'geschaeftsfuehrung' ? 'Geschäftsführung' : 'Mitarbeiter'}
           </button>
           {isSupabaseConfigured && session && (
             <>

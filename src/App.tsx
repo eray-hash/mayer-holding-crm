@@ -1,10 +1,9 @@
 import { type ReactNode } from 'react'
 import { HashRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { AppProvider, useApp } from './context/AppContext'
-import { AuthProvider, useAuth } from './context/AuthContext'
+import { AuthProvider } from './context/AuthContext'
 import { PortalAuthProvider, usePortalAuth } from './context/PortalAuthContext'
-import { isSupabaseConfigured } from './lib/supabaseClient'
-import { LoginScreen } from './pages/auth/LoginScreen'
+import { RollenAuswahl } from './pages/auth/RollenAuswahl'
 import { Layout } from './components/Layout'
 import { PortalLayout } from './components/PortalLayout'
 import { KundenListe } from './pages/beratung/KundenListe'
@@ -50,14 +49,13 @@ function AdminRoutesContent() {
   )
 }
 
-// Ohne Supabase-Konfiguration (z.B. die öffentliche GitHub-Pages-Demo) bleibt es beim reinen
-// Mock-/localStorage-Modus ohne Login, exakt wie bisher. Nur wenn echte Zugangsdaten hinterlegt
-// sind (internes Deployment), wird ein Mitarbeiter-Login davorgeschaltet.
+// Vereinfachter Platzhalter statt echtem Login: eine reine Rollenwahl (Geschäftsführung/
+// Mitarbeiter/Kunde), lokal gespeichert wie die Bereichswahl. Der echte Mitarbeiter-Login
+// (AuthContext + LoginScreen, per Supabase) bleibt fertig im Code, wird aber erst wieder
+// eingehängt, sobald echte Mitarbeiter-Zugänge angelegt sind.
 function AdminRoutes() {
-  const { ready, session } = useAuth()
-  if (!isSupabaseConfigured) return <AdminRoutesContent />
-  if (!ready) return null
-  if (!session) return <LoginScreen />
+  const { state } = useApp()
+  if (!state.rolle) return <RollenAuswahl />
   return <AdminRoutesContent />
 }
 
