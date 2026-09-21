@@ -303,18 +303,127 @@ export const ERBEN_HAUPTPFAD = [
   'abgeschlossen',
 ]
 
-type StatusBereich = 'beratung' | 'immobilien' | 'erben'
+// ==========================================================================
+// STATUSNETZ — BETRIEBSÜBERGABE
+// ==========================================================================
+
+export const BETRIEBSUEBERGABE_STATUS: Record<string, StatusNode> = {
+  erstkontakt: {
+    id: 'erstkontakt',
+    label: 'Erstkontakt',
+    color: 'bg-slate-100 text-slate-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['bedarfsanalyse', 'wiedervorlage', 'verloren'],
+  },
+  bedarfsanalyse: {
+    id: 'bedarfsanalyse',
+    label: 'Bedarfsanalyse / Erstgespräch',
+    color: 'bg-sky-100 text-sky-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['unternehmensbewertung', 'wiedervorlage', 'verloren'],
+  },
+  unternehmensbewertung: {
+    id: 'unternehmensbewertung',
+    label: 'Unternehmensbewertung / Analyse',
+    color: 'bg-cyan-100 text-cyan-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['nachfolgekonzept', 'wiedervorlage', 'verloren'],
+  },
+  nachfolgekonzept: {
+    id: 'nachfolgekonzept',
+    label: 'Nachfolgekonzept erstellt',
+    color: 'bg-indigo-100 text-indigo-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['nachfolgersuche', 'wiedervorlage', 'verloren'],
+  },
+  nachfolgersuche: {
+    id: 'nachfolgersuche',
+    label: 'Nachfolger-/Käufersuche',
+    color: 'bg-violet-100 text-violet-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['verhandlung', 'wiedervorlage', 'verloren'],
+  },
+  verhandlung: {
+    id: 'verhandlung',
+    label: 'Verhandlung / Vertragsentwurf',
+    color: 'bg-fuchsia-100 text-fuchsia-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['notartermin', 'wiedervorlage', 'verloren'],
+  },
+  notartermin: {
+    id: 'notartermin',
+    label: 'Notartermin / Übergabe vollzogen',
+    color: 'bg-amber-100 text-amber-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['abgeschlossen', 'wiedervorlage'],
+  },
+  abgeschlossen: {
+    id: 'abgeschlossen',
+    label: 'Abgeschlossen',
+    color: 'bg-emerald-100 text-emerald-700',
+    isTerminal: true,
+    isMainPath: true,
+    next: [],
+  },
+  wiedervorlage: {
+    id: 'wiedervorlage',
+    label: 'Wiedervorlage / On Hold',
+    color: 'bg-orange-100 text-orange-700',
+    isTerminal: false,
+    isMainPath: false,
+    next: [
+      'erstkontakt',
+      'bedarfsanalyse',
+      'unternehmensbewertung',
+      'nachfolgekonzept',
+      'nachfolgersuche',
+      'verhandlung',
+      'notartermin',
+      'verloren',
+    ],
+  },
+  verloren: {
+    id: 'verloren',
+    label: 'Verloren / Kein Interesse',
+    color: 'bg-rose-100 text-rose-700',
+    isTerminal: true,
+    isMainPath: false,
+    next: [],
+  },
+}
+
+export const BETRIEBSUEBERGABE_HAUPTPFAD = [
+  'erstkontakt',
+  'bedarfsanalyse',
+  'unternehmensbewertung',
+  'nachfolgekonzept',
+  'nachfolgersuche',
+  'verhandlung',
+  'notartermin',
+  'abgeschlossen',
+]
+
+type StatusBereich = 'beratung' | 'immobilien' | 'erben' | 'betriebsuebergabe'
 
 export function getStatusMap(bereich: StatusBereich): Record<string, StatusNode> {
   if (bereich === 'beratung') return BERATUNG_STATUS
   if (bereich === 'immobilien') return IMMOBILIEN_STATUS
-  return ERBEN_STATUS
+  if (bereich === 'erben') return ERBEN_STATUS
+  return BETRIEBSUEBERGABE_STATUS
 }
 
 export function getHauptpfad(bereich: StatusBereich): string[] {
   if (bereich === 'beratung') return BERATUNG_HAUPTPFAD
   if (bereich === 'immobilien') return IMMOBILIEN_HAUPTPFAD
-  return ERBEN_HAUPTPFAD
+  if (bereich === 'erben') return ERBEN_HAUPTPFAD
+  return BETRIEBSUEBERGABE_HAUPTPFAD
 }
 
 // Ermittelt den nächsten Hauptpfad-Knoten für den "Weiter →"-Button

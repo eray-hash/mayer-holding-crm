@@ -18,6 +18,9 @@ import { VorlagenPageImmobilien } from './pages/immobilien/VorlagenPageImmobilie
 import { ErbenListe } from './pages/erben/ErbenListe'
 import { ErbenDetail } from './pages/erben/ErbenDetail'
 import { VorlagenPageErben } from './pages/erben/VorlagenPageErben'
+import { BetriebsuebergabeListe } from './pages/betriebsuebergabe/BetriebsuebergabeListe'
+import { BetriebsuebergabeDetail } from './pages/betriebsuebergabe/BetriebsuebergabeDetail'
+import { VorlagenPageBetriebsuebergabe } from './pages/betriebsuebergabe/VorlagenPageBetriebsuebergabe'
 import { HeuteScreen } from './pages/heute/HeuteScreen'
 import { ProjekteListe } from './pages/projekte/ProjekteListe'
 import { PortalLogin } from './pages/portal/PortalLogin'
@@ -54,6 +57,11 @@ function AdminRoutesContent() {
         <Route path="/erben/mandanten/:id" element={<ErbenDetail />} />
         <Route path="/erben/vorlagen/:kind" element={<VorlagenPageErben />} />
         <Route path="/erben/projekte" element={<ProjekteListe />} />
+
+        <Route path="/betriebsuebergabe" element={<BetriebsuebergabeListe />} />
+        <Route path="/betriebsuebergabe/mandanten/:id" element={<BetriebsuebergabeDetail />} />
+        <Route path="/betriebsuebergabe/vorlagen/:kind" element={<VorlagenPageBetriebsuebergabe />} />
+        <Route path="/betriebsuebergabe/projekte" element={<ProjekteListe />} />
 
         <Route path="*" element={<RootRedirect />} />
       </Routes>

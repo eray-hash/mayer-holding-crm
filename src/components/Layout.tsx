@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
-import { Menu, X, Building2, Briefcase, RotateCcw, User, ExternalLink, LogOut, Users, ScrollText } from 'lucide-react'
+import { Menu, X, Building2, Briefcase, RotateCcw, User, ExternalLink, LogOut, Users, ScrollText, Handshake } from 'lucide-react'
 import type { Bereich } from '../types'
 import { useApp } from '../context/AppContext'
 import { useAuth } from '../context/AuthContext'
@@ -8,6 +8,7 @@ import { isSupabaseConfigured } from '../lib/supabaseClient'
 import { SidebarBeratung } from './SidebarBeratung'
 import { SidebarImmobilien } from './SidebarImmobilien'
 import { SidebarErben } from './SidebarErben'
+import { SidebarBetriebsuebergabe } from './SidebarBetriebsuebergabe'
 
 const BEREICHE: {
   id: Bereich
@@ -20,6 +21,7 @@ const BEREICHE: {
   { id: 'beratung', label: 'Unternehmensberatung', beschreibung: 'Kunden, Mandate, Rechnungen & Mahnwesen', icon: Briefcase, pfad: '/beratung', Sidebar: SidebarBeratung },
   { id: 'immobilien', label: 'Immobilien', beschreibung: 'Objekte, Dokumente & Finanzierungen', icon: Building2, pfad: '/immobilien', Sidebar: SidebarImmobilien },
   { id: 'erben', label: 'Erben', beschreibung: 'Mandanten, Vermögens- & Nachfolgeplanung', icon: ScrollText, pfad: '/erben', Sidebar: SidebarErben },
+  { id: 'betriebsuebergabe', label: 'Betriebsübergabe', beschreibung: 'Unternehmensnachfolge & Übergabemandate', icon: Handshake, pfad: '/betriebsuebergabe', Sidebar: SidebarBetriebsuebergabe },
 ]
 
 export function Layout({ children }: { children: ReactNode }) {
