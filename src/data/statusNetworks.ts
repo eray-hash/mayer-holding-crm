@@ -578,7 +578,101 @@ export const AKADEMIE_HAUPTPFAD = [
   'abgeschlossen',
 ]
 
-type StatusBereich = 'beratung' | 'immobilien' | 'erben' | 'betriebsuebergabe' | 'betriebsformen' | 'akademie'
+// ==========================================================================
+// STATUSNETZ — FINANZIERUNGEN (VERMÖGENSANLAGEN)
+// ==========================================================================
+
+export const FINANZIERUNGEN_STATUS: Record<string, StatusNode> = {
+  interessent: {
+    id: 'interessent',
+    label: 'Interessent',
+    color: 'bg-slate-100 text-slate-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['risikoprofil_erstellt', 'wiedervorlage', 'verloren'],
+  },
+  risikoprofil_erstellt: {
+    id: 'risikoprofil_erstellt',
+    label: 'Risikoprofil / Geeignetheitsprüfung erstellt',
+    color: 'bg-sky-100 text-sky-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['beratungsgespraech', 'wiedervorlage', 'verloren'],
+  },
+  beratungsgespraech: {
+    id: 'beratungsgespraech',
+    label: 'Beratungsgespräch geführt (Beratungsprotokoll)',
+    color: 'bg-cyan-100 text-cyan-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['zeichnung_eingegangen', 'wiedervorlage', 'verloren'],
+  },
+  zeichnung_eingegangen: {
+    id: 'zeichnung_eingegangen',
+    label: 'Zeichnungsschein eingegangen',
+    color: 'bg-indigo-100 text-indigo-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['kapital_eingezahlt', 'wiedervorlage', 'verloren'],
+  },
+  kapital_eingezahlt: {
+    id: 'kapital_eingezahlt',
+    label: 'Kapital eingezahlt',
+    color: 'bg-violet-100 text-violet-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['abgeschlossen', 'wiedervorlage'],
+  },
+  abgeschlossen: {
+    id: 'abgeschlossen',
+    label: 'Abgeschlossen (Aktiver Investor)',
+    color: 'bg-emerald-100 text-emerald-700',
+    isTerminal: true,
+    isMainPath: true,
+    next: [],
+  },
+  wiedervorlage: {
+    id: 'wiedervorlage',
+    label: 'Wiedervorlage / On Hold',
+    color: 'bg-orange-100 text-orange-700',
+    isTerminal: false,
+    isMainPath: false,
+    next: [
+      'interessent',
+      'risikoprofil_erstellt',
+      'beratungsgespraech',
+      'zeichnung_eingegangen',
+      'kapital_eingezahlt',
+      'verloren',
+    ],
+  },
+  verloren: {
+    id: 'verloren',
+    label: 'Verloren / Kein Interesse',
+    color: 'bg-rose-100 text-rose-700',
+    isTerminal: true,
+    isMainPath: false,
+    next: [],
+  },
+}
+
+export const FINANZIERUNGEN_HAUPTPFAD = [
+  'interessent',
+  'risikoprofil_erstellt',
+  'beratungsgespraech',
+  'zeichnung_eingegangen',
+  'kapital_eingezahlt',
+  'abgeschlossen',
+]
+
+type StatusBereich =
+  | 'beratung'
+  | 'immobilien'
+  | 'erben'
+  | 'betriebsuebergabe'
+  | 'betriebsformen'
+  | 'akademie'
+  | 'finanzierungen'
 
 export function getStatusMap(bereich: StatusBereich): Record<string, StatusNode> {
   if (bereich === 'beratung') return BERATUNG_STATUS
@@ -586,7 +680,8 @@ export function getStatusMap(bereich: StatusBereich): Record<string, StatusNode>
   if (bereich === 'erben') return ERBEN_STATUS
   if (bereich === 'betriebsuebergabe') return BETRIEBSUEBERGABE_STATUS
   if (bereich === 'betriebsformen') return BETRIEBSFORMEN_STATUS
-  return AKADEMIE_STATUS
+  if (bereich === 'akademie') return AKADEMIE_STATUS
+  return FINANZIERUNGEN_STATUS
 }
 
 export function getHauptpfad(bereich: StatusBereich): string[] {
@@ -595,7 +690,8 @@ export function getHauptpfad(bereich: StatusBereich): string[] {
   if (bereich === 'erben') return ERBEN_HAUPTPFAD
   if (bereich === 'betriebsuebergabe') return BETRIEBSUEBERGABE_HAUPTPFAD
   if (bereich === 'betriebsformen') return BETRIEBSFORMEN_HAUPTPFAD
-  return AKADEMIE_HAUPTPFAD
+  if (bereich === 'akademie') return AKADEMIE_HAUPTPFAD
+  return FINANZIERUNGEN_HAUPTPFAD
 }
 
 // Ermittelt den nächsten Hauptpfad-Knoten für den "Weiter →"-Button

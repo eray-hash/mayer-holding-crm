@@ -27,6 +27,9 @@ import { VorlagenPageBetriebsformen } from './pages/betriebsformen/VorlagenPageB
 import { AkademieListe } from './pages/akademie/AkademieListe'
 import { AkademieDetail } from './pages/akademie/AkademieDetail'
 import { VorlagenPageAkademie } from './pages/akademie/VorlagenPageAkademie'
+import { FinanzierungenListe } from './pages/finanzierungen/FinanzierungenListe'
+import { FinanzierungenDetail } from './pages/finanzierungen/FinanzierungenDetail'
+import { VorlagenPageFinanzierungen } from './pages/finanzierungen/VorlagenPageFinanzierungen'
 import { HeuteScreen } from './pages/heute/HeuteScreen'
 import { ProjekteListe } from './pages/projekte/ProjekteListe'
 import { PortalLogin } from './pages/portal/PortalLogin'
@@ -78,6 +81,11 @@ function AdminRoutesContent() {
         <Route path="/akademie/teilnehmer/:id" element={<AkademieDetail />} />
         <Route path="/akademie/vorlagen/:kind" element={<VorlagenPageAkademie />} />
         <Route path="/akademie/projekte" element={<ProjekteListe />} />
+
+        <Route path="/finanzierungen" element={<FinanzierungenListe />} />
+        <Route path="/finanzierungen/mandanten/:id" element={<FinanzierungenDetail />} />
+        <Route path="/finanzierungen/vorlagen/:kind" element={<VorlagenPageFinanzierungen />} />
+        <Route path="/finanzierungen/projekte" element={<ProjekteListe />} />
 
         <Route path="*" element={<RootRedirect />} />
       </Routes>

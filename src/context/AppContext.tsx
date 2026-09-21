@@ -26,6 +26,7 @@ import { seedErbenMandanten, seedVorlagenErben } from '../data/seedErben'
 import { seedBetriebsuebergabeMandanten, seedVorlagenBetriebsuebergabe } from '../data/seedBetriebsuebergabe'
 import { seedBetriebsformenMandanten, seedVorlagenBetriebsformen } from '../data/seedBetriebsformen'
 import { seedAkademieTeilnehmer, seedVorlagenAkademie } from '../data/seedAkademie'
+import { seedFinanzierungenMandanten, seedVorlagenFinanzierungen } from '../data/seedFinanzierungen'
 import {
   getNextMainStep,
   BERATUNG_STATUS,
@@ -34,6 +35,7 @@ import {
   BETRIEBSUEBERGABE_STATUS,
   BETRIEBSFORMEN_STATUS,
   AKADEMIE_STATUS,
+  FINANZIERUNGEN_STATUS,
 } from '../data/statusNetworks'
 import { uid, today } from '../lib/dates'
 import { CURRENT_USER } from '../data/constants'
@@ -63,6 +65,8 @@ export type AppData = {
   vorlagenBetriebsformen: Vorlage[]
   akademieTeilnehmer: Kunde[]
   vorlagenAkademie: Vorlage[]
+  finanzierungenMandanten: Kunde[]
+  vorlagenFinanzierungen: Vorlage[]
 }
 
 const STORAGE_KEY = 'mayer-holding-crm-data-v1'
@@ -91,6 +95,8 @@ function buildSeed(): AppData {
     vorlagenBetriebsformen: seedVorlagenBetriebsformen,
     akademieTeilnehmer: seedAkademieTeilnehmer,
     vorlagenAkademie: seedVorlagenAkademie,
+    finanzierungenMandanten: seedFinanzierungenMandanten,
+    vorlagenFinanzierungen: seedVorlagenFinanzierungen,
   }
 }
 
@@ -113,6 +119,8 @@ function loadInitial(): AppData {
         if (!Array.isArray(parsed.vorlagenBetriebsformen)) parsed.vorlagenBetriebsformen = seedVorlagenBetriebsformen
         if (!Array.isArray(parsed.akademieTeilnehmer)) parsed.akademieTeilnehmer = seedAkademieTeilnehmer
         if (!Array.isArray(parsed.vorlagenAkademie)) parsed.vorlagenAkademie = seedVorlagenAkademie
+        if (!Array.isArray(parsed.finanzierungenMandanten)) parsed.finanzierungenMandanten = seedFinanzierungenMandanten
+        if (!Array.isArray(parsed.vorlagenFinanzierungen)) parsed.vorlagenFinanzierungen = seedVorlagenFinanzierungen
         return parsed
       }
     }
@@ -166,6 +174,11 @@ type Action =
   | { type: 'SET_AKADEMIE_STATUS'; id: string; status: string; followUp?: FollowUp }
   | { type: 'SET_AKADEMIE_FOLLOWUP'; id: string; followUp: FollowUp }
   | { type: 'SET_AKADEMIE_PRIORITAET'; id: string; prioritaet: Prioritaet }
+  | { type: 'ADD_FINANZIERUNGEN_MANDANT'; kunde: Kunde }
+  | { type: 'UPDATE_FINANZIERUNGEN_MANDANT'; id: string; patch: Partial<Kunde> }
+  | { type: 'SET_FINANZIERUNGEN_STATUS'; id: string; status: string; followUp?: FollowUp }
+  | { type: 'SET_FINANZIERUNGEN_FOLLOWUP'; id: string; followUp: FollowUp }
+  | { type: 'SET_FINANZIERUNGEN_PRIORITAET'; id: string; prioritaet: Prioritaet }
 
 function reducer(state: AppData, action: Action): AppData {
   switch (action.type) {
@@ -498,6 +511,46 @@ function reducer(state: AppData, action: Action): AppData {
         ...state,
         akademieTeilnehmer: state.akademieTeilnehmer.map((k) => (k.id === action.id ? { ...k, prioritaet: action.prioritaet } : k)),
       }
+    case 'ADD_FINANZIERUNGEN_MANDANT':
+      return { ...state, finanzierungenMandanten: [action.kunde, ...state.finanzierungenMandanten] }
+    case 'UPDATE_FINANZIERUNGEN_MANDANT':
+      return {
+        ...state,
+        finanzierungenMandanten: state.finanzierungenMandanten.map((k) => (k.id === action.id ? { ...k, ...action.patch } : k)),
+      }
+    case 'SET_FINANZIERUNGEN_STATUS': {
+      return {
+        ...state,
+        finanzierungenMandanten: state.finanzierungenMandanten.map((k) => {
+          if (k.id !== action.id) return k
+          const oldLabel = FINANZIERUNGEN_STATUS[k.status]?.label ?? k.status
+          const newLabel = FINANZIERUNGEN_STATUS[action.status]?.label ?? action.status
+          const activity = {
+            id: uid('act'),
+            date: today(),
+            text: `Status: ${oldLabel} → ${newLabel} am ${today()} durch ${CURRENT_USER}`,
+            user: CURRENT_USER,
+          }
+          return {
+            ...k,
+            status: action.status,
+            followUp: action.followUp ?? k.followUp,
+            letzteAktivitaet: today(),
+            activities: [activity, ...k.activities],
+          }
+        }),
+      }
+    }
+    case 'SET_FINANZIERUNGEN_FOLLOWUP':
+      return {
+        ...state,
+        finanzierungenMandanten: state.finanzierungenMandanten.map((k) => (k.id === action.id ? { ...k, followUp: action.followUp } : k)),
+      }
+    case 'SET_FINANZIERUNGEN_PRIORITAET':
+      return {
+        ...state,
+        finanzierungenMandanten: state.finanzierungenMandanten.map((k) => (k.id === action.id ? { ...k, prioritaet: action.prioritaet } : k)),
+      }
     default:
       return state
   }
@@ -586,6 +639,15 @@ export function useAdvanceStatus() {
     },
     setAkademieStatus(id: string, status: string, followUp?: FollowUp) {
       dispatch({ type: 'SET_AKADEMIE_STATUS', id, status, followUp })
+    },
+    advanceFinanzierungenMandant(id: string, followUp?: FollowUp) {
+      const mandant = state.finanzierungenMandanten.find((k) => k.id === id)
+      if (!mandant) return
+      const next = getNextMainStep('finanzierungen', mandant.status)
+      if (next) dispatch({ type: 'SET_FINANZIERUNGEN_STATUS', id, status: next, followUp })
+    },
+    setFinanzierungenStatus(id: string, status: string, followUp?: FollowUp) {
+      dispatch({ type: 'SET_FINANZIERUNGEN_STATUS', id, status, followUp })
     },
   }
 }
