@@ -87,7 +87,12 @@ export function HeuteScreen() {
             (bereich) => {
               const anzahl = state.projekte.filter((p) => p.bereich === bereich).length
               if (anzahl === 0) return null
-              const clickable = bereich === 'beratung' || bereich === 'immobilien' || bereich === 'erben' || bereich === 'betriebsuebergabe'
+              const clickable =
+                bereich === 'beratung' ||
+                bereich === 'immobilien' ||
+                bereich === 'erben' ||
+                bereich === 'betriebsuebergabe' ||
+                bereich === 'betriebsformen'
               return (
                 <button
                   key={bereich}
@@ -97,6 +102,7 @@ export function HeuteScreen() {
                     if (bereich === 'immobilien') navigate('/immobilien/projekte')
                     if (bereich === 'erben') navigate('/erben/projekte')
                     if (bereich === 'betriebsuebergabe') navigate('/betriebsuebergabe/projekte')
+                    if (bereich === 'betriebsformen') navigate('/betriebsformen/projekte')
                   }}
                   className={`flex items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-3 text-left text-sm ${
                     clickable ? 'hover:border-accent-300 hover:shadow' : 'opacity-60'

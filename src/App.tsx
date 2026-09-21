@@ -21,6 +21,9 @@ import { VorlagenPageErben } from './pages/erben/VorlagenPageErben'
 import { BetriebsuebergabeListe } from './pages/betriebsuebergabe/BetriebsuebergabeListe'
 import { BetriebsuebergabeDetail } from './pages/betriebsuebergabe/BetriebsuebergabeDetail'
 import { VorlagenPageBetriebsuebergabe } from './pages/betriebsuebergabe/VorlagenPageBetriebsuebergabe'
+import { BetriebsformenListe } from './pages/betriebsformen/BetriebsformenListe'
+import { BetriebsformenDetail } from './pages/betriebsformen/BetriebsformenDetail'
+import { VorlagenPageBetriebsformen } from './pages/betriebsformen/VorlagenPageBetriebsformen'
 import { HeuteScreen } from './pages/heute/HeuteScreen'
 import { ProjekteListe } from './pages/projekte/ProjekteListe'
 import { PortalLogin } from './pages/portal/PortalLogin'
@@ -62,6 +65,11 @@ function AdminRoutesContent() {
         <Route path="/betriebsuebergabe/mandanten/:id" element={<BetriebsuebergabeDetail />} />
         <Route path="/betriebsuebergabe/vorlagen/:kind" element={<VorlagenPageBetriebsuebergabe />} />
         <Route path="/betriebsuebergabe/projekte" element={<ProjekteListe />} />
+
+        <Route path="/betriebsformen" element={<BetriebsformenListe />} />
+        <Route path="/betriebsformen/mandanten/:id" element={<BetriebsformenDetail />} />
+        <Route path="/betriebsformen/vorlagen/:kind" element={<VorlagenPageBetriebsformen />} />
+        <Route path="/betriebsformen/projekte" element={<ProjekteListe />} />
 
         <Route path="*" element={<RootRedirect />} />
       </Routes>

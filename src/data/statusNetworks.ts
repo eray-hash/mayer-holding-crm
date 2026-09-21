@@ -410,20 +410,119 @@ export const BETRIEBSUEBERGABE_HAUPTPFAD = [
   'abgeschlossen',
 ]
 
-type StatusBereich = 'beratung' | 'immobilien' | 'erben' | 'betriebsuebergabe'
+// ==========================================================================
+// STATUSNETZ — BETRIEBSFORMEN (RECHTSFORMBERATUNG)
+// ==========================================================================
+
+export const BETRIEBSFORMEN_STATUS: Record<string, StatusNode> = {
+  erstkontakt: {
+    id: 'erstkontakt',
+    label: 'Erstkontakt',
+    color: 'bg-slate-100 text-slate-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['bedarfsanalyse', 'wiedervorlage', 'verloren'],
+  },
+  bedarfsanalyse: {
+    id: 'bedarfsanalyse',
+    label: 'Ist-Analyse aktuelle Rechtsform',
+    color: 'bg-sky-100 text-sky-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['konzept_erstellt', 'wiedervorlage', 'verloren'],
+  },
+  konzept_erstellt: {
+    id: 'konzept_erstellt',
+    label: 'Rechtsformvergleich/Konzept erstellt',
+    color: 'bg-cyan-100 text-cyan-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['beratungsgespraech', 'wiedervorlage', 'verloren'],
+  },
+  beratungsgespraech: {
+    id: 'beratungsgespraech',
+    label: 'Beratungsgespräch geführt',
+    color: 'bg-indigo-100 text-indigo-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['umsetzung', 'wiedervorlage', 'verloren'],
+  },
+  umsetzung: {
+    id: 'umsetzung',
+    label: 'Umsetzung (Gründung/Umwandlung)',
+    color: 'bg-violet-100 text-violet-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['handelsregister', 'wiedervorlage', 'verloren'],
+  },
+  handelsregister: {
+    id: 'handelsregister',
+    label: 'Notartermin/Handelsregistereintrag',
+    color: 'bg-amber-100 text-amber-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['abgeschlossen', 'wiedervorlage'],
+  },
+  abgeschlossen: {
+    id: 'abgeschlossen',
+    label: 'Abgeschlossen',
+    color: 'bg-emerald-100 text-emerald-700',
+    isTerminal: true,
+    isMainPath: true,
+    next: [],
+  },
+  wiedervorlage: {
+    id: 'wiedervorlage',
+    label: 'Wiedervorlage / On Hold',
+    color: 'bg-orange-100 text-orange-700',
+    isTerminal: false,
+    isMainPath: false,
+    next: [
+      'erstkontakt',
+      'bedarfsanalyse',
+      'konzept_erstellt',
+      'beratungsgespraech',
+      'umsetzung',
+      'handelsregister',
+      'verloren',
+    ],
+  },
+  verloren: {
+    id: 'verloren',
+    label: 'Verloren / Kein Interesse',
+    color: 'bg-rose-100 text-rose-700',
+    isTerminal: true,
+    isMainPath: false,
+    next: [],
+  },
+}
+
+export const BETRIEBSFORMEN_HAUPTPFAD = [
+  'erstkontakt',
+  'bedarfsanalyse',
+  'konzept_erstellt',
+  'beratungsgespraech',
+  'umsetzung',
+  'handelsregister',
+  'abgeschlossen',
+]
+
+type StatusBereich = 'beratung' | 'immobilien' | 'erben' | 'betriebsuebergabe' | 'betriebsformen'
 
 export function getStatusMap(bereich: StatusBereich): Record<string, StatusNode> {
   if (bereich === 'beratung') return BERATUNG_STATUS
   if (bereich === 'immobilien') return IMMOBILIEN_STATUS
   if (bereich === 'erben') return ERBEN_STATUS
-  return BETRIEBSUEBERGABE_STATUS
+  if (bereich === 'betriebsuebergabe') return BETRIEBSUEBERGABE_STATUS
+  return BETRIEBSFORMEN_STATUS
 }
 
 export function getHauptpfad(bereich: StatusBereich): string[] {
   if (bereich === 'beratung') return BERATUNG_HAUPTPFAD
   if (bereich === 'immobilien') return IMMOBILIEN_HAUPTPFAD
   if (bereich === 'erben') return ERBEN_HAUPTPFAD
-  return BETRIEBSUEBERGABE_HAUPTPFAD
+  if (bereich === 'betriebsuebergabe') return BETRIEBSUEBERGABE_HAUPTPFAD
+  return BETRIEBSFORMEN_HAUPTPFAD
 }
 
 // Ermittelt den nächsten Hauptpfad-Knoten für den "Weiter →"-Button

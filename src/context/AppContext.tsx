@@ -24,7 +24,15 @@ import { seedFondsInvestoren, seedFondsDokumenteAllgemein } from '../data/seedFo
 import { seedProjekte } from '../data/seedProjekte'
 import { seedErbenMandanten, seedVorlagenErben } from '../data/seedErben'
 import { seedBetriebsuebergabeMandanten, seedVorlagenBetriebsuebergabe } from '../data/seedBetriebsuebergabe'
-import { getNextMainStep, BERATUNG_STATUS, IMMOBILIEN_STATUS, ERBEN_STATUS, BETRIEBSUEBERGABE_STATUS } from '../data/statusNetworks'
+import { seedBetriebsformenMandanten, seedVorlagenBetriebsformen } from '../data/seedBetriebsformen'
+import {
+  getNextMainStep,
+  BERATUNG_STATUS,
+  IMMOBILIEN_STATUS,
+  ERBEN_STATUS,
+  BETRIEBSUEBERGABE_STATUS,
+  BETRIEBSFORMEN_STATUS,
+} from '../data/statusNetworks'
 import { uid, today } from '../lib/dates'
 import { CURRENT_USER } from '../data/constants'
 
@@ -49,6 +57,8 @@ export type AppData = {
   vorlagenErben: Vorlage[]
   betriebsuebergabeMandanten: Kunde[]
   vorlagenBetriebsuebergabe: Vorlage[]
+  betriebsformenMandanten: Kunde[]
+  vorlagenBetriebsformen: Vorlage[]
 }
 
 const STORAGE_KEY = 'mayer-holding-crm-data-v1'
@@ -73,6 +83,8 @@ function buildSeed(): AppData {
     vorlagenErben: seedVorlagenErben,
     betriebsuebergabeMandanten: seedBetriebsuebergabeMandanten,
     vorlagenBetriebsuebergabe: seedVorlagenBetriebsuebergabe,
+    betriebsformenMandanten: seedBetriebsformenMandanten,
+    vorlagenBetriebsformen: seedVorlagenBetriebsformen,
   }
 }
 
@@ -91,6 +103,8 @@ function loadInitial(): AppData {
         if (!Array.isArray(parsed.vorlagenErben)) parsed.vorlagenErben = seedVorlagenErben
         if (!Array.isArray(parsed.betriebsuebergabeMandanten)) parsed.betriebsuebergabeMandanten = seedBetriebsuebergabeMandanten
         if (!Array.isArray(parsed.vorlagenBetriebsuebergabe)) parsed.vorlagenBetriebsuebergabe = seedVorlagenBetriebsuebergabe
+        if (!Array.isArray(parsed.betriebsformenMandanten)) parsed.betriebsformenMandanten = seedBetriebsformenMandanten
+        if (!Array.isArray(parsed.vorlagenBetriebsformen)) parsed.vorlagenBetriebsformen = seedVorlagenBetriebsformen
         return parsed
       }
     }
@@ -134,6 +148,11 @@ type Action =
   | { type: 'SET_BETRIEBSUEBERGABE_STATUS'; id: string; status: string; followUp?: FollowUp }
   | { type: 'SET_BETRIEBSUEBERGABE_FOLLOWUP'; id: string; followUp: FollowUp }
   | { type: 'SET_BETRIEBSUEBERGABE_PRIORITAET'; id: string; prioritaet: Prioritaet }
+  | { type: 'ADD_BETRIEBSFORMEN_MANDANT'; kunde: Kunde }
+  | { type: 'UPDATE_BETRIEBSFORMEN_MANDANT'; id: string; patch: Partial<Kunde> }
+  | { type: 'SET_BETRIEBSFORMEN_STATUS'; id: string; status: string; followUp?: FollowUp }
+  | { type: 'SET_BETRIEBSFORMEN_FOLLOWUP'; id: string; followUp: FollowUp }
+  | { type: 'SET_BETRIEBSFORMEN_PRIORITAET'; id: string; prioritaet: Prioritaet }
 
 function reducer(state: AppData, action: Action): AppData {
   switch (action.type) {
@@ -386,6 +405,46 @@ function reducer(state: AppData, action: Action): AppData {
         ...state,
         betriebsuebergabeMandanten: state.betriebsuebergabeMandanten.map((k) => (k.id === action.id ? { ...k, prioritaet: action.prioritaet } : k)),
       }
+    case 'ADD_BETRIEBSFORMEN_MANDANT':
+      return { ...state, betriebsformenMandanten: [action.kunde, ...state.betriebsformenMandanten] }
+    case 'UPDATE_BETRIEBSFORMEN_MANDANT':
+      return {
+        ...state,
+        betriebsformenMandanten: state.betriebsformenMandanten.map((k) => (k.id === action.id ? { ...k, ...action.patch } : k)),
+      }
+    case 'SET_BETRIEBSFORMEN_STATUS': {
+      return {
+        ...state,
+        betriebsformenMandanten: state.betriebsformenMandanten.map((k) => {
+          if (k.id !== action.id) return k
+          const oldLabel = BETRIEBSFORMEN_STATUS[k.status]?.label ?? k.status
+          const newLabel = BETRIEBSFORMEN_STATUS[action.status]?.label ?? action.status
+          const activity = {
+            id: uid('act'),
+            date: today(),
+            text: `Status: ${oldLabel} → ${newLabel} am ${today()} durch ${CURRENT_USER}`,
+            user: CURRENT_USER,
+          }
+          return {
+            ...k,
+            status: action.status,
+            followUp: action.followUp ?? k.followUp,
+            letzteAktivitaet: today(),
+            activities: [activity, ...k.activities],
+          }
+        }),
+      }
+    }
+    case 'SET_BETRIEBSFORMEN_FOLLOWUP':
+      return {
+        ...state,
+        betriebsformenMandanten: state.betriebsformenMandanten.map((k) => (k.id === action.id ? { ...k, followUp: action.followUp } : k)),
+      }
+    case 'SET_BETRIEBSFORMEN_PRIORITAET':
+      return {
+        ...state,
+        betriebsformenMandanten: state.betriebsformenMandanten.map((k) => (k.id === action.id ? { ...k, prioritaet: action.prioritaet } : k)),
+      }
     default:
       return state
   }
@@ -456,6 +515,15 @@ export function useAdvanceStatus() {
     },
     setBetriebsuebergabeStatus(id: string, status: string, followUp?: FollowUp) {
       dispatch({ type: 'SET_BETRIEBSUEBERGABE_STATUS', id, status, followUp })
+    },
+    advanceBetriebsformenMandant(id: string, followUp?: FollowUp) {
+      const mandant = state.betriebsformenMandanten.find((k) => k.id === id)
+      if (!mandant) return
+      const next = getNextMainStep('betriebsformen', mandant.status)
+      if (next) dispatch({ type: 'SET_BETRIEBSFORMEN_STATUS', id, status: next, followUp })
+    },
+    setBetriebsformenStatus(id: string, status: string, followUp?: FollowUp) {
+      dispatch({ type: 'SET_BETRIEBSFORMEN_STATUS', id, status, followUp })
     },
   }
 }

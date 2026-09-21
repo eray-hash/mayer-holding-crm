@@ -1,6 +1,6 @@
 // Zentrale Typdefinitionen für das Mayer Holding CRM
 
-export type Bereich = 'beratung' | 'immobilien' | 'erben' | 'betriebsuebergabe'
+export type Bereich = 'beratung' | 'immobilien' | 'erben' | 'betriebsuebergabe' | 'betriebsformen'
 
 export type Prioritaet = 'Hoch' | 'Mittel' | 'Niedrig'
 
