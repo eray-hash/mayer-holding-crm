@@ -25,6 +25,7 @@ import { seedProjekte } from '../data/seedProjekte'
 import { seedErbenMandanten, seedVorlagenErben } from '../data/seedErben'
 import { seedBetriebsuebergabeMandanten, seedVorlagenBetriebsuebergabe } from '../data/seedBetriebsuebergabe'
 import { seedBetriebsformenMandanten, seedVorlagenBetriebsformen } from '../data/seedBetriebsformen'
+import { seedAkademieTeilnehmer, seedVorlagenAkademie } from '../data/seedAkademie'
 import {
   getNextMainStep,
   BERATUNG_STATUS,
@@ -32,6 +33,7 @@ import {
   ERBEN_STATUS,
   BETRIEBSUEBERGABE_STATUS,
   BETRIEBSFORMEN_STATUS,
+  AKADEMIE_STATUS,
 } from '../data/statusNetworks'
 import { uid, today } from '../lib/dates'
 import { CURRENT_USER } from '../data/constants'
@@ -59,6 +61,8 @@ export type AppData = {
   vorlagenBetriebsuebergabe: Vorlage[]
   betriebsformenMandanten: Kunde[]
   vorlagenBetriebsformen: Vorlage[]
+  akademieTeilnehmer: Kunde[]
+  vorlagenAkademie: Vorlage[]
 }
 
 const STORAGE_KEY = 'mayer-holding-crm-data-v1'
@@ -85,6 +89,8 @@ function buildSeed(): AppData {
     vorlagenBetriebsuebergabe: seedVorlagenBetriebsuebergabe,
     betriebsformenMandanten: seedBetriebsformenMandanten,
     vorlagenBetriebsformen: seedVorlagenBetriebsformen,
+    akademieTeilnehmer: seedAkademieTeilnehmer,
+    vorlagenAkademie: seedVorlagenAkademie,
   }
 }
 
@@ -105,6 +111,8 @@ function loadInitial(): AppData {
         if (!Array.isArray(parsed.vorlagenBetriebsuebergabe)) parsed.vorlagenBetriebsuebergabe = seedVorlagenBetriebsuebergabe
         if (!Array.isArray(parsed.betriebsformenMandanten)) parsed.betriebsformenMandanten = seedBetriebsformenMandanten
         if (!Array.isArray(parsed.vorlagenBetriebsformen)) parsed.vorlagenBetriebsformen = seedVorlagenBetriebsformen
+        if (!Array.isArray(parsed.akademieTeilnehmer)) parsed.akademieTeilnehmer = seedAkademieTeilnehmer
+        if (!Array.isArray(parsed.vorlagenAkademie)) parsed.vorlagenAkademie = seedVorlagenAkademie
         return parsed
       }
     }
@@ -153,6 +161,11 @@ type Action =
   | { type: 'SET_BETRIEBSFORMEN_STATUS'; id: string; status: string; followUp?: FollowUp }
   | { type: 'SET_BETRIEBSFORMEN_FOLLOWUP'; id: string; followUp: FollowUp }
   | { type: 'SET_BETRIEBSFORMEN_PRIORITAET'; id: string; prioritaet: Prioritaet }
+  | { type: 'ADD_AKADEMIE_TEILNEHMER'; kunde: Kunde }
+  | { type: 'UPDATE_AKADEMIE_TEILNEHMER'; id: string; patch: Partial<Kunde> }
+  | { type: 'SET_AKADEMIE_STATUS'; id: string; status: string; followUp?: FollowUp }
+  | { type: 'SET_AKADEMIE_FOLLOWUP'; id: string; followUp: FollowUp }
+  | { type: 'SET_AKADEMIE_PRIORITAET'; id: string; prioritaet: Prioritaet }
 
 function reducer(state: AppData, action: Action): AppData {
   switch (action.type) {
@@ -445,6 +458,46 @@ function reducer(state: AppData, action: Action): AppData {
         ...state,
         betriebsformenMandanten: state.betriebsformenMandanten.map((k) => (k.id === action.id ? { ...k, prioritaet: action.prioritaet } : k)),
       }
+    case 'ADD_AKADEMIE_TEILNEHMER':
+      return { ...state, akademieTeilnehmer: [action.kunde, ...state.akademieTeilnehmer] }
+    case 'UPDATE_AKADEMIE_TEILNEHMER':
+      return {
+        ...state,
+        akademieTeilnehmer: state.akademieTeilnehmer.map((k) => (k.id === action.id ? { ...k, ...action.patch } : k)),
+      }
+    case 'SET_AKADEMIE_STATUS': {
+      return {
+        ...state,
+        akademieTeilnehmer: state.akademieTeilnehmer.map((k) => {
+          if (k.id !== action.id) return k
+          const oldLabel = AKADEMIE_STATUS[k.status]?.label ?? k.status
+          const newLabel = AKADEMIE_STATUS[action.status]?.label ?? action.status
+          const activity = {
+            id: uid('act'),
+            date: today(),
+            text: `Status: ${oldLabel} → ${newLabel} am ${today()} durch ${CURRENT_USER}`,
+            user: CURRENT_USER,
+          }
+          return {
+            ...k,
+            status: action.status,
+            followUp: action.followUp ?? k.followUp,
+            letzteAktivitaet: today(),
+            activities: [activity, ...k.activities],
+          }
+        }),
+      }
+    }
+    case 'SET_AKADEMIE_FOLLOWUP':
+      return {
+        ...state,
+        akademieTeilnehmer: state.akademieTeilnehmer.map((k) => (k.id === action.id ? { ...k, followUp: action.followUp } : k)),
+      }
+    case 'SET_AKADEMIE_PRIORITAET':
+      return {
+        ...state,
+        akademieTeilnehmer: state.akademieTeilnehmer.map((k) => (k.id === action.id ? { ...k, prioritaet: action.prioritaet } : k)),
+      }
     default:
       return state
   }
@@ -524,6 +577,15 @@ export function useAdvanceStatus() {
     },
     setBetriebsformenStatus(id: string, status: string, followUp?: FollowUp) {
       dispatch({ type: 'SET_BETRIEBSFORMEN_STATUS', id, status, followUp })
+    },
+    advanceAkademieTeilnehmer(id: string, followUp?: FollowUp) {
+      const teilnehmer = state.akademieTeilnehmer.find((k) => k.id === id)
+      if (!teilnehmer) return
+      const next = getNextMainStep('akademie', teilnehmer.status)
+      if (next) dispatch({ type: 'SET_AKADEMIE_STATUS', id, status: next, followUp })
+    },
+    setAkademieStatus(id: string, status: string, followUp?: FollowUp) {
+      dispatch({ type: 'SET_AKADEMIE_STATUS', id, status, followUp })
     },
   }
 }

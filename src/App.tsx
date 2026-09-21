@@ -24,6 +24,9 @@ import { VorlagenPageBetriebsuebergabe } from './pages/betriebsuebergabe/Vorlage
 import { BetriebsformenListe } from './pages/betriebsformen/BetriebsformenListe'
 import { BetriebsformenDetail } from './pages/betriebsformen/BetriebsformenDetail'
 import { VorlagenPageBetriebsformen } from './pages/betriebsformen/VorlagenPageBetriebsformen'
+import { AkademieListe } from './pages/akademie/AkademieListe'
+import { AkademieDetail } from './pages/akademie/AkademieDetail'
+import { VorlagenPageAkademie } from './pages/akademie/VorlagenPageAkademie'
 import { HeuteScreen } from './pages/heute/HeuteScreen'
 import { ProjekteListe } from './pages/projekte/ProjekteListe'
 import { PortalLogin } from './pages/portal/PortalLogin'
@@ -70,6 +73,11 @@ function AdminRoutesContent() {
         <Route path="/betriebsformen/mandanten/:id" element={<BetriebsformenDetail />} />
         <Route path="/betriebsformen/vorlagen/:kind" element={<VorlagenPageBetriebsformen />} />
         <Route path="/betriebsformen/projekte" element={<ProjekteListe />} />
+
+        <Route path="/akademie" element={<AkademieListe />} />
+        <Route path="/akademie/teilnehmer/:id" element={<AkademieDetail />} />
+        <Route path="/akademie/vorlagen/:kind" element={<VorlagenPageAkademie />} />
+        <Route path="/akademie/projekte" element={<ProjekteListe />} />
 
         <Route path="*" element={<RootRedirect />} />
       </Routes>

@@ -507,14 +507,86 @@ export const BETRIEBSFORMEN_HAUPTPFAD = [
   'abgeschlossen',
 ]
 
-type StatusBereich = 'beratung' | 'immobilien' | 'erben' | 'betriebsuebergabe' | 'betriebsformen'
+// ==========================================================================
+// STATUSNETZ — AKADEMIE
+// ==========================================================================
+
+export const AKADEMIE_STATUS: Record<string, StatusNode> = {
+  interessent: {
+    id: 'interessent',
+    label: 'Interessent',
+    color: 'bg-slate-100 text-slate-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['anmeldung_eingegangen', 'wiedervorlage', 'verloren'],
+  },
+  anmeldung_eingegangen: {
+    id: 'anmeldung_eingegangen',
+    label: 'Anmeldung eingegangen',
+    color: 'bg-sky-100 text-sky-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['platz_bestaetigt', 'wiedervorlage', 'verloren'],
+  },
+  platz_bestaetigt: {
+    id: 'platz_bestaetigt',
+    label: 'Kursplatz bestätigt',
+    color: 'bg-cyan-100 text-cyan-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['kurs_laeuft', 'wiedervorlage', 'verloren'],
+  },
+  kurs_laeuft: {
+    id: 'kurs_laeuft',
+    label: 'Kurs läuft',
+    color: 'bg-indigo-100 text-indigo-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['abgeschlossen', 'wiedervorlage'],
+  },
+  abgeschlossen: {
+    id: 'abgeschlossen',
+    label: 'Abgeschlossen / Zertifikat ausgestellt',
+    color: 'bg-emerald-100 text-emerald-700',
+    isTerminal: true,
+    isMainPath: true,
+    next: [],
+  },
+  wiedervorlage: {
+    id: 'wiedervorlage',
+    label: 'Wiedervorlage / On Hold',
+    color: 'bg-orange-100 text-orange-700',
+    isTerminal: false,
+    isMainPath: false,
+    next: ['interessent', 'anmeldung_eingegangen', 'platz_bestaetigt', 'kurs_laeuft', 'verloren'],
+  },
+  verloren: {
+    id: 'verloren',
+    label: 'Abgebrochen / Kein Interesse',
+    color: 'bg-rose-100 text-rose-700',
+    isTerminal: true,
+    isMainPath: false,
+    next: [],
+  },
+}
+
+export const AKADEMIE_HAUPTPFAD = [
+  'interessent',
+  'anmeldung_eingegangen',
+  'platz_bestaetigt',
+  'kurs_laeuft',
+  'abgeschlossen',
+]
+
+type StatusBereich = 'beratung' | 'immobilien' | 'erben' | 'betriebsuebergabe' | 'betriebsformen' | 'akademie'
 
 export function getStatusMap(bereich: StatusBereich): Record<string, StatusNode> {
   if (bereich === 'beratung') return BERATUNG_STATUS
   if (bereich === 'immobilien') return IMMOBILIEN_STATUS
   if (bereich === 'erben') return ERBEN_STATUS
   if (bereich === 'betriebsuebergabe') return BETRIEBSUEBERGABE_STATUS
-  return BETRIEBSFORMEN_STATUS
+  if (bereich === 'betriebsformen') return BETRIEBSFORMEN_STATUS
+  return AKADEMIE_STATUS
 }
 
 export function getHauptpfad(bereich: StatusBereich): string[] {
@@ -522,7 +594,8 @@ export function getHauptpfad(bereich: StatusBereich): string[] {
   if (bereich === 'immobilien') return IMMOBILIEN_HAUPTPFAD
   if (bereich === 'erben') return ERBEN_HAUPTPFAD
   if (bereich === 'betriebsuebergabe') return BETRIEBSUEBERGABE_HAUPTPFAD
-  return BETRIEBSFORMEN_HAUPTPFAD
+  if (bereich === 'betriebsformen') return BETRIEBSFORMEN_HAUPTPFAD
+  return AKADEMIE_HAUPTPFAD
 }
 
 // Ermittelt den nächsten Hauptpfad-Knoten für den "Weiter →"-Button

@@ -92,7 +92,8 @@ export function HeuteScreen() {
                 bereich === 'immobilien' ||
                 bereich === 'erben' ||
                 bereich === 'betriebsuebergabe' ||
-                bereich === 'betriebsformen'
+                bereich === 'betriebsformen' ||
+                bereich === 'akademie'
               return (
                 <button
                   key={bereich}
@@ -103,6 +104,7 @@ export function HeuteScreen() {
                     if (bereich === 'erben') navigate('/erben/projekte')
                     if (bereich === 'betriebsuebergabe') navigate('/betriebsuebergabe/projekte')
                     if (bereich === 'betriebsformen') navigate('/betriebsformen/projekte')
+                    if (bereich === 'akademie') navigate('/akademie/projekte')
                   }}
                   className={`flex items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-3 text-left text-sm ${
                     clickable ? 'hover:border-accent-300 hover:shadow' : 'opacity-60'
