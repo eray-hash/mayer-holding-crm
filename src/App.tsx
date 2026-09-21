@@ -15,6 +15,8 @@ import { ObjektListe } from './pages/immobilien/ObjektListe'
 import { ObjektDetail } from './pages/immobilien/ObjektDetail'
 import { Finanzierungen } from './pages/immobilien/Finanzierungen'
 import { VorlagenPageImmobilien } from './pages/immobilien/VorlagenPageImmobilien'
+import { HeuteScreen } from './pages/heute/HeuteScreen'
+import { ProjekteListe } from './pages/projekte/ProjekteListe'
 import { PortalLogin } from './pages/portal/PortalLogin'
 import { PortalOverview } from './pages/portal/PortalOverview'
 import { PortalRendite } from './pages/portal/PortalRendite'
@@ -22,8 +24,7 @@ import { PortalAuszahlungen } from './pages/portal/PortalAuszahlungen'
 import { PortalDokumente } from './pages/portal/PortalDokumente'
 
 function RootRedirect() {
-  const { state } = useApp()
-  return <Navigate to={state.bereich === 'immobilien' ? '/immobilien' : '/beratung'} replace />
+  return <Navigate to="/heute" replace />
 }
 
 function AdminRoutesContent() {
@@ -31,17 +32,20 @@ function AdminRoutesContent() {
     <Layout>
       <Routes>
         <Route path="/" element={<RootRedirect />} />
+        <Route path="/heute" element={<HeuteScreen />} />
 
         <Route path="/beratung" element={<KundenListe />} />
         <Route path="/beratung/kunden/:id" element={<KundenDetail />} />
         <Route path="/beratung/vorlagen/:kind" element={<VorlagenPage />} />
         <Route path="/beratung/mahnwesen" element={<Mahnwesen />} />
         <Route path="/beratung/rechnungen" element={<Rechnungen />} />
+        <Route path="/beratung/projekte" element={<ProjekteListe />} />
 
         <Route path="/immobilien" element={<ObjektListe />} />
         <Route path="/immobilien/objekte/:id" element={<ObjektDetail />} />
         <Route path="/immobilien/finanzierungen" element={<Finanzierungen />} />
         <Route path="/immobilien/vorlagen/:kind" element={<VorlagenPageImmobilien />} />
+        <Route path="/immobilien/projekte" element={<ProjekteListe />} />
 
         <Route path="*" element={<RootRedirect />} />
       </Routes>

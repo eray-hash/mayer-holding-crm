@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { Building2, Landmark, FileText, ChevronDown, ChevronLeft, ChevronRight, ScrollText } from 'lucide-react'
+import { Building2, Landmark, FileText, ChevronDown, ChevronLeft, ChevronRight, ScrollText, Sun, LayoutGrid } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { OBJEKT_GRUPPEN } from '../data/constants'
 
@@ -27,6 +27,8 @@ export function SidebarImmobilien({ collapsed, onToggle }: { collapsed: boolean;
   return (
     <nav className="flex h-full flex-col justify-between py-4">
       <div className="space-y-1 px-2">
+        <SideLink to="/heute" icon={<Sun size={17} />} label="Heute" collapsed={collapsed} active={isActive('/heute')} />
+        <SideLink to="/immobilien/projekte" icon={<LayoutGrid size={17} />} label="Projekte" collapsed={collapsed} active={isActive('/immobilien/projekte')} />
         <div>
           <button
             onClick={() => setObjekteOpen((o) => !o)}

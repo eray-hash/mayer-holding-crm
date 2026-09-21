@@ -16,10 +16,12 @@ import type {
   FondsInvestor,
   FondsDokument,
 } from '../types'
+import type { Projekt, Aufgabe, AufgabenStatus, Meilenstein } from '../types/project'
 import { seedKunden, seedRechnungen, seedProtokolle, seedKonzepte, seedVertraege, seedVorlagen } from '../data/seedBeratung'
 import { seedObjekte, seedFinanzierungen } from '../data/seedImmobilien'
 import { seedVorlagenImmobilien } from '../data/seedVorlagenImmobilien'
 import { seedFondsInvestoren, seedFondsDokumenteAllgemein } from '../data/seedFonds'
+import { seedProjekte } from '../data/seedProjekte'
 import { getNextMainStep, BERATUNG_STATUS, IMMOBILIEN_STATUS } from '../data/statusNetworks'
 import { uid, today } from '../lib/dates'
 import { CURRENT_USER } from '../data/constants'
@@ -40,6 +42,7 @@ export type AppData = {
   vorlagenImmobilien: Vorlage[]
   fondsInvestoren: FondsInvestor[]
   fondsDokumenteAllgemein: FondsDokument[]
+  projekte: Projekt[]
 }
 
 const STORAGE_KEY = 'mayer-holding-crm-data-v1'
@@ -59,6 +62,7 @@ function buildSeed(): AppData {
     vorlagenImmobilien: seedVorlagenImmobilien,
     fondsInvestoren: seedFondsInvestoren,
     fondsDokumenteAllgemein: seedFondsDokumenteAllgemein,
+    projekte: seedProjekte,
   }
 }
 
@@ -72,6 +76,7 @@ function loadInitial(): AppData {
         if (!Array.isArray(parsed.fondsInvestoren)) parsed.fondsInvestoren = seedFondsInvestoren
         if (!Array.isArray(parsed.fondsDokumenteAllgemein)) parsed.fondsDokumenteAllgemein = seedFondsDokumenteAllgemein
         if (parsed.rolle === undefined) parsed.rolle = null
+        if (!Array.isArray(parsed.projekte)) parsed.projekte = seedProjekte
         return parsed
       }
     }
@@ -100,6 +105,11 @@ type Action =
   | { type: 'SET_OBJEKT_PRIORITAET'; id: string; prioritaet: Prioritaet }
   | { type: 'ADD_FINANZIERUNG'; finanzierung: Finanzierung }
   | { type: 'ADD_DOKUMENT'; objektId: string; ordner: DokumentOrdnerName; dokument: Dokument }
+  | { type: 'ADD_PROJEKT'; projekt: Projekt }
+  | { type: 'ADD_MEILENSTEIN'; projektId: string; meilenstein: Meilenstein }
+  | { type: 'ADD_AUFGABE'; projektId: string; meilensteinId: string; aufgabe: Aufgabe }
+  | { type: 'UPDATE_AUFGABE'; projektId: string; meilensteinId: string; aufgabeId: string; patch: Partial<Aufgabe> }
+  | { type: 'MOVE_AUFGABE'; projektId: string; meilensteinId: string; aufgabeId: string; status: AufgabenStatus }
 
 function reducer(state: AppData, action: Action): AppData {
   switch (action.type) {
@@ -208,6 +218,70 @@ function reducer(state: AppData, action: Action): AppData {
           return { ...o, dokumente: { ...o.dokumente, [action.ordner]: [action.dokument, ...existing] } }
         }),
       }
+    case 'ADD_PROJEKT':
+      return { ...state, projekte: [action.projekt, ...state.projekte] }
+    case 'ADD_MEILENSTEIN':
+      return {
+        ...state,
+        projekte: state.projekte.map((p) =>
+          p.id !== action.projektId ? p : { ...p, meilensteine: [...p.meilensteine, action.meilenstein] },
+        ),
+      }
+    case 'ADD_AUFGABE':
+      return {
+        ...state,
+        projekte: state.projekte.map((p) =>
+          p.id !== action.projektId
+            ? p
+            : {
+                ...p,
+                meilensteine: p.meilensteine.map((m) =>
+                  m.id !== action.meilensteinId ? m : { ...m, aufgaben: [...m.aufgaben, action.aufgabe] },
+                ),
+              },
+        ),
+      }
+    case 'UPDATE_AUFGABE':
+      return {
+        ...state,
+        projekte: state.projekte.map((p) =>
+          p.id !== action.projektId
+            ? p
+            : {
+                ...p,
+                meilensteine: p.meilensteine.map((m) =>
+                  m.id !== action.meilensteinId
+                    ? m
+                    : {
+                        ...m,
+                        aufgaben: m.aufgaben.map((a) => (a.id !== action.aufgabeId ? a : { ...a, ...action.patch })),
+                      },
+                ),
+              },
+        ),
+      }
+    case 'MOVE_AUFGABE': {
+      const patch: Partial<Aufgabe> =
+        action.status === 'erledigt' ? { status: action.status, erledigtAm: today() } : { status: action.status }
+      return {
+        ...state,
+        projekte: state.projekte.map((p) =>
+          p.id !== action.projektId
+            ? p
+            : {
+                ...p,
+                meilensteine: p.meilensteine.map((m) =>
+                  m.id !== action.meilensteinId
+                    ? m
+                    : {
+                        ...m,
+                        aufgaben: m.aufgaben.map((a) => (a.id !== action.aufgabeId ? a : { ...a, ...patch })),
+                      },
+                ),
+              },
+        ),
+      }
+    }
     default:
       return state
   }

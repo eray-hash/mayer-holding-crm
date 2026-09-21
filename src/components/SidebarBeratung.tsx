@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { Users, FileText, AlertTriangle, Receipt, ChevronDown, ChevronLeft, ChevronRight, ScrollText } from 'lucide-react'
+import { Users, FileText, AlertTriangle, Receipt, ChevronDown, ChevronLeft, ChevronRight, ScrollText, Sun, LayoutGrid } from 'lucide-react'
 
 const VORLAGEN_LINKS = [
   { kind: 'vollmacht', label: 'Vollmacht' },
@@ -17,7 +17,9 @@ export function SidebarBeratung({ collapsed, onToggle }: { collapsed: boolean; o
   return (
     <nav className="flex h-full flex-col justify-between py-4">
       <div className="space-y-1 px-2">
-        <SideLink to="/beratung" icon={<Users size={17} />} label="Kunden" collapsed={collapsed} active={isActive('/beratung') && !location.pathname.includes('mahnwesen') && !location.pathname.includes('rechnungen') && !location.pathname.includes('vorlagen')} />
+        <SideLink to="/heute" icon={<Sun size={17} />} label="Heute" collapsed={collapsed} active={isActive('/heute')} />
+        <SideLink to="/beratung/projekte" icon={<LayoutGrid size={17} />} label="Projekte" collapsed={collapsed} active={isActive('/beratung/projekte')} />
+        <SideLink to="/beratung" icon={<Users size={17} />} label="Kunden" collapsed={collapsed} active={isActive('/beratung') && !location.pathname.includes('mahnwesen') && !location.pathname.includes('rechnungen') && !location.pathname.includes('vorlagen') && !location.pathname.includes('projekte')} />
 
         <div>
           <button
