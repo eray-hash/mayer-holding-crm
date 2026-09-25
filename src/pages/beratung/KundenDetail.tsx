@@ -7,6 +7,7 @@ import { StatusBadge, Card, Modal, Field, inputClass, PrimaryButton, EmptyState 
 import { fmtDate, isOverdue, today, uid, fmtEUR } from '../../lib/dates'
 import { PRIORITAETEN } from '../../data/constants'
 import { ZugewieseneObjekte } from '../../components/ZugewieseneObjekte'
+import { FormularLinkButtons } from '../../components/FormularLink'
 import type { Prioritaet } from '../../types'
 
 const TABS = [
@@ -113,6 +114,14 @@ export function KundenDetail() {
             <div className="mt-4 rounded-lg bg-slate-50 p-3">
               <div className="text-xs font-medium text-slate-400">Nächste Follow-up-Aufgabe</div>
               <div className={`text-sm ${overdue ? 'font-medium text-rose-600' : 'text-slate-700'}`}>{fmtDate(kunde.followUp.date)} — {kunde.followUp.note}</div>
+            </div>
+            <div className="mt-4 border-t border-slate-100 pt-4">
+              <div className="mb-1.5 text-xs font-medium text-slate-400">Vollmacht Finanzamt digital versenden</div>
+              <FormularLinkButtons pfad={`/formular/vollmacht/beratung/finanzamt/${kunde.id}`} />
+            </div>
+            <div className="mt-3">
+              <div className="mb-1.5 text-xs font-medium text-slate-400">Vollmacht Bank digital versenden</div>
+              <FormularLinkButtons pfad={`/formular/vollmacht/beratung/bank/${kunde.id}`} />
             </div>
           </Card>
           <Card className="p-5 lg:col-span-2">
