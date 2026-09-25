@@ -7,6 +7,7 @@ import { fmtDate, isOverdue } from '../../lib/dates'
 import { PRIORITAETEN } from '../../data/constants'
 import { ERBEN_CHECKLISTE } from '../../data/seedErben'
 import { FormularLinkButtons } from '../../components/FormularLink'
+import { ZugewieseneObjekte } from '../../components/ZugewieseneObjekte'
 import type { Prioritaet } from '../../types'
 
 const TABS = [
@@ -152,6 +153,8 @@ export function ErbenDetail() {
               </div>
             </Card>
           )}
+
+          <ZugewieseneObjekte bereich="erben" kundeId={mandant.id} />
         </div>
       )}
 

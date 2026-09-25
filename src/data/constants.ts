@@ -52,4 +52,17 @@ export const VORLAGEN_KATEGORIEN: { id: 'vollmacht' | 'schreiben' | 'vertraege';
 
 export const MITARBEITER = ['Thomas Berger', 'Julia Hartmann', 'Markus Lehmann', 'Sandra Peters']
 
+// Die echten Lukrativitäts-Einstufungen aus dem separaten ImmoRadar-Tool (eigenständiges
+// Scan-/Scoring-Projekt, läuft unter eray-hash.github.io/immobilien-radar).
+export const LUKRATIVITAET_OPTIONS = ['sehr interessant', 'interessant', 'neutral', 'eher unattraktiv', 'unattraktiv', 'zu wenig Daten'] as const
+
+export const LUKRATIVITAET_COLOR: Record<string, string> = {
+  'sehr interessant': 'bg-emerald-100 text-emerald-700',
+  interessant: 'bg-sky-100 text-sky-700',
+  neutral: 'bg-slate-100 text-slate-600',
+  'eher unattraktiv': 'bg-amber-100 text-amber-700',
+  unattraktiv: 'bg-rose-100 text-rose-700',
+  'zu wenig Daten': 'bg-slate-100 text-slate-400',
+}
+
 export const CURRENT_USER = 'Eray (Demo)'

@@ -5,6 +5,7 @@ import { StatusWidget } from '../../components/StatusWidget'
 import { Card, EmptyState } from '../../components/ui'
 import { fmtDate, isOverdue } from '../../lib/dates'
 import { PRIORITAETEN } from '../../data/constants'
+import { ZugewieseneObjekte } from '../../components/ZugewieseneObjekte'
 import type { Prioritaet } from '../../types'
 
 export function BetriebsuebergabeDetail() {
@@ -99,6 +100,8 @@ export function BetriebsuebergabeDetail() {
             {mandant.activities.length === 0 && <EmptyState text="Keine Aktivitäten." />}
           </ul>
         </Card>
+
+        <ZugewieseneObjekte bereich="betriebsuebergabe" kundeId={mandant.id} />
       </div>
     </div>
   )

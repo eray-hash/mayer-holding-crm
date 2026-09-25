@@ -39,6 +39,7 @@ import { PortalAuszahlungen } from './pages/portal/PortalAuszahlungen'
 import { PortalDokumente } from './pages/portal/PortalDokumente'
 import { PublicFeedbackbogen } from './pages/formulare/PublicFeedbackbogen'
 import { PublicVollmachtErben } from './pages/formulare/PublicVollmachtErben'
+import { PublicExpose } from './pages/formulare/PublicExpose'
 
 function RootRedirect() {
   return <Navigate to="/heute" replace />
@@ -168,6 +169,7 @@ function AppRoutes() {
       <Routes>
         <Route path="/formular/feedbackbogen" element={<PublicFeedbackbogen />} />
         <Route path="/formular/vollmacht/erben/:mandantId" element={<PublicVollmachtErben />} />
+        <Route path="/formular/expose/:vorschlagId" element={<PublicExpose />} />
       </Routes>
     )
   }

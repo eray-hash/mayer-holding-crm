@@ -6,6 +6,7 @@ import { StatusWidget } from '../../components/StatusWidget'
 import { StatusBadge, Card, Modal, Field, inputClass, PrimaryButton, EmptyState } from '../../components/ui'
 import { fmtDate, isOverdue, today, uid, fmtEUR } from '../../lib/dates'
 import { PRIORITAETEN } from '../../data/constants'
+import { ZugewieseneObjekte } from '../../components/ZugewieseneObjekte'
 import type { Prioritaet } from '../../types'
 
 const TABS = [
@@ -144,6 +145,8 @@ export function KundenDetail() {
               </div>
             </Card>
           )}
+
+          <ZugewieseneObjekte bereich="beratung" kundeId={kunde.id} />
         </div>
       )}
 

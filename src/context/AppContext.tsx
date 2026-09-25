@@ -15,6 +15,7 @@ import type {
   Prioritaet,
   FondsInvestor,
   FondsDokument,
+  ObjektVorschlag,
 } from '../types'
 import type { Projekt, Aufgabe, AufgabenStatus, Meilenstein } from '../types/project'
 import { seedKunden, seedRechnungen, seedProtokolle, seedKonzepte, seedVertraege, seedVorlagen } from '../data/seedBeratung'
@@ -67,6 +68,7 @@ export type AppData = {
   vorlagenAkademie: Vorlage[]
   finanzierungenMandanten: Kunde[]
   vorlagenFinanzierungen: Vorlage[]
+  objektVorschlaege: ObjektVorschlag[]
 }
 
 const STORAGE_KEY = 'mayer-holding-crm-data-v1'
@@ -97,6 +99,7 @@ function buildSeed(): AppData {
     vorlagenAkademie: seedVorlagenAkademie,
     finanzierungenMandanten: seedFinanzierungenMandanten,
     vorlagenFinanzierungen: seedVorlagenFinanzierungen,
+    objektVorschlaege: [],
   }
 }
 
@@ -121,6 +124,7 @@ function loadInitial(): AppData {
         if (!Array.isArray(parsed.vorlagenAkademie)) parsed.vorlagenAkademie = seedVorlagenAkademie
         if (!Array.isArray(parsed.finanzierungenMandanten)) parsed.finanzierungenMandanten = seedFinanzierungenMandanten
         if (!Array.isArray(parsed.vorlagenFinanzierungen)) parsed.vorlagenFinanzierungen = seedVorlagenFinanzierungen
+        if (!Array.isArray(parsed.objektVorschlaege)) parsed.objektVorschlaege = []
         return parsed
       }
     }
@@ -179,6 +183,9 @@ type Action =
   | { type: 'SET_FINANZIERUNGEN_STATUS'; id: string; status: string; followUp?: FollowUp }
   | { type: 'SET_FINANZIERUNGEN_FOLLOWUP'; id: string; followUp: FollowUp }
   | { type: 'SET_FINANZIERUNGEN_PRIORITAET'; id: string; prioritaet: Prioritaet }
+  | { type: 'ADD_OBJEKT_VORSCHLAG'; vorschlag: ObjektVorschlag }
+  | { type: 'ACCEPT_OBJEKT_VORSCHLAG'; id: string }
+  | { type: 'REJECT_OBJEKT_VORSCHLAG'; id: string }
 
 function reducer(state: AppData, action: Action): AppData {
   switch (action.type) {
@@ -550,6 +557,39 @@ function reducer(state: AppData, action: Action): AppData {
       return {
         ...state,
         finanzierungenMandanten: state.finanzierungenMandanten.map((k) => (k.id === action.id ? { ...k, prioritaet: action.prioritaet } : k)),
+      }
+    case 'ADD_OBJEKT_VORSCHLAG':
+      return { ...state, objektVorschlaege: [action.vorschlag, ...state.objektVorschlaege] }
+    case 'ACCEPT_OBJEKT_VORSCHLAG': {
+      const vorschlag = state.objektVorschlaege.find((v) => v.id === action.id)
+      if (!vorschlag) return state
+      return {
+        ...state,
+        objektVorschlaege: state.objektVorschlaege.map((v) =>
+          v.id === action.id ? { ...v, status: 'akzeptiert', beantwortetAm: today() } : v,
+        ),
+        objekte: state.objekte.map((o) => {
+          if (o.id !== vorschlag.objektId) return o
+          const activity = {
+            id: uid('act'),
+            date: today(),
+            text: `Exposé von ${vorschlag.kundeName} angenommen — Objekt dem Kunden-Portfolio zugewiesen.`,
+            user: `${vorschlag.kundeName} (Formular)`,
+          }
+          return {
+            ...o,
+            zugewiesenerKunde: { bereich: vorschlag.kundeBereich, kundeId: vorschlag.kundeId, kundeName: vorschlag.kundeName },
+            activities: [activity, ...o.activities],
+          }
+        }),
+      }
+    }
+    case 'REJECT_OBJEKT_VORSCHLAG':
+      return {
+        ...state,
+        objektVorschlaege: state.objektVorschlaege.map((v) =>
+          v.id === action.id ? { ...v, status: 'abgelehnt', beantwortetAm: today() } : v,
+        ),
       }
     default:
       return state

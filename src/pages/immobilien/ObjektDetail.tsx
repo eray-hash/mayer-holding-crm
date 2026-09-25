@@ -1,19 +1,29 @@
 import { useState } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
-import { ArrowLeft, Folder, FolderOpen, File, Upload, Plus } from 'lucide-react'
-import { useApp } from '../../context/AppContext'
+import { ArrowLeft, Folder, FolderOpen, File, Upload, Plus, Radar, ExternalLink, Users } from 'lucide-react'
+import { useApp, type AppData } from '../../context/AppContext'
 import { StatusWidget } from '../../components/StatusWidget'
 import { Card, Modal, Field, inputClass, PrimaryButton, EmptyState, StatusBadge } from '../../components/ui'
+import { FormularLinkButtons } from '../../components/FormularLink'
+import { KUNDEN_BEREICHE, kundeBereichLabel } from '../../data/kundenBereiche'
 import { fmtDate, isOverdue, today, uid, fmtEUR } from '../../lib/dates'
-import { PRIORITAETEN, gruppeLabel } from '../../data/constants'
+import { PRIORITAETEN, gruppeLabel, LUKRATIVITAET_COLOR } from '../../data/constants'
 import { DOKUMENT_ORDNER } from '../../types'
-import type { DokumentOrdnerName, Prioritaet, FinanzierungStatus } from '../../types'
+import type { DokumentOrdnerName, Prioritaet, FinanzierungStatus, KundeBereich } from '../../types'
 
 const TABS = [
   { id: 'uebersicht', label: 'Übersicht' },
   { id: 'dokumente', label: 'Dokumente' },
   { id: 'finanzierung', label: 'Finanzierung' },
+  { id: 'vorschlaege', label: 'Kunden-Vorschläge' },
 ]
+
+const VORSCHLAG_STATUS_LABEL: Record<string, string> = { offen: 'Offen', akzeptiert: 'Angenommen', abgelehnt: 'Abgelehnt' }
+const VORSCHLAG_STATUS_COLOR: Record<string, string> = {
+  offen: 'bg-slate-100 text-slate-600',
+  akzeptiert: 'bg-emerald-100 text-emerald-700',
+  abgelehnt: 'bg-rose-100 text-rose-700',
+}
 
 export function ObjektDetail() {
   const { id } = useParams()
@@ -21,6 +31,7 @@ export function ObjektDetail() {
   const navigate = useNavigate()
   const { state, dispatch } = useApp()
   const [finOpen, setFinOpen] = useState(false)
+  const [vorschlagOpen, setVorschlagOpen] = useState(false)
 
   const objekt = state.objekte.find((o) => o.id === id)
   const tab = params.get('tab') ?? 'uebersicht'
@@ -39,6 +50,7 @@ export function ObjektDetail() {
 
   const overdue = isOverdue(objekt.followUp.date, objekt.followUp.done)
   const finanzierungen = state.finanzierungen.filter((f) => f.objektId === objekt.id)
+  const vorschlaege = state.objektVorschlaege.filter((v) => v.objektId === objekt.id)
   const objektId = objekt.id
 
   function setTab(t: string) {
@@ -69,6 +81,28 @@ export function ObjektDetail() {
           <div>
             <h1 className="text-xl font-semibold text-slate-800">{objekt.bezeichnung}</h1>
             <p className="text-sm text-slate-500">{objekt.adresse} · {gruppeLabel(objekt.gruppe)} · {objekt.typ}</p>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              {objekt.quelle === 'immoradar' && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-accent-50 px-2.5 py-0.5 text-xs font-medium text-accent-700">
+                  <Radar size={12} /> Aus ImmoRadar
+                </span>
+              )}
+              {objekt.lukrativitaet && (
+                <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${LUKRATIVITAET_COLOR[objekt.lukrativitaet] ?? 'bg-slate-100 text-slate-600'}`}>
+                  {objekt.lukrativitaet}
+                </span>
+              )}
+              {objekt.immoRadarLink && (
+                <a href={objekt.immoRadarLink} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-accent-600 underline">
+                  <ExternalLink size={11} /> Original-Inserat
+                </a>
+              )}
+              {objekt.zugewiesenerKunde && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700">
+                  <Users size={12} /> Zugewiesen: {objekt.zugewiesenerKunde.kundeName} ({kundeBereichLabel(objekt.zugewiesenerKunde.bereich)})
+                </span>
+              )}
+            </div>
           </div>
           <select
             value={objekt.prioritaet}
@@ -231,6 +265,33 @@ export function ObjektDetail() {
         </div>
       )}
 
+      {tab === 'vorschlaege' && (
+        <div>
+          <div className="mb-3 flex justify-end">
+            <PrimaryButton onClick={() => setVorschlagOpen(true)}><Plus size={14} /> Diesem Kunden vorschlagen</PrimaryButton>
+          </div>
+          <div className="space-y-3">
+            {vorschlaege.map((v) => (
+              <Card key={v.id} className="p-4">
+                <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-sm font-medium text-slate-800">
+                    {v.kundeName} <span className="font-normal text-slate-400">· {kundeBereichLabel(v.kundeBereich)}</span>
+                  </div>
+                  <StatusBadge label={VORSCHLAG_STATUS_LABEL[v.status]} color={VORSCHLAG_STATUS_COLOR[v.status]} />
+                </div>
+                <p className="mb-2 text-sm text-slate-600">{v.steuerBegruendung}</p>
+                <div className="mb-2 text-xs text-slate-400">
+                  Erstellt {fmtDate(v.erstelltAm)} durch {v.erstelltVon}
+                  {v.beantwortetAm && ` · beantwortet ${fmtDate(v.beantwortetAm)}`}
+                </div>
+                {v.status === 'offen' && <FormularLinkButtons pfad={`/formular/expose/${v.id}`} />}
+              </Card>
+            ))}
+            {vorschlaege.length === 0 && <EmptyState text="Noch keinem Kunden vorgeschlagen." />}
+          </div>
+        </div>
+      )}
+
       <Modal open={finOpen} onClose={() => setFinOpen(false)} title="Finanzierung anlegen">
         <FinanzierungForm
           onSubmit={(f) => {
@@ -239,6 +300,76 @@ export function ObjektDetail() {
           }}
         />
       </Modal>
+
+      <Modal open={vorschlagOpen} onClose={() => setVorschlagOpen(false)} title="Objekt einem Kunden vorschlagen">
+        <VorschlagForm
+          state={state}
+          onSubmit={(v) => {
+            dispatch({
+              type: 'ADD_OBJEKT_VORSCHLAG',
+              vorschlag: { ...v, id: uid('ov'), objektId: objekt.id, status: 'offen', erstelltAm: today() },
+            })
+            setVorschlagOpen(false)
+          }}
+        />
+      </Modal>
+    </div>
+  )
+}
+
+function VorschlagForm({
+  state,
+  onSubmit,
+}: {
+  state: AppData
+  onSubmit: (v: { kundeBereich: KundeBereich; kundeId: string; kundeName: string; steuerBegruendung: string; erstelltVon: string }) => void
+}) {
+  const [bereich, setBereich] = useState<KundeBereich>(KUNDEN_BEREICHE[0].id)
+  const kundenListe = KUNDEN_BEREICHE.find((b) => b.id === bereich)!.get(state)
+  const [kundeId, setKundeId] = useState(kundenListe[0]?.id ?? '')
+  const [steuerBegruendung, setSteuerBegruendung] = useState('')
+  const [erstelltVon, setErstelltVon] = useState('Andreas Mayer')
+
+  function changeBereich(next: KundeBereich) {
+    setBereich(next)
+    const liste = KUNDEN_BEREICHE.find((b) => b.id === next)!.get(state)
+    setKundeId(liste[0]?.id ?? '')
+  }
+
+  function submit() {
+    const kunde = kundenListe.find((k) => k.id === kundeId)
+    if (!kunde || !steuerBegruendung.trim()) return
+    onSubmit({ kundeBereich: bereich, kundeId: kunde.id, kundeName: kunde.ansprechpartner, steuerBegruendung, erstelltVon })
+  }
+
+  return (
+    <div>
+      <Field label="Bereich">
+        <select className={inputClass} value={bereich} onChange={(e) => changeBereich(e.target.value as KundeBereich)}>
+          {KUNDEN_BEREICHE.map((b) => <option key={b.id} value={b.id}>{b.label}</option>)}
+        </select>
+      </Field>
+      <Field label="Kunde/Mandant">
+        <select className={inputClass} value={kundeId} onChange={(e) => setKundeId(e.target.value)}>
+          {kundenListe.length === 0 && <option value="">– keine Kunden in diesem Bereich –</option>}
+          {kundenListe.map((k) => <option key={k.id} value={k.id}>{k.firma} ({k.ansprechpartner})</option>)}
+        </select>
+      </Field>
+      <Field label="Begründung (z.B. Steuerersparnis)">
+        <textarea
+          className={inputClass}
+          rows={4}
+          value={steuerBegruendung}
+          onChange={(e) => setSteuerBegruendung(e.target.value)}
+          placeholder="z.B. Durch AfA und Finanzierungskosten ca. 4.200 €/Jahr Steuerersparnis bei diesem Objekt."
+        />
+      </Field>
+      <Field label="Erstellt von">
+        <input className={inputClass} value={erstelltVon} onChange={(e) => setErstelltVon(e.target.value)} />
+      </Field>
+      <div className="mt-4 flex justify-end">
+        <PrimaryButton onClick={submit} disabled={!kundeId}>Vorschlag anlegen &amp; Link erzeugen</PrimaryButton>
+      </div>
     </div>
   )
 }

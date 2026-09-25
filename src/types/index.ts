@@ -2,6 +2,10 @@
 
 export type Bereich = 'beratung' | 'immobilien' | 'erben' | 'betriebsuebergabe' | 'betriebsformen' | 'akademie' | 'finanzierungen'
 
+// Bereiche, die eine Kunden-/Mandanten-Liste vom Typ Kunde[] führen (alle außer Immobilien,
+// das stattdessen Objekte führt) — Basis für die bereichsübergreifende Objekt-Kunde-Zuweisung.
+export type KundeBereich = Exclude<Bereich, 'immobilien'>
+
 export type Prioritaet = 'Hoch' | 'Mittel' | 'Niedrig'
 
 export type StatusNode = {
@@ -176,6 +180,31 @@ export type Objekt = {
   verantwortlich: string
   activities: ActivityEntry[]
   dokumente: Partial<Record<DokumentOrdnerName, Dokument[]>>
+  // Herkunft aus dem separaten ImmoRadar-Scan-Tool (eigenständiges Projekt, nicht Teil dieses
+  // Repos) — der Link führt zurück zum Original-Inserat, die Lukrativität ist dessen eigene
+  // Einschätzung (z.B. "sehr interessant"/"interessant"/"neutral"/"eher unattraktiv").
+  quelle?: 'immoradar'
+  immoRadarLink?: string
+  lukrativitaet?: string
+  zugewiesenerKunde?: { bereich: KundeBereich; kundeId: string; kundeName: string }
+}
+
+// Vorschlag/Exposé-Versand: ein Objekt wird einem Kunden (aus einem beliebigen Kunden-Bereich)
+// mit einer Begründung (z.B. Steuerersparnis) vorgeschlagen. Der Kunde entscheidet über den
+// personalisierten Formular-Link (/formular/expose/:id) selbst über Annahme/Ablehnung.
+export type ObjektVorschlagStatus = 'offen' | 'akzeptiert' | 'abgelehnt'
+
+export type ObjektVorschlag = {
+  id: string
+  objektId: string
+  kundeBereich: KundeBereich
+  kundeId: string
+  kundeName: string
+  steuerBegruendung: string
+  status: ObjektVorschlagStatus
+  erstelltAm: string
+  erstelltVon: string
+  beantwortetAm?: string
 }
 
 // ---------- Investorenportal (Investitionsfonds) ----------
