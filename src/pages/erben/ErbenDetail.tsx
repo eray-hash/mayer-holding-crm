@@ -122,6 +122,10 @@ export function ErbenDetail() {
               <div className="mb-1.5 text-xs font-medium text-slate-400">Allgemeine Vollmacht digital versenden</div>
               <FormularLinkButtons pfad={`/formular/vollmacht/erben/${mandant.id}`} />
             </div>
+            <div className="mt-3">
+              <div className="mb-1.5 text-xs font-medium text-slate-400">Mandantenfragebogen digital versenden</div>
+              <FormularLinkButtons pfad={`/formular/mandantenfragebogen/erben/${mandant.id}`} />
+            </div>
           </Card>
           <Card className="p-5 lg:col-span-2">
             <h3 className="mb-3 text-sm font-semibold text-slate-700">Aktivitäten-Timeline</h3>
