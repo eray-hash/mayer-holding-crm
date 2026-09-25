@@ -1,37 +1,10 @@
 import { useState } from 'react'
-import { Eye, FileText, ExternalLink, Link2, Check } from 'lucide-react'
+import { Eye, FileText } from 'lucide-react'
 import type { Vorlage } from '../types'
 import { fmtDate } from '../lib/dates'
 import { Modal, Card } from './ui'
 import { VORLAGEN_KATEGORIEN } from '../data/constants'
-
-function shareableUrl(formularPfad: string): string {
-  const { origin, pathname } = window.location
-  return `${origin}${pathname}#${formularPfad}`
-}
-
-function CopyLinkButton({ formularPfad }: { formularPfad: string }) {
-  const [copied, setCopied] = useState(false)
-  return (
-    <button
-      onClick={async (e) => {
-        e.stopPropagation()
-        try {
-          await navigator.clipboard.writeText(shareableUrl(formularPfad))
-          setCopied(true)
-          setTimeout(() => setCopied(false), 1500)
-        } catch {
-          // Clipboard-Zugriff kann in manchen Kontexten fehlschlagen — kein Blocker für die Demo.
-        }
-      }}
-      className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
-      title="Link zu diesem Formular kopieren"
-    >
-      {copied ? <Check size={13} className="text-emerald-600" /> : <Link2 size={13} />}
-      {copied ? 'Kopiert' : 'Link kopieren'}
-    </button>
-  )
-}
+import { FormularLinkButtons } from './FormularLink'
 
 export function VorlagenListe({ kategorie, vorlagen }: { kategorie: string; vorlagen: Vorlage[] }) {
   const [preview, setPreview] = useState<Vorlage | null>(null)
@@ -72,20 +45,7 @@ export function VorlagenListe({ kategorie, vorlagen }: { kategorie: string; vorl
                     >
                       <Eye size={13} /> Vorschau
                     </button>
-                    {v.formularPfad && (
-                      <>
-                        <a
-                          href={`#${v.formularPfad}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          onClick={(e) => e.stopPropagation()}
-                          className="inline-flex items-center gap-1 rounded-md bg-accent-50 px-2.5 py-1 text-xs font-medium text-accent-700 hover:bg-accent-100"
-                        >
-                          <ExternalLink size={13} /> Formular öffnen
-                        </a>
-                        <CopyLinkButton formularPfad={v.formularPfad} />
-                      </>
-                    )}
+                    {v.formularPfad && <FormularLinkButtons pfad={v.formularPfad} />}
                   </div>
                 </td>
               </tr>

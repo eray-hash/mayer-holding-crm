@@ -6,6 +6,7 @@ import { Card, EmptyState } from '../../components/ui'
 import { fmtDate, isOverdue } from '../../lib/dates'
 import { PRIORITAETEN } from '../../data/constants'
 import { ERBEN_CHECKLISTE } from '../../data/seedErben'
+import { FormularLinkButtons } from '../../components/FormularLink'
 import type { Prioritaet } from '../../types'
 
 const TABS = [
@@ -116,6 +117,10 @@ export function ErbenDetail() {
               <div className="text-xs font-medium text-slate-400">Nächste Follow-up-Aufgabe</div>
               <div className={`text-sm ${overdue ? 'font-medium text-rose-600' : 'text-slate-700'}`}>{fmtDate(mandant.followUp.date)} — {mandant.followUp.note}</div>
             </div>
+            <div className="mt-4 border-t border-slate-100 pt-4">
+              <div className="mb-1.5 text-xs font-medium text-slate-400">Allgemeine Vollmacht digital versenden</div>
+              <FormularLinkButtons pfad={`/formular/vollmacht/erben/${mandant.id}`} />
+            </div>
           </Card>
           <Card className="p-5 lg:col-span-2">
             <h3 className="mb-3 text-sm font-semibold text-slate-700">Aktivitäten-Timeline</h3>
@@ -132,6 +137,21 @@ export function ErbenDetail() {
               {mandant.activities.length === 0 && <EmptyState text="Keine Aktivitäten." />}
             </ul>
           </Card>
+
+          {mandant.signaturen && mandant.signaturen.length > 0 && (
+            <Card className="p-5 lg:col-span-3">
+              <h3 className="mb-3 text-sm font-semibold text-slate-700">Erfasste Unterschriften</h3>
+              <div className="flex flex-wrap gap-4">
+                {mandant.signaturen.map((s) => (
+                  <div key={s.id} className="rounded-lg border border-slate-200 p-3">
+                    <img src={s.dataUrl} alt={`Unterschrift ${s.name}`} className="h-20 rounded bg-white" />
+                    <div className="mt-1.5 text-xs text-slate-500">{s.kontext}</div>
+                    <div className="text-xs text-slate-400">{s.name} · {fmtDate(s.datum)}</div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
         </div>
       )}
 
