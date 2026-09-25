@@ -129,6 +129,21 @@ export function KundenDetail() {
               {kunde.activities.length === 0 && <EmptyState text="Keine Aktivitäten." />}
             </ul>
           </Card>
+
+          {kunde.signaturen && kunde.signaturen.length > 0 && (
+            <Card className="p-5 lg:col-span-3">
+              <h3 className="mb-3 text-sm font-semibold text-slate-700">Erfasste Unterschriften</h3>
+              <div className="flex flex-wrap gap-4">
+                {kunde.signaturen.map((s) => (
+                  <div key={s.id} className="rounded-lg border border-slate-200 p-3">
+                    <img src={s.dataUrl} alt={`Unterschrift ${s.name}`} className="h-20 rounded bg-white" />
+                    <div className="mt-1.5 text-xs text-slate-500">{s.kontext}</div>
+                    <div className="text-xs text-slate-400">{s.name} · {fmtDate(s.datum)}</div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
         </div>
       )}
 

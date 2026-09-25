@@ -26,6 +26,14 @@ export type ActivityEntry = {
   user: string
 }
 
+export type Signatur = {
+  id: string
+  name: string
+  dataUrl: string // erfasste Unterschrift als PNG (Data-URL)
+  datum: string
+  kontext: string // z.B. "Feedbackbogen Vermögensschutz"
+}
+
 // ---------- Beratung ----------
 
 export type RechnungStatus = 'Entwurf' | 'Versendet' | 'Bezahlt' | 'Überfällig'
@@ -85,6 +93,7 @@ export type Kunde = {
   letzteAktivitaet: string
   activities: ActivityEntry[]
   unterlagenCheckliste?: Record<string, boolean>
+  signaturen?: Signatur[]
 }
 
 export type Vorlage = {
@@ -94,6 +103,7 @@ export type Vorlage = {
   typ: string
   zuletztGeaendert: string
   text: string
+  formularPfad?: string // gesetzt, wenn diese Vorlage ein echtes, ausfüllbares digitales Formular hat
 }
 
 // ---------- Immobilien ----------

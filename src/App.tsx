@@ -37,6 +37,7 @@ import { PortalOverview } from './pages/portal/PortalOverview'
 import { PortalRendite } from './pages/portal/PortalRendite'
 import { PortalAuszahlungen } from './pages/portal/PortalAuszahlungen'
 import { PortalDokumente } from './pages/portal/PortalDokumente'
+import { PublicFeedbackbogen } from './pages/formulare/PublicFeedbackbogen'
 
 function RootRedirect() {
   return <Navigate to="/heute" replace />
@@ -159,6 +160,15 @@ function PortalRoutes() {
 
 function AppRoutes() {
   const location = useLocation()
+  // Öffentliche, ausfüllbare Formulare: brauchen weder Rollenwahl noch Portal-Login — genau
+  // der Link, den man z.B. nach einem Vortrag an Interessenten verschickt.
+  if (location.pathname.startsWith('/formular/')) {
+    return (
+      <Routes>
+        <Route path="/formular/feedbackbogen" element={<PublicFeedbackbogen />} />
+      </Routes>
+    )
+  }
   const isPortal = location.pathname.startsWith('/portal')
   return isPortal ? <PortalRoutes /> : <AdminRoutes />
 }
