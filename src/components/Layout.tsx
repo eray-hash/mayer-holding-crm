@@ -1,10 +1,11 @@
 import { useState, type ReactNode } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
-import { Menu, X, Building2, Briefcase, RotateCcw, User, ExternalLink, LogOut, Users, ScrollText, Handshake, Scale, GraduationCap, PiggyBank } from 'lucide-react'
+import { Menu, X, Building2, Briefcase, RotateCcw, User, ExternalLink, LogOut, Users, ScrollText, Handshake, Scale, GraduationCap, PiggyBank, Camera } from 'lucide-react'
 import type { Bereich } from '../types'
 import { useApp } from '../context/AppContext'
 import { useAuth } from '../context/AuthContext'
 import { isSupabaseConfigured } from '../lib/supabaseClient'
+import { DokumentenImportModal } from './DokumentenImportModal'
 import { SidebarBeratung } from './SidebarBeratung'
 import { SidebarImmobilien } from './SidebarImmobilien'
 import { SidebarErben } from './SidebarErben'
@@ -35,6 +36,7 @@ export function Layout({ children }: { children: ReactNode }) {
   const { session, mitarbeiter, signOut } = useAuth()
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [dokumentImportOpen, setDokumentImportOpen] = useState(false)
   const navigate = useNavigate()
 
   const aktuellerBereich = BEREICHE.find((b) => b.id === state.bereich) ?? BEREICHE[0]
@@ -74,6 +76,13 @@ export function Layout({ children }: { children: ReactNode }) {
           </span>
         </div>
         <div className="flex items-center gap-3">
+          <button
+            onClick={() => setDokumentImportOpen(true)}
+            className="hidden items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-50 sm:inline-flex"
+            title="Dokument per Handyscan/Druckerscan importieren"
+          >
+            <Camera size={13} /> Dokument importieren
+          </button>
           <a
             href="#/portal/login"
             target="_blank"
@@ -137,33 +146,37 @@ export function Layout({ children }: { children: ReactNode }) {
       {drawerOpen && (
         <div className="fixed inset-0 z-50 flex">
           <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-[1px]" onClick={() => setDrawerOpen(false)} />
-          <div className="relative z-10 flex h-full w-full max-w-md flex-col bg-white p-6 shadow-2xl">
-            <div className="mb-6 flex items-center justify-between">
+          <div className="relative z-10 flex h-full w-full max-w-md flex-col bg-white shadow-2xl">
+            <div className="flex flex-shrink-0 items-center justify-between p-6 pb-0">
               <h2 className="text-lg font-semibold text-slate-800">Bereich wählen</h2>
               <button onClick={() => setDrawerOpen(false)} className="rounded-md p-1.5 text-slate-400 hover:bg-slate-100">
                 <X size={20} />
               </button>
             </div>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              {BEREICHE.map((b) => (
-                <button
-                  key={b.id}
-                  onClick={() => chooseBereich(b.id)}
-                  className={`group flex flex-col items-center gap-3 rounded-2xl border p-8 text-center transition ${
-                    state.bereich === b.id
-                      ? 'border-accent-400 bg-accent-50 ring-2 ring-accent-200'
-                      : 'border-slate-200 hover:border-accent-300 hover:bg-slate-50'
-                  }`}
-                >
-                  <b.icon size={36} className="text-accent-600" />
-                  <span className="text-base font-semibold text-slate-800">{b.label}</span>
-                  <span className="text-xs text-slate-500">{b.beschreibung}</span>
-                </button>
-              ))}
+            <div className="min-h-0 flex-1 overflow-y-auto p-6">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                {BEREICHE.map((b) => (
+                  <button
+                    key={b.id}
+                    onClick={() => chooseBereich(b.id)}
+                    className={`group flex flex-col items-center gap-3 rounded-2xl border p-8 text-center transition ${
+                      state.bereich === b.id
+                        ? 'border-accent-400 bg-accent-50 ring-2 ring-accent-200'
+                        : 'border-slate-200 hover:border-accent-300 hover:bg-slate-50'
+                    }`}
+                  >
+                    <b.icon size={36} className="text-accent-600" />
+                    <span className="text-base font-semibold text-slate-800">{b.label}</span>
+                    <span className="text-xs text-slate-500">{b.beschreibung}</span>
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         </div>
       )}
+
+      <DokumentenImportModal open={dokumentImportOpen} onClose={() => setDokumentImportOpen(false)} />
     </div>
   )
 }

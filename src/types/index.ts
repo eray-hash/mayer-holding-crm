@@ -207,6 +207,19 @@ export type ObjektVorschlag = {
   beantwortetAm?: string
 }
 
+// Dokumenten-Import per Handyscan/Drucker: eine Datei (Foto/PDF) landet zunächst unzugewiesen hier,
+// das System schlägt auf Basis des erfassten Texts einen passenden Kunden/Mandanten vor (beliebiger
+// KundeBereich), die endgültige Zuweisung bestätigt ein Mitarbeiter.
+export type ImportiertesDokument = {
+  id: string
+  dateiname: string
+  hochgeladenAm: string
+  vorschauDataUrl?: string
+  erkannterText: string
+  vorschlag?: { bereich: KundeBereich; kundeId: string; kundeName: string }
+  zugewiesen?: { bereich: KundeBereich; kundeId: string; kundeName: string }
+}
+
 // ---------- Investorenportal (Investitionsfonds) ----------
 
 export type FondsZeichnungStatus = 'Zeichnung eingegangen' | 'Kapital eingezahlt' | 'Allokiert' | 'Aktiv'

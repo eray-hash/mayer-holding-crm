@@ -16,6 +16,9 @@ import type {
   FondsInvestor,
   FondsDokument,
   ObjektVorschlag,
+  ImportiertesDokument,
+  KundeBereich,
+  ActivityEntry,
 } from '../types'
 import type { Projekt, Aufgabe, AufgabenStatus, Meilenstein } from '../types/project'
 import { seedKunden, seedRechnungen, seedProtokolle, seedKonzepte, seedVertraege, seedVorlagen } from '../data/seedBeratung'
@@ -69,6 +72,7 @@ export type AppData = {
   finanzierungenMandanten: Kunde[]
   vorlagenFinanzierungen: Vorlage[]
   objektVorschlaege: ObjektVorschlag[]
+  importierteDokumente: ImportiertesDokument[]
 }
 
 const STORAGE_KEY = 'mayer-holding-crm-data-v1'
@@ -100,6 +104,7 @@ function buildSeed(): AppData {
     finanzierungenMandanten: seedFinanzierungenMandanten,
     vorlagenFinanzierungen: seedVorlagenFinanzierungen,
     objektVorschlaege: [],
+    importierteDokumente: [],
   }
 }
 
@@ -125,6 +130,7 @@ function loadInitial(): AppData {
         if (!Array.isArray(parsed.finanzierungenMandanten)) parsed.finanzierungenMandanten = seedFinanzierungenMandanten
         if (!Array.isArray(parsed.vorlagenFinanzierungen)) parsed.vorlagenFinanzierungen = seedVorlagenFinanzierungen
         if (!Array.isArray(parsed.objektVorschlaege)) parsed.objektVorschlaege = []
+        if (!Array.isArray(parsed.importierteDokumente)) parsed.importierteDokumente = []
         return parsed
       }
     }
@@ -186,6 +192,30 @@ type Action =
   | { type: 'ADD_OBJEKT_VORSCHLAG'; vorschlag: ObjektVorschlag }
   | { type: 'ACCEPT_OBJEKT_VORSCHLAG'; id: string }
   | { type: 'REJECT_OBJEKT_VORSCHLAG'; id: string }
+  | { type: 'ADD_IMPORTIERTES_DOKUMENT'; dokument: ImportiertesDokument }
+  | { type: 'ASSIGN_IMPORTIERTES_DOKUMENT'; id: string; bereich: KundeBereich; kundeId: string; kundeName: string }
+
+// Hängt eine Aktivität an den Kunden/Mandanten im richtigen Bereichs-Array — zentrale Stelle, da
+// jeder KundeBereich sein eigenes AppData-Feld hat (siehe kundenBereiche.ts für die Lese-Seite).
+function appendKundeActivity(state: AppData, bereich: KundeBereich, kundeId: string, activity: ActivityEntry): AppData {
+  const patch = (list: Kunde[]) => list.map((k) => (k.id === kundeId ? { ...k, activities: [activity, ...k.activities] } : k))
+  switch (bereich) {
+    case 'beratung':
+      return { ...state, kunden: patch(state.kunden) }
+    case 'erben':
+      return { ...state, erbenMandanten: patch(state.erbenMandanten) }
+    case 'betriebsuebergabe':
+      return { ...state, betriebsuebergabeMandanten: patch(state.betriebsuebergabeMandanten) }
+    case 'betriebsformen':
+      return { ...state, betriebsformenMandanten: patch(state.betriebsformenMandanten) }
+    case 'akademie':
+      return { ...state, akademieTeilnehmer: patch(state.akademieTeilnehmer) }
+    case 'finanzierungen':
+      return { ...state, finanzierungenMandanten: patch(state.finanzierungenMandanten) }
+    default:
+      return state
+  }
+}
 
 function reducer(state: AppData, action: Action): AppData {
   switch (action.type) {
@@ -242,8 +272,21 @@ function reducer(state: AppData, action: Action): AppData {
         ...state,
         rechnungen: state.rechnungen.map((r) => (r.id === action.id ? { ...r, ...action.patch } : r)),
       }
-    case 'ADD_PROTOKOLL':
-      return { ...state, protokolle: [action.protokoll, ...state.protokolle] }
+    case 'ADD_PROTOKOLL': {
+      const activity = {
+        id: uid('act'),
+        date: today(),
+        text: `Gesprächsprotokoll erfasst: „${action.protokoll.betreff}" (Teilnehmer: ${action.protokoll.teilnehmer})`,
+        user: CURRENT_USER,
+      }
+      return {
+        ...state,
+        protokolle: [action.protokoll, ...state.protokolle],
+        kunden: state.kunden.map((k) =>
+          k.id === action.protokoll.kundeId ? { ...k, activities: [activity, ...k.activities] } : k,
+        ),
+      }
+    }
     case 'ADD_OBJEKT':
       return { ...state, objekte: [action.objekt, ...state.objekte] }
     case 'UPDATE_OBJEKT':
@@ -591,6 +634,23 @@ function reducer(state: AppData, action: Action): AppData {
           v.id === action.id ? { ...v, status: 'abgelehnt', beantwortetAm: today() } : v,
         ),
       }
+    case 'ADD_IMPORTIERTES_DOKUMENT':
+      return { ...state, importierteDokumente: [action.dokument, ...state.importierteDokumente] }
+    case 'ASSIGN_IMPORTIERTES_DOKUMENT': {
+      const dok = state.importierteDokumente.find((d) => d.id === action.id)
+      if (!dok) return state
+      const zugewiesen = { bereich: action.bereich, kundeId: action.kundeId, kundeName: action.kundeName }
+      const activity: ActivityEntry = {
+        id: uid('act'),
+        date: today(),
+        text: `Importiertes Dokument zugewiesen: „${dok.dateiname}"`,
+        user: CURRENT_USER,
+      }
+      return {
+        ...appendKundeActivity(state, action.bereich, action.kundeId, activity),
+        importierteDokumente: state.importierteDokumente.map((d) => (d.id === action.id ? { ...d, zugewiesen } : d)),
+      }
+    }
     default:
       return state
   }

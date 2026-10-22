@@ -1,13 +1,14 @@
 import { useState } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
-import { ArrowLeft, Plus } from 'lucide-react'
+import { ArrowLeft, Plus, Phone } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { StatusWidget } from '../../components/StatusWidget'
-import { StatusBadge, Card, Modal, Field, inputClass, PrimaryButton, EmptyState } from '../../components/ui'
+import { StatusBadge, Card, Modal, Field, inputClass, PrimaryButton, SecondaryButton, EmptyState } from '../../components/ui'
 import { fmtDate, isOverdue, today, uid, fmtEUR } from '../../lib/dates'
-import { PRIORITAETEN } from '../../data/constants'
+import { PRIORITAETEN, CURRENT_USER } from '../../data/constants'
 import { ZugewieseneObjekte } from '../../components/ZugewieseneObjekte'
 import { FormularLinkButtons } from '../../components/FormularLink'
+import { CallRecorder } from '../../components/CallRecorder'
 import type { Prioritaet } from '../../types'
 
 const TABS = [
@@ -24,6 +25,7 @@ export function KundenDetail() {
   const navigate = useNavigate()
   const { state, dispatch } = useApp()
   const [protokollOpen, setProtokollOpen] = useState(false)
+  const [callRecorderOpen, setCallRecorderOpen] = useState(false)
   const [editFollowUp, setEditFollowUp] = useState(false)
 
   const kunde = state.kunden.find((k) => k.id === id)
@@ -184,7 +186,8 @@ export function KundenDetail() {
 
       {tab === 'protokolle' && (
         <div>
-          <div className="mb-3 flex justify-end">
+          <div className="mb-3 flex justify-end gap-2">
+            <SecondaryButton onClick={() => setCallRecorderOpen(true)}><Phone size={14} /> Gespräch aufzeichnen</SecondaryButton>
             <PrimaryButton onClick={() => setProtokollOpen(true)}><Plus size={14} /> Neues Protokoll</PrimaryButton>
           </div>
           <div className="space-y-3">
@@ -255,6 +258,26 @@ export function KundenDetail() {
           onSubmit={(p) => {
             dispatch({ type: 'ADD_PROTOKOLL', protokoll: { ...p, id: uid('p'), kundeId: kunde.id } })
             setProtokollOpen(false)
+          }}
+        />
+      </Modal>
+
+      <Modal open={callRecorderOpen} onClose={() => setCallRecorderOpen(false)} title="Telefonat aufzeichnen" width="max-w-2xl">
+        <CallRecorder
+          onCancel={() => setCallRecorderOpen(false)}
+          onSave={(transcript) => {
+            dispatch({
+              type: 'ADD_PROTOKOLL',
+              protokoll: {
+                id: uid('p'),
+                kundeId: kunde.id,
+                datum: today(),
+                teilnehmer: `${kunde.ansprechpartner}, ${CURRENT_USER}`,
+                betreff: 'Telefonat (automatisch transkribiert)',
+                text: transcript,
+              },
+            })
+            setCallRecorderOpen(false)
           }}
         />
       </Modal>
