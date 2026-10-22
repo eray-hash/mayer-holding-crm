@@ -1,11 +1,12 @@
 import { useState, type ReactNode } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
-import { Menu, X, Building2, Briefcase, RotateCcw, User, ExternalLink, LogOut, Users, ScrollText, Handshake, Scale, GraduationCap, PiggyBank, Camera } from 'lucide-react'
+import { Menu, X, Building2, Briefcase, RotateCcw, User, ExternalLink, LogOut, Users, ScrollText, Handshake, Scale, GraduationCap, PiggyBank, Camera, Inbox } from 'lucide-react'
 import type { Bereich } from '../types'
 import { useApp } from '../context/AppContext'
 import { useAuth } from '../context/AuthContext'
 import { isSupabaseConfigured } from '../lib/supabaseClient'
 import { DokumentenImportModal } from './DokumentenImportModal'
+import { PosteingangModal } from './PosteingangModal'
 import { SidebarBeratung } from './SidebarBeratung'
 import { SidebarImmobilien } from './SidebarImmobilien'
 import { SidebarErben } from './SidebarErben'
@@ -37,6 +38,7 @@ export function Layout({ children }: { children: ReactNode }) {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [dokumentImportOpen, setDokumentImportOpen] = useState(false)
+  const [posteingangOpen, setPosteingangOpen] = useState(false)
   const navigate = useNavigate()
 
   const aktuellerBereich = BEREICHE.find((b) => b.id === state.bereich) ?? BEREICHE[0]
@@ -76,6 +78,13 @@ export function Layout({ children }: { children: ReactNode }) {
           </span>
         </div>
         <div className="flex items-center gap-3">
+          <button
+            onClick={() => setPosteingangOpen(true)}
+            className="hidden items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-50 sm:inline-flex"
+            title="E-Mail-Posteingang (info@amayer-holding.com)"
+          >
+            <Inbox size={13} /> Postfach
+          </button>
           <button
             onClick={() => setDokumentImportOpen(true)}
             className="hidden items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-50 sm:inline-flex"
@@ -177,6 +186,7 @@ export function Layout({ children }: { children: ReactNode }) {
       )}
 
       <DokumentenImportModal open={dokumentImportOpen} onClose={() => setDokumentImportOpen(false)} />
+      <PosteingangModal open={posteingangOpen} onClose={() => setPosteingangOpen(false)} />
     </div>
   )
 }

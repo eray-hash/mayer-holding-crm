@@ -1,26 +1,11 @@
 import { useRef, useState } from 'react'
 import { Camera, CheckCircle2, FileText } from 'lucide-react'
-import { useApp, type AppData } from '../context/AppContext'
+import { useApp } from '../context/AppContext'
 import { KUNDEN_BEREICHE } from '../data/kundenBereiche'
+import { suggestKunde } from '../lib/matchKunde'
 import { Modal, Field, inputClass, PrimaryButton, SecondaryButton } from './ui'
 import { uid, today } from '../lib/dates'
 import type { KundeBereich } from '../types'
-
-function suggestKunde(state: AppData, text: string): { bereich: KundeBereich; kundeId: string; kundeName: string; score: number } | null {
-  const tokens = text.toLowerCase().match(/[a-zäöüß]{3,}/g) ?? []
-  if (tokens.length === 0) return null
-  let best: { bereich: KundeBereich; kundeId: string; kundeName: string; score: number } | null = null
-  for (const b of KUNDEN_BEREICHE) {
-    for (const k of b.get(state)) {
-      const haystack = `${k.firma} ${k.ansprechpartner}`.toLowerCase()
-      const score = tokens.filter((t) => haystack.includes(t)).length
-      if (score > 0 && (!best || score > best.score)) {
-        best = { bereich: b.id, kundeId: k.id, kundeName: `${k.firma} (${k.ansprechpartner})`, score }
-      }
-    }
-  }
-  return best
-}
 
 export function DokumentenImportModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { state, dispatch } = useApp()

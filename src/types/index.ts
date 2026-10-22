@@ -220,6 +220,22 @@ export type ImportiertesDokument = {
   zugewiesen?: { bereich: KundeBereich; kundeId: string; kundeName: string }
 }
 
+// Posteingang: eine via "email-gateway"-Edge-Function abgerufene echte E-Mail aus
+// info@amayer-holding.com. Wird per messageId dedupliziert, einem Kunden zugeordnet (vorhandener
+// Treffer per E-Mail-Adresse, sonst Text-Vorschlag) oder als neuer Lead übernommen.
+export type EingegangeneEmail = {
+  id: string
+  messageId: string
+  von: string
+  vonName: string
+  betreff: string
+  datum: string
+  ausschnitt: string
+  vorschlag?: { bereich: KundeBereich; kundeId: string; kundeName: string }
+  zugewiesen?: { bereich: KundeBereich; kundeId: string; kundeName: string }
+  ignoriert?: boolean
+}
+
 // ---------- Investorenportal (Investitionsfonds) ----------
 
 export type FondsZeichnungStatus = 'Zeichnung eingegangen' | 'Kapital eingezahlt' | 'Allokiert' | 'Aktiv'

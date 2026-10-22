@@ -17,6 +17,7 @@ import type {
   FondsDokument,
   ObjektVorschlag,
   ImportiertesDokument,
+  EingegangeneEmail,
   KundeBereich,
   ActivityEntry,
 } from '../types'
@@ -73,6 +74,7 @@ export type AppData = {
   vorlagenFinanzierungen: Vorlage[]
   objektVorschlaege: ObjektVorschlag[]
   importierteDokumente: ImportiertesDokument[]
+  eingegangeneEmails: EingegangeneEmail[]
 }
 
 const STORAGE_KEY = 'mayer-holding-crm-data-v1'
@@ -105,6 +107,7 @@ function buildSeed(): AppData {
     vorlagenFinanzierungen: seedVorlagenFinanzierungen,
     objektVorschlaege: [],
     importierteDokumente: [],
+    eingegangeneEmails: [],
   }
 }
 
@@ -131,6 +134,7 @@ function loadInitial(): AppData {
         if (!Array.isArray(parsed.vorlagenFinanzierungen)) parsed.vorlagenFinanzierungen = seedVorlagenFinanzierungen
         if (!Array.isArray(parsed.objektVorschlaege)) parsed.objektVorschlaege = []
         if (!Array.isArray(parsed.importierteDokumente)) parsed.importierteDokumente = []
+        if (!Array.isArray(parsed.eingegangeneEmails)) parsed.eingegangeneEmails = []
         return parsed
       }
     }
@@ -194,6 +198,9 @@ type Action =
   | { type: 'REJECT_OBJEKT_VORSCHLAG'; id: string }
   | { type: 'ADD_IMPORTIERTES_DOKUMENT'; dokument: ImportiertesDokument }
   | { type: 'ASSIGN_IMPORTIERTES_DOKUMENT'; id: string; bereich: KundeBereich; kundeId: string; kundeName: string }
+  | { type: 'ADD_EINGEGANGENE_EMAILS'; emails: EingegangeneEmail[] }
+  | { type: 'ASSIGN_EINGEGANGENE_EMAIL'; id: string; bereich: KundeBereich; kundeId: string; kundeName: string }
+  | { type: 'IGNORE_EINGEGANGENE_EMAIL'; id: string }
 
 // Hängt eine Aktivität an den Kunden/Mandanten im richtigen Bereichs-Array — zentrale Stelle, da
 // jeder KundeBereich sein eigenes AppData-Feld hat (siehe kundenBereiche.ts für die Lese-Seite).
@@ -651,6 +658,31 @@ function reducer(state: AppData, action: Action): AppData {
         importierteDokumente: state.importierteDokumente.map((d) => (d.id === action.id ? { ...d, zugewiesen } : d)),
       }
     }
+    case 'ADD_EINGEGANGENE_EMAILS': {
+      const bekannteIds = new Set(state.eingegangeneEmails.map((e) => e.messageId))
+      const neue = action.emails.filter((e) => !bekannteIds.has(e.messageId))
+      return { ...state, eingegangeneEmails: [...neue, ...state.eingegangeneEmails] }
+    }
+    case 'ASSIGN_EINGEGANGENE_EMAIL': {
+      const mail = state.eingegangeneEmails.find((e) => e.id === action.id)
+      if (!mail) return state
+      const zugewiesenMail = { bereich: action.bereich, kundeId: action.kundeId, kundeName: action.kundeName }
+      const activity: ActivityEntry = {
+        id: uid('act'),
+        date: today(),
+        text: `E-Mail zugeordnet: „${mail.betreff}" von ${mail.vonName}`,
+        user: CURRENT_USER,
+      }
+      return {
+        ...appendKundeActivity(state, action.bereich, action.kundeId, activity),
+        eingegangeneEmails: state.eingegangeneEmails.map((e) => (e.id === action.id ? { ...e, zugewiesen: zugewiesenMail } : e)),
+      }
+    }
+    case 'IGNORE_EINGEGANGENE_EMAIL':
+      return {
+        ...state,
+        eingegangeneEmails: state.eingegangeneEmails.map((e) => (e.id === action.id ? { ...e, ignoriert: true } : e)),
+      }
     default:
       return state
   }

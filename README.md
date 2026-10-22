@@ -50,6 +50,40 @@ npm run deploy
 Baut das Projekt und pusht `dist/` auf den Branch `gh-pages` (Paket `gh-pages` ist als Dev-Dependency
 enthalten). In diesem Fall in den Pages-Einstellungen als Source den Branch `gh-pages` wählen.
 
+## E-Mail-Postfach-Anbindung (info@amayer-holding.com)
+
+Die Edge Function `supabase/functions/email-gateway` verbindet das CRM mit dem echten IONOS-Postfach
+(IMAP-Abruf + SMTP-Versand). Das echte Postfach-Passwort steht **nirgends im Code** — es wird nur als
+Supabase-Secret hinterlegt, das Frontend bekommt lediglich die Function-URL + ein geteiltes Secret.
+
+**Einmalige Einrichtung:**
+
+1. Edge Function deployen (Supabase-Projekt `fundament-command-center`):
+   ```bash
+   npx supabase functions deploy email-gateway --project-ref gqumelldxrkxpjtnnotv --no-verify-jwt
+   ```
+2. Secrets setzen (im Supabase-Dashboard unter **Edge Functions → email-gateway → Secrets**, oder per
+   CLI — **das eigentliche Postfach-Passwort wird nur hier eingetragen, nie im Chat/Code**):
+   - `IMAP_HOST` = `imap.ionos.de`, `IMAP_PORT` = `993`
+   - `IMAP_USER` = `info@amayer-holding.com`, `IMAP_PASSWORD` = *(echtes Postfach-Passwort)*
+   - `SMTP_HOST` = `smtp.ionos.de`, `SMTP_PORT` = `587`
+   - `SMTP_USER` = `info@amayer-holding.com`, `SMTP_PASSWORD` = *(gleiches oder separates Passwort)*
+   - `CRM_SHARED_SECRET` = *(ein selbst gewähltes, beliebiges langes Zufalls-Secret)*
+3. Function-URL (`supabase functions list` bzw. Dashboard) und das gleiche `CRM_SHARED_SECRET` in
+   `.env.local` eintragen (siehe `.env.example`):
+   ```bash
+   VITE_EMAIL_GATEWAY_URL=https://<project-ref>.supabase.co/functions/v1/email-gateway
+   VITE_EMAIL_GATEWAY_SECRET=<gleiches Secret wie CRM_SHARED_SECRET>
+   ```
+4. Für die live auf GitHub Pages deployte Version dieselben beiden Variablen zusätzlich unter
+   **Repo-Settings → Secrets and variables → Actions** als Repository-Secrets (`VITE_EMAIL_GATEWAY_URL`,
+   `VITE_EMAIL_GATEWAY_SECRET`) hinterlegen — der Build-Workflow (`.github/workflows/deploy.yml`) reicht
+   sie bereits automatisch an `npm run build` durch (genau wie `VITE_SUPABASE_URL`/`VITE_SUPABASE_ANON_KEY`,
+   für die dasselbe gilt, falls das CRM später auf die echte Datenbank umgestellt wird).
+
+Ohne diese Konfiguration zeigt der „Postfach"-Button im CRM transparent „noch nicht verbunden" an —
+es wird nichts vorgetäuscht.
+
 ## Projektstruktur
 
 ```
