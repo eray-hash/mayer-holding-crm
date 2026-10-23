@@ -136,7 +136,11 @@ async function main() {
       }
     } catch (err) {
       console.error(`Verbindung unterbrochen (zuletzt verarbeitete UID: ${lastUid ?? '–'}): ${err.message}`)
-      await client.close().catch(() => {})
+      try {
+        client.close() // synchron, kein Promise
+      } catch {
+        // Verbindung ist ohnehin schon weg
+      }
       if (attempt >= maxAttempts) {
         console.error(`Maximale Anzahl an Wiederverbindungsversuchen erreicht (${maxAttempts}). Abbruch.`)
         console.error(`${imported} importiert/aktualisiert, ${skipped} fehlgeschlagen bis dahin. Einfach erneut starten, um fortzusetzen (dank Upsert werden bereits importierte Mails nicht dupliziert).`)
