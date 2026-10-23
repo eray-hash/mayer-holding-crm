@@ -35,6 +35,8 @@ jobs:
         env:
           VITE_EMAIL_GATEWAY_URL: ${{ secrets.VITE_EMAIL_GATEWAY_URL }}
           VITE_EMAIL_GATEWAY_SECRET: ${{ secrets.VITE_EMAIL_GATEWAY_SECRET }}
+          VITE_SUPABASE_EMAIL_URL: ${{ secrets.VITE_SUPABASE_EMAIL_URL }}
+          VITE_SUPABASE_EMAIL_ANON_KEY: ${{ secrets.VITE_SUPABASE_EMAIL_ANON_KEY }}
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
