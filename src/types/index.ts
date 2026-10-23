@@ -243,6 +243,29 @@ export type EingegangeneEmail = {
   ignoriert?: boolean
 }
 
+// Textvorlage für den E-Mail-Versand (Postfach/Kundenakte) mit Platzhaltern wie {{firma}} und
+// {{ansprechpartner}}, die beim Anwenden auf den aktuellen Kunden-Kontext ersetzt werden.
+export type MailVorlage = {
+  id: string
+  name: string
+  betreff: string
+  text: string
+}
+
+// Eine über das CRM versendete E-Mail — rein lesend aus public.gesendete_emails (vom
+// email-gateway beim erfolgreichen Versand mitgeschrieben), für den "Gesendet"-Ordner im Postfach.
+export type GesendeteEmail = {
+  id: string
+  an: string
+  anName: string
+  betreff: string
+  text: string
+  gesendetAm: string
+  kundeBereich?: KundeBereich
+  kundeId?: string
+  kundeName?: string
+}
+
 // ---------- Investorenportal (Investitionsfonds) ----------
 
 export type FondsZeichnungStatus = 'Zeichnung eingegangen' | 'Kapital eingezahlt' | 'Allokiert' | 'Aktiv'

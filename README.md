@@ -150,6 +150,29 @@ nachweislich funktionieren.
 Ohne diese Konfiguration zeigt der "Postfach"-Button im CRM transparent „Posteingang noch nicht
 verbunden" an.
 
+## Postfach-Seite (Ordnerstruktur, Gesendet, Mailvorlagen)
+
+Das Postfach (`#/postfach`, eigene Seite statt Modal) zeigt zwei Ordner — **Posteingang** (siehe
+oben) und **Gesendet**. Jede über "E-Mail senden"/"Neue E-Mail" verschickte Mail wird vom
+`email-gateway` nach erfolgreichem SMTP-Versand zusätzlich in `public.gesendete_emails` geschrieben
+(gleiche Lese-Policy wie `eingegangene_emails`):
+
+```sql
+create table if not exists public.gesendete_emails (
+  id uuid primary key default gen_random_uuid(),
+  an text not null, an_name text, betreff text, text text,
+  kunde_bereich text, kunde_id text, kunde_name text,
+  gesendet_am timestamptz not null default now()
+);
+alter table public.gesendete_emails enable row level security;
+create policy "allow read for all" on public.gesendete_emails for select using (true);
+```
+
+**Mailvorlagen** (Betreff + Text mit Platzhaltern `{{firma}}`/`{{ansprechpartner}}`) sind rein
+lokale CRM-Daten (wie die bestehenden Dokumentvorlagen), verwaltbar über "Mailvorlagen verwalten" im
+Postfach. Beim Versenden aus einer Kundenakte werden die Platzhalter automatisch durch die
+Kundendaten ersetzt; beim freien Verfassen im Postfach bleiben sie sichtbar stehen.
+
 ### Bestehende, alte E-Mails nachträglich importieren
 
 Die IONOS-Weiterleitung erfasst nur E-Mails, die **nach** ihrer Einrichtung eintreffen — ältere,

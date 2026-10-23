@@ -18,6 +18,7 @@ import type {
   ObjektVorschlag,
   ImportiertesDokument,
   EingegangeneEmail,
+  MailVorlage,
   KundeBereich,
   ActivityEntry,
 } from '../types'
@@ -32,6 +33,7 @@ import { seedBetriebsuebergabeMandanten, seedVorlagenBetriebsuebergabe } from '.
 import { seedBetriebsformenMandanten, seedVorlagenBetriebsformen } from '../data/seedBetriebsformen'
 import { seedAkademieTeilnehmer, seedVorlagenAkademie } from '../data/seedAkademie'
 import { seedFinanzierungenMandanten, seedVorlagenFinanzierungen } from '../data/seedFinanzierungen'
+import { seedMailVorlagen } from '../data/mailVorlagen'
 import {
   getNextMainStep,
   BERATUNG_STATUS,
@@ -75,6 +77,7 @@ export type AppData = {
   objektVorschlaege: ObjektVorschlag[]
   importierteDokumente: ImportiertesDokument[]
   eingegangeneEmails: EingegangeneEmail[]
+  mailVorlagen: MailVorlage[]
 }
 
 const STORAGE_KEY = 'mayer-holding-crm-data-v1'
@@ -108,6 +111,7 @@ function buildSeed(): AppData {
     objektVorschlaege: [],
     importierteDokumente: [],
     eingegangeneEmails: [],
+    mailVorlagen: seedMailVorlagen,
   }
 }
 
@@ -135,6 +139,7 @@ function loadInitial(): AppData {
         if (!Array.isArray(parsed.objektVorschlaege)) parsed.objektVorschlaege = []
         if (!Array.isArray(parsed.importierteDokumente)) parsed.importierteDokumente = []
         if (!Array.isArray(parsed.eingegangeneEmails)) parsed.eingegangeneEmails = []
+        if (!Array.isArray(parsed.mailVorlagen)) parsed.mailVorlagen = seedMailVorlagen
         return parsed
       }
     }
@@ -201,6 +206,9 @@ type Action =
   | { type: 'ADD_EINGEGANGENE_EMAILS'; emails: EingegangeneEmail[] }
   | { type: 'ASSIGN_EINGEGANGENE_EMAIL'; id: string; bereich: KundeBereich; kundeId: string; kundeName: string }
   | { type: 'IGNORE_EINGEGANGENE_EMAIL'; id: string }
+  | { type: 'ADD_MAIL_VORLAGE'; vorlage: MailVorlage }
+  | { type: 'UPDATE_MAIL_VORLAGE'; id: string; patch: Partial<MailVorlage> }
+  | { type: 'DELETE_MAIL_VORLAGE'; id: string }
 
 // Hängt eine Aktivität an den Kunden/Mandanten im richtigen Bereichs-Array — zentrale Stelle, da
 // jeder KundeBereich sein eigenes AppData-Feld hat (siehe kundenBereiche.ts für die Lese-Seite).
@@ -683,6 +691,15 @@ function reducer(state: AppData, action: Action): AppData {
         ...state,
         eingegangeneEmails: state.eingegangeneEmails.map((e) => (e.id === action.id ? { ...e, ignoriert: true } : e)),
       }
+    case 'ADD_MAIL_VORLAGE':
+      return { ...state, mailVorlagen: [action.vorlage, ...state.mailVorlagen] }
+    case 'UPDATE_MAIL_VORLAGE':
+      return {
+        ...state,
+        mailVorlagen: state.mailVorlagen.map((v) => (v.id === action.id ? { ...v, ...action.patch } : v)),
+      }
+    case 'DELETE_MAIL_VORLAGE':
+      return { ...state, mailVorlagen: state.mailVorlagen.filter((v) => v.id !== action.id) }
     default:
       return state
   }

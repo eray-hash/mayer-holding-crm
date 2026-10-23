@@ -31,6 +31,7 @@ import { FinanzierungenListe } from './pages/finanzierungen/FinanzierungenListe'
 import { FinanzierungenDetail } from './pages/finanzierungen/FinanzierungenDetail'
 import { VorlagenPageFinanzierungen } from './pages/finanzierungen/VorlagenPageFinanzierungen'
 import { HeuteScreen } from './pages/heute/HeuteScreen'
+import { Postfach } from './pages/postfach/Postfach'
 import { ProjekteListe } from './pages/projekte/ProjekteListe'
 import { PortalLogin } from './pages/portal/PortalLogin'
 import { PortalOverview } from './pages/portal/PortalOverview'
@@ -53,6 +54,7 @@ function AdminRoutesContent() {
       <Routes>
         <Route path="/" element={<RootRedirect />} />
         <Route path="/heute" element={<HeuteScreen />} />
+        <Route path="/postfach" element={<Postfach />} />
 
         <Route path="/beratung" element={<KundenListe />} />
         <Route path="/beratung/kunden/:id" element={<KundenDetail />} />

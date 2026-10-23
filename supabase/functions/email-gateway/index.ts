@@ -13,6 +13,7 @@
 import { ImapFlow } from 'npm:imapflow@1'
 import { simpleParser } from 'npm:mailparser@3'
 import nodemailer from 'npm:nodemailer@6'
+import { createClient } from 'npm:@supabase/supabase-js@2'
 
 const ALLOWED_ORIGINS = [
   'https://eray-hash.github.io',
@@ -187,11 +188,29 @@ Deno.serve(async (req: Request) => {
     }
 
     if (body.action === 'send') {
-      const { to, subject, text, html } = body
+      const { to, toName, subject, text, html, kundeBereich, kundeId, kundeName } = body
       if (!to || !subject || !text) {
         return new Response(JSON.stringify({ error: 'to, subject und text sind Pflichtfelder' }), { status: 400, headers })
       }
       await sendMail(to, subject, text, html)
+
+      // Für den "Gesendet"-Ordner im Postfach mitschreiben — best effort, ein Fehler hier darf den
+      // bereits erfolgreich versendeten Mailversand nicht als fehlgeschlagen melden.
+      try {
+        const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+        await supabase.from('gesendete_emails').insert({
+          an: to,
+          an_name: toName ?? to,
+          betreff: subject,
+          text,
+          kunde_bereich: kundeBereich ?? null,
+          kunde_id: kundeId ?? null,
+          kunde_name: kundeName ?? null,
+        })
+      } catch (logErr) {
+        console.error('Konnte gesendete Mail nicht protokollieren:', logErr)
+      }
+
       return new Response(JSON.stringify({ ok: true }), { headers })
     }
 

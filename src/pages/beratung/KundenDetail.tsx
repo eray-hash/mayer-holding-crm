@@ -289,6 +289,7 @@ export function KundenDetail() {
         open={sendEmailOpen}
         onClose={() => setSendEmailOpen(false)}
         to={kunde.email}
+        kunde={{ bereich: 'beratung', id: kunde.id, name: kunde.ansprechpartner, firma: kunde.firma, ansprechpartner: kunde.ansprechpartner }}
         onSent={({ subject }) => {
           dispatch({
             type: 'UPDATE_KUNDE',

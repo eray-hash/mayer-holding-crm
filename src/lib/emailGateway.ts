@@ -38,8 +38,15 @@ export async function syncPosteingang(limit = 20): Promise<EingegangeneMail[]> {
   return data.mails ?? []
 }
 
-export async function sendEmail(to: string, subject: string, text: string, html?: string): Promise<void> {
-  await call({ action: 'send', to, subject, text, html })
+export type SendEmailKundeKontext = {
+  toName?: string
+  kundeBereich?: string
+  kundeId?: string
+  kundeName?: string
+}
+
+export async function sendEmail(to: string, subject: string, text: string, html?: string, kontext?: SendEmailKundeKontext): Promise<void> {
+  await call({ action: 'send', to, subject, text, html, ...kontext })
 }
 
 export type Gespraechszusammenfassung = {
