@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
-import { Inbox, Send, RefreshCw, UserPlus, Check, X, AlertTriangle, Plus, Reply, ListPlus } from 'lucide-react'
+import { Inbox, Send, RefreshCw, UserPlus, Check, X, AlertTriangle, Plus, Reply, ListPlus, Search } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
-import { isEmailInboxDbConfigured, fetchStoredEmails } from '../../lib/emailInboxDb'
-import { isSentEmailsDbConfigured, fetchSentEmails } from '../../lib/sentEmailsDb'
+import { isEmailInboxDbConfigured, fetchStoredEmails, searchStoredEmails } from '../../lib/emailInboxDb'
+import { isSentEmailsDbConfigured, fetchSentEmails, searchSentEmails } from '../../lib/sentEmailsDb'
 import { matchKundeByEmail, suggestKunde } from '../../lib/matchKunde'
 import { KUNDEN_BEREICHE, kundeBereichLabel } from '../../data/kundenBereiche'
 import { uid, today, addDays, fmtDateTime } from '../../lib/dates'
@@ -33,9 +33,14 @@ export function Postfach() {
   const [bereichWahl, setBereichWahl] = useState<Record<string, KundeBereich>>({})
   const [kundeWahl, setKundeWahl] = useState<Record<string, string>>({})
 
-  const mails = [...state.eingegangeneEmails]
+  const [query, setQuery] = useState('')
+  const [suche, setSuche] = useState(false)
+  const [posteingangSucheIds, setPosteingangSucheIds] = useState<Set<string> | null>(null)
+
+  const mailsOhneSuche = [...state.eingegangeneEmails]
     .filter((e) => !e.ignoriert)
     .sort((a, b) => (b.datum < a.datum ? -1 : b.datum > a.datum ? 1 : 0))
+  const mails = posteingangSucheIds ? mailsOhneSuche.filter((m) => posteingangSucheIds.has(m.messageId)) : mailsOhneSuche
 
   async function ladePosteingang(l = limit) {
     setLoading(true)
@@ -76,9 +81,48 @@ export function Postfach() {
   }, [])
 
   useEffect(() => {
-    if (ordner === 'gesendet' && isSentEmailsDbConfigured) ladeGesendet(gesendetLimit)
+    if (ordner === 'gesendet' && isSentEmailsDbConfigured && gesendet.length === 0) ladeGesendet(gesendetLimit)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ordner])
+
+  // Server-seitige Suche (debounced) über Absender/Betreff/Text — ordnerabhängig, damit ältere,
+  // noch nicht nachgeladene E-Mails auch gefunden werden statt nur die lokal geladene Seite zu filtern.
+  useEffect(() => {
+    const trimmed = query.trim()
+    if (!trimmed) {
+      setSuche(false)
+      setPosteingangSucheIds(null)
+      if (ordner === 'gesendet') ladeGesendet(gesendetLimit)
+      return
+    }
+    const timeout = setTimeout(async () => {
+      setSuche(true)
+      setError('')
+      try {
+        if (ordner === 'posteingang') {
+          const treffer = await searchStoredEmails(trimmed, 100)
+          const emails: EingegangeneEmail[] = treffer.map((m) => {
+            const vorschlagMatch = matchKundeByEmail(state, m.von) ?? suggestKunde(state, `${m.betreff} ${m.ausschnitt} ${m.vonName}`)
+            return {
+              id: uid('mail'),
+              ...m,
+              vorschlag: vorschlagMatch ? { bereich: vorschlagMatch.bereich, kundeId: vorschlagMatch.kundeId, kundeName: vorschlagMatch.kundeName } : undefined,
+            }
+          })
+          dispatch({ type: 'ADD_EINGEGANGENE_EMAILS', emails })
+          setPosteingangSucheIds(new Set(treffer.map((m) => m.messageId)))
+        } else {
+          setGesendet(await searchSentEmails(trimmed, 100))
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Suche fehlgeschlagen.')
+      } finally {
+        setSuche(false)
+      }
+    }, 350)
+    return () => clearTimeout(timeout)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, ordner])
 
   function mehrLadenPosteingang() {
     const next = limit + 30
@@ -187,6 +231,17 @@ export function Postfach() {
               </button>
             </div>
 
+            <div className="relative border-b border-slate-100 p-2">
+              <Search size={13} className="pointer-events-none absolute left-5 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                className={`${inputClass} py-1.5 pl-7 pr-7 text-xs`}
+                placeholder="Absender, Betreff oder Text durchsuchen…"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+              {suche && <RefreshCw size={12} className="pointer-events-none absolute right-5 top-1/2 -translate-y-1/2 animate-spin text-slate-400" />}
+            </div>
+
             {error && (
               <div className="m-2 flex items-start gap-2 rounded-lg bg-rose-50 p-2 text-xs text-rose-700">
                 <AlertTriangle size={13} className="mt-0.5 flex-shrink-0" /> {error}
@@ -196,7 +251,7 @@ export function Postfach() {
             <div className="min-h-0 flex-1 overflow-y-auto">
               {ordner === 'posteingang' &&
                 (mails.length === 0 ? (
-                  <EmptyState text="Keine E-Mails geladen." />
+                  <EmptyState text={query.trim() ? 'Keine Treffer für diese Suche.' : 'Keine E-Mails geladen.'} />
                 ) : (
                   mails.map((mail) => (
                     <button
@@ -220,7 +275,7 @@ export function Postfach() {
 
               {ordner === 'gesendet' &&
                 (gesendet.length === 0 ? (
-                  <EmptyState text="Noch keine gesendeten E-Mails." />
+                  <EmptyState text={query.trim() ? 'Keine Treffer für diese Suche.' : 'Noch keine gesendeten E-Mails.'} />
                 ) : (
                   gesendet.map((mail) => (
                     <button
@@ -243,15 +298,17 @@ export function Postfach() {
                 ))}
             </div>
 
-            <div className="border-t border-slate-100 p-2">
-              <SecondaryButton
-                onClick={() => (ordner === 'posteingang' ? mehrLadenPosteingang() : mehrLadenGesendet())}
-                disabled={loading || gesendetLoading}
-                className="w-full justify-center text-xs"
-              >
-                Mehr laden
-              </SecondaryButton>
-            </div>
+            {!query.trim() && (
+              <div className="border-t border-slate-100 p-2">
+                <SecondaryButton
+                  onClick={() => (ordner === 'posteingang' ? mehrLadenPosteingang() : mehrLadenGesendet())}
+                  disabled={loading || gesendetLoading}
+                  className="w-full justify-center text-xs"
+                >
+                  Mehr laden
+                </SecondaryButton>
+              </div>
+            )}
           </div>
 
           {/* Lesefenster */}
