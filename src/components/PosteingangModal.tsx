@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Inbox, RefreshCw, UserPlus, Check, X, AlertTriangle } from 'lucide-react'
 import { useApp } from '../context/AppContext'
-import { isEmailGatewayConfigured, syncPosteingang } from '../lib/emailGateway'
+import { isEmailInboxDbConfigured, fetchStoredEmails } from '../lib/emailInboxDb'
 import { matchKundeByEmail, suggestKunde } from '../lib/matchKunde'
 import { KUNDEN_BEREICHE } from '../data/kundenBereiche'
 import { Modal, inputClass, PrimaryButton, SecondaryButton } from './ui'
@@ -22,7 +22,7 @@ export function PosteingangModal({ open, onClose }: { open: boolean; onClose: ()
     setLoading(true)
     setError('')
     try {
-      const fetched = await syncPosteingang(20)
+      const fetched = await fetchStoredEmails(20)
       const emails = fetched.map((m) => {
         const vorschlagMatch = matchKundeByEmail(state, m.von) ?? suggestKunde(state, `${m.betreff} ${m.ausschnitt} ${m.vonName}`)
         return {
@@ -67,19 +67,20 @@ export function PosteingangModal({ open, onClose }: { open: boolean; onClose: ()
 
   return (
     <Modal open={open} onClose={onClose} title="E-Mail-Posteingang (info@amayer-holding.com)" width="max-w-2xl">
-      {!isEmailGatewayConfigured ? (
+      {!isEmailInboxDbConfigured ? (
         <div className="rounded-lg bg-amber-50 p-4 text-sm text-amber-800">
-          <div className="mb-1 flex items-center gap-2 font-medium"><AlertTriangle size={15} /> Postfach noch nicht verbunden</div>
-          Sobald die echten Zugangsdaten als Supabase-Secrets hinterlegt sind (nie im Frontend-Code),
-          erscheinen hier automatisch die eingehenden E-Mails und können direkt einem Kunden/Mandanten
-          zugeordnet oder als neuer Lead übernommen werden.
+          <div className="mb-1 flex items-center gap-2 font-medium"><AlertTriangle size={15} /> Posteingang noch nicht verbunden</div>
+          E-Mails an info@amayer-holding.com werden per Weiterleitung an einen Webhook-Dienst
+          geschickt, der sie in eine Datenbank-Tabelle schreibt — sobald das eingerichtet ist,
+          erscheinen hier automatisch die eingehenden E-Mails und können direkt einem
+          Kunden/Mandanten zugeordnet oder als neuer Lead übernommen werden.
         </div>
       ) : (
         <>
           <div className="mb-4 flex items-center justify-between">
             <p className="text-xs text-slate-500">Letzte E-Mails aus dem Postfach, automatischer Kunden-Vorschlag inklusive.</p>
             <SecondaryButton onClick={refresh} disabled={loading}>
-              <RefreshCw size={13} className={loading ? 'animate-spin' : ''} /> Postfach jetzt abrufen
+              <RefreshCw size={13} className={loading ? 'animate-spin' : ''} /> Neu laden
             </SecondaryButton>
           </div>
 
@@ -145,7 +146,7 @@ export function PosteingangModal({ open, onClose }: { open: boolean; onClose: ()
             {mails.length === 0 && (
               <div className="rounded-lg border border-dashed border-slate-200 p-8 text-center text-sm text-slate-400">
                 <Inbox className="mx-auto mb-2" size={24} />
-                Keine E-Mails geladen — auf „Postfach jetzt abrufen" klicken.
+                Keine E-Mails geladen — auf „Neu laden" klicken.
               </div>
             )}
           </div>

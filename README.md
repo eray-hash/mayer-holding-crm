@@ -50,11 +50,18 @@ npm run deploy
 Baut das Projekt und pusht `dist/` auf den Branch `gh-pages` (Paket `gh-pages` ist als Dev-Dependency
 enthalten). In diesem Fall in den Pages-Einstellungen als Source den Branch `gh-pages` wählen.
 
-## E-Mail-Postfach-Anbindung (info@amayer-holding.com)
+## E-Mail-Versand (info@amayer-holding.com)
 
 Die Edge Function `supabase/functions/email-gateway` verbindet das CRM mit dem echten IONOS-Postfach
-(IMAP-Abruf + SMTP-Versand). Das echte Postfach-Passwort steht **nirgends im Code** — es wird nur als
-Supabase-Secret hinterlegt, das Frontend bekommt lediglich die Function-URL + ein geteiltes Secret.
+für **Versand** (SMTP) und die **KI-Gesprächszusammenfassung**. Das echte Postfach-Passwort steht
+**nirgends im Code** — es wird nur als Supabase-Secret hinterlegt, das Frontend bekommt lediglich die
+Function-URL + ein geteiltes Secret.
+
+> **Hinweis zum Posteingang:** Der direkte IMAP-Abruf (`action: "sync"` in dieser Function) ist
+> technisch nicht nutzbar — Port 993 wird von der Supabase-Edge-Function-Laufzeit blockiert, Port 143
+> scheitert an einem STARTTLS-Kompatibilitätsproblem der `imapflow`-Bibliothek unter Deno (beides
+> live getestet, 22./23.10.2026). Der Posteingang läuft stattdessen über einen Webhook — siehe
+> nächster Abschnitt "Posteingang über Webhook".
 
 **Einmalige Einrichtung:**
 
@@ -66,14 +73,14 @@ Supabase-Secret hinterlegt, das Frontend bekommt lediglich die Function-URL + ei
    ```
 2. Secrets setzen (im Supabase-Dashboard unter **Edge Functions → email-gateway → Secrets**, oder per
    CLI — **das eigentliche Postfach-Passwort wird nur hier eingetragen, nie im Chat/Code**):
-   - `IMAP_HOST` = `imap.ionos.de`, `IMAP_PORT` = `993`
+   - `IMAP_HOST` = `imap.ionos.de`, `IMAP_PORT` = `143` (nur für den—aktuell nicht funktionierenden—Sync)
    - `IMAP_USER` = `info@amayer-holding.com`, `IMAP_PASSWORD` = *(echtes Postfach-Passwort)*
    - `SMTP_HOST` = `smtp.ionos.de`, `SMTP_PORT` = `587`
    - `SMTP_USER` = `info@amayer-holding.com`, `SMTP_PASSWORD` = *(gleiches oder separates Passwort)*
    - `CRM_SHARED_SECRET` = *(ein selbst gewähltes, beliebiges langes Zufalls-Secret)*
    - `ANTHROPIC_API_KEY` = *(eigener Anthropic-API-Key, für die KI-Gesprächszusammenfassung — siehe
-     Abschnitt "Gespräch aufzeichnen" unten; ohne diesen Key funktionieren Posteingang/Versand trotzdem,
-     nur "Mit KI zusammenfassen" zeigt dann einen Hinweis statt eines Ergebnisses)
+     Abschnitt "Gespräch aufzeichnen" unten; ohne diesen Key funktioniert Versand trotzdem, nur
+     "Mit KI zusammenfassen" zeigt dann einen Hinweis statt eines Ergebnisses)
 3. Function-URL (`supabase functions list` bzw. Dashboard) und das gleiche `CRM_SHARED_SECRET` in
    `.env.local` eintragen (siehe `.env.example`):
    ```bash
@@ -86,8 +93,62 @@ Supabase-Secret hinterlegt, das Frontend bekommt lediglich die Function-URL + ei
    sie bereits automatisch an `npm run build` durch (genau wie `VITE_SUPABASE_URL`/`VITE_SUPABASE_ANON_KEY`,
    für die dasselbe gilt, falls das CRM später auf die echte Datenbank umgestellt wird).
 
-Ohne diese Konfiguration zeigt der „Postfach"-Button im CRM transparent „noch nicht verbunden" an —
-es wird nichts vorgetäuscht.
+Ohne diese Konfiguration zeigt der „E-Mail senden"-Button im CRM transparent „noch nicht verbunden"
+an — es wird nichts vorgetäuscht.
+
+## Posteingang über Webhook (statt IMAP)
+
+Eingehende E-Mails an info@amayer-holding.com landen über eine **Weiterleitungsregel in IONOS** bei
+einem externen Inbound-Email-Webhook-Dienst (z. B. [CloudMailin](https://www.cloudmailin.com/)), der
+jede E-Mail als HTTP-POST an die Edge Function `supabase/functions/inbound-email` schickt. Diese
+schreibt sie in die Tabelle `public.eingegangene_emails` (im selben `mayer-holding-crm`-Projekt); das
+CRM-Frontend liest diese Tabelle direkt per Supabase-Client (nur Lesezugriff, RLS-Policy "allow read
+for all"). Kein IMAP nötig — nur normale HTTPS-Webhooks, die in der Edge-Function-Umgebung
+nachweislich funktionieren.
+
+**Einmalige Einrichtung:**
+
+1. Tabelle `public.eingegangene_emails` + Lese-Policy sind bereits angelegt (siehe Migration unten,
+   zur Nachvollziehbarkeit — wurde direkt im SQL-Editor ausgeführt, nicht per CLI-Migration):
+   ```sql
+   create table if not exists public.eingegangene_emails (
+     id uuid primary key default gen_random_uuid(),
+     message_id text, von text not null, von_name text, betreff text,
+     mail_datum timestamptz not null default now(), ausschnitt text,
+     rohdaten jsonb, erstellt_am timestamptz not null default now()
+   );
+   alter table public.eingegangene_emails enable row level security;
+   create policy "allow read for all" on public.eingegangene_emails for select using (true);
+   ```
+2. Function deployen:
+   ```bash
+   npx supabase functions deploy inbound-email --project-ref qyqtxltwgetliddwceox --no-verify-jwt
+   ```
+3. Secret setzen (frei erfundenes Secret, schützt den öffentlichen Webhook-Endpunkt vor Fremdzugriff
+   — `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY` sind in jeder Edge Function bereits automatisch
+   vorhanden, müssen nicht gesetzt werden):
+   ```bash
+   npx supabase secrets set --project-ref qyqtxltwgetliddwceox INBOUND_SECRET=<frei gewähltes Secret>
+   ```
+4. Bei CloudMailin (oder einem anderen Anbieter) einen kostenlosen Account anlegen, eine neue
+   Adresse/Ziel anlegen mit **Target URL**:
+   ```
+   https://qyqtxltwgetliddwceox.supabase.co/functions/v1/inbound-email?secret=<gleiches INBOUND_SECRET>
+   ```
+5. In IONOS beim Postfach `info@amayer-holding.com` eine **Weiterleitung** auf die von CloudMailin
+   vergebene Adresse einrichten, **"Kopie im Posteingang behalten"** aktivieren (keine Änderung an
+   MX-Records der Domain nötig — betrifft nur dieses eine Postfach, die anderen drei
+   `amayer-holding.com`-Postfächer bleiben unberührt).
+6. Projekt-URL + Publishable Key dieses Supabase-Projekts (Project Settings → API Keys) in
+   `.env.local` eintragen (siehe `.env.example`) und als Repository-Secrets für den Live-Build
+   hinterlegen:
+   ```bash
+   VITE_SUPABASE_EMAIL_URL=https://qyqtxltwgetliddwceox.supabase.co
+   VITE_SUPABASE_EMAIL_ANON_KEY=<Publishable Key aus dem Dashboard>
+   ```
+
+Ohne diese Konfiguration zeigt der "Postfach"-Button im CRM transparent „Posteingang noch nicht
+verbunden" an.
 
 ## Gespräch aufzeichnen + KI-Zusammenfassung
 
