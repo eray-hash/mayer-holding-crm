@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
-import { ArrowLeft, Plus, Phone } from 'lucide-react'
+import { ArrowLeft, Plus, Phone, Mail } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { StatusWidget } from '../../components/StatusWidget'
 import { StatusBadge, Card, Modal, Field, inputClass, PrimaryButton, SecondaryButton, EmptyState } from '../../components/ui'
@@ -9,6 +9,7 @@ import { PRIORITAETEN, CURRENT_USER } from '../../data/constants'
 import { ZugewieseneObjekte } from '../../components/ZugewieseneObjekte'
 import { FormularLinkButtons } from '../../components/FormularLink'
 import { CallRecorder } from '../../components/CallRecorder'
+import { SendEmailModal } from '../../components/SendEmailModal'
 import type { Prioritaet, Protokoll } from '../../types'
 
 const TABS = [
@@ -26,6 +27,7 @@ export function KundenDetail() {
   const { state, dispatch } = useApp()
   const [protokollOpen, setProtokollOpen] = useState(false)
   const [callRecorderOpen, setCallRecorderOpen] = useState(false)
+  const [sendEmailOpen, setSendEmailOpen] = useState(false)
   const [editFollowUp, setEditFollowUp] = useState(false)
 
   const kunde = state.kunden.find((k) => k.id === id)
@@ -113,6 +115,11 @@ export function KundenDetail() {
               <Row label="Telefon" value={kunde.telefon} />
               <Row label="Verantwortlich" value={kunde.verantwortlich} />
             </dl>
+            <div className="mt-4">
+              <SecondaryButton onClick={() => setSendEmailOpen(true)} className="w-full justify-center">
+                <Mail size={14} /> E-Mail senden
+              </SecondaryButton>
+            </div>
             <div className="mt-4 rounded-lg bg-slate-50 p-3">
               <div className="text-xs font-medium text-slate-400">Nächste Follow-up-Aufgabe</div>
               <div className={`text-sm ${overdue ? 'font-medium text-rose-600' : 'text-slate-700'}`}>{fmtDate(kunde.followUp.date)} — {kunde.followUp.note}</div>
@@ -277,6 +284,25 @@ export function KundenDetail() {
           }}
         />
       </Modal>
+
+      <SendEmailModal
+        open={sendEmailOpen}
+        onClose={() => setSendEmailOpen(false)}
+        to={kunde.email}
+        onSent={({ subject }) => {
+          dispatch({
+            type: 'UPDATE_KUNDE',
+            id: kunde.id,
+            patch: {
+              letzteAktivitaet: today(),
+              activities: [
+                { id: uid('act'), date: today(), text: `E-Mail versendet: „${subject}"`, user: CURRENT_USER },
+                ...kunde.activities,
+              ],
+            },
+          })
+        }}
+      />
 
       <Modal open={editFollowUp} onClose={() => setEditFollowUp(false)} title="Follow-up bearbeiten">
         <FollowUpForm
