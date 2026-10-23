@@ -150,6 +150,27 @@ nachweislich funktionieren.
 Ohne diese Konfiguration zeigt der "Postfach"-Button im CRM transparent „Posteingang noch nicht
 verbunden" an.
 
+### Bestehende, alte E-Mails nachträglich importieren
+
+Die IONOS-Weiterleitung erfasst nur E-Mails, die **nach** ihrer Einrichtung eintreffen — ältere,
+bereits im Postfach liegende Mails landen dadurch nicht automatisch in `eingegangene_emails`. Dafür
+gibt es ein einmaliges lokales Migrations-Skript (`scripts/migrate-inbox.mjs`), das die bestehenden
+Mails per IMAP ausliest (funktioniert normal von einem Rechner aus, nur nicht aus der
+Supabase-Edge-Function-Laufzeit heraus) und per `message_id`-Upsert in dieselbe Tabelle schreibt, die
+auch der Webhook befüllt — bereits vom Webhook erfasste Mails werden dabei übersprungen statt
+dupliziert.
+
+```bash
+IMAP_USER=info@amayer-holding.com \
+IMAP_PASSWORD='<echtes Postfach-Passwort>' \
+SUPABASE_URL=https://qyqtxltwgetliddwceox.supabase.co \
+SUPABASE_SERVICE_ROLE_KEY='<Service-Role-Key aus Project Settings → API Keys>' \
+npm run migrate-inbox
+```
+
+Optional: `IMAP_LIMIT=100` begrenzt den Import auf die letzten N Mails statt aller. Das Skript ist
+rein lokal/einmalig gedacht, nicht Teil von CI/CD.
+
 ## Gespräch aufzeichnen + KI-Zusammenfassung
 
 In der Gesprächsprotokolle-Tab eines Kunden (Beratung) kann ein Telefonat live transkribiert werden
