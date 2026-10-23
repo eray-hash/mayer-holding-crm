@@ -6,6 +6,11 @@
 // Upsert werden Mails, die der Webhook bereits erfasst hat, übersprungen statt
 // dupliziert.
 //
+// IONOS beendet lang laufende IMAP-Sessions von sich aus (beobachtet nach ca.
+// 1300+ Mails in einer Verbindung) — das Skript merkt sich deshalb die zuletzt
+// verarbeitete UID und baut die Verbindung bei einem Abbruch automatisch neu auf,
+// statt komplett abzubrechen.
+//
 // Einmalig lokal ausführen, NICHT in CI/CD. Zugangsdaten nur per Umgebungsvariable
 // übergeben, nie im Code oder in der Shell-History fest hinterlegt:
 //
@@ -43,65 +48,103 @@ function parseFromHeader(raw) {
 
 const supabase = createClient(env('SUPABASE_URL'), env('SUPABASE_SERVICE_ROLE_KEY'))
 
-const client = new ImapFlow({
-  host: env('IMAP_HOST', 'imap.ionos.de'),
-  port: Number(env('IMAP_PORT', '993')),
-  secure: true,
-  auth: { user: env('IMAP_USER'), pass: env('IMAP_PASSWORD') },
-  logger: false,
-})
+function createImapClient() {
+  return new ImapFlow({
+    host: env('IMAP_HOST', 'imap.ionos.de'),
+    port: Number(env('IMAP_PORT', '993')),
+    secure: true,
+    auth: { user: env('IMAP_USER'), pass: env('IMAP_PASSWORD') },
+    logger: false,
+  })
+}
+
+async function importMessage(message) {
+  const parsed = await simpleParser(message.source)
+  const rawFrom = parsed.from?.text ?? 'unbekannt'
+  const { email: von, name: vonName } = parseFromHeader(rawFrom)
+  const betreff = parsed.subject ?? '(ohne Betreff)'
+  const text = (parsed.text ?? '').trim()
+  const messageId = parsed.messageId ?? `imap-uid-${message.uid}`
+  const mailDatum = parsed.date ?? new Date()
+
+  return supabase.from('eingegangene_emails').upsert(
+    {
+      message_id: messageId,
+      von,
+      von_name: vonName,
+      betreff,
+      mail_datum: mailDatum.toISOString(),
+      ausschnitt: text.slice(0, 500),
+      rohdaten: { quelle: 'imap-migration', uid: message.uid },
+    },
+    { onConflict: 'message_id' },
+  )
+}
 
 async function main() {
-  console.log('Verbinde mit IMAP...')
-  await client.connect()
-  const lock = await client.getMailboxLock('INBOX')
-  try {
-    const status = await client.status('INBOX', { messages: true })
-    const total = status.messages ?? 0
-    console.log(`${total} E-Mails im Postfach gefunden.`)
-    if (total === 0) return
+  const limit = process.env.IMAP_LIMIT ? Number(process.env.IMAP_LIMIT) : undefined
+  const maxAttempts = 8
 
-    const limit = process.env.IMAP_LIMIT ? Number(process.env.IMAP_LIMIT) : undefined
-    const from = limit ? Math.max(1, total - limit + 1) : 1
+  let imported = 0
+  let skipped = 0
+  let lastUid = null // wird nach dem ersten erfolgreichen connect gesetzt
+  let attempt = 0
 
-    let imported = 0
-    let skipped = 0
+  while (true) {
+    attempt++
+    const client = createImapClient()
+    try {
+      console.log(attempt === 1 ? 'Verbinde mit IMAP...' : `Verbinde erneut mit IMAP (Versuch ${attempt})...`)
+      await client.connect()
+      const lock = await client.getMailboxLock('INBOX')
+      try {
+        if (lastUid === null) {
+          const status = await client.status('INBOX', { messages: true })
+          const total = status.messages ?? 0
+          console.log(`${total} E-Mails im Postfach gefunden.`)
+          if (total === 0) return
 
-    for await (const message of client.fetch(`${from}:*`, { source: true })) {
-      const parsed = await simpleParser(message.source)
-      const rawFrom = parsed.from?.text ?? 'unbekannt'
-      const { email: von, name: vonName } = parseFromHeader(rawFrom)
-      const betreff = parsed.subject ?? '(ohne Betreff)'
-      const text = (parsed.text ?? '').trim()
-      const messageId = parsed.messageId ?? `imap-uid-${message.uid}`
-      const mailDatum = parsed.date ?? new Date()
+          if (limit) {
+            const seqFrom = Math.max(1, total - limit + 1)
+            const uids = []
+            for await (const m of client.fetch(`${seqFrom}:*`, { uid: true })) uids.push(m.uid)
+            lastUid = (uids.length ? Math.min(...uids) : 1) - 1
+          } else {
+            lastUid = 0
+          }
+        }
 
-      const { error } = await supabase.from('eingegangene_emails').upsert(
-        {
-          message_id: messageId,
-          von,
-          von_name: vonName,
-          betreff,
-          mail_datum: mailDatum.toISOString(),
-          ausschnitt: text.slice(0, 500),
-          rohdaten: { quelle: 'imap-migration', uid: message.uid },
-        },
-        { onConflict: 'message_id' },
-      )
+        const fromUid = lastUid + 1
+        for await (const message of client.fetch(`${fromUid}:*`, { source: true }, { uid: true })) {
+          if (message.uid <= lastUid) continue // bereits in einem früheren Versuch verarbeitet
+          lastUid = message.uid
+          const { error } = await importMessage(message)
+          if (error) {
+            console.error(`Fehler bei UID ${message.uid}:`, error.message)
+            skipped++
+          } else {
+            imported++
+            if (imported % 25 === 0) console.log(`${imported} verarbeitet... (zuletzt UID ${message.uid})`)
+          }
+        }
 
-      if (error) {
-        console.error(`Fehler bei UID ${message.uid} ("${betreff}"):`, error.message)
-        skipped++
-      } else {
-        imported++
-        if (imported % 25 === 0) console.log(`${imported} verarbeitet...`)
+        console.log(`Fertig. ${imported} importiert/aktualisiert, ${skipped} fehlgeschlagen.`)
+        return
+      } finally {
+        lock.release()
+        await client.logout().catch(() => {})
       }
+    } catch (err) {
+      console.error(`Verbindung unterbrochen (zuletzt verarbeitete UID: ${lastUid ?? '–'}): ${err.message}`)
+      await client.close().catch(() => {})
+      if (attempt >= maxAttempts) {
+        console.error(`Maximale Anzahl an Wiederverbindungsversuchen erreicht (${maxAttempts}). Abbruch.`)
+        console.error(`${imported} importiert/aktualisiert, ${skipped} fehlgeschlagen bis dahin. Einfach erneut starten, um fortzusetzen (dank Upsert werden bereits importierte Mails nicht dupliziert).`)
+        process.exit(1)
+      }
+      console.log('Warte 5 Sekunden und verbinde erneut...')
+      await new Promise((resolve) => setTimeout(resolve, 5000))
     }
-
-    console.log(`Fertig. ${imported} importiert/aktualisiert, ${skipped} fehlgeschlagen.`)
-  } finally {
-    lock.release()
-    await client.logout()
   }
 }
 
