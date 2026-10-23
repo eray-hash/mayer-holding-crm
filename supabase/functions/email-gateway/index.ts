@@ -36,16 +36,26 @@ function env(name: string): string {
   return v
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(message)), ms)),
+  ])
+}
+
 async function syncInbox(limit: number) {
+  // Port 993 (implizites TLS) hängt sich in dieser Laufzeitumgebung auf — Port 143 mit STARTTLS
+  // (gleiches Muster wie das bereits funktionierende SMTP auf Port 587) ist die verlässliche Wahl.
+  const port = Number(Deno.env.get('IMAP_PORT') ?? '143')
   const client = new ImapFlow({
     host: Deno.env.get('IMAP_HOST') ?? 'imap.ionos.de',
-    port: Number(Deno.env.get('IMAP_PORT') ?? '993'),
-    secure: true,
+    port,
+    secure: port === 993,
     auth: { user: env('IMAP_USER'), pass: env('IMAP_PASSWORD') },
     logger: false,
   })
 
-  await client.connect()
+  await withTimeout(client.connect(), 20000, 'IMAP-Verbindung hat nach 20 Sekunden nicht geantwortet (Timeout).')
   const mails: Array<{
     messageId: string
     von: string
