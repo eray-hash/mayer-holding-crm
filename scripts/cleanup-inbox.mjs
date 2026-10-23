@@ -111,14 +111,28 @@ ${list}`,
   return toolUse.input.ergebnisse ?? []
 }
 
+async function fetchAllEmails() {
+  // Supabase/PostgREST liefert pro select() standardmäßig maximal 1000 Zeilen —
+  // ohne Pagination würden ältere Mails (bei Sortierung nach mail_datum desc) nie
+  // geladen und damit auch nie klassifiziert/aufgeräumt werden.
+  const pageSize = 1000
+  const all = []
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await supabase
+      .from('eingegangene_emails')
+      .select('id, von, von_name, betreff, ausschnitt')
+      .order('mail_datum', { ascending: false })
+      .range(from, from + pageSize - 1)
+    if (error) throw new Error(error.message)
+    all.push(...data)
+    if (data.length < pageSize) break
+  }
+  return all
+}
+
 async function main() {
   console.log('Lade E-Mails aus der Datenbank...')
-  const { data: emails, error } = await supabase
-    .from('eingegangene_emails')
-    .select('id, von, von_name, betreff, ausschnitt')
-    .order('mail_datum', { ascending: false })
-
-  if (error) throw new Error(error.message)
+  const emails = await fetchAllEmails()
   console.log(`${emails.length} E-Mails geladen. Klassifiziere in Batches von ${BATCH_SIZE}...`)
 
   const batches = chunk(emails, BATCH_SIZE)
