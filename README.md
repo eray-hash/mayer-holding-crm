@@ -169,7 +169,33 @@ npm run migrate-inbox
 ```
 
 Optional: `IMAP_LIMIT=100` begrenzt den Import auf die letzten N Mails statt aller. Das Skript ist
-rein lokal/einmalig gedacht, nicht Teil von CI/CD.
+rein lokal/einmalig gedacht, nicht Teil von CI/CD. Es verfolgt die zuletzt verarbeitete UID und
+verbindet bei einem Verbindungsabbruch (IONOS beendet lang laufende IMAP-Sessions von sich aus)
+automatisch bis zu 8x neu.
+
+### Posteingang aufräumen (Newsletter/Werbung/Belege entfernen)
+
+Ein per IMAP importiertes Postfach enthält typischerweise sehr viel Nicht-Kunden-Korrespondenz
+(Newsletter, Zahlungsbelege, Lead-Marktplätze, Abo-Dienste). `scripts/cleanup-inbox.mjs` klassifiziert
+jede Mail in `eingegangene_emails` per Anthropic-API als „Kunde/Interessent" oder „nicht relevant" und
+löscht Letztere. Läuft standardmäßig als **Dry Run** — zeigt nur an, was gelöscht würde, und schreibt
+die vollständige Liste zur Durchsicht nach `scripts/cleanup-inbox-report.json` (lokal, nicht
+eingecheckt). Erst mit `CONFIRM_DELETE=yes` wird tatsächlich gelöscht.
+
+```bash
+# 1. Dry Run — zeigt nur an, was gelöscht würde
+SUPABASE_URL=https://qyqtxltwgetliddwceox.supabase.co \
+SUPABASE_SERVICE_ROLE_KEY='<Service-Role-Key>' \
+ANTHROPIC_API_KEY='<eigener Anthropic-API-Key>' \
+npm run cleanup-inbox
+
+# 2. Report in scripts/cleanup-inbox-report.json prüfen, dann tatsächlich löschen:
+SUPABASE_URL=https://qyqtxltwgetliddwceox.supabase.co \
+SUPABASE_SERVICE_ROLE_KEY='<Service-Role-Key>' \
+ANTHROPIC_API_KEY='<eigener Anthropic-API-Key>' \
+CONFIRM_DELETE=yes \
+npm run cleanup-inbox
+```
 
 ## Gespräch aufzeichnen + KI-Zusammenfassung
 

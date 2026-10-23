@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "predeploy": "npm run build",
     "deploy": "gh-pages -d dist",
-    "migrate-inbox": "node scripts/migrate-inbox.mjs"
+    "migrate-inbox": "node scripts/migrate-inbox.mjs",
+    "cleanup-inbox": "node scripts/cleanup-inbox.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

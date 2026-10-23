@@ -15,6 +15,9 @@ dist-ssr
 # Supabase CLI local cache (project link, CLI version check — machine-specific, not shared)
 supabase/.temp/
 
+# Dry-run report von scripts/cleanup-inbox.mjs (enthält echte Postfach-Daten)
+scripts/cleanup-inbox-report.json
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
