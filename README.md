@@ -58,9 +58,11 @@ Supabase-Secret hinterlegt, das Frontend bekommt lediglich die Function-URL + ei
 
 **Einmalige Einrichtung:**
 
-1. Edge Function deployen (Supabase-Projekt `fundament-command-center`):
+1. Edge Function deployen (eigenes Supabase-Projekt `mayer-holding-crm`, Projekt-Ref
+   `qyqtxltwgetliddwceox` — bewusst getrennt von `fundament-command-center`, da der dortige Account
+   keinen Zugriff auf dieses Projekt hat):
    ```bash
-   npx supabase functions deploy email-gateway --project-ref gqumelldxrkxpjtnnotv --no-verify-jwt
+   npx supabase functions deploy email-gateway --project-ref qyqtxltwgetliddwceox --no-verify-jwt
    ```
 2. Secrets setzen (im Supabase-Dashboard unter **Edge Functions → email-gateway → Secrets**, oder per
    CLI — **das eigentliche Postfach-Passwort wird nur hier eingetragen, nie im Chat/Code**):
@@ -69,10 +71,13 @@ Supabase-Secret hinterlegt, das Frontend bekommt lediglich die Function-URL + ei
    - `SMTP_HOST` = `smtp.ionos.de`, `SMTP_PORT` = `587`
    - `SMTP_USER` = `info@amayer-holding.com`, `SMTP_PASSWORD` = *(gleiches oder separates Passwort)*
    - `CRM_SHARED_SECRET` = *(ein selbst gewähltes, beliebiges langes Zufalls-Secret)*
+   - `ANTHROPIC_API_KEY` = *(eigener Anthropic-API-Key, für die KI-Gesprächszusammenfassung — siehe
+     Abschnitt "Gespräch aufzeichnen" unten; ohne diesen Key funktionieren Posteingang/Versand trotzdem,
+     nur "Mit KI zusammenfassen" zeigt dann einen Hinweis statt eines Ergebnisses)
 3. Function-URL (`supabase functions list` bzw. Dashboard) und das gleiche `CRM_SHARED_SECRET` in
    `.env.local` eintragen (siehe `.env.example`):
    ```bash
-   VITE_EMAIL_GATEWAY_URL=https://<project-ref>.supabase.co/functions/v1/email-gateway
+   VITE_EMAIL_GATEWAY_URL=https://qyqtxltwgetliddwceox.supabase.co/functions/v1/email-gateway
    VITE_EMAIL_GATEWAY_SECRET=<gleiches Secret wie CRM_SHARED_SECRET>
    ```
 4. Für die live auf GitHub Pages deployte Version dieselben beiden Variablen zusätzlich unter
@@ -83,6 +88,16 @@ Supabase-Secret hinterlegt, das Frontend bekommt lediglich die Function-URL + ei
 
 Ohne diese Konfiguration zeigt der „Postfach"-Button im CRM transparent „noch nicht verbunden" an —
 es wird nichts vorgetäuscht.
+
+## Gespräch aufzeichnen + KI-Zusammenfassung
+
+In der Gesprächsprotokolle-Tab eines Kunden (Beratung) kann ein Telefonat live transkribiert werden
+(Web-Speech-API, mit manuell editierbarem Fallback-Textfeld). Über „Mit KI zusammenfassen" wird das
+Transkript an dieselbe `email-gateway`-Function geschickt (`action: "summarize"`), die über die
+Anthropic-API eine strukturierte Zusammenfassung erzeugt: Kernthemen, Vereinbarungen, offene Punkte,
+Stimmung, Fließtext-Zusammenfassung — alle Felder bleiben vor dem Speichern editierbar. Braucht
+zusätzlich zu den Secrets oben nur `ANTHROPIC_API_KEY` als weiteres Supabase-Secret (siehe oben) —
+kein zweites Deployment, keine weiteren Frontend-Variablen nötig.
 
 ## Projektstruktur
 

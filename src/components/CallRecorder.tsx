@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { Mic, Square, AlertTriangle } from 'lucide-react'
-import { inputClass, PrimaryButton, SecondaryButton } from './ui'
+import { Mic, Square, AlertTriangle, Sparkles } from 'lucide-react'
+import { inputClass, Field, PrimaryButton, SecondaryButton } from './ui'
+import { isEmailGatewayConfigured, summarizeTranscript, type Gespraechszusammenfassung } from '../lib/emailGateway'
 
 type SpeechRecognitionLike = {
   continuous: boolean
@@ -18,13 +19,19 @@ function getSpeechRecognition(): (new () => SpeechRecognitionLike) | null {
   return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null
 }
 
-export function CallRecorder({ onSave, onCancel }: { onSave: (transcript: string) => void; onCancel: () => void }) {
+export type CallRecorderSave = { transcript: string; summary?: Gespraechszusammenfassung }
+
+export function CallRecorder({ onSave, onCancel }: { onSave: (data: CallRecorderSave) => void; onCancel: () => void }) {
   const [supported] = useState(() => getSpeechRecognition() !== null)
   const [recording, setRecording] = useState(false)
   const [transcript, setTranscript] = useState('')
   const [interim, setInterim] = useState('')
   const [error, setError] = useState('')
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
+
+  const [summarizing, setSummarizing] = useState(false)
+  const [summaryError, setSummaryError] = useState('')
+  const [summary, setSummary] = useState<Gespraechszusammenfassung | null>(null)
 
   useEffect(() => {
     return () => {
@@ -77,6 +84,24 @@ export function CallRecorder({ onSave, onCancel }: { onSave: (transcript: string
     setRecording(false)
   }
 
+  async function summarize() {
+    setSummarizing(true)
+    setSummaryError('')
+    try {
+      const result = await summarizeTranscript(transcript.trim())
+      setSummary(result)
+    } catch (err) {
+      setSummaryError(err instanceof Error ? err.message : 'Zusammenfassung fehlgeschlagen.')
+    } finally {
+      setSummarizing(false)
+    }
+  }
+
+  function updateSummaryList(field: 'kernthemen' | 'vereinbarungen' | 'offene_punkte', value: string) {
+    if (!summary) return
+    setSummary({ ...summary, [field]: value.split('\n').map((s) => s.trim()).filter(Boolean) })
+  }
+
   return (
     <div>
       <div className="mb-4 flex items-center gap-3 rounded-lg bg-slate-50 p-4">
@@ -114,9 +139,65 @@ export function CallRecorder({ onSave, onCancel }: { onSave: (transcript: string
         placeholder="Transkript erscheint hier während des Gesprächs — oder einfach manuell eintippen/einfügen."
       />
 
+      {isEmailGatewayConfigured && (
+        <div className="mt-3">
+          <SecondaryButton onClick={summarize} disabled={!transcript.trim() || summarizing}>
+            <Sparkles size={13} className={summarizing ? 'animate-pulse' : ''} />
+            {summarizing ? 'Fasst zusammen …' : summary ? 'Erneut zusammenfassen' : 'Mit KI zusammenfassen'}
+          </SecondaryButton>
+        </div>
+      )}
+
+      {summaryError && (
+        <div className="mt-3 flex items-start gap-2 rounded-lg bg-amber-50 p-3 text-xs text-amber-700">
+          <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" /> KI-Zusammenfassung nicht verfügbar: {summaryError}
+        </div>
+      )}
+
+      {summary && (
+        <div className="mt-4 space-y-3 rounded-lg border border-accent-200 bg-accent-50 p-4">
+          <div className="flex items-center justify-between">
+            <h4 className="text-xs font-semibold uppercase tracking-wide text-accent-700">KI-Zusammenfassung (editierbar)</h4>
+            <span className="rounded-full bg-white px-2 py-0.5 text-xs font-medium text-accent-700">Stimmung: {summary.stimmung}</span>
+          </div>
+          <Field label="Zusammenfassung">
+            <textarea
+              className={inputClass}
+              rows={3}
+              value={summary.zusammenfassung}
+              onChange={(e) => setSummary({ ...summary, zusammenfassung: e.target.value })}
+            />
+          </Field>
+          <Field label="Kernthemen (eine Zeile je Punkt)">
+            <textarea
+              className={inputClass}
+              rows={3}
+              value={summary.kernthemen.join('\n')}
+              onChange={(e) => updateSummaryList('kernthemen', e.target.value)}
+            />
+          </Field>
+          <Field label="Vereinbarungen (eine Zeile je Punkt)">
+            <textarea
+              className={inputClass}
+              rows={3}
+              value={summary.vereinbarungen.join('\n')}
+              onChange={(e) => updateSummaryList('vereinbarungen', e.target.value)}
+            />
+          </Field>
+          <Field label="Offene Punkte (eine Zeile je Punkt)">
+            <textarea
+              className={inputClass}
+              rows={3}
+              value={summary.offene_punkte.join('\n')}
+              onChange={(e) => updateSummaryList('offene_punkte', e.target.value)}
+            />
+          </Field>
+        </div>
+      )}
+
       <div className="mt-4 flex justify-end gap-2">
         <SecondaryButton onClick={onCancel}>Abbrechen</SecondaryButton>
-        <PrimaryButton onClick={() => onSave(transcript.trim())} disabled={!transcript.trim()}>
+        <PrimaryButton onClick={() => onSave({ transcript: transcript.trim(), summary: summary ?? undefined })} disabled={!transcript.trim()}>
           Als Gesprächsprotokoll speichern
         </PrimaryButton>
       </div>

@@ -1,7 +1,11 @@
-// Edge Function "email-gateway" — Brücke zwischen dem CRM-Frontend und dem echten
-// IONOS-Postfach info@amayer-holding.com. Zwei Aktionen über denselben Endpunkt:
-//   { action: "sync" }                         -> letzte E-Mails aus dem Posteingang lesen
-//   { action: "send", to, subject, text, html } -> E-Mail über dasselbe Postfach versenden
+// Edge Function "email-gateway" — Brücke zwischen dem CRM-Frontend und echten externen Diensten,
+// die einen Server-seitigen Schlüssel/Zugangsdaten brauchen. Drei Aktionen über denselben Endpunkt:
+//   { action: "sync" }                          -> letzte E-Mails aus dem IONOS-Posteingang lesen
+//   { action: "send", to, subject, text, html }  -> E-Mail über dasselbe Postfach versenden
+//   { action: "summarize", transcript }          -> Gesprächstranskript per Claude strukturiert
+//                                                    zusammenfassen (Kernthemen/Vereinbarungen/
+//                                                    offene Punkte/Stimmung), für die
+//                                                    "Gespräch aufzeichnen"-Funktion
 //
 // Alle Zugangsdaten kommen ausschließlich aus Supabase Function Secrets (nie im Code, nie im
 // Frontend). Siehe README-Abschnitt "E-Mail-Postfach-Anbindung" für die Einrichtung.
@@ -97,6 +101,62 @@ async function sendMail(to: string, subject: string, text: string, html?: string
   })
 }
 
+type Zusammenfassung = {
+  kernthemen: string[]
+  vereinbarungen: string[]
+  offene_punkte: string[]
+  stimmung: string
+  zusammenfassung: string
+}
+
+async function summarizeTranscript(transcript: string): Promise<Zusammenfassung> {
+  const apiKey = env('ANTHROPIC_API_KEY')
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1024,
+      tools: [
+        {
+          name: 'gespraechs_zusammenfassung',
+          description: 'Strukturierte Zusammenfassung eines Beratungsgesprächs auf Deutsch.',
+          input_schema: {
+            type: 'object',
+            properties: {
+              kernthemen: { type: 'array', items: { type: 'string' }, description: 'Die wichtigsten besprochenen Themen, kurz und stichpunktartig.' },
+              vereinbarungen: { type: 'array', items: { type: 'string' }, description: 'Was konkret vereinbart wurde.' },
+              offene_punkte: { type: 'array', items: { type: 'string' }, description: 'Offene Fragen oder vereinbarte nächste Schritte.' },
+              stimmung: { type: 'string', description: 'Kurze Einschätzung der Gesprächsstimmung in ein bis zwei Worten, z. B. "positiv", "angespannt", "neutral".' },
+              zusammenfassung: { type: 'string', description: 'Ein kurzer Fließtext-Absatz (2-4 Sätze), der das Gespräch zusammenfasst.' },
+            },
+            required: ['kernthemen', 'vereinbarungen', 'offene_punkte', 'stimmung', 'zusammenfassung'],
+          },
+        },
+      ],
+      tool_choice: { type: 'tool', name: 'gespraechs_zusammenfassung' },
+      messages: [
+        {
+          role: 'user',
+          content: `Fasse folgendes Transkript eines Beratungsgesprächs strukturiert zusammen. Antworte ausschließlich auf Deutsch.\n\nTranskript:\n${transcript}`,
+        },
+      ],
+    }),
+  })
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '')
+    throw new Error(`Anthropic-API-Fehler (${res.status}): ${detail.slice(0, 300)}`)
+  }
+  const data = await res.json()
+  const toolUse = data.content?.find((c: { type: string }) => c.type === 'tool_use')
+  if (!toolUse) throw new Error('Keine strukturierte Antwort von der Anthropic-API erhalten.')
+  return toolUse.input as Zusammenfassung
+}
+
 Deno.serve(async (req: Request) => {
   const origin = req.headers.get('origin')
   const headers = corsHeaders(origin)
@@ -125,7 +185,16 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ ok: true }), { headers })
     }
 
-    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync" oder "send"' }), { status: 400, headers })
+    if (body.action === 'summarize') {
+      const { transcript } = body
+      if (!transcript || typeof transcript !== 'string' || !transcript.trim()) {
+        return new Response(JSON.stringify({ error: 'transcript ist ein Pflichtfeld' }), { status: 400, headers })
+      }
+      const summary = await summarizeTranscript(transcript)
+      return new Response(JSON.stringify({ summary }), { headers })
+    }
+
+    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send" oder "summarize"' }), { status: 400, headers })
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }

@@ -1,6 +1,8 @@
 // Client für die Supabase Edge Function "email-gateway" (siehe
 // supabase/functions/email-gateway/index.ts). Liest URL + geteiltes Secret aus Vite-Env-Variablen,
-// damit nirgends ein echtes Postfach-Passwort im Frontend-Code landet.
+// damit nirgends ein echtes Postfach-Passwort oder API-Key im Frontend-Code landet. Trotz des
+// Namens bündelt diese eine Function inzwischen auch die KI-Gesprächszusammenfassung
+// (summarizeTranscript) — gleiche URL, gleiches Secret, kein zweites Deployment nötig.
 
 const FUNCTION_URL = import.meta.env.VITE_EMAIL_GATEWAY_URL as string | undefined
 const SHARED_SECRET = import.meta.env.VITE_EMAIL_GATEWAY_SECRET as string | undefined
@@ -38,4 +40,17 @@ export async function syncPosteingang(limit = 20): Promise<EingegangeneMail[]> {
 
 export async function sendEmail(to: string, subject: string, text: string, html?: string): Promise<void> {
   await call({ action: 'send', to, subject, text, html })
+}
+
+export type Gespraechszusammenfassung = {
+  kernthemen: string[]
+  vereinbarungen: string[]
+  offene_punkte: string[]
+  stimmung: string
+  zusammenfassung: string
+}
+
+export async function summarizeTranscript(transcript: string): Promise<Gespraechszusammenfassung> {
+  const data = await call({ action: 'summarize', transcript })
+  return data.summary
 }

@@ -63,6 +63,13 @@ export type Protokoll = {
   teilnehmer: string
   betreff: string
   text: string
+  // Optionale KI-generierte Struktur (aus "Gespräch aufzeichnen" + Zusammenfassen) — manuell
+  // angelegte Protokolle haben diese Felder nicht und zeigen nur `text`.
+  kernthemen?: string[]
+  vereinbarungen?: string[]
+  offenePunkte?: string[]
+  stimmung?: string
+  kiZusammenfassung?: string
 }
 
 export type Konzept = {
