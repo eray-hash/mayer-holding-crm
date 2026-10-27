@@ -62,7 +62,7 @@ export async function summarizeTranscript(transcript: string): Promise<Gespraech
   return data.summary
 }
 
-export type AssistentTyp = 'notiz' | 'aufgabe' | 'frage'
+export type AssistentTyp = 'notiz' | 'aufgabe' | 'frage' | 'aufnahme'
 
 export type AssistentKlassifikation = {
   typ: AssistentTyp

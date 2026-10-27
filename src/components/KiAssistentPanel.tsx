@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Mic, Square, Sparkles, AlertTriangle, Send, X, Volume2, VolumeX, Bot, ImagePlus } from 'lucide-react'
+import { Mic, Square, Sparkles, AlertTriangle, Send, X, Volume2, VolumeX, Bot, ImagePlus, Phone } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { useSpeechRecognition } from '../lib/useSpeechRecognition'
 import { speak, isSpeechSynthesisSupported } from '../lib/useSpeechSynthesis'
@@ -7,12 +7,15 @@ import { isEmailGatewayConfigured, classifyAssistantInput, answerAssistantQuesti
 import { suggestKunde } from '../lib/matchKunde'
 import { KUNDEN_BEREICHE } from '../data/kundenBereiche'
 import { getStatusMap } from '../data/statusNetworks'
-import { inputClass } from './ui'
+import { CallRecorder } from './CallRecorder'
+import { Modal, inputClass } from './ui'
 import { today, fmtDate, uid } from '../lib/dates'
+import { CURRENT_USER } from '../data/constants'
 import type { KundeBereich } from '../types'
 
 type ChatMessage = { id: string; role: 'user' | 'assistant'; text: string; imageDataUrl?: string }
 type PastedImage = { dataUrl: string; base64: string; mediaType: string }
+type AufnahmeKunde = { bereich: KundeBereich; kundeId: string; kundeName: string }
 
 type PendingAction = {
   typ: AssistentTyp
@@ -39,6 +42,8 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
   const [verarbeiten, setVerarbeiten] = useState(false)
   const [ttsEnabled, setTtsEnabled] = useState(true)
   const [pastedImage, setPastedImage] = useState<PastedImage | null>(null)
+  const [aufnahmeKunde, setAufnahmeKunde] = useState<AufnahmeKunde | null>(null)
+  const [recorderOpen, setRecorderOpen] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -126,6 +131,13 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
           } catch (err) {
             addMessage('assistant', `Antwort konnte nicht abgerufen werden: ${err instanceof Error ? err.message : 'Fehler'}`, true)
           }
+        }
+      } else if (klass.typ === 'aufnahme') {
+        if (!match) {
+          addMessage('assistant', 'Für welchen Kunden/Mandanten soll ich aufzeichnen? Nenn mir bitte den Namen.', true)
+        } else {
+          setAufnahmeKunde({ bereich: match.bereich, kundeId: match.kundeId, kundeName: match.kundeName })
+          addMessage('assistant', `Aufnahme für ${match.kundeName} vorbereitet. Klicke unten auf „Jetzt aufnehmen", sobald es losgeht.`, true)
         }
       } else {
         const titel = klass.titel ?? text.slice(0, 80)
@@ -286,6 +298,23 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
               </div>
             </div>
           )}
+
+          {aufnahmeKunde && (
+            <div className="rounded-xl border border-accent-200 bg-accent-50 p-3">
+              <p className="mb-2 text-sm text-slate-700">Aufnahme für <strong>{aufnahmeKunde.kundeName}</strong> bereit.</p>
+              <div className="flex justify-end gap-2">
+                <button onClick={() => setAufnahmeKunde(null)} className="rounded-lg px-3 py-1.5 text-xs font-medium text-slate-500 hover:bg-white">
+                  Verwerfen
+                </button>
+                <button
+                  onClick={() => setRecorderOpen(true)}
+                  className="flex items-center gap-1.5 rounded-lg bg-accent-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-700"
+                >
+                  <Phone size={13} /> Jetzt aufnehmen
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {recError && (
@@ -348,6 +377,46 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
           </div>
         </div>
       </div>
+
+      <Modal open={recorderOpen && !!aufnahmeKunde} onClose={() => setRecorderOpen(false)} title="Gespräch aufzeichnen" width="max-w-2xl">
+        {aufnahmeKunde && (
+          <CallRecorder
+            onCancel={() => setRecorderOpen(false)}
+            onSave={({ transcript: aufnahmeTranscript, summary }) => {
+              dispatch({
+                type: 'ADD_PROTOKOLL',
+                protokoll: {
+                  id: uid('p'),
+                  bereich: aufnahmeKunde.bereich,
+                  kundeId: aufnahmeKunde.kundeId,
+                  datum: today(),
+                  teilnehmer: `${aufnahmeKunde.kundeName}, ${CURRENT_USER}`,
+                  betreff: summary ? 'Telefonat (KI-zusammengefasst)' : 'Telefonat (automatisch transkribiert)',
+                  text: aufnahmeTranscript,
+                  kernthemen: summary?.kernthemen,
+                  vereinbarungen: summary?.vereinbarungen,
+                  offenePunkte: summary?.offene_punkte,
+                  stimmung: summary?.stimmung,
+                  kiZusammenfassung: summary?.zusammenfassung,
+                },
+              })
+              addMessage('assistant', `Protokoll bei ${aufnahmeKunde.kundeName} abgelegt.`, true)
+              if (summary?.offene_punkte && summary.offene_punkte.length > 0) {
+                setPending({
+                  typ: 'aufgabe',
+                  titel: summary.offene_punkte[0],
+                  faelligkeitsDatum: '',
+                  kundeAuswahl: `${aufnahmeKunde.bereich}:${aufnahmeKunde.kundeId}`,
+                  frageText: '',
+                })
+                addMessage('assistant', 'Ich habe daraus einen Follow-up-Vorschlag erstellt — unten prüfen und speichern.', true)
+              }
+              setRecorderOpen(false)
+              setAufnahmeKunde(null)
+            }}
+          />
+        )}
+      </Modal>
     </div>
   )
 }
