@@ -253,6 +253,17 @@ export type MailVorlage = {
   text: string
 }
 
+// Profildaten des aktuellen CRM-Nutzers (lokal, solange kein echter Mitarbeiter-Login aktiv ist —
+// siehe AuthContext.tsx/LoginScreen.tsx, die bereits fertig für echte Mitarbeiter-Accounts
+// vorbereitet sind, aber erst eingehängt werden, sobald echte Zugänge angelegt sind).
+export type MitarbeiterProfil = {
+  name: string
+  telefon: string
+  email: string
+  fotoDataUrl?: string
+  signaturHtml: string
+}
+
 // Freie Notiz aus dem KI-Assistenten, wenn dabei kein Kunde/Mandant erkannt bzw. ausgewählt wurde
 // (landet sonst als Follow-up + Aktivität direkt beim erkannten Kunden, siehe ADD_VOICE_TASK).
 export type Notiz = {

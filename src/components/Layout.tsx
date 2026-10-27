@@ -1,10 +1,32 @@
 import { useState, type ReactNode } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
-import { Menu, X, Building2, Briefcase, RotateCcw, User, ExternalLink, LogOut, Users, ScrollText, Handshake, Scale, GraduationCap, PiggyBank, Camera, Inbox, Sparkles } from 'lucide-react'
+import {
+  Menu,
+  X,
+  Building2,
+  Briefcase,
+  RotateCcw,
+  User,
+  ExternalLink,
+  LogOut,
+  Users,
+  ScrollText,
+  Handshake,
+  Scale,
+  GraduationCap,
+  PiggyBank,
+  Camera,
+  Inbox,
+  Sparkles,
+  Bell,
+  UserCog,
+  ChevronDown,
+} from 'lucide-react'
 import type { Bereich } from '../types'
 import { useApp } from '../context/AppContext'
 import { useAuth } from '../context/AuthContext'
 import { isSupabaseConfigured } from '../lib/supabaseClient'
+import { collectPriorityEntries } from '../lib/todayPriorities'
 import { DokumentenImportModal } from './DokumentenImportModal'
 import { KiAssistentModal } from './KiAssistentModal'
 import { SidebarBeratung } from './SidebarBeratung'
@@ -39,9 +61,12 @@ export function Layout({ children }: { children: ReactNode }) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [dokumentImportOpen, setDokumentImportOpen] = useState(false)
   const [kiAssistentOpen, setKiAssistentOpen] = useState(false)
+  const [profilMenuOpen, setProfilMenuOpen] = useState(false)
+  const [benachrichtigungenOpen, setBenachrichtigungenOpen] = useState(false)
   const navigate = useNavigate()
 
   const aktuellerBereich = BEREICHE.find((b) => b.id === state.bereich) ?? BEREICHE[0]
+  const { prioritaeten } = collectPriorityEntries(state.projekte)
 
   function chooseBereich(b: Bereich) {
     dispatch({ type: 'SET_BEREICH', bereich: b })
@@ -77,75 +102,129 @@ export function Layout({ children }: { children: ReactNode }) {
             {aktuellerBereich.label}
           </span>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-1.5">
           <button
             onClick={() => setKiAssistentOpen(true)}
-            className="hidden items-center gap-1.5 rounded-lg border border-accent-200 bg-accent-50 px-2.5 py-1.5 text-xs font-medium text-accent-700 hover:bg-accent-100 sm:inline-flex"
+            className="flex items-center gap-1.5 rounded-lg border border-accent-200 bg-accent-50 px-2.5 py-1.5 text-xs font-medium text-accent-700 hover:bg-accent-100"
             title="KI-Assistent: Notiz/Aufgabe aufnehmen oder Frage stellen"
           >
-            <Sparkles size={13} /> KI-Assistent
+            <Sparkles size={14} />
+            <span className="hidden sm:inline">KI-Assistent</span>
           </button>
           <button
             onClick={() => navigate('/postfach')}
-            className="hidden items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-50 sm:inline-flex"
+            className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
             title="Postfach (info@amayer-holding.com)"
           >
-            <Inbox size={13} /> Postfach
+            <Inbox size={16} />
           </button>
           <button
             onClick={() => setDokumentImportOpen(true)}
-            className="hidden items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-50 sm:inline-flex"
+            className="hidden rounded-lg p-2 text-slate-500 hover:bg-slate-100 sm:inline-flex"
             title="Dokument per Handyscan/Druckerscan importieren"
           >
-            <Camera size={13} /> Dokument importieren
+            <Camera size={16} />
           </button>
-          <a
-            href="#/portal/login"
-            target="_blank"
-            rel="noreferrer"
-            className="hidden items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-50 sm:inline-flex"
-            title="Investoren-Portal in neuem Tab öffnen"
-          >
-            <ExternalLink size={13} /> Kundenportal (Demo)
-          </a>
-          {state.rolle === 'geschaeftsfuehrung' && (
+
+          <div className="relative">
             <button
-              onClick={resetData}
-              className="hidden items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-50 sm:inline-flex"
-              title="Daten zurücksetzen"
+              onClick={() => setBenachrichtigungenOpen((o) => !o)}
+              className="relative rounded-lg p-2 text-slate-500 hover:bg-slate-100"
+              title="Benachrichtigungen"
             >
-              <RotateCcw size={13} /> Daten zurücksetzen
+              <Bell size={16} />
+              {prioritaeten.length > 0 && (
+                <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-semibold text-white">
+                  {prioritaeten.length}
+                </span>
+              )}
             </button>
-          )}
-          <button
-            onClick={rolleWechseln}
-            className="hidden items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-50 sm:inline-flex"
-            title="Rolle wechseln"
-          >
-            <Users size={13} /> {state.rolle === 'geschaeftsfuehrung' ? 'Geschäftsführung' : 'Mitarbeiter'}
-          </button>
-          {isSupabaseConfigured && session && (
-            <>
-              <span className="hidden text-xs text-slate-500 sm:inline">{mitarbeiter?.name ?? session.user.email}</span>
-              <button
-                onClick={signOut}
-                className="rounded-lg border border-slate-200 p-1.5 text-slate-400 hover:bg-slate-50"
-                title="Abmelden"
-              >
-                <LogOut size={15} />
-              </button>
-            </>
-          )}
-          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-200 text-slate-500">
-            <User size={16} />
+            {benachrichtigungenOpen && (
+              <>
+                <button className="fixed inset-0 z-40 cursor-default" onClick={() => setBenachrichtigungenOpen(false)} aria-label="Schließen" />
+                <div className="absolute right-0 z-50 mt-2 w-72 rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
+                  <p className="px-2 py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">Offene Prioritäten</p>
+                  {prioritaeten.length === 0 ? (
+                    <p className="px-2 py-3 text-sm text-slate-400">Nichts Dringendes.</p>
+                  ) : (
+                    <div className="max-h-72 overflow-y-auto">
+                      {prioritaeten.slice(0, 8).map((e) => (
+                        <button
+                          key={e.aufgabe.id}
+                          onClick={() => {
+                            setBenachrichtigungenOpen(false)
+                            navigate('/heute')
+                          }}
+                          className="block w-full rounded-lg px-2 py-2 text-left text-sm hover:bg-slate-50"
+                        >
+                          <span className="block truncate text-slate-700">{e.aufgabe.titel}</span>
+                          <span className="text-xs text-slate-400">{e.projektName}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+
+          <div className="relative">
+            <button
+              onClick={() => setProfilMenuOpen((o) => !o)}
+              className="flex items-center gap-1.5 rounded-lg p-1.5 pr-2 hover:bg-slate-100"
+              title="Profil & Einstellungen"
+            >
+              {state.profil.fotoDataUrl ? (
+                <img src={state.profil.fotoDataUrl} alt="" className="h-7 w-7 rounded-full object-cover" />
+              ) : (
+                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-200 text-slate-500">
+                  <User size={15} />
+                </div>
+              )}
+              <span className="hidden text-xs font-medium text-slate-600 sm:inline">{state.profil.name}</span>
+              <ChevronDown size={13} className="hidden text-slate-400 sm:inline" />
+            </button>
+            {profilMenuOpen && (
+              <>
+                <button className="fixed inset-0 z-40 cursor-default" onClick={() => setProfilMenuOpen(false)} aria-label="Schließen" />
+                <div className="absolute right-0 z-50 mt-2 w-60 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg">
+                  <div className="px-2.5 py-2">
+                    <p className="text-sm font-medium text-slate-800">{state.profil.name}</p>
+                    <p className="text-xs text-slate-400">{isSupabaseConfigured && session ? mitarbeiter?.name ?? session.user.email : state.rolle === 'geschaeftsfuehrung' ? 'Geschäftsführung' : 'Mitarbeiter'}</p>
+                  </div>
+                  <div className="border-t border-slate-100 pt-1">
+                    <MenuItem icon={<UserCog size={15} />} onClick={() => { setProfilMenuOpen(false); navigate('/profil') }}>
+                      Mein Profil
+                    </MenuItem>
+                    <MenuItem icon={<ExternalLink size={15} />} onClick={() => { setProfilMenuOpen(false); window.open('#/portal/login', '_blank') }}>
+                      Kundenportal (Demo)
+                    </MenuItem>
+                    <MenuItem icon={<Users size={15} />} onClick={() => { setProfilMenuOpen(false); rolleWechseln() }}>
+                      Rolle wechseln ({state.rolle === 'geschaeftsfuehrung' ? 'Geschäftsführung' : 'Mitarbeiter'})
+                    </MenuItem>
+                    {state.rolle === 'geschaeftsfuehrung' && (
+                      <MenuItem icon={<RotateCcw size={15} />} onClick={() => { setProfilMenuOpen(false); resetData() }}>
+                        Daten zurücksetzen
+                      </MenuItem>
+                    )}
+                    {isSupabaseConfigured && session && (
+                      <MenuItem icon={<LogOut size={15} />} onClick={() => { setProfilMenuOpen(false); signOut() }}>
+                        Abmelden
+                      </MenuItem>
+                    )}
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         </div>
       </header>
 
       <div className="flex min-h-0 flex-1">
-        {/* Sidebar */}
+        {/* Sidebar — ab md sichtbar; auf Mobile steckt dieselbe Navigation stattdessen im
+            Bereichsmenü-Drawer (siehe unten), damit sie nicht den knappen Platz wegnimmt. */}
         <aside
-          className={`flex-shrink-0 border-r border-slate-200 bg-white transition-all duration-150 ${
+          className={`hidden flex-shrink-0 border-r border-slate-200 bg-white transition-all duration-150 md:flex ${
             sidebarCollapsed ? 'w-14' : 'w-60'
           }`}
         >
@@ -154,7 +233,7 @@ export function Layout({ children }: { children: ReactNode }) {
 
         {/* Main */}
         <main className="min-w-0 flex-1 overflow-y-auto">
-          <div className="mx-auto max-w-[1400px] px-6 py-6">{children}</div>
+          <div className="mx-auto max-w-[1400px] px-4 py-5 sm:px-6 sm:py-6">{children}</div>
         </main>
       </div>
 
@@ -170,6 +249,20 @@ export function Layout({ children }: { children: ReactNode }) {
               </button>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto p-6">
+              {/* Navigation des aktuellen Bereichs — nur auf Mobile sichtbar, da dort die feste
+                  Sidebar (siehe oben, ab md) keinen Platz hat. */}
+              <div
+                className="mb-6 rounded-xl border border-slate-200 md:hidden"
+                onClick={(e) => {
+                  // Schließt das Drawer nur bei echter Navigation (Klick auf einen Link), nicht
+                  // beim Aufklappen von Untergruppen wie "Vorlagen".
+                  if ((e.target as HTMLElement).closest('a')) setDrawerOpen(false)
+                }}
+              >
+                <aktuellerBereich.Sidebar collapsed={false} onToggle={() => setDrawerOpen(false)} />
+              </div>
+
+              <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-400">Bereich wechseln</h3>
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 {BEREICHE.map((b) => (
                   <button
@@ -195,6 +288,15 @@ export function Layout({ children }: { children: ReactNode }) {
       <DokumentenImportModal open={dokumentImportOpen} onClose={() => setDokumentImportOpen(false)} />
       <KiAssistentModal open={kiAssistentOpen} onClose={() => setKiAssistentOpen(false)} />
     </div>
+  )
+}
+
+function MenuItem({ icon, onClick, children }: { icon: ReactNode; onClick: () => void; children: ReactNode }) {
+  return (
+    <button onClick={onClick} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm text-slate-600 hover:bg-slate-50">
+      {icon}
+      {children}
+    </button>
   )
 }
 

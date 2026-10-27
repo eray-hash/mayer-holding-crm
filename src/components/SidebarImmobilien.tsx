@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { Building2, Landmark, FileText, ChevronDown, ChevronLeft, ChevronRight, ScrollText, Sun, LayoutGrid } from 'lucide-react'
+import { Building2, Landmark, FileText, ChevronDown, ChevronLeft, ChevronRight, ScrollText, Sun, LayoutGrid, UserCog } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { OBJEKT_GRUPPEN } from '../data/constants'
 
@@ -118,6 +118,7 @@ export function SidebarImmobilien({ collapsed, onToggle }: { collapsed: boolean;
             <ScrollText size={14} /> Immobilien
           </div>
         )}
+        <SideLink to="/profil" icon={<UserCog size={17} />} label="Mein Profil" collapsed={collapsed} active={isActive('/profil')} />
         <button
           onClick={onToggle}
           className="flex w-full items-center justify-center rounded-lg border border-slate-200 py-1.5 text-slate-400 hover:bg-slate-50"

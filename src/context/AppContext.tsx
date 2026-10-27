@@ -20,6 +20,7 @@ import type {
   EingegangeneEmail,
   MailVorlage,
   Notiz,
+  MitarbeiterProfil,
   KundeBereich,
   ActivityEntry,
 } from '../types'
@@ -80,6 +81,7 @@ export type AppData = {
   eingegangeneEmails: EingegangeneEmail[]
   mailVorlagen: MailVorlage[]
   notizen: Notiz[]
+  profil: MitarbeiterProfil
 }
 
 const STORAGE_KEY = 'mayer-holding-crm-data-v1'
@@ -115,6 +117,12 @@ function buildSeed(): AppData {
     eingegangeneEmails: [],
     mailVorlagen: seedMailVorlagen,
     notizen: [],
+    profil: {
+      name: CURRENT_USER,
+      telefon: '',
+      email: '',
+      signaturHtml: `<p><strong>${CURRENT_USER}</strong><br/>Mayer Holding</p>`,
+    },
   }
 }
 
@@ -144,6 +152,14 @@ function loadInitial(): AppData {
         if (!Array.isArray(parsed.eingegangeneEmails)) parsed.eingegangeneEmails = []
         if (!Array.isArray(parsed.mailVorlagen)) parsed.mailVorlagen = seedMailVorlagen
         if (!Array.isArray(parsed.notizen)) parsed.notizen = []
+        if (!parsed.profil) {
+          parsed.profil = {
+            name: CURRENT_USER,
+            telefon: '',
+            email: '',
+            signaturHtml: `<p><strong>${CURRENT_USER}</strong><br/>Mayer Holding</p>`,
+          }
+        }
         return parsed
       }
     }
@@ -217,6 +233,7 @@ type Action =
   | { type: 'ADD_NOTIZ'; notiz: Notiz }
   | { type: 'TOGGLE_NOTIZ'; id: string }
   | { type: 'DELETE_NOTIZ'; id: string }
+  | { type: 'UPDATE_PROFIL'; patch: Partial<MitarbeiterProfil> }
 
 // Hängt eine Aktivität an den Kunden/Mandanten im richtigen Bereichs-Array — zentrale Stelle, da
 // jeder KundeBereich sein eigenes AppData-Feld hat (siehe kundenBereiche.ts für die Lese-Seite).
@@ -721,6 +738,8 @@ function reducer(state: AppData, action: Action): AppData {
       return { ...state, notizen: state.notizen.map((n) => (n.id === action.id ? { ...n, erledigt: !n.erledigt } : n)) }
     case 'DELETE_NOTIZ':
       return { ...state, notizen: state.notizen.filter((n) => n.id !== action.id) }
+    case 'UPDATE_PROFIL':
+      return { ...state, profil: { ...state.profil, ...action.patch } }
     default:
       return state
   }

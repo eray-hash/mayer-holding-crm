@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { Users, FileText, ChevronDown, ChevronLeft, ChevronRight, ScrollText, Sun, LayoutGrid } from 'lucide-react'
+import { Users, FileText, ChevronDown, ChevronLeft, ChevronRight, ScrollText, Sun, LayoutGrid, UserCog } from 'lucide-react'
 
 const VORLAGEN_LINKS = [
   { kind: 'vollmacht', label: 'Vollmacht' },
@@ -64,6 +64,7 @@ export function SidebarErben({ collapsed, onToggle }: { collapsed: boolean; onTo
             <ScrollText size={14} /> Erben
           </div>
         )}
+        <SideLink to="/profil" icon={<UserCog size={17} />} label="Mein Profil" collapsed={collapsed} active={isActive('/profil')} />
         <button
           onClick={onToggle}
           className="flex w-full items-center justify-center rounded-lg border border-slate-200 py-1.5 text-slate-400 hover:bg-slate-50"
