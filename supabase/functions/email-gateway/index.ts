@@ -255,8 +255,8 @@ Text:
 // Frontend mitgeschickten Kunden-Kontexts (Protokolle, Aktivitäten, Status, Follow-up) — die
 // Function selbst hat keinen Datenbankzugriff auf die CRM-Daten, die leben nur im Browser.
 async function answerAssistantQuestion(frage: string, kontext: string): Promise<{ antwort: string }> {
-  return callClaudeTool<{ antwort: string }>(
-    `Beantworte die folgende Frage eines Mitarbeiters ausschließlich auf Basis der gegebenen CRM-Daten zu einem Kunden/Mandanten. Antworte auf Deutsch, knapp und konkret. Wenn die Daten die Frage nicht beantworten können, sage das ehrlich statt zu spekulieren.
+  const result = await callClaudeTool<{ antwort: string }>(
+    `Beantworte die folgende Frage eines Mitarbeiters ausschließlich auf Basis der gegebenen CRM-Daten zu einem Kunden/Mandanten. Antworte auf Deutsch, knapp und konkret, als reiner Fließtext ohne jegliche Tags oder Markup. Wenn die Daten die Frage nicht beantworten können, sage das ehrlich statt zu spekulieren.
 
 CRM-Daten zum Kunden:
 """${kontext}"""
@@ -272,6 +272,9 @@ Frage: ${frage}`,
       },
     },
   )
+  // Verteidigt gegen gelegentliche Reste von Pseudo-XML/Tool-Syntax, die das Modell manchmal ans
+  // Ende des Strings anhängt (z. B. "</antwort> </invoke>") statt sie sauber im tool_use zu lassen.
+  return { antwort: result.antwort.replace(/<\/?[a-zA-Z_][^>]*>/g, '').trim() }
 }
 
 Deno.serve(async (req: Request) => {
