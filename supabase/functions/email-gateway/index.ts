@@ -17,6 +17,9 @@
 //                                                   Fachwissen zu den Leistungsbereichen der Holding
 //                                                   vorschlagen (keine echte Otto-Schmidt-Verlag-
 //                                                   Anbindung, da nicht lizenziert)
+//   { action: "draft_campaign", ziel }           -> Betreff + Text für eine Segment-/Kampagnen-Mail
+//                                                   (z.B. zweiwöchentlicher Newsletter) anhand eines
+//                                                   kurz beschriebenen Ziels entwerfen
 //
 // Alle Zugangsdaten kommen ausschließlich aus Supabase Function Secrets (nie im Code, nie im
 // Frontend). Siehe README-Abschnitt "E-Mail-Postfach-Anbindung" für die Einrichtung.
@@ -343,6 +346,31 @@ Gib maximal drei konkrete, plausible Chancen zurück, sortiert nach Priorität (
   )
 }
 
+type KampagnenEntwurf = { betreff: string; text: string }
+
+// Entwirft Betreff + Text für eine Segment-/Kampagnen-Mail (z.B. den zweiwöchentlichen Newsletter)
+// anhand eines kurz beschriebenen Ziels. Nutzt {{firma}}/{{ansprechpartner}} als Platzhalter, damit
+// der Text beim Versand pro Empfänger personalisiert werden kann (siehe applyMailVorlage im Frontend).
+async function draftCampaign(ziel: string): Promise<KampagnenEntwurf> {
+  return callClaudeTool<KampagnenEntwurf>(
+    `Du verfasst eine E-Mail für eine Beratungsholding (Andreas Mayer Holding, Ulm), die an eine ausgewählte Gruppe bestehender Kunden/Mandanten verschickt wird. Ziel/Thema der Mail: "${ziel}".
+
+Schreibe einen kurzen, prägnanten Betreff und einen freundlichen, professionellen Mailtext auf Deutsch, in einfacher und klarer Sprache ohne Anglizismen oder Fachjargon. Verwende im Text genau einmal die Platzhalter {{firma}} und {{ansprechpartner}} an einer passenden Stelle (z. B. in der Anrede), damit die Mail pro Empfänger personalisiert werden kann. Der Text soll ca. 4-8 Sätze lang sein, mit einer klaren Grußformel enden ("Mit freundlichen Grüßen\\nIhr Team der Andreas Mayer Holding") und keine Platzhalter außer {{firma}}/{{ansprechpartner}} enthalten.`,
+    {
+      name: 'kampagnen_entwurf',
+      description: 'Entwirft Betreff und Text für eine Segment-/Kampagnen-Mail.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          betreff: { type: 'string' },
+          text: { type: 'string' },
+        },
+        required: ['betreff', 'text'],
+      },
+    },
+  )
+}
+
 Deno.serve(async (req: Request) => {
   const origin = req.headers.get('origin')
   const headers = corsHeaders(origin)
@@ -425,7 +453,16 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ chancen }), { headers })
     }
 
-    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer" oder "potenzial_analyse"' }), { status: 400, headers })
+    if (body.action === 'draft_campaign') {
+      const { ziel } = body
+      if (!ziel || typeof ziel !== 'string' || !ziel.trim()) {
+        return new Response(JSON.stringify({ error: 'ziel ist ein Pflichtfeld' }), { status: 400, headers })
+      }
+      const entwurf = await draftCampaign(ziel)
+      return new Response(JSON.stringify(entwurf), { headers })
+    }
+
+    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse" oder "draft_campaign"' }), { status: 400, headers })
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }

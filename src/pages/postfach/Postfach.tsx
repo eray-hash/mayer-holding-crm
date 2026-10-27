@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { Inbox, Send, RefreshCw, UserPlus, Check, X, AlertTriangle, Plus, Reply, ListPlus, Search, Sparkles } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { Inbox, Send, RefreshCw, UserPlus, Check, X, AlertTriangle, Plus, Reply, ListPlus, Search, Sparkles, Megaphone } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { isEmailInboxDbConfigured, fetchStoredEmails, searchStoredEmails } from '../../lib/emailInboxDb'
 import { isSentEmailsDbConfigured, fetchSentEmails, searchSentEmails } from '../../lib/sentEmailsDb'
@@ -50,6 +51,7 @@ function addKundeZuBereich(dispatch: ReturnType<typeof useApp>['dispatch'], bere
 }
 
 export function Postfach() {
+  const navigate = useNavigate()
   const { state, dispatch } = useApp()
   const [ordner, setOrdner] = useState<Ordner>('posteingang')
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -274,8 +276,14 @@ export function Postfach() {
           </button>
         </nav>
         <button
-          onClick={() => setVorlagenOpen(true)}
+          onClick={() => navigate('/kampagnen')}
           className="mt-4 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-slate-500 hover:bg-slate-50"
+        >
+          <Megaphone size={14} /> Kampagnen
+        </button>
+        <button
+          onClick={() => setVorlagenOpen(true)}
+          className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-slate-500 hover:bg-slate-50"
         >
           <ListPlus size={14} /> Mailvorlagen verwalten
         </button>

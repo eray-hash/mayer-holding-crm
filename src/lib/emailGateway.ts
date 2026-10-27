@@ -94,3 +94,8 @@ export async function analysierePotenzial(kontext: string): Promise<PotenzialCha
   const data = await call({ action: 'potenzial_analyse', kontext })
   return data.chancen ?? []
 }
+
+export async function draftCampaign(ziel: string): Promise<{ betreff: string; text: string }> {
+  const data = await call({ action: 'draft_campaign', ziel })
+  return { betreff: data.betreff, text: data.text }
+}
