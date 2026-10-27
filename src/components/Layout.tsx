@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import {
   Menu,
@@ -28,6 +28,7 @@ import { useAuth } from '../context/AuthContext'
 import { isSupabaseConfigured } from '../lib/supabaseClient'
 import { collectPriorityEntries } from '../lib/todayPriorities'
 import { collectFollowUpPriorities, followUpDetailPfad } from '../lib/followUpPriorities'
+import { isLeadsDbConfigured, fetchOffeneLeads } from '../lib/leadsDb'
 import { DokumentenImportModal } from './DokumentenImportModal'
 import { KiAssistentPanel } from './KiAssistentPanel'
 import { SidebarBeratung } from './SidebarBeratung'
@@ -64,12 +65,24 @@ export function Layout({ children }: { children: ReactNode }) {
   const [kiAssistentOpen, setKiAssistentOpen] = useState(false)
   const [profilMenuOpen, setProfilMenuOpen] = useState(false)
   const [benachrichtigungenOpen, setBenachrichtigungenOpen] = useState(false)
+  const [neueLeadsCount, setNeueLeadsCount] = useState(0)
   const navigate = useNavigate()
 
   const aktuellerBereich = BEREICHE.find((b) => b.id === state.bereich) ?? BEREICHE[0]
   const { prioritaeten } = collectPriorityEntries(state.projekte)
   const followUps = collectFollowUpPriorities(state)
+
+  useEffect(() => {
+    if (!isLeadsDbConfigured) return
+    fetchOffeneLeads()
+      .then((leads) => setNeueLeadsCount(leads.length))
+      .catch(() => {})
+  }, [])
+
   const benachrichtigungen = [
+    ...(neueLeadsCount > 0
+      ? [{ key: 'neue-leads', titel: `${neueLeadsCount} neue Lead-Vorschläge`, subtitel: 'Aus der E-Mail-Analyse — im Postfach prüfen', onClick: () => navigate('/postfach') }]
+      : []),
     ...followUps.map((f) => ({ key: `fu-${f.bereich}-${f.id}`, titel: f.note || 'Follow-up', subtitel: f.name, onClick: () => navigate(followUpDetailPfad(f)) })),
     ...prioritaeten.map((p) => ({ key: `pr-${p.aufgabe.id}`, titel: p.aufgabe.titel, subtitel: p.projektName, onClick: () => navigate('/heute') })),
   ]

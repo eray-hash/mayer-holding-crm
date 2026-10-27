@@ -274,6 +274,21 @@ export type Notiz = {
   erledigt: boolean
 }
 
+// Ein per KI aus der E-Mail-Historie (oder später aus Fragenkatalog-Formularen) extrahierter
+// Lead-Vorschlag — rein lesend aus public.vorgeschlagene_leads, siehe scripts/extract-leads.mjs.
+// Übernahme als echter Kunde/Mandant passiert im CRM selbst (Dedup-Check gegen lokale Kundendaten).
+export type VorgeschlagenerLead = {
+  id: string
+  email: string
+  name?: string
+  firma?: string
+  telefon?: string
+  bereichVorschlag: KundeBereich | 'unklar'
+  notiz: string
+  status: 'offen' | 'uebernommen' | 'verworfen'
+  erstelltAm: string
+}
+
 // Eine über das CRM versendete E-Mail — rein lesend aus public.gesendete_emails (vom
 // email-gateway beim erfolgreichen Versand mitgeschrieben), für den "Gesendet"-Ordner im Postfach.
 export type GesendeteEmail = {

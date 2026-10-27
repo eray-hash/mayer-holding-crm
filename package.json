@@ -11,7 +11,8 @@
     "predeploy": "npm run build",
     "deploy": "gh-pages -d dist",
     "migrate-inbox": "node scripts/migrate-inbox.mjs",
-    "cleanup-inbox": "node scripts/cleanup-inbox.mjs"
+    "cleanup-inbox": "node scripts/cleanup-inbox.mjs",
+    "extract-leads": "node scripts/extract-leads.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

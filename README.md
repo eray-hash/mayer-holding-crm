@@ -220,6 +220,29 @@ CONFIRM_DELETE=yes \
 npm run cleanup-inbox
 ```
 
+### Leads aus der E-Mail-Historie extrahieren
+
+Nach dem Aufräumen (oben) enthält `eingegangene_emails` nur noch echte Kunden-/Interessenten-
+korrespondenz. `scripts/extract-leads.mjs` gruppiert diese nach Absender, lässt jede Gruppe per
+Anthropic-API bewerten (echter Lead ja/nein, welcher Bereich passt, Firma/Name/Telefon falls
+erkennbar, kurze Notiz) und schreibt Vorschläge nach `public.vorgeschlagene_leads` — **legt nie
+direkt einen Kunden an**. Die eigentliche Übernahme passiert im CRM selbst, unter **Postfach → Neue
+Leads**: dort wird pro Vorschlag automatisch geprüft, ob schon ein Kunde mit dieser E-Mail existiert
+(Dedup gegen die echten, nur lokal im Browser liegenden Kundendaten), sonst lässt sich der
+vorgeschlagene Bereich anpassen und der Lead per Klick als echter Kunde/Mandant anlegen oder
+verwerfen. Neue offene Vorschläge zeigt zusätzlich die Benachrichtigungsglocke in der Topbar an.
+
+```bash
+SUPABASE_URL=https://qyqtxltwgetliddwceox.supabase.co \
+SUPABASE_SERVICE_ROLE_KEY='<Service-Role-Key>' \
+ANTHROPIC_API_KEY='<eigener Anthropic-API-Key>' \
+npm run extract-leads
+```
+
+Dieselbe Tabelle/dasselbe Review-UI ist bewusst so gebaut, dass sie später auch Leads aus den
+geplanten öffentlichen Fragenkatalog-Formularen (ein Formular pro Bereich) aufnehmen kann, nicht nur
+aus der E-Mail-Analyse.
+
 ## Gespräch aufzeichnen + KI-Zusammenfassung
 
 In der Gesprächsprotokolle-Tab/-Sektion eines Kunden (in **allen** Bereichen) kann ein Telefonat live

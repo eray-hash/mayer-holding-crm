@@ -1,18 +1,53 @@
 import { useEffect, useState } from 'react'
-import { Inbox, Send, RefreshCw, UserPlus, Check, X, AlertTriangle, Plus, Reply, ListPlus, Search } from 'lucide-react'
+import { Inbox, Send, RefreshCw, UserPlus, Check, X, AlertTriangle, Plus, Reply, ListPlus, Search, Sparkles } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { isEmailInboxDbConfigured, fetchStoredEmails, searchStoredEmails } from '../../lib/emailInboxDb'
 import { isSentEmailsDbConfigured, fetchSentEmails, searchSentEmails } from '../../lib/sentEmailsDb'
+import { isLeadsDbConfigured, fetchOffeneLeads, setLeadStatus } from '../../lib/leadsDb'
 import { matchKundeByEmail, suggestKunde } from '../../lib/matchKunde'
 import { KUNDEN_BEREICHE, kundeBereichLabel } from '../../data/kundenBereiche'
-import { uid, today, addDays, fmtDateTime } from '../../lib/dates'
+import { uid, today, addDays, fmtDateTime, fmtDate } from '../../lib/dates'
 import { MITARBEITER } from '../../data/constants'
 import { SendEmailModal } from '../../components/SendEmailModal'
 import { MailVorlagenModal } from '../../components/MailVorlagenModal'
 import { PrimaryButton, SecondaryButton, EmptyState, inputClass } from '../../components/ui'
-import type { EingegangeneEmail, GesendeteEmail, KundeBereich } from '../../types'
+import type { EingegangeneEmail, GesendeteEmail, KundeBereich, VorgeschlagenerLead } from '../../types'
 
-type Ordner = 'posteingang' | 'gesendet'
+type Ordner = 'posteingang' | 'gesendet' | 'leads'
+
+function neuerKunde(lead: VorgeschlagenerLead) {
+  return {
+    id: uid('k'),
+    firma: lead.firma || lead.name || lead.email,
+    ansprechpartner: lead.name || lead.firma || lead.email,
+    email: lead.email,
+    telefon: lead.telefon || '',
+    prioritaet: 'Mittel' as const,
+    status: 'lead',
+    followUp: { date: addDays(today(), 2), note: 'Erstkontakt aufnehmen', done: false },
+    verantwortlich: MITARBEITER[0],
+    letzteAktivitaet: today(),
+    activities: [{ id: uid('act'), date: today(), text: `Als Lead aus E-Mail-Analyse übernommen: „${lead.notiz}"`, user: 'KI-Lead-Analyse' }],
+  }
+}
+
+function addKundeZuBereich(dispatch: ReturnType<typeof useApp>['dispatch'], bereich: KundeBereich, lead: VorgeschlagenerLead) {
+  const kunde = neuerKunde(lead)
+  switch (bereich) {
+    case 'beratung':
+      return dispatch({ type: 'ADD_KUNDE', kunde })
+    case 'erben':
+      return dispatch({ type: 'ADD_ERBEN_MANDANT', kunde })
+    case 'betriebsuebergabe':
+      return dispatch({ type: 'ADD_BETRIEBSUEBERGABE_MANDANT', kunde })
+    case 'betriebsformen':
+      return dispatch({ type: 'ADD_BETRIEBSFORMEN_MANDANT', kunde })
+    case 'akademie':
+      return dispatch({ type: 'ADD_AKADEMIE_TEILNEHMER', kunde })
+    case 'finanzierungen':
+      return dispatch({ type: 'ADD_FINANZIERUNGEN_MANDANT', kunde })
+  }
+}
 
 export function Postfach() {
   const { state, dispatch } = useApp()
@@ -25,6 +60,10 @@ export function Postfach() {
   const [gesendet, setGesendet] = useState<GesendeteEmail[]>([])
   const [gesendetLimit, setGesendetLimit] = useState(30)
   const [gesendetLoading, setGesendetLoading] = useState(false)
+
+  const [leads, setLeads] = useState<VorgeschlagenerLead[]>([])
+  const [leadsLoading, setLeadsLoading] = useState(false)
+  const [leadBereichWahl, setLeadBereichWahl] = useState<Record<string, KundeBereich>>({})
 
   const [composeOpen, setComposeOpen] = useState(false)
   const [vorlagenOpen, setVorlagenOpen] = useState(false)
@@ -82,8 +121,34 @@ export function Postfach() {
 
   useEffect(() => {
     if (ordner === 'gesendet' && isSentEmailsDbConfigured && gesendet.length === 0) ladeGesendet(gesendetLimit)
+    if (ordner === 'leads' && isLeadsDbConfigured && leads.length === 0) ladeLeads()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ordner])
+
+  async function ladeLeads() {
+    setLeadsLoading(true)
+    setError('')
+    try {
+      setLeads(await fetchOffeneLeads())
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Lead-Vorschläge konnten nicht geladen werden.')
+    } finally {
+      setLeadsLoading(false)
+    }
+  }
+
+  async function leadUebernehmen(lead: VorgeschlagenerLead, bereich: KundeBereich) {
+    addKundeZuBereich(dispatch, bereich, lead)
+    await setLeadStatus(lead.id, 'uebernommen').catch(() => {})
+    setLeads((ls) => ls.filter((l) => l.id !== lead.id))
+    setSelectedId(null)
+  }
+
+  async function leadVerwerfen(lead: VorgeschlagenerLead) {
+    await setLeadStatus(lead.id, 'verworfen').catch(() => {})
+    setLeads((ls) => ls.filter((l) => l.id !== lead.id))
+    setSelectedId(null)
+  }
 
   // Server-seitige Suche (debounced) über Absender/Betreff/Text — ordnerabhängig, damit ältere,
   // noch nicht nachgeladene E-Mails auch gefunden werden statt nur die lokal geladene Seite zu filtern.
@@ -165,8 +230,9 @@ export function Postfach() {
 
   const selectedMail = ordner === 'posteingang' ? mails.find((m) => m.id === selectedId) : undefined
   const selectedGesendet = ordner === 'gesendet' ? gesendet.find((m) => m.id === selectedId) : undefined
+  const selectedLead = ordner === 'leads' ? leads.find((l) => l.id === selectedId) : undefined
 
-  const dbConfigured = ordner === 'posteingang' ? isEmailInboxDbConfigured : isSentEmailsDbConfigured
+  const dbConfigured = ordner === 'posteingang' ? isEmailInboxDbConfigured : ordner === 'gesendet' ? isSentEmailsDbConfigured : isLeadsDbConfigured
 
   return (
     <div className="flex h-[calc(100vh-7.5rem)] gap-4">
@@ -197,6 +263,15 @@ export function Postfach() {
             <Send size={15} /> Gesendet
             <span className="ml-auto text-xs text-slate-400">{gesendet.length}</span>
           </button>
+          <button
+            onClick={() => { setOrdner('leads'); setSelectedId(null) }}
+            className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium ${
+              ordner === 'leads' ? 'bg-accent-50 text-accent-700' : 'text-slate-600 hover:bg-slate-50'
+            }`}
+          >
+            <Sparkles size={15} /> Neue Leads
+            {leads.length > 0 && <span className="ml-auto rounded-full bg-rose-500 px-1.5 text-xs font-semibold text-white">{leads.length}</span>}
+          </button>
         </nav>
         <button
           onClick={() => setVorlagenOpen(true)}
@@ -212,7 +287,9 @@ export function Postfach() {
             <AlertTriangle size={15} className="mt-0.5 flex-shrink-0" />
             {ordner === 'posteingang'
               ? 'Posteingang noch nicht verbunden — E-Mails an info@amayer-holding.com werden per Weiterleitung an einen Webhook-Dienst geschickt, der sie in eine Datenbank-Tabelle schreibt.'
-              : 'Gesendet-Ordner noch nicht verbunden — sobald die E-Mail-Datenbank konfiguriert ist, erscheinen hier über das CRM versendete Mails.'}
+              : ordner === 'gesendet'
+                ? 'Gesendet-Ordner noch nicht verbunden — sobald die E-Mail-Datenbank konfiguriert ist, erscheinen hier über das CRM versendete Mails.'
+                : 'Lead-Vorschläge noch nicht verbunden — sobald die E-Mail-Datenbank konfiguriert ist, erscheinen hier per KI aus der E-Mail-Historie extrahierte Leads.'}
           </div>
         </div>
       ) : (
@@ -220,27 +297,29 @@ export function Postfach() {
           {/* Mail-Liste */}
           <div className="flex w-80 flex-shrink-0 flex-col rounded-xl border border-slate-200 bg-white">
             <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2">
-              <span className="text-xs font-medium text-slate-500">{ordner === 'posteingang' ? 'Posteingang' : 'Gesendet'}</span>
+              <span className="text-xs font-medium text-slate-500">{ordner === 'posteingang' ? 'Posteingang' : ordner === 'gesendet' ? 'Gesendet' : 'Neue Leads'}</span>
               <button
-                onClick={() => (ordner === 'posteingang' ? ladePosteingang(limit) : ladeGesendet(gesendetLimit))}
-                disabled={loading || gesendetLoading}
+                onClick={() => (ordner === 'posteingang' ? ladePosteingang(limit) : ordner === 'gesendet' ? ladeGesendet(gesendetLimit) : ladeLeads())}
+                disabled={loading || gesendetLoading || leadsLoading}
                 className="rounded-md p-1 text-slate-400 hover:bg-slate-50 hover:text-slate-600"
                 title="Aktualisieren"
               >
-                <RefreshCw size={13} className={loading || gesendetLoading ? 'animate-spin' : ''} />
+                <RefreshCw size={13} className={loading || gesendetLoading || leadsLoading ? 'animate-spin' : ''} />
               </button>
             </div>
 
-            <div className="relative border-b border-slate-100 p-2">
-              <Search size={13} className="pointer-events-none absolute left-5 top-1/2 -translate-y-1/2 text-slate-400" />
-              <input
-                className={`${inputClass} py-1.5 pl-7 pr-7 text-xs`}
-                placeholder="Absender, Betreff oder Text durchsuchen…"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-              />
-              {suche && <RefreshCw size={12} className="pointer-events-none absolute right-5 top-1/2 -translate-y-1/2 animate-spin text-slate-400" />}
-            </div>
+            {ordner !== 'leads' && (
+              <div className="relative border-b border-slate-100 p-2">
+                <Search size={13} className="pointer-events-none absolute left-5 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  className={`${inputClass} py-1.5 pl-7 pr-7 text-xs`}
+                  placeholder="Absender, Betreff oder Text durchsuchen…"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                />
+                {suche && <RefreshCw size={12} className="pointer-events-none absolute right-5 top-1/2 -translate-y-1/2 animate-spin text-slate-400" />}
+              </div>
+            )}
 
             {error && (
               <div className="m-2 flex items-start gap-2 rounded-lg bg-rose-50 p-2 text-xs text-rose-700">
@@ -296,9 +375,29 @@ export function Postfach() {
                     </button>
                   ))
                 ))}
+
+              {ordner === 'leads' &&
+                (leads.length === 0 ? (
+                  <EmptyState text="Keine offenen Lead-Vorschläge." />
+                ) : (
+                  leads.map((lead) => (
+                    <button
+                      key={lead.id}
+                      onClick={() => setSelectedId(lead.id)}
+                      className={`block w-full border-b border-slate-50 px-3 py-2.5 text-left ${selectedId === lead.id ? 'bg-accent-50' : 'hover:bg-slate-50'}`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="truncate text-sm font-medium text-slate-800">{lead.firma || lead.name || lead.email}</span>
+                        <span className="flex-shrink-0 text-[11px] text-slate-400">{fmtDate(lead.erstelltAm)}</span>
+                      </div>
+                      <div className="truncate text-xs text-slate-600">{lead.name || lead.email}</div>
+                      <div className="mt-1 text-[11px] text-slate-400">{lead.bereichVorschlag === 'unklar' ? 'Bereich unklar' : kundeBereichLabel(lead.bereichVorschlag)}</div>
+                    </button>
+                  ))
+                ))}
             </div>
 
-            {!query.trim() && (
+            {ordner !== 'leads' && !query.trim() && (
               <div className="border-t border-slate-100 p-2">
                 <SecondaryButton
                   onClick={() => (ordner === 'posteingang' ? mehrLadenPosteingang() : mehrLadenGesendet())}
@@ -364,7 +463,17 @@ export function Postfach() {
               </div>
             )}
 
-            {!selectedMail && !selectedGesendet && <EmptyState text="Wähle links eine E-Mail aus." />}
+            {selectedLead && (
+              <LeadDetail
+                lead={selectedLead}
+                bereichWahl={leadBereichWahl[selectedLead.id] ?? (selectedLead.bereichVorschlag === 'unklar' ? 'beratung' : selectedLead.bereichVorschlag)}
+                onBereichChange={(b) => setLeadBereichWahl((s) => ({ ...s, [selectedLead.id]: b }))}
+                onUebernehmen={(bereich) => leadUebernehmen(selectedLead, bereich)}
+                onVerwerfen={() => leadVerwerfen(selectedLead)}
+              />
+            )}
+
+            {!selectedMail && !selectedGesendet && !selectedLead && <EmptyState text="Wähle links einen Eintrag aus." />}
           </div>
         </>
       )}
@@ -379,6 +488,67 @@ export function Postfach() {
         }}
       />
       <MailVorlagenModal open={vorlagenOpen} onClose={() => setVorlagenOpen(false)} />
+    </div>
+  )
+}
+
+function LeadDetail({
+  lead,
+  bereichWahl,
+  onBereichChange,
+  onUebernehmen,
+  onVerwerfen,
+}: {
+  lead: VorgeschlagenerLead
+  bereichWahl: KundeBereich
+  onBereichChange: (b: KundeBereich) => void
+  onUebernehmen: (bereich: KundeBereich) => void
+  onVerwerfen: () => void
+}) {
+  const { state } = useApp()
+  const bestehenderTreffer = matchKundeByEmail(state, lead.email)
+
+  return (
+    <div>
+      <h2 className="text-base font-semibold text-slate-800">{lead.firma || lead.name || lead.email}</h2>
+      <p className="mt-1 text-xs text-slate-500">
+        {lead.name && `${lead.name} · `}
+        {lead.email}
+        {lead.telefon && ` · ${lead.telefon}`}
+      </p>
+      <p className="mt-1 text-xs text-slate-400">Vorgeschlagen am {fmtDate(lead.erstelltAm)}</p>
+
+      <p className="mb-6 mt-4 whitespace-pre-wrap rounded-lg bg-slate-50 p-3 text-sm text-slate-700">{lead.notiz}</p>
+
+      {bestehenderTreffer ? (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+          <p className="mb-2 text-sm text-amber-800">
+            Es gibt bereits einen Kunden mit dieser E-Mail: <strong>{bestehenderTreffer.kundeName}</strong> ({kundeBereichLabel(bestehenderTreffer.bereich)}).
+          </p>
+          <SecondaryButton onClick={onVerwerfen} className="text-xs">
+            Vorschlag verwerfen
+          </SecondaryButton>
+        </div>
+      ) : (
+        <div className="rounded-lg border border-slate-200 p-3">
+          <label className="mb-1.5 block text-xs font-medium text-slate-500">Bereich</label>
+          <select className={`${inputClass} mb-3 w-auto`} value={bereichWahl} onChange={(e) => onBereichChange(e.target.value as KundeBereich)}>
+            {KUNDEN_BEREICHE.map((b) => (
+              <option key={b.id} value={b.id}>
+                {b.label}
+              </option>
+            ))}
+          </select>
+          <div className="flex items-center gap-2">
+            <PrimaryButton onClick={() => onUebernehmen(bereichWahl)} className="text-xs">
+              <UserPlus size={13} /> Als Kunde/Mandant anlegen
+            </PrimaryButton>
+            <button onClick={onVerwerfen} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-50 hover:text-slate-600" title="Verwerfen">
+              <X size={14} />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
