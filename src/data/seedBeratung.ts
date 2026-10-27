@@ -173,10 +173,10 @@ export const seedRechnungen: Rechnung[] = [
 ]
 
 export const seedProtokolle: Protokoll[] = [
-  { id: uid('p'), kundeId: 'k3', datum: rel(-1), teilnehmer: 'Christine Bergmann, Thomas Berger', betreff: 'Vorgespräch Erstgespräch', text: 'Themen für das Erstgespräch abgestimmt, Fokus auf Prozessoptimierung Lager.' },
-  { id: uid('p'), kundeId: 'k5', datum: rel(-7), teilnehmer: 'Peter Winkelmann, Thomas Berger', betreff: 'Konzeptvorstellung', text: 'Konzept zur Neuausrichtung Vertrieb vorgestellt, positives Feedback.' },
-  { id: uid('p'), kundeId: 'k8', datum: rel(-12), teilnehmer: 'Elisabeth Hoffmann, Julia Hartmann', betreff: 'Quartalsgespräch Q3', text: 'Laufendes Mandat besprochen, Zwischenbericht übergeben.' },
-  { id: uid('p'), kundeId: 'k8', datum: rel(-45), teilnehmer: 'Elisabeth Hoffmann, Julia Hartmann', betreff: 'Kickoff aktives Mandat', text: 'Startbesprechung zur laufenden Vermögensberatung.' },
+  { id: uid('p'), bereich: 'beratung', kundeId: 'k3', datum: rel(-1), teilnehmer: 'Christine Bergmann, Thomas Berger', betreff: 'Vorgespräch Erstgespräch', text: 'Themen für das Erstgespräch abgestimmt, Fokus auf Prozessoptimierung Lager.' },
+  { id: uid('p'), bereich: 'beratung', kundeId: 'k5', datum: rel(-7), teilnehmer: 'Peter Winkelmann, Thomas Berger', betreff: 'Konzeptvorstellung', text: 'Konzept zur Neuausrichtung Vertrieb vorgestellt, positives Feedback.' },
+  { id: uid('p'), bereich: 'beratung', kundeId: 'k8', datum: rel(-12), teilnehmer: 'Elisabeth Hoffmann, Julia Hartmann', betreff: 'Quartalsgespräch Q3', text: 'Laufendes Mandat besprochen, Zwischenbericht übergeben.' },
+  { id: uid('p'), bereich: 'beratung', kundeId: 'k8', datum: rel(-45), teilnehmer: 'Elisabeth Hoffmann, Julia Hartmann', betreff: 'Kickoff aktives Mandat', text: 'Startbesprechung zur laufenden Vermögensberatung.' },
 ]
 
 export const seedKonzepte: Konzept[] = [

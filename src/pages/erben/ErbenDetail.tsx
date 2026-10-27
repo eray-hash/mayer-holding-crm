@@ -8,11 +8,13 @@ import { PRIORITAETEN } from '../../data/constants'
 import { ERBEN_CHECKLISTE } from '../../data/seedErben'
 import { FormularLinkButtons } from '../../components/FormularLink'
 import { ZugewieseneObjekte } from '../../components/ZugewieseneObjekte'
+import { GespraechsprotokolleSection } from '../../components/GespraechsprotokolleSection'
 import type { Prioritaet } from '../../types'
 
 const TABS = [
   { id: 'uebersicht', label: 'Übersicht' },
   { id: 'unterlagen', label: 'Unterlagen-Checkliste' },
+  { id: 'protokolle', label: 'Gesprächsprotokolle' },
 ]
 
 export function ErbenDetail() {
@@ -190,6 +192,8 @@ export function ErbenDetail() {
           </div>
         </Card>
       )}
+
+      {tab === 'protokolle' && <GespraechsprotokolleSection bereich="erben" kundeId={mandant.id} kundeName={mandant.ansprechpartner} />}
     </div>
   )
 }

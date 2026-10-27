@@ -6,6 +6,7 @@ import { Card, EmptyState } from '../../components/ui'
 import { fmtDate, isOverdue } from '../../lib/dates'
 import { PRIORITAETEN } from '../../data/constants'
 import { ZugewieseneObjekte } from '../../components/ZugewieseneObjekte'
+import { GespraechsprotokolleSection } from '../../components/GespraechsprotokolleSection'
 import type { Prioritaet } from '../../types'
 
 export function BetriebsformenDetail() {
@@ -102,6 +103,11 @@ export function BetriebsformenDetail() {
         </Card>
 
         <ZugewieseneObjekte bereich="betriebsformen" kundeId={mandant.id} />
+
+        <Card className="p-5 lg:col-span-3">
+          <h3 className="mb-3 text-sm font-semibold text-slate-700">Gesprächsprotokolle</h3>
+          <GespraechsprotokolleSection bereich="betriebsformen" kundeId={mandant.id} kundeName={mandant.ansprechpartner} />
+        </Card>
       </div>
     </div>
   )

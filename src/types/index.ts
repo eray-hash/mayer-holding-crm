@@ -58,6 +58,7 @@ export type MahnstufeId = 'erinnerung' | 'mahnung1' | 'mahnung2' | 'inkasso'
 
 export type Protokoll = {
   id: string
+  bereich: KundeBereich
   kundeId: string
   datum: string
   teilnehmer: string

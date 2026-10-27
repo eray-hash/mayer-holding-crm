@@ -295,11 +295,8 @@ function reducer(state: AppData, action: Action): AppData {
         user: CURRENT_USER,
       }
       return {
-        ...state,
+        ...appendKundeActivity(state, action.protokoll.bereich, action.protokoll.kundeId, activity),
         protokolle: [action.protokoll, ...state.protokolle],
-        kunden: state.kunden.map((k) =>
-          k.id === action.protokoll.kundeId ? { ...k, activities: [activity, ...k.activities] } : k,
-        ),
       }
     }
     case 'ADD_OBJEKT':
