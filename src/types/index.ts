@@ -107,6 +107,34 @@ export type Kaeuferprofil = {
   erstelltAm: string
 }
 
+// Fragenkatalog (Selbstauskunft): pro Bereich frei im CRM konfigurierbare Fragen, die einem
+// bestehenden Kunden/Mandanten als ausfüllbarer Link geschickt werden (siehe
+// /formular/selbstauskunft/:bereich/:kundeId). Eine komplett neue öffentliche Lead-Gen-Website pro
+// Bereich ist bewusst nicht Teil dieses Repos (separate Website-Projekte) — hier geht es nur um
+// die interne Verwaltung der Fragen plus den Link-Versand an bereits angelegte Kunden.
+export type FragenkatalogFragetyp = 'text' | 'zahl' | 'auswahl' | 'checkbox'
+
+export type FragenkatalogFrage = {
+  id: string
+  bereich: KundeBereich
+  text: string
+  typ: FragenkatalogFragetyp
+  optionen?: string[] // nur bei typ "auswahl"
+  pflichtfeld: boolean
+}
+
+export type SelbstauskunftAntwort = {
+  frageId: string
+  frageText: string // Snapshot der Frage zum Ausfüllzeitpunkt, falls der Katalog später geändert wird
+  antwort: string
+}
+
+export type Selbstauskunft = {
+  antworten: SelbstauskunftAntwort[]
+  signaturDataUrl: string
+  eingereichtAm: string
+}
+
 export type Kunde = {
   id: string
   firma: string
@@ -122,6 +150,7 @@ export type Kunde = {
   unterlagenCheckliste?: Record<string, boolean>
   signaturen?: Signatur[]
   kaeuferprofil?: Kaeuferprofil
+  selbstauskunft?: Selbstauskunft
 }
 
 export type Vorlage = {

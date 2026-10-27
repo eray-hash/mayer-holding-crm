@@ -9,6 +9,7 @@ import { ZugewieseneObjekte } from '../../components/ZugewieseneObjekte'
 import { GespraechsprotokolleSection } from '../../components/GespraechsprotokolleSection'
 import { PotenzialAnalyseSection } from '../../components/PotenzialAnalyseSection'
 import { KaeuferprofilSection } from '../../components/KaeuferprofilSection'
+import { SelbstauskunftSection } from '../../components/SelbstauskunftSection'
 import type { Prioritaet } from '../../types'
 
 export function AkademieDetail() {
@@ -118,6 +119,11 @@ export function AkademieDetail() {
         <Card className="p-5 lg:col-span-3">
           <h3 className="mb-3 text-sm font-semibold text-slate-700">Käuferprofil</h3>
           <KaeuferprofilSection bereich="akademie" kundeId={teilnehmer.id} kundeName={teilnehmer.ansprechpartner || teilnehmer.firma} />
+        </Card>
+
+        <Card className="p-5 lg:col-span-3">
+          <h3 className="mb-3 text-sm font-semibold text-slate-700">Selbstauskunft</h3>
+          <SelbstauskunftSection bereich="akademie" kundeId={teilnehmer.id} kundeName={teilnehmer.ansprechpartner || teilnehmer.firma} />
         </Card>
       </div>
     </div>

@@ -1,11 +1,12 @@
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, List, LayoutGrid, ArrowRight } from 'lucide-react'
+import { Plus, List, LayoutGrid, ArrowRight, ClipboardList } from 'lucide-react'
 import { useApp, useAdvanceStatus } from '../../context/AppContext'
 import { BETRIEBSUEBERGABE_STATUS } from '../../data/statusNetworks'
 import { PRIORITAET_ORDER, MITARBEITER, PRIORITAETEN } from '../../data/constants'
-import { PriorityBadge, StatusBadge, PrimaryButton, Modal, Field, inputClass } from '../../components/ui'
+import { PriorityBadge, StatusBadge, PrimaryButton, SecondaryButton, Modal, Field, inputClass } from '../../components/ui'
 import { StatusBoard } from '../../components/StatusBoard'
+import { FragenkatalogModal } from '../../components/FragenkatalogModal'
 import { fmtDate, isOverdue, today, uid } from '../../lib/dates'
 import type { Kunde, Prioritaet } from '../../types'
 
@@ -15,6 +16,7 @@ export function BetriebsuebergabeListe() {
   const navigate = useNavigate()
   const [view, setView] = useState<'liste' | 'board'>('liste')
   const [addOpen, setAddOpen] = useState(false)
+  const [fragenOpen, setFragenOpen] = useState(false)
 
   const [fStatus, setFStatus] = useState('')
   const [fPrio, setFPrio] = useState('')
@@ -52,11 +54,16 @@ export function BetriebsuebergabeListe() {
               <LayoutGrid size={14} /> Board
             </button>
           </div>
+          <SecondaryButton onClick={() => setFragenOpen(true)}>
+            <ClipboardList size={15} /> Fragenkatalog
+          </SecondaryButton>
           <PrimaryButton onClick={() => setAddOpen(true)}>
             <Plus size={15} /> Neuer Mandant
           </PrimaryButton>
         </div>
       </div>
+
+      <FragenkatalogModal open={fragenOpen} onClose={() => setFragenOpen(false)} bereich="betriebsuebergabe" />
 
       <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white p-3">
         <select value={fStatus} onChange={(e) => setFStatus(e.target.value)} className={`${inputClass} w-auto`}>

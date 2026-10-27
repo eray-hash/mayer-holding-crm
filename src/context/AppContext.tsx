@@ -24,7 +24,10 @@ import type {
   KundeBereich,
   ActivityEntry,
   Kaeuferprofil,
+  FragenkatalogFrage,
+  Selbstauskunft,
 } from '../types'
+import { DEFAULT_FRAGENKATALOG } from '../data/fragenkataloge'
 import type { Projekt, Aufgabe, AufgabenStatus, Meilenstein } from '../types/project'
 import { seedKunden, seedRechnungen, seedProtokolle, seedKonzepte, seedVertraege, seedVorlagen } from '../data/seedBeratung'
 import { seedObjekte, seedFinanzierungen } from '../data/seedImmobilien'
@@ -83,6 +86,7 @@ export type AppData = {
   mailVorlagen: MailVorlage[]
   notizen: Notiz[]
   profil: MitarbeiterProfil
+  fragenkataloge: FragenkatalogFrage[]
 }
 
 const STORAGE_KEY = 'mayer-holding-crm-data-v1'
@@ -124,6 +128,7 @@ function buildSeed(): AppData {
       email: '',
       signaturHtml: `<p><strong>${CURRENT_USER}</strong><br/>Mayer Holding</p>`,
     },
+    fragenkataloge: DEFAULT_FRAGENKATALOG,
   }
 }
 
@@ -161,6 +166,7 @@ function loadInitial(): AppData {
             signaturHtml: `<p><strong>${CURRENT_USER}</strong><br/>Mayer Holding</p>`,
           }
         }
+        if (!Array.isArray(parsed.fragenkataloge)) parsed.fragenkataloge = DEFAULT_FRAGENKATALOG
         return parsed
       }
     }
@@ -233,6 +239,10 @@ type Action =
   | { type: 'ADD_VOICE_TASK'; bereich: KundeBereich; kundeId: string; text: string; followUp?: FollowUp }
   | { type: 'ADD_POTENZIAL_NOTIZ'; bereich: KundeBereich; kundeId: string; titel: string; begruendung: string; followUp?: FollowUp }
   | { type: 'SET_KAEUFERPROFIL'; bereich: KundeBereich; kundeId: string; profil: Kaeuferprofil }
+  | { type: 'ADD_FRAGE'; frage: FragenkatalogFrage }
+  | { type: 'UPDATE_FRAGE'; id: string; patch: Partial<FragenkatalogFrage> }
+  | { type: 'DELETE_FRAGE'; id: string }
+  | { type: 'SET_SELBSTAUSKUNFT'; bereich: KundeBereich; kundeId: string; selbstauskunft: Selbstauskunft }
   | { type: 'ADD_NOTIZ'; notiz: Notiz }
   | { type: 'TOGGLE_NOTIZ'; id: string }
   | { type: 'DELETE_NOTIZ'; id: string }
@@ -752,6 +762,21 @@ function reducer(state: AppData, action: Action): AppData {
         user: CURRENT_USER,
       }
       return appendKundeActivity(state, action.bereich, action.kundeId, activity, { kaeuferprofil: action.profil })
+    }
+    case 'ADD_FRAGE':
+      return { ...state, fragenkataloge: [...state.fragenkataloge, action.frage] }
+    case 'UPDATE_FRAGE':
+      return { ...state, fragenkataloge: state.fragenkataloge.map((f) => (f.id === action.id ? { ...f, ...action.patch } : f)) }
+    case 'DELETE_FRAGE':
+      return { ...state, fragenkataloge: state.fragenkataloge.filter((f) => f.id !== action.id) }
+    case 'SET_SELBSTAUSKUNFT': {
+      const activity: ActivityEntry = {
+        id: uid('act'),
+        date: today(),
+        text: 'Selbstauskunft digital eingereicht und unterschrieben',
+        user: 'Kunde (Formular)',
+      }
+      return appendKundeActivity(state, action.bereich, action.kundeId, activity, { selbstauskunft: action.selbstauskunft })
     }
     case 'ADD_NOTIZ':
       return { ...state, notizen: [action.notiz, ...state.notizen] }

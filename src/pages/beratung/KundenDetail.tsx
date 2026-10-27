@@ -11,6 +11,7 @@ import { FormularLinkButtons } from '../../components/FormularLink'
 import { GespraechsprotokolleSection } from '../../components/GespraechsprotokolleSection'
 import { PotenzialAnalyseSection } from '../../components/PotenzialAnalyseSection'
 import { KaeuferprofilSection } from '../../components/KaeuferprofilSection'
+import { SelbstauskunftSection } from '../../components/SelbstauskunftSection'
 import { SendEmailModal } from '../../components/SendEmailModal'
 import type { Prioritaet } from '../../types'
 
@@ -20,6 +21,7 @@ const TABS = [
   { id: 'protokolle', label: 'Gesprächsprotokolle' },
   { id: 'potenzial', label: 'Potenzial-Analyse' },
   { id: 'kaeuferprofil', label: 'Käuferprofil' },
+  { id: 'selbstauskunft', label: 'Selbstauskunft' },
   { id: 'konzepte', label: 'Konzeptvorstellungen' },
   { id: 'vertraege', label: 'Unterschriebene Beratungsverträge' },
 ]
@@ -197,6 +199,8 @@ export function KundenDetail() {
       {tab === 'potenzial' && <PotenzialAnalyseSection bereich="beratung" kundeId={kunde.id} kundeName={kunde.ansprechpartner} />}
 
       {tab === 'kaeuferprofil' && <KaeuferprofilSection bereich="beratung" kundeId={kunde.id} kundeName={kunde.ansprechpartner} />}
+
+      {tab === 'selbstauskunft' && <SelbstauskunftSection bereich="beratung" kundeId={kunde.id} kundeName={kunde.ansprechpartner} />}
 
       {tab === 'konzepte' && (
         <Card className="overflow-hidden">

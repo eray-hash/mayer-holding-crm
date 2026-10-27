@@ -44,6 +44,7 @@ import { PublicVollmachtErben } from './pages/formulare/PublicVollmachtErben'
 import { PublicExpose } from './pages/formulare/PublicExpose'
 import { PublicMandantenfragebogenErben } from './pages/formulare/PublicMandantenfragebogenErben'
 import { PublicVollmachtBeratung } from './pages/formulare/PublicVollmachtBeratung'
+import { PublicSelbstauskunft } from './pages/formulare/PublicSelbstauskunft'
 
 function RootRedirect() {
   return <Navigate to="/heute" replace />
@@ -178,6 +179,7 @@ function AppRoutes() {
         <Route path="/formular/expose/:vorschlagId" element={<PublicExpose />} />
         <Route path="/formular/mandantenfragebogen/erben/:mandantId" element={<PublicMandantenfragebogenErben />} />
         <Route path="/formular/vollmacht/beratung/:typ/:kundeId" element={<PublicVollmachtBeratung />} />
+        <Route path="/formular/selbstauskunft/:bereich/:kundeId" element={<PublicSelbstauskunft />} />
       </Routes>
     )
   }
