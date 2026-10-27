@@ -99,3 +99,8 @@ export async function draftCampaign(ziel: string): Promise<{ betreff: string; te
   const data = await call({ action: 'draft_campaign', ziel })
   return { betreff: data.betreff, text: data.text }
 }
+
+export async function answerWithImage(frage: string, imageBase64: string, mediaType: string): Promise<string> {
+  const data = await call({ action: 'assistant_vision', frage, image_base64: imageBase64, media_type: mediaType })
+  return data.antwort
+}

@@ -20,6 +20,9 @@
 //   { action: "draft_campaign", ziel }           -> Betreff + Text für eine Segment-/Kampagnen-Mail
 //                                                   (z.B. zweiwöchentlicher Newsletter) anhand eines
 //                                                   kurz beschriebenen Ziels entwerfen
+//   { action: "assistant_vision", frage, image_base64, media_type }
+//                                                -> Frage zu einem per Copy/Paste eingefügten Bild
+//                                                   beantworten (KI-Assistent, multimodale Eingabe)
 //
 // Alle Zugangsdaten kommen ausschließlich aus Supabase Function Secrets (nie im Code, nie im
 // Frontend). Siehe README-Abschnitt "E-Mail-Postfach-Anbindung" für die Einrichtung.
@@ -182,9 +185,18 @@ async function summarizeTranscript(transcript: string): Promise<Zusammenfassung>
   return toolUse.input as Zusammenfassung
 }
 
-// Gemeinsamer Aufruf für die beiden KI-Assistent-Aktionen unten — erzwingt per tool_choice eine
-// strukturierte Antwort im gegebenen Schema, statt Freitext parsen zu müssen.
-async function callClaudeTool<T>(prompt: string, tool: { name: string; description: string; input_schema: Record<string, unknown> }): Promise<T> {
+type ClaudeContentBlock =
+  | { type: 'text'; text: string }
+  | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }
+
+// Gemeinsamer Aufruf für die KI-Assistent-Aktionen unten — erzwingt per tool_choice eine
+// strukturierte Antwort im gegebenen Schema, statt Freitext parsen zu müssen. `prompt` kann ein
+// reiner Text sein oder (für multimodale Eingaben, siehe assistant_vision) ein Array aus
+// Text-/Bild-Content-Blöcken.
+async function callClaudeTool<T>(
+  prompt: string | ClaudeContentBlock[],
+  tool: { name: string; description: string; input_schema: Record<string, unknown> },
+): Promise<T> {
   const apiKey = env('ANTHROPIC_API_KEY')
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -346,6 +358,31 @@ Gib maximal drei konkrete, plausible Chancen zurück, sortiert nach Priorität (
   )
 }
 
+// Beantwortet eine Frage zu einem per Copy/Paste im KI-Assistenten eingefügten Bild (z.B. ein
+// Foto von einem Dokument oder einer Immobilie) — multimodale Eingabe über Claudes Vision-Fähigkeit,
+// kein CRM-Datenzugriff wie bei assistant_answer.
+async function answerWithImage(frage: string, imageBase64: string, mediaType: string): Promise<{ antwort: string }> {
+  const result = await callClaudeTool<{ antwort: string }>(
+    [
+      {
+        type: 'text',
+        text: `Ein Mitarbeiter einer Beratungsholding hat dir ein Bild geschickt, dazu diese Frage/Anweisung: "${frage || 'Beschreibe/analysiere das Bild allgemein.'}". Antworte auf Deutsch, knapp und konkret, als reiner Fließtext ohne Tags oder Markup.`,
+      },
+      { type: 'image', source: { type: 'base64', media_type: mediaType, data: imageBase64 } },
+    ],
+    {
+      name: 'ki_assistent_bildantwort',
+      description: 'Beantwortet eine Frage zu einem mitgeschickten Bild.',
+      input_schema: {
+        type: 'object',
+        properties: { antwort: { type: 'string' } },
+        required: ['antwort'],
+      },
+    },
+  )
+  return { antwort: result.antwort.replace(/<\/?[a-zA-Z_][^>]*>/g, '').trim() }
+}
+
 type KampagnenEntwurf = { betreff: string; text: string }
 
 // Entwirft Betreff + Text für eine Segment-/Kampagnen-Mail (z.B. den zweiwöchentlichen Newsletter)
@@ -462,7 +499,16 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify(entwurf), { headers })
     }
 
-    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse" oder "draft_campaign"' }), { status: 400, headers })
+    if (body.action === 'assistant_vision') {
+      const { frage, image_base64, media_type } = body
+      if (!image_base64 || typeof image_base64 !== 'string') {
+        return new Response(JSON.stringify({ error: 'image_base64 ist ein Pflichtfeld' }), { status: 400, headers })
+      }
+      const { antwort } = await answerWithImage(frage ?? '', image_base64, media_type || 'image/png')
+      return new Response(JSON.stringify({ antwort }), { headers })
+    }
+
+    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign" oder "assistant_vision"' }), { status: 400, headers })
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }

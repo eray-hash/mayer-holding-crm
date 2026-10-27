@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { Mic, Square, Sparkles, AlertTriangle, Send, X, Volume2, VolumeX, Bot } from 'lucide-react'
+import { Mic, Square, Sparkles, AlertTriangle, Send, X, Volume2, VolumeX, Bot, ImagePlus } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { useSpeechRecognition } from '../lib/useSpeechRecognition'
 import { speak, isSpeechSynthesisSupported } from '../lib/useSpeechSynthesis'
-import { isEmailGatewayConfigured, classifyAssistantInput, answerAssistantQuestion, type AssistentTyp } from '../lib/emailGateway'
+import { isEmailGatewayConfigured, classifyAssistantInput, answerAssistantQuestion, answerWithImage, type AssistentTyp } from '../lib/emailGateway'
 import { suggestKunde } from '../lib/matchKunde'
 import { KUNDEN_BEREICHE } from '../data/kundenBereiche'
 import { getStatusMap } from '../data/statusNetworks'
@@ -11,7 +11,8 @@ import { inputClass } from './ui'
 import { today, fmtDate, uid } from '../lib/dates'
 import type { KundeBereich } from '../types'
 
-type ChatMessage = { id: string; role: 'user' | 'assistant'; text: string }
+type ChatMessage = { id: string; role: 'user' | 'assistant'; text: string; imageDataUrl?: string }
+type PastedImage = { dataUrl: string; base64: string; mediaType: string }
 
 type PendingAction = {
   typ: AssistentTyp
@@ -37,15 +38,31 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
   const [pending, setPending] = useState<PendingAction | null>(null)
   const [verarbeiten, setVerarbeiten] = useState(false)
   const [ttsEnabled, setTtsEnabled] = useState(true)
+  const [pastedImage, setPastedImage] = useState<PastedImage | null>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' })
   }, [messages, pending])
 
-  function addMessage(role: ChatMessage['role'], text: string, sprechen = false) {
-    setMessages((m) => [...m, { id: uid('msg'), role, text }])
+  function addMessage(role: ChatMessage['role'], text: string, sprechen = false, imageDataUrl?: string) {
+    setMessages((m) => [...m, { id: uid('msg'), role, text, imageDataUrl }])
     if (sprechen) speak(text, ttsEnabled)
+  }
+
+  function onPasteInput(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const item = Array.from(e.clipboardData.items).find((i) => i.type.startsWith('image/'))
+    if (!item) return
+    const file = item.getAsFile()
+    if (!file) return
+    e.preventDefault()
+    const reader = new FileReader()
+    reader.onload = () => {
+      const dataUrl = reader.result as string
+      const base64 = dataUrl.split(',')[1] ?? ''
+      setPastedImage({ dataUrl, base64, mediaType: file.type })
+    }
+    reader.readAsDataURL(file)
   }
 
   const alleKunden = KUNDEN_BEREICHE.flatMap((b) =>
@@ -54,8 +71,26 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
 
   async function senden() {
     const text = (interim ? `${transcript} ${interim}` : transcript).trim()
-    if (!text) return
+    if (!text && !pastedImage) return
     setTranscript('')
+
+    if (pastedImage) {
+      const bild = pastedImage
+      addMessage('user', text || '(Bild ohne Text gesendet)', false, bild.dataUrl)
+      setPastedImage(null)
+      setVerarbeiten(true)
+      try {
+        const antwort = await answerWithImage(text, bild.base64, bild.mediaType)
+        addMessage('assistant', antwort, true)
+      } catch (err) {
+        addMessage('assistant', `Bild konnte nicht analysiert werden: ${err instanceof Error ? err.message : 'Fehler'}`, true)
+      } finally {
+        setVerarbeiten(false)
+      }
+      return
+    }
+    if (!text) return
+
     addMessage('user', text)
     setVerarbeiten(true)
     try {
@@ -182,6 +217,7 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
                   m.role === 'user' ? 'bg-accent-600 text-white' : 'bg-slate-100 text-slate-700'
                 }`}
               >
+                {m.imageDataUrl && <img src={m.imageDataUrl} alt="Angehängtes Bild" className="mb-2 max-h-40 rounded-lg" />}
                 {m.text}
               </div>
             </div>
@@ -265,38 +301,51 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
         )}
 
         {/* Eingabe */}
-        <div className="flex flex-shrink-0 items-end gap-2 border-t border-slate-100 p-3">
-          <button
-            onClick={recording ? stop : start}
-            className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg ${
-              recording ? 'bg-rose-100 text-rose-600' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
-            }`}
-            title={recording ? 'Aufnahme stoppen' : 'Aufnahme starten'}
-            disabled={!supported}
-          >
-            {recording ? <Square size={14} /> : <Mic size={16} />}
-          </button>
-          <textarea
-            className={`${inputClass} max-h-24 flex-1 resize-none text-sm`}
-            rows={1}
-            value={liveText}
-            onChange={(e) => setTranscript(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault()
-                senden()
-              }
-            }}
-            placeholder="Nachricht eingeben oder Mikro nutzen …"
-          />
-          <button
-            onClick={senden}
-            disabled={!isEmailGatewayConfigured || verarbeiten || !liveText.trim()}
-            className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-accent-600 text-white hover:bg-accent-700 disabled:opacity-50"
-            title="Senden"
-          >
-            <Send size={15} />
-          </button>
+        <div className="flex-shrink-0 border-t border-slate-100 p-3">
+          {pastedImage && (
+            <div className="mb-2 flex items-center gap-2 rounded-lg bg-slate-50 p-2">
+              <img src={pastedImage.dataUrl} alt="Eingefügtes Bild" className="h-12 w-12 rounded object-cover" />
+              <span className="flex-1 text-xs text-slate-500">Bild angehängt — Frage dazu eintippen oder direkt senden.</span>
+              <button onClick={() => setPastedImage(null)} className="rounded-md p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-600" title="Bild entfernen">
+                <X size={14} />
+              </button>
+            </div>
+          )}
+          <div className="flex items-end gap-2">
+            <button
+              onClick={recording ? stop : start}
+              className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg ${
+                recording ? 'bg-rose-100 text-rose-600' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+              }`}
+              title={recording ? 'Aufnahme stoppen' : 'Aufnahme starten'}
+              disabled={!supported}
+            >
+              {recording ? <Square size={14} /> : <Mic size={16} />}
+            </button>
+            <textarea
+              className={`${inputClass} max-h-24 flex-1 resize-none text-sm`}
+              rows={1}
+              value={liveText}
+              onChange={(e) => setTranscript(e.target.value)}
+              onPaste={onPasteInput}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault()
+                  senden()
+                }
+              }}
+              placeholder={pastedImage ? 'Frage zum Bild (optional) …' : 'Nachricht eingeben, Mikro nutzen oder Bild einfügen …'}
+              title="Bilder per Strg/Cmd+V aus der Zwischenablage einfügen"
+            />
+            <button
+              onClick={senden}
+              disabled={!isEmailGatewayConfigured || verarbeiten || (!liveText.trim() && !pastedImage)}
+              className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-accent-600 text-white hover:bg-accent-700 disabled:opacity-50"
+              title="Senden"
+            >
+              {pastedImage ? <ImagePlus size={15} /> : <Send size={15} />}
+            </button>
+          </div>
         </div>
       </div>
     </div>
