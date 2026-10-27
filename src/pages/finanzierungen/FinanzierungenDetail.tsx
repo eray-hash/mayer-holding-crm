@@ -7,6 +7,7 @@ import { fmtDate, isOverdue } from '../../lib/dates'
 import { PRIORITAETEN } from '../../data/constants'
 import { ZugewieseneObjekte } from '../../components/ZugewieseneObjekte'
 import { GespraechsprotokolleSection } from '../../components/GespraechsprotokolleSection'
+import { PotenzialAnalyseSection } from '../../components/PotenzialAnalyseSection'
 import type { Prioritaet } from '../../types'
 
 export function FinanzierungenDetail() {
@@ -106,6 +107,11 @@ export function FinanzierungenDetail() {
         <Card className="p-5 lg:col-span-3">
           <h3 className="mb-3 text-sm font-semibold text-slate-700">Gesprächsprotokolle</h3>
           <GespraechsprotokolleSection bereich="finanzierungen" kundeId={mandant.id} kundeName={mandant.ansprechpartner || mandant.firma} />
+        </Card>
+
+        <Card className="p-5 lg:col-span-3">
+          <h3 className="mb-3 text-sm font-semibold text-slate-700">Potenzial-Analyse</h3>
+          <PotenzialAnalyseSection bereich="finanzierungen" kundeId={mandant.id} kundeName={mandant.ansprechpartner || mandant.firma} />
         </Card>
       </div>
     </div>

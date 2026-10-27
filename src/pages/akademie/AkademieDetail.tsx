@@ -7,6 +7,7 @@ import { fmtDate, isOverdue } from '../../lib/dates'
 import { PRIORITAETEN } from '../../data/constants'
 import { ZugewieseneObjekte } from '../../components/ZugewieseneObjekte'
 import { GespraechsprotokolleSection } from '../../components/GespraechsprotokolleSection'
+import { PotenzialAnalyseSection } from '../../components/PotenzialAnalyseSection'
 import type { Prioritaet } from '../../types'
 
 export function AkademieDetail() {
@@ -106,6 +107,11 @@ export function AkademieDetail() {
         <Card className="p-5 lg:col-span-3">
           <h3 className="mb-3 text-sm font-semibold text-slate-700">Gesprächsprotokolle</h3>
           <GespraechsprotokolleSection bereich="akademie" kundeId={teilnehmer.id} kundeName={teilnehmer.ansprechpartner || teilnehmer.firma} />
+        </Card>
+
+        <Card className="p-5 lg:col-span-3">
+          <h3 className="mb-3 text-sm font-semibold text-slate-700">Potenzial-Analyse</h3>
+          <PotenzialAnalyseSection bereich="akademie" kundeId={teilnehmer.id} kundeName={teilnehmer.ansprechpartner || teilnehmer.firma} />
         </Card>
       </div>
     </div>

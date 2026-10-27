@@ -230,6 +230,7 @@ type Action =
   | { type: 'UPDATE_MAIL_VORLAGE'; id: string; patch: Partial<MailVorlage> }
   | { type: 'DELETE_MAIL_VORLAGE'; id: string }
   | { type: 'ADD_VOICE_TASK'; bereich: KundeBereich; kundeId: string; text: string; followUp?: FollowUp }
+  | { type: 'ADD_POTENZIAL_NOTIZ'; bereich: KundeBereich; kundeId: string; titel: string; begruendung: string; followUp?: FollowUp }
   | { type: 'ADD_NOTIZ'; notiz: Notiz }
   | { type: 'TOGGLE_NOTIZ'; id: string }
   | { type: 'DELETE_NOTIZ'; id: string }
@@ -728,6 +729,15 @@ function reducer(state: AppData, action: Action): AppData {
         id: uid('act'),
         date: today(),
         text: `Notiz per KI-Assistent erfasst: „${action.text}"`,
+        user: CURRENT_USER,
+      }
+      return appendKundeActivity(state, action.bereich, action.kundeId, activity, action.followUp ? { followUp: action.followUp } : {})
+    }
+    case 'ADD_POTENZIAL_NOTIZ': {
+      const activity: ActivityEntry = {
+        id: uid('act'),
+        date: today(),
+        text: `KI-Potenzialanalyse: „${action.titel}" — ${action.begruendung}`,
         user: CURRENT_USER,
       }
       return appendKundeActivity(state, action.bereich, action.kundeId, activity, action.followUp ? { followUp: action.followUp } : {})

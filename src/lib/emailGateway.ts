@@ -81,3 +81,16 @@ export async function answerAssistantQuestion(frage: string, kontext: string): P
   const data = await call({ action: 'assistant_answer', frage, kontext })
   return data.antwort
 }
+
+export type PotenzialChance = {
+  bereich: string
+  titel: string
+  begruendung: string
+  naechster_schritt: string
+  prioritaet: 'Hoch' | 'Mittel' | 'Niedrig'
+}
+
+export async function analysierePotenzial(kontext: string): Promise<PotenzialChance[]> {
+  const data = await call({ action: 'potenzial_analyse', kontext })
+  return data.chancen ?? []
+}

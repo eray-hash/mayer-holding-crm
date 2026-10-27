@@ -12,6 +12,11 @@
 //   { action: "assistant_answer", frage, kontext }
 //                                                -> Frage zu einem Kunden anhand mitgeschickter
 //                                                   CRM-Daten beantworten (KI-Assistent, Schritt 2)
+//   { action: "potenzial_analyse", kontext }     -> Cross-Sell-/Upsell-Chancen zu einem Kunden auf
+//                                                   Basis mitgeschickter CRM-Daten und allgemeinem
+//                                                   Fachwissen zu den Leistungsbereichen der Holding
+//                                                   vorschlagen (keine echte Otto-Schmidt-Verlag-
+//                                                   Anbindung, da nicht lizenziert)
 //
 // Alle Zugangsdaten kommen ausschließlich aus Supabase Function Secrets (nie im Code, nie im
 // Frontend). Siehe README-Abschnitt "E-Mail-Postfach-Anbindung" für die Einrichtung.
@@ -277,6 +282,67 @@ Frage: ${frage}`,
   return { antwort: result.antwort.replace(/<\/?[a-zA-Z_][^>]*>/g, '').trim() }
 }
 
+type PotenzialChance = {
+  bereich: string
+  titel: string
+  begruendung: string
+  naechster_schritt: string
+  prioritaet: 'Hoch' | 'Mittel' | 'Niedrig'
+}
+
+// Beschreibung der sieben Leistungsbereiche der Holding als Wissensgrundlage für die
+// Potenzialanalyse — ersetzt die ursprünglich angefragte, aber nicht lizenzierte Anbindung an den
+// Otto Schmidt Verlag; die KI arbeitet stattdessen mit ihrem allgemeinen Fachwissen zu Steuer-,
+// Nachfolge- und Finanzierungsthemen (siehe Projektnotiz "mach es mit allgemeinem Wissen").
+const LEISTUNGSBEREICHE = `- beratung (Unternehmensberatung): strategische und betriebswirtschaftliche Beratung für Unternehmen.
+- immobilien (Immobilien): Vermittlung, Bewertung und Verwaltung von Wohn- und Gewerbeimmobilien, auch zur Vermögensanlage oder im Rahmen einer Nachfolge.
+- erben (Erben): Nachlassplanung, Optimierung der Erbschaftsteuer, Testamentsgestaltung, Übergabe von Vermögen an die nächste Generation.
+- betriebsuebergabe (Betriebsübergabe): Planung und Begleitung der Unternehmensnachfolge (familienintern oder extern), Bewertung, steuerliche Gestaltung.
+- betriebsformen (Betriebsformen): Prüfung und Optimierung der Rechtsform eines Unternehmens (z. B. GmbH, GmbH & Co. KG, Holding-Struktur) aus steuerlicher und haftungsrechtlicher Sicht.
+- akademie (Akademie): Schulungen und Weiterbildungen für Unternehmer und Führungskräfte.
+- finanzierungen (Finanzierungen): Beschaffung und Strukturierung von Finanzierungen (Bankkredite, Fördermittel, Investoren) für Unternehmen oder Immobilienvorhaben.`
+
+// Analysiert die CRM-Daten eines bestehenden Kunden/Mandanten und schlägt plausible Cross-Sell-/
+// Upsell-Chancen in den anderen Leistungsbereichen der Holding vor. Rein auf Basis des
+// mitgeschickten Kontexts und allgemeinen Fachwissens, keine externe Datenquelle.
+async function analysePotenzial(kontext: string): Promise<{ chancen: PotenzialChance[] }> {
+  return callClaudeTool<{ chancen: PotenzialChance[] }>(
+    `Du bist ein erfahrener Berater einer Beratungsholding mit mehreren Geschäftsbereichen. Analysiere die folgenden CRM-Daten zu einem bestehenden Kunden/Mandanten und identifiziere realistische Cross-Sell- oder Upsell-Chancen — zusätzliche Leistungen der Holding, die für diesen Kunden aufgrund seiner Situation, Branche, Gesprächshistorie und seines Status sinnvoll sein könnten. Nutze dafür dein allgemeines Fachwissen zu Steueroptimierung, Unternehmensnachfolge, Vermögensplanung und Finanzierung — du hast keinen Zugriff auf externe Datenbanken oder Fachverlage.
+
+Geschäftsbereiche der Holding:
+${LEISTUNGSBEREICHE}
+
+CRM-Daten zum Kunden:
+"""${kontext}"""
+
+Gib maximal drei konkrete, plausible Chancen zurück, sortiert nach Priorität (höchste zuerst). Schlage keine Chance im selben Bereich vor, in dem der Kunde ohnehin schon aktiv betreut wird, außer es gibt eine klar erkennbare zusätzliche Leistung. Jede Chance braucht: den passenden Bereich (exakt eine der sieben Bereichs-IDs oben, z. B. "erben"), einen kurzen prägnanten Titel, eine nachvollziehbare Begründung basierend auf den CRM-Daten (zwei bis drei Sätze, auf Deutsch, in einfacher und klarer Sprache ohne Anglizismen oder Fachjargon), einen konkreten nächsten Schritt, und eine Priorität (Hoch/Mittel/Niedrig). Wenn aus den Daten keine plausible Chance erkennbar ist, gib eine leere Liste zurück statt zu spekulieren.`,
+    {
+      name: 'potenzial_analyse',
+      description: 'Schlägt Cross-Sell-/Upsell-Chancen für einen Kunden in den Leistungsbereichen der Holding vor.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          chancen: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                bereich: { type: 'string', enum: ['beratung', 'immobilien', 'erben', 'betriebsuebergabe', 'betriebsformen', 'akademie', 'finanzierungen'] },
+                titel: { type: 'string' },
+                begruendung: { type: 'string' },
+                naechster_schritt: { type: 'string' },
+                prioritaet: { type: 'string', enum: ['Hoch', 'Mittel', 'Niedrig'] },
+              },
+              required: ['bereich', 'titel', 'begruendung', 'naechster_schritt', 'prioritaet'],
+            },
+          },
+        },
+        required: ['chancen'],
+      },
+    },
+  )
+}
+
 Deno.serve(async (req: Request) => {
   const origin = req.headers.get('origin')
   const headers = corsHeaders(origin)
@@ -350,7 +416,16 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ antwort }), { headers })
     }
 
-    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify" oder "assistant_answer"' }), { status: 400, headers })
+    if (body.action === 'potenzial_analyse') {
+      const { kontext } = body
+      if (!kontext || typeof kontext !== 'string' || !kontext.trim()) {
+        return new Response(JSON.stringify({ error: 'kontext ist ein Pflichtfeld' }), { status: 400, headers })
+      }
+      const { chancen } = await analysePotenzial(kontext)
+      return new Response(JSON.stringify({ chancen }), { headers })
+    }
+
+    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer" oder "potenzial_analyse"' }), { status: 400, headers })
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }

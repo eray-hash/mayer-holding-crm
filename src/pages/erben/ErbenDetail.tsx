@@ -9,12 +9,14 @@ import { ERBEN_CHECKLISTE } from '../../data/seedErben'
 import { FormularLinkButtons } from '../../components/FormularLink'
 import { ZugewieseneObjekte } from '../../components/ZugewieseneObjekte'
 import { GespraechsprotokolleSection } from '../../components/GespraechsprotokolleSection'
+import { PotenzialAnalyseSection } from '../../components/PotenzialAnalyseSection'
 import type { Prioritaet } from '../../types'
 
 const TABS = [
   { id: 'uebersicht', label: 'Übersicht' },
   { id: 'unterlagen', label: 'Unterlagen-Checkliste' },
   { id: 'protokolle', label: 'Gesprächsprotokolle' },
+  { id: 'potenzial', label: 'Potenzial-Analyse' },
 ]
 
 export function ErbenDetail() {
@@ -194,6 +196,8 @@ export function ErbenDetail() {
       )}
 
       {tab === 'protokolle' && <GespraechsprotokolleSection bereich="erben" kundeId={mandant.id} kundeName={mandant.ansprechpartner} />}
+
+      {tab === 'potenzial' && <PotenzialAnalyseSection bereich="erben" kundeId={mandant.id} kundeName={mandant.ansprechpartner} />}
     </div>
   )
 }
