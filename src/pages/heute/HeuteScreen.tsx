@@ -1,12 +1,14 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Bot, PhoneCall, Flame, CalendarClock, StickyNote, Trash2 } from 'lucide-react'
+import { Bot, PhoneCall, Flame, CalendarClock, StickyNote, Trash2, Check, Clock3, Users } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { collectPriorityEntries, type PriorityEntry, type PriorityKind } from '../../lib/todayPriorities'
+import { collectFollowUpPriorities, followUpDetailPfad, type FollowUpEntry } from '../../lib/followUpPriorities'
 import { TaskDetailModal } from '../../components/kanban/TaskDetailModal'
 import { PROJEKT_BEREICH_LABEL } from '../../types/project'
 import { Card } from '../../components/ui'
-import { fmtDate } from '../../lib/dates'
+import { fmtDate, addDays, today } from '../../lib/dates'
+import type { FollowUp } from '../../types'
 
 function weekdayGerman(): string {
   return new Date().toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long' })
@@ -43,17 +45,85 @@ function EntryRow({ e, onOpen }: { e: PriorityEntry; onOpen: () => void }) {
   )
 }
 
+function dispatchFollowUp(dispatch: ReturnType<typeof useApp>['dispatch'], bereich: FollowUpEntry['bereich'], id: string, followUp: FollowUp) {
+  switch (bereich) {
+    case 'beratung':
+      return dispatch({ type: 'SET_KUNDE_FOLLOWUP', id, followUp })
+    case 'immobilien':
+      return dispatch({ type: 'SET_OBJEKT_FOLLOWUP', id, followUp })
+    case 'erben':
+      return dispatch({ type: 'SET_ERBEN_FOLLOWUP', id, followUp })
+    case 'betriebsuebergabe':
+      return dispatch({ type: 'SET_BETRIEBSUEBERGABE_FOLLOWUP', id, followUp })
+    case 'betriebsformen':
+      return dispatch({ type: 'SET_BETRIEBSFORMEN_FOLLOWUP', id, followUp })
+    case 'akademie':
+      return dispatch({ type: 'SET_AKADEMIE_FOLLOWUP', id, followUp })
+    case 'finanzierungen':
+      return dispatch({ type: 'SET_FINANZIERUNGEN_FOLLOWUP', id, followUp })
+  }
+}
+
 export function HeuteScreen() {
   const { state, dispatch } = useApp()
   const navigate = useNavigate()
   const [openEntry, setOpenEntry] = useState<PriorityEntry | null>(null)
   const { prioritaeten, demnaechst } = collectPriorityEntries(state.projekte)
+  const followUps = collectFollowUpPriorities(state)
 
   const gruss = state.rolle === 'geschaeftsfuehrung' ? 'Geschäftsführung' : 'Team'
   const offeneNotizen = state.notizen.filter((n) => !n.erledigt)
 
+  function followUpErledigt(entry: FollowUpEntry) {
+    dispatchFollowUp(dispatch, entry.bereich, entry.id, { date: entry.date, note: entry.note, done: true })
+  }
+
+  function followUpVerschieben(entry: FollowUpEntry, tage: number) {
+    dispatchFollowUp(dispatch, entry.bereich, entry.id, { date: addDays(today(), tage), note: entry.note, done: false })
+  }
+
   return (
     <div className="mx-auto max-w-3xl">
+      {followUps.length > 0 && (
+        <Card className="mb-5 p-5">
+          <h2 className="mb-1 flex items-center gap-1.5 text-sm font-semibold text-slate-700">
+            <Users size={14} className="text-accent-600" /> Follow-ups fällig
+          </h2>
+          <p className="mb-3 text-xs text-slate-400">Aus den Kunden-/Mandanten-/Objektakten — direkt anklicken, erledigen oder verschieben.</p>
+          <ul className="flex flex-col gap-2">
+            {followUps.map((entry) => (
+              <li key={`${entry.bereich}-${entry.id}`} className="flex items-start gap-2.5 rounded-lg bg-slate-50 px-3 py-2.5 text-sm">
+                <span className="mt-0.5 shrink-0">
+                  {entry.kind === 'overdue' ? <PhoneCall size={15} className="text-rose-500" /> : <CalendarClock size={15} className="text-sky-500" />}
+                </span>
+                <button type="button" onClick={() => navigate(followUpDetailPfad(entry))} className="min-w-0 flex-1 text-left hover:underline">
+                  <p className="truncate text-slate-800">{entry.note || 'Follow-up'}</p>
+                  <p className="text-xs text-slate-400">
+                    {entry.name} · {entry.bereichLabel} · {entry.kind === 'overdue' ? 'überfällig seit' : 'fällig'} {fmtDate(entry.date)}
+                  </p>
+                </button>
+                <div className="flex flex-shrink-0 items-center gap-1">
+                  <button
+                    onClick={() => followUpVerschieben(entry, 3)}
+                    className="rounded-md p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                    title="Um 3 Tage verschieben"
+                  >
+                    <Clock3 size={14} />
+                  </button>
+                  <button
+                    onClick={() => followUpErledigt(entry)}
+                    className="rounded-md p-1.5 text-slate-400 hover:bg-emerald-50 hover:text-emerald-600"
+                    title="Als erledigt markieren"
+                  >
+                    <Check size={14} />
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
+
       {offeneNotizen.length > 0 && (
         <Card className="mb-5 p-5">
           <h2 className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-slate-700">

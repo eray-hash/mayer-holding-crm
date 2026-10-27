@@ -27,6 +27,7 @@ import { useApp } from '../context/AppContext'
 import { useAuth } from '../context/AuthContext'
 import { isSupabaseConfigured } from '../lib/supabaseClient'
 import { collectPriorityEntries } from '../lib/todayPriorities'
+import { collectFollowUpPriorities, followUpDetailPfad } from '../lib/followUpPriorities'
 import { DokumentenImportModal } from './DokumentenImportModal'
 import { KiAssistentPanel } from './KiAssistentPanel'
 import { SidebarBeratung } from './SidebarBeratung'
@@ -67,6 +68,11 @@ export function Layout({ children }: { children: ReactNode }) {
 
   const aktuellerBereich = BEREICHE.find((b) => b.id === state.bereich) ?? BEREICHE[0]
   const { prioritaeten } = collectPriorityEntries(state.projekte)
+  const followUps = collectFollowUpPriorities(state)
+  const benachrichtigungen = [
+    ...followUps.map((f) => ({ key: `fu-${f.bereich}-${f.id}`, titel: f.note || 'Follow-up', subtitel: f.name, onClick: () => navigate(followUpDetailPfad(f)) })),
+    ...prioritaeten.map((p) => ({ key: `pr-${p.aufgabe.id}`, titel: p.aufgabe.titel, subtitel: p.projektName, onClick: () => navigate('/heute') })),
+  ]
 
   function chooseBereich(b: Bereich) {
     dispatch({ type: 'SET_BEREICH', bereich: b })
@@ -133,9 +139,9 @@ export function Layout({ children }: { children: ReactNode }) {
               title="Benachrichtigungen"
             >
               <Bell size={16} />
-              {prioritaeten.length > 0 && (
+              {benachrichtigungen.length > 0 && (
                 <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-semibold text-white">
-                  {prioritaeten.length}
+                  {benachrichtigungen.length}
                 </span>
               )}
             </button>
@@ -144,21 +150,21 @@ export function Layout({ children }: { children: ReactNode }) {
                 <button className="fixed inset-0 z-40 cursor-default" onClick={() => setBenachrichtigungenOpen(false)} aria-label="Schließen" />
                 <div className="absolute right-0 z-50 mt-2 w-72 rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
                   <p className="px-2 py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">Offene Prioritäten</p>
-                  {prioritaeten.length === 0 ? (
+                  {benachrichtigungen.length === 0 ? (
                     <p className="px-2 py-3 text-sm text-slate-400">Nichts Dringendes.</p>
                   ) : (
                     <div className="max-h-72 overflow-y-auto">
-                      {prioritaeten.slice(0, 8).map((e) => (
+                      {benachrichtigungen.slice(0, 8).map((e) => (
                         <button
-                          key={e.aufgabe.id}
+                          key={e.key}
                           onClick={() => {
                             setBenachrichtigungenOpen(false)
-                            navigate('/heute')
+                            e.onClick()
                           }}
                           className="block w-full rounded-lg px-2 py-2 text-left text-sm hover:bg-slate-50"
                         >
-                          <span className="block truncate text-slate-700">{e.aufgabe.titel}</span>
-                          <span className="text-xs text-slate-400">{e.projektName}</span>
+                          <span className="block truncate text-slate-700">{e.titel}</span>
+                          <span className="text-xs text-slate-400">{e.subtitel}</span>
                         </button>
                       ))}
                     </div>
