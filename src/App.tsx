@@ -1,9 +1,11 @@
 import { type ReactNode } from 'react'
 import { HashRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { AppProvider, useApp } from './context/AppContext'
-import { AuthProvider } from './context/AuthContext'
+import { AuthProvider, useAuth } from './context/AuthContext'
 import { PortalAuthProvider, usePortalAuth } from './context/PortalAuthContext'
 import { RollenAuswahl } from './pages/auth/RollenAuswahl'
+import { LoginScreen } from './pages/auth/LoginScreen'
+import { isSupabaseConfigured } from './lib/supabaseClient'
 import { Layout } from './components/Layout'
 import { PortalLayout } from './components/PortalLayout'
 import { KundenListe } from './pages/beratung/KundenListe'
@@ -34,6 +36,7 @@ import { HeuteScreen } from './pages/heute/HeuteScreen'
 import { Postfach } from './pages/postfach/Postfach'
 import { Kampagnen } from './pages/kampagnen/Kampagnen'
 import { MeinProfil } from './pages/profil/MeinProfil'
+import { MitarbeiterVerwalten } from './pages/admin/MitarbeiterVerwalten'
 import { ProjekteListe } from './pages/projekte/ProjekteListe'
 import { PortalLogin } from './pages/portal/PortalLogin'
 import { PortalOverview } from './pages/portal/PortalOverview'
@@ -60,6 +63,7 @@ function AdminRoutesContent() {
         <Route path="/postfach" element={<Postfach />} />
         <Route path="/kampagnen" element={<Kampagnen />} />
         <Route path="/profil" element={<MeinProfil />} />
+        <Route path="/mitarbeiter" element={<MitarbeiterVerwalten />} />
 
         <Route path="/beratung" element={<KundenListe />} />
         <Route path="/beratung/kunden/:id" element={<KundenDetail />} />
@@ -105,13 +109,55 @@ function AdminRoutesContent() {
   )
 }
 
-// Vereinfachter Platzhalter statt echtem Login: eine reine Rollenwahl (Geschäftsführung/
-// Mitarbeiter/Kunde), lokal gespeichert wie die Bereichswahl. Der echte Mitarbeiter-Login
-// (AuthContext + LoginScreen, per Supabase) bleibt fertig im Code, wird aber erst wieder
-// eingehängt, sobald echte Mitarbeiter-Zugänge angelegt sind.
+function LadeBildschirm({ text }: { text: string }) {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-slate-50 text-sm text-slate-400">
+      {text}
+    </div>
+  )
+}
+
+function ZugangGesperrt({ email, onSignOut }: { email: string; onSignOut: () => void }) {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
+      <div className="w-full max-w-sm rounded-xl border border-slate-200 bg-white p-6 text-center shadow-sm">
+        <h1 className="mb-2 text-lg font-semibold text-slate-800">Zugang noch nicht freigeschaltet</h1>
+        <p className="mb-4 text-sm text-slate-500">
+          {email} ist angemeldet, aber (noch) nicht als aktiver Mitarbeiter hinterlegt. Bitte bei der Geschäftsführung melden.
+        </p>
+        <button onClick={onSignOut} className="text-sm font-medium text-accent-600 hover:underline">
+          Abmelden
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// Echter Mitarbeiter-Login, sobald Supabase konfiguriert ist (siehe lib/supabaseClient.ts) — ohne
+// Konfiguration (z.B. lokale Entwicklung ohne .env.local) bleibt der bisherige reine Rollenpicker
+// als Demo-Modus aktiv, damit lokales Arbeiten ohne echte Zugangsdaten weiter funktioniert.
 function AdminRoutes() {
-  const { state } = useApp()
-  if (!state.rolle) return <RollenAuswahl />
+  const { state, hydrated, hydrateError } = useApp()
+  const { ready, session, mitarbeiter, signOut } = useAuth()
+
+  if (!isSupabaseConfigured) {
+    if (!state.rolle) return <RollenAuswahl />
+    return <AdminRoutesContent />
+  }
+
+  if (!ready) return <LadeBildschirm text="Lädt …" />
+  if (!session) return <LoginScreen />
+  if (!mitarbeiter || !mitarbeiter.aktiv) return <ZugangGesperrt email={session.user.email ?? ''} onSignOut={signOut} />
+  if (!hydrated) return <LadeBildschirm text="Daten werden geladen …" />
+  if (hydrateError) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
+        <div className="w-full max-w-sm rounded-xl border border-rose-200 bg-rose-50 p-6 text-center text-sm text-rose-700">
+          Daten konnten nicht geladen werden: {hydrateError}
+        </div>
+      </div>
+    )
+  }
   return <AdminRoutesContent />
 }
 

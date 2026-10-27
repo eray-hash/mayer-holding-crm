@@ -200,7 +200,9 @@ export function Layout({ children }: { children: ReactNode }) {
                   <User size={15} />
                 </div>
               )}
-              <span className="hidden text-xs font-medium text-slate-600 sm:inline">{state.profil.name}</span>
+              <span className="hidden text-xs font-medium text-slate-600 sm:inline">
+                {isSupabaseConfigured && session ? mitarbeiter?.name ?? session.user.email : state.profil.name}
+              </span>
               <ChevronDown size={13} className="hidden text-slate-400 sm:inline" />
             </button>
             {profilMenuOpen && (
@@ -208,8 +210,18 @@ export function Layout({ children }: { children: ReactNode }) {
                 <button className="fixed inset-0 z-40 cursor-default" onClick={() => setProfilMenuOpen(false)} aria-label="Schließen" />
                 <div className="absolute right-0 z-50 mt-2 w-60 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg">
                   <div className="px-2.5 py-2">
-                    <p className="text-sm font-medium text-slate-800">{state.profil.name}</p>
-                    <p className="text-xs text-slate-400">{isSupabaseConfigured && session ? mitarbeiter?.name ?? session.user.email : state.rolle === 'geschaeftsfuehrung' ? 'Geschäftsführung' : 'Mitarbeiter'}</p>
+                    <p className="text-sm font-medium text-slate-800">
+                      {isSupabaseConfigured && session ? mitarbeiter?.name ?? session.user.email : state.profil.name}
+                    </p>
+                    <p className="text-xs text-slate-400">
+                      {isSupabaseConfigured && session
+                        ? mitarbeiter?.rolle === 'geschaeftsfuehrung'
+                          ? 'Geschäftsführung'
+                          : 'Mitarbeiter'
+                        : state.rolle === 'geschaeftsfuehrung'
+                          ? 'Geschäftsführung'
+                          : 'Mitarbeiter'}
+                    </p>
                   </div>
                   <div className="border-t border-slate-100 pt-1">
                     <MenuItem icon={<UserCog size={15} />} onClick={() => { setProfilMenuOpen(false); navigate('/profil') }}>
@@ -218,12 +230,21 @@ export function Layout({ children }: { children: ReactNode }) {
                     <MenuItem icon={<ExternalLink size={15} />} onClick={() => { setProfilMenuOpen(false); window.open('#/portal/login', '_blank') }}>
                       Kundenportal (Demo)
                     </MenuItem>
-                    <MenuItem icon={<Users size={15} />} onClick={() => { setProfilMenuOpen(false); rolleWechseln() }}>
-                      Rolle wechseln ({state.rolle === 'geschaeftsfuehrung' ? 'Geschäftsführung' : 'Mitarbeiter'})
-                    </MenuItem>
-                    {state.rolle === 'geschaeftsfuehrung' && (
-                      <MenuItem icon={<RotateCcw size={15} />} onClick={() => { setProfilMenuOpen(false); resetData() }}>
-                        Daten zurücksetzen
+                    {!(isSupabaseConfigured && session) && (
+                      <>
+                        <MenuItem icon={<Users size={15} />} onClick={() => { setProfilMenuOpen(false); rolleWechseln() }}>
+                          Rolle wechseln ({state.rolle === 'geschaeftsfuehrung' ? 'Geschäftsführung' : 'Mitarbeiter'})
+                        </MenuItem>
+                        {state.rolle === 'geschaeftsfuehrung' && (
+                          <MenuItem icon={<RotateCcw size={15} />} onClick={() => { setProfilMenuOpen(false); resetData() }}>
+                            Daten zurücksetzen
+                          </MenuItem>
+                        )}
+                      </>
+                    )}
+                    {isSupabaseConfigured && session && mitarbeiter?.rolle === 'geschaeftsfuehrung' && (
+                      <MenuItem icon={<Users size={15} />} onClick={() => { setProfilMenuOpen(false); navigate('/mitarbeiter') }}>
+                        Mitarbeiter verwalten
                       </MenuItem>
                     )}
                     {isSupabaseConfigured && session && (

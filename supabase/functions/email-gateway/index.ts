@@ -23,6 +23,10 @@
 //   { action: "assistant_vision", frage, image_base64, media_type }
 //                                                -> Frage zu einem per Copy/Paste eingefügten Bild
 //                                                   beantworten (KI-Assistent, multimodale Eingabe)
+//   { action: "invite_mitarbeiter", email }      -> schickt per Supabase Auth Admin API eine
+//                                                   Einladungs-Mail (Mitarbeiter setzt sein eigenes
+//                                                   Passwort selbst, landet nie bei uns) — braucht
+//                                                   den Service-Role-Key, läuft daher nur serverseitig
 //
 // Alle Zugangsdaten kommen ausschließlich aus Supabase Function Secrets (nie im Code, nie im
 // Frontend). Siehe README-Abschnitt "E-Mail-Postfach-Anbindung" für die Einrichtung.
@@ -491,6 +495,19 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ chancen }), { headers })
     }
 
+    if (body.action === 'invite_mitarbeiter') {
+      const { email } = body
+      if (!email || typeof email !== 'string' || !email.trim()) {
+        return new Response(JSON.stringify({ error: 'email ist ein Pflichtfeld' }), { status: 400, headers })
+      }
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const { error: inviteError } = await admin.auth.admin.inviteUserByEmail(email.trim())
+      if (inviteError) {
+        return new Response(JSON.stringify({ error: inviteError.message }), { status: 400, headers })
+      }
+      return new Response(JSON.stringify({ ok: true }), { headers })
+    }
+
     if (body.action === 'draft_campaign') {
       const { ziel } = body
       if (!ziel || typeof ziel !== 'string' || !ziel.trim()) {
@@ -509,7 +526,7 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ antwort }), { headers })
     }
 
-    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign" oder "assistant_vision"' }), { status: 400, headers })
+    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision" oder "invite_mitarbeiter"' }), { status: 400, headers })
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }

@@ -9,7 +9,7 @@ const URL = import.meta.env.VITE_SUPABASE_EMAIL_URL as string | undefined
 const ANON_KEY = import.meta.env.VITE_SUPABASE_EMAIL_ANON_KEY as string | undefined
 
 export const isSentEmailsDbConfigured = Boolean(URL && ANON_KEY)
-const client = isSentEmailsDbConfigured ? createClient(URL!, ANON_KEY!) : null
+const client = isSentEmailsDbConfigured ? createClient(URL!, ANON_KEY!, { auth: { persistSession: false, autoRefreshToken: false } }) : null
 
 type Row = {
   id: string

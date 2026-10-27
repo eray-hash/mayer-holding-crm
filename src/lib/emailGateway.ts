@@ -104,3 +104,7 @@ export async function answerWithImage(frage: string, imageBase64: string, mediaT
   const data = await call({ action: 'assistant_vision', frage, image_base64: imageBase64, media_type: mediaType })
   return data.antwort
 }
+
+export async function inviteMitarbeiter(email: string): Promise<void> {
+  await call({ action: 'invite_mitarbeiter', email })
+}

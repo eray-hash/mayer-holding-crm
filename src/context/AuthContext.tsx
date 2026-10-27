@@ -6,6 +6,7 @@ export type Mitarbeiter = {
   id: string
   name: string
   email: string
+  rolle: 'geschaeftsfuehrung' | 'mitarbeiter'
   bereiche: string[]
   aktiv: boolean
 }
@@ -48,7 +49,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let cancelled = false
     supabase
       .from('mitarbeiter')
-      .select('id, name, email, bereiche, aktiv')
+      .select('id, name, email, rolle, bereiche, aktiv')
       .eq('email', session.user.email)
       .maybeSingle()
       .then(({ data }) => {

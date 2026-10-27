@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useReducer, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react'
 import type {
   Bereich,
   Kunde,
@@ -28,6 +28,7 @@ import type {
   Selbstauskunft,
 } from '../types'
 import { DEFAULT_FRAGENKATALOG } from '../data/fragenkataloge'
+import { isSupabaseConfigured, hydrateFromSupabase, syncAfterDispatch, type HydratedData } from '../lib/crmSync'
 import type { Projekt, Aufgabe, AufgabenStatus, Meilenstein } from '../types/project'
 import { seedKunden, seedRechnungen, seedProtokolle, seedKonzepte, seedVertraege, seedVorlagen } from '../data/seedBeratung'
 import { seedObjekte, seedFinanzierungen } from '../data/seedImmobilien'
@@ -90,6 +91,26 @@ export type AppData = {
 }
 
 const STORAGE_KEY = 'mayer-holding-crm-data-v1'
+
+// Kunden/Objekte/Protokolle/Objekt-Vorschläge kommen jetzt, sobald Supabase konfiguriert ist, aus
+// der geteilten Datenbank (siehe lib/crmSync.ts) statt aus den lokalen Demo-Seed-Daten — sonst
+// würde beim ersten Laden kurz Fake-Daten aufblitzen, und ein versehentliches "Daten zurücksetzen"
+// könnte echte Kundendaten lokal überschreiben.
+function leereGeteilteEntities(data: AppData): AppData {
+  if (!isSupabaseConfigured) return data
+  return {
+    ...data,
+    kunden: [],
+    erbenMandanten: [],
+    betriebsuebergabeMandanten: [],
+    betriebsformenMandanten: [],
+    akademieTeilnehmer: [],
+    finanzierungenMandanten: [],
+    objekte: [],
+    protokolle: [],
+    objektVorschlaege: [],
+  }
+}
 
 function buildSeed(): AppData {
   return {
@@ -167,13 +188,13 @@ function loadInitial(): AppData {
           }
         }
         if (!Array.isArray(parsed.fragenkataloge)) parsed.fragenkataloge = DEFAULT_FRAGENKATALOG
-        return parsed
+        return leereGeteilteEntities(parsed)
       }
     }
   } catch {
     // ignore, fall back to seed
   }
-  return buildSeed()
+  return leereGeteilteEntities(buildSeed())
 }
 
 type Action =
@@ -243,6 +264,7 @@ type Action =
   | { type: 'UPDATE_FRAGE'; id: string; patch: Partial<FragenkatalogFrage> }
   | { type: 'DELETE_FRAGE'; id: string }
   | { type: 'SET_SELBSTAUSKUNFT'; bereich: KundeBereich; kundeId: string; selbstauskunft: Selbstauskunft }
+  | { type: 'HYDRATE_SUPABASE'; data: HydratedData }
   | { type: 'ADD_NOTIZ'; notiz: Notiz }
   | { type: 'TOGGLE_NOTIZ'; id: string }
   | { type: 'DELETE_NOTIZ'; id: string }
@@ -278,7 +300,7 @@ function reducer(state: AppData, action: Action): AppData {
     case 'SET_ROLLE':
       return { ...state, rolle: action.rolle }
     case 'RESET':
-      return buildSeed()
+      return leereGeteilteEntities(buildSeed())
     case 'ADD_KUNDE':
       return { ...state, kunden: [action.kunde, ...state.kunden] }
     case 'UPDATE_KUNDE':
@@ -763,6 +785,19 @@ function reducer(state: AppData, action: Action): AppData {
       }
       return appendKundeActivity(state, action.bereich, action.kundeId, activity, { kaeuferprofil: action.profil })
     }
+    case 'HYDRATE_SUPABASE':
+      return {
+        ...state,
+        kunden: action.data.kunden.beratung,
+        erbenMandanten: action.data.kunden.erben,
+        betriebsuebergabeMandanten: action.data.kunden.betriebsuebergabe,
+        betriebsformenMandanten: action.data.kunden.betriebsformen,
+        akademieTeilnehmer: action.data.kunden.akademie,
+        finanzierungenMandanten: action.data.kunden.finanzierungen,
+        objekte: action.data.objekte,
+        protokolle: action.data.protokolle,
+        objektVorschlaege: action.data.objektVorschlaege,
+      }
     case 'ADD_FRAGE':
       return { ...state, fragenkataloge: [...state.fragenkataloge, action.frage] }
     case 'UPDATE_FRAGE':
@@ -794,18 +829,61 @@ function reducer(state: AppData, action: Action): AppData {
 type Ctx = {
   state: AppData
   dispatch: React.Dispatch<Action>
+  /** true sobald der geteilte Stand (Kunden/Objekte/Protokolle/Vorschläge) geladen ist — ohne
+   * Supabase-Konfiguration sofort true (reiner Demo-/Lokalmodus wie bisher). */
+  hydrated: boolean
+  hydrateError: string | null
 }
 
 const AppContext = createContext<Ctx | null>(null)
 
 export function AppProvider({ children }: { children: ReactNode }) {
-  const [state, dispatch] = useReducer(reducer, undefined, loadInitial)
+  const [state, dispatchRaw] = useReducer(reducer, undefined, loadInitial)
+  const stateRef = useRef(state)
+  const [hydrated, setHydrated] = useState(!isSupabaseConfigured)
+  const [hydrateError, setHydrateError] = useState<string | null>(null)
+
+  useEffect(() => {
+    stateRef.current = state
+  }, [state])
+
+  // Schreibt nach jedem Dispatch zusätzlich die geänderten Kunden/Objekte/Protokolle/Vorschläge in
+  // die geteilte Datenbank (siehe lib/crmSync.ts) — der eigentliche reducer()-Aufruf hier läuft rein
+  // lokal für den Diff, useReducer führt ihn intern nochmal aus, das ist bewusst in Kauf genommen,
+  // um ohne Eingriff in jeden einzelnen Action-Typ auszukommen.
+  const dispatch = useCallback((action: Action) => {
+    const prev = stateRef.current
+    const next = reducer(prev, action)
+    stateRef.current = next
+    dispatchRaw(action)
+    if (action.type !== 'HYDRATE_SUPABASE') syncAfterDispatch(prev, next)
+  }, [])
+
+  useEffect(() => {
+    if (!isSupabaseConfigured) return
+    let cancelled = false
+    hydrateFromSupabase()
+      .then((data) => {
+        if (cancelled || !data) return
+        dispatch({ type: 'HYDRATE_SUPABASE', data })
+        setHydrated(true)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setHydrateError(err instanceof Error ? err.message : 'Daten konnten nicht geladen werden.')
+        setHydrated(true)
+      })
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
   }, [state])
 
-  const value = useMemo(() => ({ state, dispatch }), [state])
+  const value = useMemo(() => ({ state, dispatch, hydrated, hydrateError }), [state, hydrated, hydrateError])
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>
 }

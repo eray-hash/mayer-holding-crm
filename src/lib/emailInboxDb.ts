@@ -10,7 +10,7 @@ const URL = import.meta.env.VITE_SUPABASE_EMAIL_URL as string | undefined
 const ANON_KEY = import.meta.env.VITE_SUPABASE_EMAIL_ANON_KEY as string | undefined
 
 export const isEmailInboxDbConfigured = Boolean(URL && ANON_KEY)
-const client = isEmailInboxDbConfigured ? createClient(URL!, ANON_KEY!) : null
+const client = isEmailInboxDbConfigured ? createClient(URL!, ANON_KEY!, { auth: { persistSession: false, autoRefreshToken: false } }) : null
 
 type Row = { message_id: string | null; id: string; von: string; von_name: string | null; betreff: string | null; mail_datum: string; ausschnitt: string | null }
 

@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Bot, PhoneCall, Flame, CalendarClock, StickyNote, Trash2, Check, Clock3, Users } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
+import { useAuth } from '../../context/AuthContext'
+import { isSupabaseConfigured } from '../../lib/supabaseClient'
 import { collectPriorityEntries, type PriorityEntry, type PriorityKind } from '../../lib/todayPriorities'
 import { collectFollowUpPriorities, followUpDetailPfad, type FollowUpEntry } from '../../lib/followUpPriorities'
 import { TaskDetailModal } from '../../components/kanban/TaskDetailModal'
@@ -66,12 +68,14 @@ function dispatchFollowUp(dispatch: ReturnType<typeof useApp>['dispatch'], berei
 
 export function HeuteScreen() {
   const { state, dispatch } = useApp()
+  const { session, mitarbeiter } = useAuth()
   const navigate = useNavigate()
   const [openEntry, setOpenEntry] = useState<PriorityEntry | null>(null)
   const { prioritaeten, demnaechst } = collectPriorityEntries(state.projekte)
   const followUps = collectFollowUpPriorities(state)
 
-  const gruss = state.rolle === 'geschaeftsfuehrung' ? 'Geschäftsführung' : 'Team'
+  const istGeschaeftsfuehrung = isSupabaseConfigured && session ? mitarbeiter?.rolle === 'geschaeftsfuehrung' : state.rolle === 'geschaeftsfuehrung'
+  const gruss = isSupabaseConfigured && session ? mitarbeiter?.name ?? 'Team' : istGeschaeftsfuehrung ? 'Geschäftsführung' : 'Team'
   const offeneNotizen = state.notizen.filter((n) => !n.erledigt)
 
   function followUpErledigt(entry: FollowUpEntry) {
