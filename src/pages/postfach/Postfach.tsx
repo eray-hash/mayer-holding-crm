@@ -6,7 +6,7 @@ import { isSentEmailsDbConfigured, fetchSentEmails, searchSentEmails } from '../
 import { isLeadsDbConfigured, fetchOffeneLeads, setLeadStatus } from '../../lib/leadsDb'
 import { matchKundeByEmail, suggestKunde } from '../../lib/matchKunde'
 import { KUNDEN_BEREICHE, kundeBereichLabel } from '../../data/kundenBereiche'
-import { uid, today, addDays, fmtDateTime, fmtDate } from '../../lib/dates'
+import { uid, today, addDays, fmtDateTime } from '../../lib/dates'
 import { MITARBEITER } from '../../data/constants'
 import { SendEmailModal } from '../../components/SendEmailModal'
 import { MailVorlagenModal } from '../../components/MailVorlagenModal'
@@ -388,7 +388,7 @@ export function Postfach() {
                     >
                       <div className="flex items-center justify-between gap-2">
                         <span className="truncate text-sm font-medium text-slate-800">{lead.firma || lead.name || lead.email}</span>
-                        <span className="flex-shrink-0 text-[11px] text-slate-400">{fmtDate(lead.erstelltAm)}</span>
+                        <span className="flex-shrink-0 text-[11px] text-slate-400">{fmtDateTime(lead.erstelltAm)}</span>
                       </div>
                       <div className="truncate text-xs text-slate-600">{lead.name || lead.email}</div>
                       <div className="mt-1 text-[11px] text-slate-400">{lead.bereichVorschlag === 'unklar' ? 'Bereich unklar' : kundeBereichLabel(lead.bereichVorschlag)}</div>
@@ -516,7 +516,7 @@ function LeadDetail({
         {lead.email}
         {lead.telefon && ` · ${lead.telefon}`}
       </p>
-      <p className="mt-1 text-xs text-slate-400">Vorgeschlagen am {fmtDate(lead.erstelltAm)}</p>
+      <p className="mt-1 text-xs text-slate-400">Vorgeschlagen am {fmtDateTime(lead.erstelltAm)}</p>
 
       <p className="mb-6 mt-4 whitespace-pre-wrap rounded-lg bg-slate-50 p-3 text-sm text-slate-700">{lead.notiz}</p>
 
