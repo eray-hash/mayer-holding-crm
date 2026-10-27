@@ -1,10 +1,76 @@
 import { useRef, useState } from 'react'
-import { AlertTriangle, Camera, CheckCircle2, User } from 'lucide-react'
+import { AlertTriangle, Camera, CheckCircle2, Lock, User } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
+import { useAuth } from '../../context/AuthContext'
+import { supabase, isSupabaseConfigured } from '../../lib/supabaseClient'
 import { Card, Field, inputClass, PrimaryButton } from '../../components/ui'
+
+function PasswortSetzen() {
+  const [passwort, setPasswort] = useState('')
+  const [passwortWiederholen, setPasswortWiederholen] = useState('')
+  const [speichern, setSpeichern] = useState(false)
+  const [fehler, setFehler] = useState('')
+  const [erfolg, setErfolg] = useState(false)
+
+  async function absenden() {
+    if (passwort.length < 8) {
+      setFehler('Mindestens 8 Zeichen.')
+      return
+    }
+    if (passwort !== passwortWiederholen) {
+      setFehler('Die beiden Passwörter stimmen nicht überein.')
+      return
+    }
+    setFehler('')
+    setSpeichern(true)
+    try {
+      const { error } = await supabase!.auth.updateUser({ password: passwort })
+      if (error) throw new Error(error.message)
+      setErfolg(true)
+      setPasswort('')
+      setPasswortWiederholen('')
+    } catch (err) {
+      setFehler(err instanceof Error ? err.message : 'Passwort konnte nicht gesetzt werden.')
+    } finally {
+      setSpeichern(false)
+    }
+  }
+
+  return (
+    <Card className="mb-5 p-5">
+      <h3 className="mb-1 flex items-center gap-1.5 text-sm font-semibold text-slate-700">
+        <Lock size={14} /> Passwort setzen
+      </h3>
+      <p className="mb-3 text-xs text-slate-400">
+        Wenn du über einen Einladungs-Link hierher gekommen bist, setz dir hier dein eigenes Passwort — danach kannst du dich
+        damit normal über die Login-Seite anmelden.
+      </p>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="Neues Passwort">
+          <input type="password" className={inputClass} value={passwort} onChange={(e) => setPasswort(e.target.value)} autoComplete="new-password" />
+        </Field>
+        <Field label="Passwort wiederholen">
+          <input
+            type="password"
+            className={inputClass}
+            value={passwortWiederholen}
+            onChange={(e) => setPasswortWiederholen(e.target.value)}
+            autoComplete="new-password"
+          />
+        </Field>
+      </div>
+      {fehler && <p className="mb-2 text-sm font-medium text-rose-600">{fehler}</p>}
+      {erfolg && <p className="mb-2 text-sm font-medium text-emerald-600">Passwort gesetzt — ab jetzt damit anmelden.</p>}
+      <PrimaryButton onClick={absenden} disabled={speichern || !passwort || !passwortWiederholen}>
+        {speichern ? 'Speichert …' : 'Passwort speichern'}
+      </PrimaryButton>
+    </Card>
+  )
+}
 
 export function MeinProfil() {
   const { state, dispatch } = useApp()
+  const { session } = useAuth()
   const [name, setName] = useState(state.profil.name)
   const [telefon, setTelefon] = useState(state.profil.telefon)
   const [email, setEmail] = useState(state.profil.email)
@@ -37,11 +103,15 @@ export function MeinProfil() {
       <h1 className="mb-1 text-xl font-semibold text-slate-800">Mein Profil</h1>
       <p className="mb-5 text-sm text-slate-500">Persönliche Daten und E-Mail-Signatur.</p>
 
-      <div className="mb-5 flex items-start gap-2 rounded-lg bg-amber-50 p-3 text-xs text-amber-700">
-        <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" />
-        Diese Angaben sind aktuell lokal auf diesem Gerät gespeichert — sobald echte
-        Mitarbeiter-Logins eingerichtet sind, wird daraus ein echtes, pro Person gespeichertes Profil.
-      </div>
+      {isSupabaseConfigured && session ? (
+        <PasswortSetzen />
+      ) : (
+        <div className="mb-5 flex items-start gap-2 rounded-lg bg-amber-50 p-3 text-xs text-amber-700">
+          <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" />
+          Diese Angaben sind aktuell lokal auf diesem Gerät gespeichert — sobald echte
+          Mitarbeiter-Logins eingerichtet sind, wird daraus ein echtes, pro Person gespeichertes Profil.
+        </div>
+      )}
 
       <Card className="p-5">
         <div className="mb-5 flex items-center gap-4">

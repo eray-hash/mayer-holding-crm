@@ -3,30 +3,19 @@ import { Mic, Square, Sparkles, AlertTriangle, Send, X, Volume2, VolumeX, Bot, I
 import { useApp } from '../context/AppContext'
 import { useSpeechRecognition } from '../lib/useSpeechRecognition'
 import { speak, isSpeechSynthesisSupported } from '../lib/useSpeechSynthesis'
-import { isEmailGatewayConfigured, classifyAssistantInput, answerAssistantQuestion, answerWithImage, type AssistentTyp } from '../lib/emailGateway'
+import { isEmailGatewayConfigured, classifyAssistantInput, answerAssistantQuestion, answerWithImage } from '../lib/emailGateway'
 import { suggestKunde } from '../lib/matchKunde'
 import { KUNDEN_BEREICHE } from '../data/kundenBereiche'
 import { getStatusMap } from '../data/statusNetworks'
 import { CallRecorder } from './CallRecorder'
 import { Modal, inputClass } from './ui'
-import { today, fmtDate, uid } from '../lib/dates'
+import { today, fmtDate, uid, addDays } from '../lib/dates'
 import { CURRENT_USER } from '../data/constants'
 import type { KundeBereich } from '../types'
 
 type ChatMessage = { id: string; role: 'user' | 'assistant'; text: string; imageDataUrl?: string }
 type PastedImage = { dataUrl: string; base64: string; mediaType: string }
 type AufnahmeKunde = { bereich: KundeBereich; kundeId: string; kundeName: string }
-
-type PendingAction = {
-  typ: AssistentTyp
-  titel: string
-  faelligkeitsDatum: string
-  kundeAuswahl: string
-  frageText: string
-  antwort?: string
-  antwortLoading?: boolean
-  antwortError?: string
-}
 
 // Persistentes Chat-Panel (statt Modal) für den KI-Assistenten — bleibt über die ganze Session
 // gemountet (siehe Layout.tsx), damit der Gesprächsverlauf beim Auf-/Zuklappen erhalten bleibt.
@@ -38,7 +27,6 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
   const [messages, setMessages] = useState<ChatMessage[]>([
     { id: uid('msg'), role: 'assistant', text: 'Hallo! Sag oder tipp mir eine Notiz, eine Aufgabe oder stell mir eine Frage zu einem Kunden.' },
   ])
-  const [pending, setPending] = useState<PendingAction | null>(null)
   const [verarbeiten, setVerarbeiten] = useState(false)
   const [ttsEnabled, setTtsEnabled] = useState(true)
   const [pastedImage, setPastedImage] = useState<PastedImage | null>(null)
@@ -48,7 +36,7 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' })
-  }, [messages, pending])
+  }, [messages, aufnahmeKunde])
 
   function addMessage(role: ChatMessage['role'], text: string, sprechen = false, imageDataUrl?: string) {
     setMessages((m) => [...m, { id: uid('msg'), role, text, imageDataUrl }])
@@ -69,10 +57,6 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
     }
     reader.readAsDataURL(file)
   }
-
-  const alleKunden = KUNDEN_BEREICHE.flatMap((b) =>
-    b.get(state).map((k) => ({ bereich: b.id, kundeId: k.id, label: `${k.firma} (${k.ansprechpartner}) · ${b.label}`, kunde: k })),
-  )
 
   async function senden() {
     const text = (interim ? `${transcript} ${interim}` : transcript).trim()
@@ -101,7 +85,6 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
     try {
       const klass = await classifyAssistantInput(text, today())
       const match = (klass.erkannter_name && suggestKunde(state, klass.erkannter_name)) || suggestKunde(state, text)
-      const kundeAuswahl = match ? `${match.bereich}:${match.kundeId}` : ''
 
       if (klass.typ === 'frage') {
         const frageText = klass.frage ?? text
@@ -141,44 +124,31 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
         }
       } else {
         const titel = klass.titel ?? text.slice(0, 80)
-        setPending({ typ: klass.typ, titel, faelligkeitsDatum: klass.faelligkeitsdatum ?? '', kundeAuswahl, frageText: '' })
-        const kundeHinweis = match ? ` für ${match.kundeName}` : ' (kein Kunde erkannt — landet als allgemeine Notiz auf "Heute")'
-        addMessage('assistant', `Ich habe das als ${klass.typ === 'aufgabe' ? 'Aufgabe' : 'Notiz'}${kundeHinweis} verstanden. Unten kannst du es prüfen und speichern.`, true)
+        const faelligkeitsDatum = klass.faelligkeitsdatum || today()
+        const art = klass.typ === 'aufgabe' ? 'Aufgabe' : 'Notiz'
+        if (match) {
+          dispatch({
+            type: 'ADD_VOICE_TASK',
+            bereich: match.bereich,
+            kundeId: match.kundeId,
+            text: titel,
+            followUp: klass.typ === 'aufgabe' ? { date: faelligkeitsDatum, note: titel, done: false } : undefined,
+          })
+          const falligHinweis = klass.typ === 'aufgabe' ? ` (fällig ${fmtDate(faelligkeitsDatum)})` : ''
+          addMessage('assistant', `Erledigt — ${art}${falligHinweis} bei ${match.kundeName} gespeichert: „${titel}"`, true)
+        } else {
+          dispatch({
+            type: 'ADD_NOTIZ',
+            notiz: { id: uid('notiz'), text: titel, erstelltAm: today(), faelligkeitsDatum: klass.typ === 'aufgabe' ? faelligkeitsDatum : undefined, erledigt: false },
+          })
+          addMessage('assistant', `Erledigt — als ${art} auf "Heute" gespeichert: „${titel}" (ich hab keinen passenden Kunden gefunden).`, true)
+        }
       }
     } catch (err) {
       addMessage('assistant', `Verarbeitung fehlgeschlagen: ${err instanceof Error ? err.message : 'Fehler'}`)
     } finally {
       setVerarbeiten(false)
     }
-  }
-
-  function pendingKunde(p: PendingAction) {
-    if (!p.kundeAuswahl) return null
-    const [bereich, kundeId] = p.kundeAuswahl.split(':') as [KundeBereich, string]
-    const kunde = KUNDEN_BEREICHE.find((b) => b.id === bereich)?.get(state).find((k) => k.id === kundeId)
-    return kunde ? { bereich, kundeId, kunde } : null
-  }
-
-  function speichernPending() {
-    if (!pending) return
-    const ausgewaehlt = pendingKunde(pending)
-    if (ausgewaehlt) {
-      dispatch({
-        type: 'ADD_VOICE_TASK',
-        bereich: ausgewaehlt.bereich,
-        kundeId: ausgewaehlt.kundeId,
-        text: pending.titel,
-        followUp: pending.typ === 'aufgabe' ? { date: pending.faelligkeitsDatum || today(), note: pending.titel, done: false } : undefined,
-      })
-      addMessage('assistant', `Gespeichert bei ${ausgewaehlt.kunde.firma}.`, true)
-    } else {
-      dispatch({
-        type: 'ADD_NOTIZ',
-        notiz: { id: uid('notiz'), text: pending.titel, erstelltAm: today(), faelligkeitsDatum: pending.faelligkeitsDatum || undefined, erledigt: false },
-      })
-      addMessage('assistant', 'Als Notiz auf "Heute" gespeichert.', true)
-    }
-    setPending(null)
   }
 
   const liveText = interim ? `${transcript} ${interim}`.trim() : transcript
@@ -239,62 +209,6 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
             <div className="flex justify-start">
               <div className="rounded-2xl bg-slate-100 px-3.5 py-2 text-sm text-slate-400">
                 <Sparkles size={13} className="inline animate-pulse" /> denkt nach …
-              </div>
-            </div>
-          )}
-
-          {pending && (
-            <div className="rounded-xl border border-accent-200 bg-accent-50 p-3">
-              <label className="mb-1 block text-xs font-medium text-slate-500">Art</label>
-              <select
-                className={`${inputClass} mb-2 text-xs`}
-                value={pending.typ}
-                onChange={(e) => setPending({ ...pending, typ: e.target.value as AssistentTyp })}
-              >
-                <option value="notiz">Notiz</option>
-                <option value="aufgabe">Aufgabe</option>
-              </select>
-
-              <label className="mb-1 block text-xs font-medium text-slate-500">Kunde/Mandant</label>
-              <select
-                className={`${inputClass} mb-2 text-xs`}
-                value={pending.kundeAuswahl}
-                onChange={(e) => setPending({ ...pending, kundeAuswahl: e.target.value })}
-              >
-                <option value="">— kein Kunde —</option>
-                {alleKunden.map((k) => (
-                  <option key={`${k.bereich}:${k.kundeId}`} value={`${k.bereich}:${k.kundeId}`}>
-                    {k.label}
-                  </option>
-                ))}
-              </select>
-
-              <label className="mb-1 block text-xs font-medium text-slate-500">Titel</label>
-              <input className={`${inputClass} mb-2 text-xs`} value={pending.titel} onChange={(e) => setPending({ ...pending, titel: e.target.value })} />
-
-              {pending.typ === 'aufgabe' && (
-                <>
-                  <label className="mb-1 block text-xs font-medium text-slate-500">Fälligkeitsdatum</label>
-                  <input
-                    type="date"
-                    className={`${inputClass} mb-2 text-xs`}
-                    value={pending.faelligkeitsDatum}
-                    onChange={(e) => setPending({ ...pending, faelligkeitsDatum: e.target.value })}
-                  />
-                </>
-              )}
-
-              <div className="mt-2 flex justify-end gap-2">
-                <button onClick={() => setPending(null)} className="rounded-lg px-3 py-1.5 text-xs font-medium text-slate-500 hover:bg-white">
-                  Verwerfen
-                </button>
-                <button
-                  onClick={speichernPending}
-                  disabled={!pending.titel.trim()}
-                  className="rounded-lg bg-accent-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-700 disabled:opacity-50"
-                >
-                  Speichern
-                </button>
               </div>
             </div>
           )}
@@ -402,14 +316,15 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
               })
               addMessage('assistant', `Protokoll bei ${aufnahmeKunde.kundeName} abgelegt.`, true)
               if (summary?.offene_punkte && summary.offene_punkte.length > 0) {
-                setPending({
-                  typ: 'aufgabe',
-                  titel: summary.offene_punkte[0],
-                  faelligkeitsDatum: '',
-                  kundeAuswahl: `${aufnahmeKunde.bereich}:${aufnahmeKunde.kundeId}`,
-                  frageText: '',
+                const titel = summary.offene_punkte[0]
+                dispatch({
+                  type: 'ADD_VOICE_TASK',
+                  bereich: aufnahmeKunde.bereich,
+                  kundeId: aufnahmeKunde.kundeId,
+                  text: titel,
+                  followUp: { date: addDays(today(), 3), note: titel, done: false },
                 })
-                addMessage('assistant', 'Ich habe daraus einen Follow-up-Vorschlag erstellt — unten prüfen und speichern.', true)
+                addMessage('assistant', `Daraus hab ich gleich einen Follow-up angelegt: „${titel}" (fällig in 3 Tagen).`, true)
               }
               setRecorderOpen(false)
               setAufnahmeKunde(null)
