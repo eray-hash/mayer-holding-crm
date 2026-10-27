@@ -233,8 +233,12 @@ nötig.
 
 ## KI-Assistent (Notiz/Aufgabe aufnehmen oder Frage stellen)
 
-Globaler Button in der Topbar (`src/components/KiAssistentModal.tsx`), unabhängig von einer
-konkreten Kundenakte. Aufnahme oder Texteingabe wird an `email-gateway` geschickt
+Persistentes Chat-Panel (`src/components/KiAssistentPanel.tsx`), erreichbar über den Topbar-Button
+oder die runde Sprechblase unten rechts — bleibt beim Auf-/Zuklappen über die ganze Session gemountet,
+der Gesprächsverlauf geht also nicht verloren. Antworten werden zusätzlich per Sprachausgabe
+(Web Speech API, `src/lib/useSpeechSynthesis.ts`) vorgelesen, abschaltbar über das Lautsprecher-Icon
+im Panel-Header. Unabhängig von einer konkreten Kundenakte nutzbar. Aufnahme oder Texteingabe wird an
+`email-gateway` geschickt
 (`action: "assistant_classify"`), die per Anthropic-API klassifiziert, ob es sich um eine **Notiz**,
 eine **Aufgabe** oder eine **Frage** zu einem Kunden handelt, und dabei einen eventuell genannten
 Namen sowie ein relatives Datum ("nächste Woche" → konkretes Datum) extrahiert. Der Kundenabgleich

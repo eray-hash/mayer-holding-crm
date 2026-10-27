@@ -28,7 +28,7 @@ import { useAuth } from '../context/AuthContext'
 import { isSupabaseConfigured } from '../lib/supabaseClient'
 import { collectPriorityEntries } from '../lib/todayPriorities'
 import { DokumentenImportModal } from './DokumentenImportModal'
-import { KiAssistentModal } from './KiAssistentModal'
+import { KiAssistentPanel } from './KiAssistentPanel'
 import { SidebarBeratung } from './SidebarBeratung'
 import { SidebarImmobilien } from './SidebarImmobilien'
 import { SidebarErben } from './SidebarErben'
@@ -104,7 +104,7 @@ export function Layout({ children }: { children: ReactNode }) {
         </div>
         <div className="flex items-center gap-1.5">
           <button
-            onClick={() => setKiAssistentOpen(true)}
+            onClick={() => setKiAssistentOpen((o) => !o)}
             className="flex items-center gap-1.5 rounded-lg border border-accent-200 bg-accent-50 px-2.5 py-1.5 text-xs font-medium text-accent-700 hover:bg-accent-100"
             title="KI-Assistent: Notiz/Aufgabe aufnehmen oder Frage stellen"
           >
@@ -286,7 +286,7 @@ export function Layout({ children }: { children: ReactNode }) {
       )}
 
       <DokumentenImportModal open={dokumentImportOpen} onClose={() => setDokumentImportOpen(false)} />
-      <KiAssistentModal open={kiAssistentOpen} onClose={() => setKiAssistentOpen(false)} />
+      <KiAssistentPanel open={kiAssistentOpen} onToggle={() => setKiAssistentOpen((o) => !o)} />
     </div>
   )
 }

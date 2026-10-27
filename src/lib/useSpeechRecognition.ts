@@ -16,7 +16,7 @@ function getSpeechRecognitionCtor(): (new () => SpeechRecognitionLike) | null {
   return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null
 }
 
-// Geteilte Live-Transkriptions-Logik (Web Speech API) — von CallRecorder und KiAssistentModal
+// Geteilte Live-Transkriptions-Logik (Web Speech API) — von CallRecorder und KiAssistentPanel
 // genutzt, damit beide dieselbe Aufnahme-/Fehlerbehandlung haben statt sie zu duplizieren.
 export function useSpeechRecognition() {
   const [supported] = useState(() => getSpeechRecognitionCtor() !== null)
