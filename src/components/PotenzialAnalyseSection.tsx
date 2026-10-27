@@ -30,7 +30,7 @@ export function PotenzialAnalyseSection({ bereich, kundeId, kundeName }: { berei
   const [chancen, setChancen] = useState<PotenzialChance[] | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [uebernommen, setUebernommen] = useState<Set<number>>(new Set())
+  const [uebernommen, setUebernommen] = useState<Map<number, boolean>>(new Map())
 
   async function analysieren() {
     setLoading(true)
@@ -56,7 +56,7 @@ export function PotenzialAnalyseSection({ bereich, kundeId, kundeName }: { berei
       ].join('\n')
       const result = await analysierePotenzial(kontext)
       setChancen(result)
-      setUebernommen(new Set())
+      setUebernommen(new Map())
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Analyse fehlgeschlagen.')
     } finally {
@@ -65,15 +65,20 @@ export function PotenzialAnalyseSection({ bereich, kundeId, kundeName }: { berei
   }
 
   function alsFollowUpUebernehmen(c: PotenzialChance, index: number) {
+    // Ein bereits offenes Follow-up (z. B. ein dringender Erstkontakt) darf nicht durch den
+    // Cross-Sell-Vorschlag überschrieben werden — die Chance landet dann nur als Aktivität in der
+    // Kundenakte, das bestehende Follow-up bleibt die aktuelle Priorität.
+    const kunde = KUNDEN_BEREICHE.find((b) => b.id === bereich)!.get(state).find((k) => k.id === kundeId)
+    const hatOffenesFollowUp = kunde && !kunde.followUp.done
     dispatch({
       type: 'ADD_POTENZIAL_NOTIZ',
       bereich,
       kundeId,
       titel: c.titel,
       begruendung: c.begruendung,
-      followUp: { date: addDays(today(), 3), note: c.naechster_schritt, done: false },
+      ...(hatOffenesFollowUp ? {} : { followUp: { date: addDays(today(), 3), note: c.naechster_schritt, done: false } }),
     })
-    setUebernommen((s) => new Set(s).add(index))
+    setUebernommen((m) => new Map(m).set(index, !hatOffenesFollowUp))
   }
 
   return (
@@ -104,7 +109,11 @@ export function PotenzialAnalyseSection({ bereich, kundeId, kundeName }: { berei
               <p className="mb-2 text-sm text-slate-600">{c.begruendung}</p>
               <p className="mb-3 text-xs text-slate-400">Nächster Schritt: {c.naechster_schritt}</p>
               {uebernommen.has(i) ? (
-                <p className="text-xs font-medium text-emerald-600">Als Follow-up übernommen.</p>
+                <p className="text-xs font-medium text-emerald-600">
+                  {uebernommen.get(i)
+                    ? 'Als Follow-up übernommen.'
+                    : 'In der Kundenakte vermerkt — bestehendes Follow-up bleibt erhalten.'}
+                </p>
               ) : (
                 <button
                   onClick={() => alsFollowUpUebernehmen(c, i)}
