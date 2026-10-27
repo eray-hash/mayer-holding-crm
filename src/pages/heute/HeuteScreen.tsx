@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Bot, PhoneCall, Flame, CalendarClock } from 'lucide-react'
+import { Bot, PhoneCall, Flame, CalendarClock, StickyNote, Trash2 } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { collectPriorityEntries, type PriorityEntry, type PriorityKind } from '../../lib/todayPriorities'
 import { TaskDetailModal } from '../../components/kanban/TaskDetailModal'
@@ -50,9 +50,44 @@ export function HeuteScreen() {
   const { prioritaeten, demnaechst } = collectPriorityEntries(state.projekte)
 
   const gruss = state.rolle === 'geschaeftsfuehrung' ? 'Geschäftsführung' : 'Team'
+  const offeneNotizen = state.notizen.filter((n) => !n.erledigt)
 
   return (
     <div className="mx-auto max-w-3xl">
+      {offeneNotizen.length > 0 && (
+        <Card className="mb-5 p-5">
+          <h2 className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-slate-700">
+            <StickyNote size={14} className="text-accent-600" /> Notizen
+          </h2>
+          <ul className="flex flex-col gap-2">
+            {offeneNotizen.map((n) => (
+              <li key={n.id} className="flex items-start gap-2.5 rounded-lg bg-slate-50 px-3 py-2.5 text-sm">
+                <input
+                  type="checkbox"
+                  checked={n.erledigt}
+                  onChange={() => dispatch({ type: 'TOGGLE_NOTIZ', id: n.id })}
+                  className="mt-0.5 rounded"
+                />
+                <div className="min-w-0 flex-1">
+                  <p className="text-slate-800">{n.text}</p>
+                  <p className="text-xs text-slate-400">
+                    {fmtDate(n.erstelltAm)}
+                    {n.faelligkeitsDatum ? ` · fällig ${fmtDate(n.faelligkeitsDatum)}` : ''}
+                  </p>
+                </div>
+                <button
+                  onClick={() => dispatch({ type: 'DELETE_NOTIZ', id: n.id })}
+                  className="flex-shrink-0 rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-rose-600"
+                  title="Löschen"
+                >
+                  <Trash2 size={13} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
+
       <Card className="p-5">
         <p className="text-sm text-slate-400">{weekdayGerman()}</p>
         <h1 className="mb-4 text-xl font-bold text-slate-800">Guten Tag, {gruss} 👋</h1>

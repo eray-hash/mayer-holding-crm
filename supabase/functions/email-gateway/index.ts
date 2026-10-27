@@ -1,11 +1,17 @@
 // Edge Function "email-gateway" — Brücke zwischen dem CRM-Frontend und echten externen Diensten,
-// die einen Server-seitigen Schlüssel/Zugangsdaten brauchen. Drei Aktionen über denselben Endpunkt:
+// die einen Server-seitigen Schlüssel/Zugangsdaten brauchen. Aktionen über denselben Endpunkt:
 //   { action: "sync" }                          -> letzte E-Mails aus dem IONOS-Posteingang lesen
 //   { action: "send", to, subject, text, html }  -> E-Mail über dasselbe Postfach versenden
 //   { action: "summarize", transcript }          -> Gesprächstranskript per Claude strukturiert
 //                                                    zusammenfassen (Kernthemen/Vereinbarungen/
 //                                                    offene Punkte/Stimmung), für die
 //                                                    "Gespräch aufzeichnen"-Funktion
+//   { action: "assistant_classify", transcript, heute }
+//                                                -> freies Diktat als Notiz/Aufgabe/Frage
+//                                                   klassifizieren (KI-Assistent, Schritt 1)
+//   { action: "assistant_answer", frage, kontext }
+//                                                -> Frage zu einem Kunden anhand mitgeschickter
+//                                                   CRM-Daten beantworten (KI-Assistent, Schritt 2)
 //
 // Alle Zugangsdaten kommen ausschließlich aus Supabase Function Secrets (nie im Code, nie im
 // Frontend). Siehe README-Abschnitt "E-Mail-Postfach-Anbindung" für die Einrichtung.
@@ -168,6 +174,106 @@ async function summarizeTranscript(transcript: string): Promise<Zusammenfassung>
   return toolUse.input as Zusammenfassung
 }
 
+// Gemeinsamer Aufruf für die beiden KI-Assistent-Aktionen unten — erzwingt per tool_choice eine
+// strukturierte Antwort im gegebenen Schema, statt Freitext parsen zu müssen.
+async function callClaudeTool<T>(prompt: string, tool: { name: string; description: string; input_schema: Record<string, unknown> }): Promise<T> {
+  const apiKey = env('ANTHROPIC_API_KEY')
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1024,
+      tools: [tool],
+      tool_choice: { type: 'tool', name: tool.name },
+      messages: [{ role: 'user', content: prompt }],
+    }),
+  })
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '')
+    throw new Error(`Anthropic-API-Fehler (${res.status}): ${detail.slice(0, 300)}`)
+  }
+  const data = await res.json()
+  const toolUse = data.content?.find((c: { type: string }) => c.type === 'tool_use')
+  if (!toolUse) throw new Error('Keine strukturierte Antwort von der Anthropic-API erhalten.')
+  return toolUse.input as T
+}
+
+type AssistentKlassifikation = {
+  typ: 'notiz' | 'aufgabe' | 'frage'
+  erkannter_name?: string
+  titel?: string
+  faelligkeitsdatum?: string
+  frage?: string
+}
+
+// Erster Schritt des KI-Assistenten: erkennt aus freiem Diktat/Text, ob es sich um eine reine
+// Notiz, eine konkrete Aufgabe (z.B. "Kunde X kontaktieren") oder eine Frage zu einem Kunden
+// handelt, und extrahiert dabei einen eventuell genannten Namen sowie ein relatives Datum
+// ("nächste Woche" -> konkretes Datum). Die eigentliche Kundenzuordnung passiert im Frontend per
+// Textabgleich gegen die echten Kundendaten — die KI kennt die Kundenliste nicht.
+async function classifyAssistantInput(transcript: string, heute: string): Promise<AssistentKlassifikation> {
+  return callClaudeTool<AssistentKlassifikation>(
+    `Du hilfst einem Mitarbeiter einer Unternehmensberatungs-/Immobilien-/Finanzierungsholding, ein kurzes gesprochenes oder getipptes Diktat einzuordnen. Heutiges Datum: ${heute}.
+
+Klassifiziere den folgenden Text als genau einen von drei Typen:
+- "aufgabe": eine konkrete Handlungsaufforderung an sich selbst, z. B. "Kunde X anrufen", "bei Y Unterlagen anfordern", "Z noch erledigen".
+- "frage": eine Frage zu einem bestehenden Kunden/Mandanten, z. B. "was wurde beim letzten Termin mit X besprochen", "wie ist der Stand bei Y".
+- "notiz": alles andere, ein allgemeiner Gedanke oder eine Beobachtung ohne konkrete Handlung oder Frage.
+
+Extrahiere zusätzlich, falls vorhanden:
+- erkannter_name: der Name einer Person oder Firma, die im Text erwähnt wird (nur der Name, keine Anrede/Titel).
+- titel: bei "aufgabe" oder "notiz" ein kurzer, prägnanter Titel (max. ca. 80 Zeichen) für die Aufgabe/Notiz.
+- faelligkeitsdatum: falls ein relatives oder konkretes Datum erwähnt wird (z. B. "nächste Woche", "morgen", "Freitag"), berechne daraus das konkrete Datum im Format YYYY-MM-DD ausgehend vom heutigen Datum. Sonst weglassen.
+- frage: bei "frage" die Frage selbst, neutral und vollständig formuliert.
+
+Text:
+"""${transcript}"""`,
+    {
+      name: 'ki_assistent_klassifikation',
+      description: 'Klassifiziert ein Diktat als Notiz, Aufgabe oder Frage und extrahiert relevante Felder.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          typ: { type: 'string', enum: ['notiz', 'aufgabe', 'frage'] },
+          erkannter_name: { type: 'string' },
+          titel: { type: 'string' },
+          faelligkeitsdatum: { type: 'string' },
+          frage: { type: 'string' },
+        },
+        required: ['typ'],
+      },
+    },
+  )
+}
+
+// Zweiter Schritt (nur bei typ="frage"): beantwortet die Frage ausschließlich auf Basis des vom
+// Frontend mitgeschickten Kunden-Kontexts (Protokolle, Aktivitäten, Status, Follow-up) — die
+// Function selbst hat keinen Datenbankzugriff auf die CRM-Daten, die leben nur im Browser.
+async function answerAssistantQuestion(frage: string, kontext: string): Promise<{ antwort: string }> {
+  return callClaudeTool<{ antwort: string }>(
+    `Beantworte die folgende Frage eines Mitarbeiters ausschließlich auf Basis der gegebenen CRM-Daten zu einem Kunden/Mandanten. Antworte auf Deutsch, knapp und konkret. Wenn die Daten die Frage nicht beantworten können, sage das ehrlich statt zu spekulieren.
+
+CRM-Daten zum Kunden:
+"""${kontext}"""
+
+Frage: ${frage}`,
+    {
+      name: 'ki_assistent_antwort',
+      description: 'Beantwortet eine Frage zu einem Kunden basierend auf gegebenen CRM-Daten.',
+      input_schema: {
+        type: 'object',
+        properties: { antwort: { type: 'string' } },
+        required: ['antwort'],
+      },
+    },
+  )
+}
+
 Deno.serve(async (req: Request) => {
   const origin = req.headers.get('origin')
   const headers = corsHeaders(origin)
@@ -223,7 +329,25 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ summary }), { headers })
     }
 
-    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send" oder "summarize"' }), { status: 400, headers })
+    if (body.action === 'assistant_classify') {
+      const { transcript, heute } = body
+      if (!transcript || typeof transcript !== 'string' || !transcript.trim()) {
+        return new Response(JSON.stringify({ error: 'transcript ist ein Pflichtfeld' }), { status: 400, headers })
+      }
+      const klassifikation = await classifyAssistantInput(transcript, heute || new Date().toISOString().slice(0, 10))
+      return new Response(JSON.stringify({ klassifikation }), { headers })
+    }
+
+    if (body.action === 'assistant_answer') {
+      const { frage, kontext } = body
+      if (!frage || typeof frage !== 'string' || !frage.trim()) {
+        return new Response(JSON.stringify({ error: 'frage ist ein Pflichtfeld' }), { status: 400, headers })
+      }
+      const { antwort } = await answerAssistantQuestion(frage, kontext ?? '')
+      return new Response(JSON.stringify({ antwort }), { headers })
+    }
+
+    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify" oder "assistant_answer"' }), { status: 400, headers })
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }

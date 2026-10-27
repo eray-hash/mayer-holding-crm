@@ -222,13 +222,37 @@ npm run cleanup-inbox
 
 ## Gespräch aufzeichnen + KI-Zusammenfassung
 
-In der Gesprächsprotokolle-Tab eines Kunden (Beratung) kann ein Telefonat live transkribiert werden
-(Web-Speech-API, mit manuell editierbarem Fallback-Textfeld). Über „Mit KI zusammenfassen" wird das
-Transkript an dieselbe `email-gateway`-Function geschickt (`action: "summarize"`), die über die
-Anthropic-API eine strukturierte Zusammenfassung erzeugt: Kernthemen, Vereinbarungen, offene Punkte,
-Stimmung, Fließtext-Zusammenfassung — alle Felder bleiben vor dem Speichern editierbar. Braucht
-zusätzlich zu den Secrets oben nur `ANTHROPIC_API_KEY` als weiteres Supabase-Secret (siehe oben) —
-kein zweites Deployment, keine weiteren Frontend-Variablen nötig.
+In der Gesprächsprotokolle-Tab/-Sektion eines Kunden (in **allen** Bereichen) kann ein Telefonat live
+transkribiert werden (Web-Speech-API, mit manuell editierbarem Fallback-Textfeld). Über „Mit KI
+zusammenfassen" wird das Transkript an dieselbe `email-gateway`-Function geschickt
+(`action: "summarize"`), die über die Anthropic-API eine strukturierte Zusammenfassung erzeugt:
+Kernthemen, Vereinbarungen, offene Punkte, Stimmung, Fließtext-Zusammenfassung — alle Felder bleiben
+vor dem Speichern editierbar. Braucht zusätzlich zu den Secrets oben nur `ANTHROPIC_API_KEY` als
+weiteres Supabase-Secret (siehe oben) — kein zweites Deployment, keine weiteren Frontend-Variablen
+nötig.
+
+## KI-Assistent (Notiz/Aufgabe aufnehmen oder Frage stellen)
+
+Globaler Button in der Topbar (`src/components/KiAssistentModal.tsx`), unabhängig von einer
+konkreten Kundenakte. Aufnahme oder Texteingabe wird an `email-gateway` geschickt
+(`action: "assistant_classify"`), die per Anthropic-API klassifiziert, ob es sich um eine **Notiz**,
+eine **Aufgabe** oder eine **Frage** zu einem Kunden handelt, und dabei einen eventuell genannten
+Namen sowie ein relatives Datum ("nächste Woche" → konkretes Datum) extrahiert. Der Kundenabgleich
+selbst passiert im Frontend per Textabgleich gegen die echten Kundendaten (`suggestKunde`,
+bereichsübergreifend) — die KI kennt die Kundenliste nicht.
+
+- **Aufgabe** mit erkanntem Kunden → wird als Follow-up + Aktivität direkt beim Kunden gespeichert
+  (`ADD_VOICE_TASK`).
+- **Notiz**/Aufgabe ohne Kundentreffer → landet in einer einfachen Notizen-Liste auf dem
+  "Heute"-Screen (`notizen` in `AppData`).
+- **Frage** zu einem erkannten Kunden → `action: "assistant_answer"` beantwortet sie anhand des vom
+  Frontend mitgeschickten Kunden-Kontexts (Protokolle, Aktivitäten, Status, Follow-up) — die Function
+  selbst hat keinen eigenen Datenbankzugriff auf die CRM-Daten, die leben nur im Browser
+  (`localStorage`).
+
+Braucht dieselben Secrets wie oben (`CRM_SHARED_SECRET`, `ANTHROPIC_API_KEY`) — kein zusätzliches
+Deployment/Secret nötig, nur ein erneutes `supabase functions deploy email-gateway` nach Code-Änderungen
+an der Function.
 
 ## Projektstruktur
 

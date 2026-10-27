@@ -19,6 +19,7 @@ import type {
   ImportiertesDokument,
   EingegangeneEmail,
   MailVorlage,
+  Notiz,
   KundeBereich,
   ActivityEntry,
 } from '../types'
@@ -78,6 +79,7 @@ export type AppData = {
   importierteDokumente: ImportiertesDokument[]
   eingegangeneEmails: EingegangeneEmail[]
   mailVorlagen: MailVorlage[]
+  notizen: Notiz[]
 }
 
 const STORAGE_KEY = 'mayer-holding-crm-data-v1'
@@ -112,6 +114,7 @@ function buildSeed(): AppData {
     importierteDokumente: [],
     eingegangeneEmails: [],
     mailVorlagen: seedMailVorlagen,
+    notizen: [],
   }
 }
 
@@ -140,6 +143,7 @@ function loadInitial(): AppData {
         if (!Array.isArray(parsed.importierteDokumente)) parsed.importierteDokumente = []
         if (!Array.isArray(parsed.eingegangeneEmails)) parsed.eingegangeneEmails = []
         if (!Array.isArray(parsed.mailVorlagen)) parsed.mailVorlagen = seedMailVorlagen
+        if (!Array.isArray(parsed.notizen)) parsed.notizen = []
         return parsed
       }
     }
@@ -209,11 +213,16 @@ type Action =
   | { type: 'ADD_MAIL_VORLAGE'; vorlage: MailVorlage }
   | { type: 'UPDATE_MAIL_VORLAGE'; id: string; patch: Partial<MailVorlage> }
   | { type: 'DELETE_MAIL_VORLAGE'; id: string }
+  | { type: 'ADD_VOICE_TASK'; bereich: KundeBereich; kundeId: string; text: string; followUp?: FollowUp }
+  | { type: 'ADD_NOTIZ'; notiz: Notiz }
+  | { type: 'TOGGLE_NOTIZ'; id: string }
+  | { type: 'DELETE_NOTIZ'; id: string }
 
 // Hängt eine Aktivität an den Kunden/Mandanten im richtigen Bereichs-Array — zentrale Stelle, da
 // jeder KundeBereich sein eigenes AppData-Feld hat (siehe kundenBereiche.ts für die Lese-Seite).
-function appendKundeActivity(state: AppData, bereich: KundeBereich, kundeId: string, activity: ActivityEntry): AppData {
-  const patch = (list: Kunde[]) => list.map((k) => (k.id === kundeId ? { ...k, activities: [activity, ...k.activities] } : k))
+// extraPatch erlaubt, in derselben Operation weitere Felder zu setzen (z.B. followUp).
+function appendKundeActivity(state: AppData, bereich: KundeBereich, kundeId: string, activity: ActivityEntry, extraPatch: Partial<Kunde> = {}): AppData {
+  const patch = (list: Kunde[]) => list.map((k) => (k.id === kundeId ? { ...k, ...extraPatch, activities: [activity, ...k.activities] } : k))
   switch (bereich) {
     case 'beratung':
       return { ...state, kunden: patch(state.kunden) }
@@ -697,6 +706,21 @@ function reducer(state: AppData, action: Action): AppData {
       }
     case 'DELETE_MAIL_VORLAGE':
       return { ...state, mailVorlagen: state.mailVorlagen.filter((v) => v.id !== action.id) }
+    case 'ADD_VOICE_TASK': {
+      const activity: ActivityEntry = {
+        id: uid('act'),
+        date: today(),
+        text: `Notiz per KI-Assistent erfasst: „${action.text}"`,
+        user: CURRENT_USER,
+      }
+      return appendKundeActivity(state, action.bereich, action.kundeId, activity, action.followUp ? { followUp: action.followUp } : {})
+    }
+    case 'ADD_NOTIZ':
+      return { ...state, notizen: [action.notiz, ...state.notizen] }
+    case 'TOGGLE_NOTIZ':
+      return { ...state, notizen: state.notizen.map((n) => (n.id === action.id ? { ...n, erledigt: !n.erledigt } : n)) }
+    case 'DELETE_NOTIZ':
+      return { ...state, notizen: state.notizen.filter((n) => n.id !== action.id) }
     default:
       return state
   }

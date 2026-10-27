@@ -61,3 +61,23 @@ export async function summarizeTranscript(transcript: string): Promise<Gespraech
   const data = await call({ action: 'summarize', transcript })
   return data.summary
 }
+
+export type AssistentTyp = 'notiz' | 'aufgabe' | 'frage'
+
+export type AssistentKlassifikation = {
+  typ: AssistentTyp
+  erkannter_name?: string
+  titel?: string
+  faelligkeitsdatum?: string
+  frage?: string
+}
+
+export async function classifyAssistantInput(transcript: string, heute: string): Promise<AssistentKlassifikation> {
+  const data = await call({ action: 'assistant_classify', transcript, heute })
+  return data.klassifikation
+}
+
+export async function answerAssistantQuestion(frage: string, kontext: string): Promise<string> {
+  const data = await call({ action: 'assistant_answer', frage, kontext })
+  return data.antwort
+}

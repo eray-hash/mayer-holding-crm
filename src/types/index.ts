@@ -253,6 +253,16 @@ export type MailVorlage = {
   text: string
 }
 
+// Freie Notiz aus dem KI-Assistenten, wenn dabei kein Kunde/Mandant erkannt bzw. ausgewählt wurde
+// (landet sonst als Follow-up + Aktivität direkt beim erkannten Kunden, siehe ADD_VOICE_TASK).
+export type Notiz = {
+  id: string
+  text: string
+  erstelltAm: string
+  faelligkeitsDatum?: string
+  erledigt: boolean
+}
+
 // Eine über das CRM versendete E-Mail — rein lesend aus public.gesendete_emails (vom
 // email-gateway beim erfolgreichen Versand mitgeschrieben), für den "Gesendet"-Ordner im Postfach.
 export type GesendeteEmail = {
