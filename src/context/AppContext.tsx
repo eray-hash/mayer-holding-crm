@@ -23,6 +23,7 @@ import type {
   MitarbeiterProfil,
   KundeBereich,
   ActivityEntry,
+  Kaeuferprofil,
 } from '../types'
 import type { Projekt, Aufgabe, AufgabenStatus, Meilenstein } from '../types/project'
 import { seedKunden, seedRechnungen, seedProtokolle, seedKonzepte, seedVertraege, seedVorlagen } from '../data/seedBeratung'
@@ -231,6 +232,7 @@ type Action =
   | { type: 'DELETE_MAIL_VORLAGE'; id: string }
   | { type: 'ADD_VOICE_TASK'; bereich: KundeBereich; kundeId: string; text: string; followUp?: FollowUp }
   | { type: 'ADD_POTENZIAL_NOTIZ'; bereich: KundeBereich; kundeId: string; titel: string; begruendung: string; followUp?: FollowUp }
+  | { type: 'SET_KAEUFERPROFIL'; bereich: KundeBereich; kundeId: string; profil: Kaeuferprofil }
   | { type: 'ADD_NOTIZ'; notiz: Notiz }
   | { type: 'TOGGLE_NOTIZ'; id: string }
   | { type: 'DELETE_NOTIZ'; id: string }
@@ -741,6 +743,15 @@ function reducer(state: AppData, action: Action): AppData {
         user: CURRENT_USER,
       }
       return appendKundeActivity(state, action.bereich, action.kundeId, activity, action.followUp ? { followUp: action.followUp } : {})
+    }
+    case 'SET_KAEUFERPROFIL': {
+      const activity: ActivityEntry = {
+        id: uid('act'),
+        date: today(),
+        text: 'Käuferprofil erfasst/aktualisiert',
+        user: CURRENT_USER,
+      }
+      return appendKundeActivity(state, action.bereich, action.kundeId, activity, { kaeuferprofil: action.profil })
     }
     case 'ADD_NOTIZ':
       return { ...state, notizen: [action.notiz, ...state.notizen] }

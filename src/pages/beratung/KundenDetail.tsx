@@ -10,6 +10,7 @@ import { ZugewieseneObjekte } from '../../components/ZugewieseneObjekte'
 import { FormularLinkButtons } from '../../components/FormularLink'
 import { GespraechsprotokolleSection } from '../../components/GespraechsprotokolleSection'
 import { PotenzialAnalyseSection } from '../../components/PotenzialAnalyseSection'
+import { KaeuferprofilSection } from '../../components/KaeuferprofilSection'
 import { SendEmailModal } from '../../components/SendEmailModal'
 import type { Prioritaet } from '../../types'
 
@@ -18,6 +19,7 @@ const TABS = [
   { id: 'rechnungen', label: 'Rechnungen' },
   { id: 'protokolle', label: 'Gesprächsprotokolle' },
   { id: 'potenzial', label: 'Potenzial-Analyse' },
+  { id: 'kaeuferprofil', label: 'Käuferprofil' },
   { id: 'konzepte', label: 'Konzeptvorstellungen' },
   { id: 'vertraege', label: 'Unterschriebene Beratungsverträge' },
 ]
@@ -193,6 +195,8 @@ export function KundenDetail() {
       {tab === 'protokolle' && <GespraechsprotokolleSection bereich="beratung" kundeId={kunde.id} kundeName={kunde.ansprechpartner} />}
 
       {tab === 'potenzial' && <PotenzialAnalyseSection bereich="beratung" kundeId={kunde.id} kundeName={kunde.ansprechpartner} />}
+
+      {tab === 'kaeuferprofil' && <KaeuferprofilSection bereich="beratung" kundeId={kunde.id} kundeName={kunde.ansprechpartner} />}
 
       {tab === 'konzepte' && (
         <Card className="overflow-hidden">

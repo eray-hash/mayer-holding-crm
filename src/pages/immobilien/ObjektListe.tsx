@@ -59,7 +59,15 @@ export function ObjektListe() {
               <LayoutGrid size={14} /> Board
             </button>
           </div>
-          <SecondaryButton onClick={() => setImmoRadarOpen(true)}><Radar size={15} /> Aus ImmoRadar übernehmen</SecondaryButton>
+          <a
+            href="https://eray-hash.github.io/immobilien-radar/"
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+          >
+            <Radar size={15} /> ImmoRadar öffnen
+          </a>
+          <SecondaryButton onClick={() => setImmoRadarOpen(true)}><Plus size={15} /> Aus ImmoRadar übernehmen</SecondaryButton>
           <PrimaryButton onClick={() => setAddOpen(true)}><Plus size={15} /> Neues Objekt</PrimaryButton>
         </div>
       </div>

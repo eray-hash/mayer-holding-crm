@@ -8,6 +8,7 @@ import { PRIORITAETEN } from '../../data/constants'
 import { ZugewieseneObjekte } from '../../components/ZugewieseneObjekte'
 import { GespraechsprotokolleSection } from '../../components/GespraechsprotokolleSection'
 import { PotenzialAnalyseSection } from '../../components/PotenzialAnalyseSection'
+import { KaeuferprofilSection } from '../../components/KaeuferprofilSection'
 import type { Prioritaet } from '../../types'
 
 export function BetriebsuebergabeDetail() {
@@ -113,6 +114,11 @@ export function BetriebsuebergabeDetail() {
         <Card className="p-5 lg:col-span-3">
           <h3 className="mb-3 text-sm font-semibold text-slate-700">Potenzial-Analyse</h3>
           <PotenzialAnalyseSection bereich="betriebsuebergabe" kundeId={mandant.id} kundeName={mandant.ansprechpartner} />
+        </Card>
+
+        <Card className="p-5 lg:col-span-3">
+          <h3 className="mb-3 text-sm font-semibold text-slate-700">Käuferprofil</h3>
+          <KaeuferprofilSection bereich="betriebsuebergabe" kundeId={mandant.id} kundeName={mandant.ansprechpartner} />
         </Card>
       </div>
     </div>

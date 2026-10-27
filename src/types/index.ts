@@ -92,6 +92,21 @@ export type Beratungsvertrag = {
   datei: string
 }
 
+// Käuferprofil: per Fragebogen erfasste Kaufkriterien eines Kunden/Mandanten (bereichsübergreifend,
+// nicht nur für originär Immobilien-Kunden — auch ein Beratungs- oder Erben-Mandant kann
+// Kaufinteresse haben) — Grundlage für das automatische Matching gegen den Objektbestand.
+export type Kaeuferprofil = {
+  budgetMin?: number
+  budgetMax?: number
+  objekttypen: ObjektTyp[]
+  bevorzugteLage: string
+  nutzung: 'Eigennutz' | 'Kapitalanlage' | 'Unklar'
+  zeitrahmen: string
+  finanzierungGesichert: boolean
+  notizen: string
+  erstelltAm: string
+}
+
 export type Kunde = {
   id: string
   firma: string
@@ -106,6 +121,7 @@ export type Kunde = {
   activities: ActivityEntry[]
   unterlagenCheckliste?: Record<string, boolean>
   signaturen?: Signatur[]
+  kaeuferprofil?: Kaeuferprofil
 }
 
 export type Vorlage = {
