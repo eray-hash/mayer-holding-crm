@@ -307,6 +307,7 @@ export type MitarbeiterProfil = {
   email: string
   fotoDataUrl?: string
   signaturHtml: string
+  buchungslink?: string
 }
 
 // Freie Notiz aus dem KI-Assistenten, wenn dabei kein Kunde/Mandant erkannt bzw. ausgewählt wurde

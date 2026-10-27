@@ -9,6 +9,7 @@ export function MeinProfil() {
   const [telefon, setTelefon] = useState(state.profil.telefon)
   const [email, setEmail] = useState(state.profil.email)
   const [signaturHtml, setSignaturHtml] = useState(state.profil.signaturHtml)
+  const [buchungslink, setBuchungslink] = useState(state.profil.buchungslink ?? '')
   const [fotoDataUrl, setFotoDataUrl] = useState(state.profil.fotoDataUrl)
   const [gespeichert, setGespeichert] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -21,9 +22,14 @@ export function MeinProfil() {
   }
 
   function speichern() {
-    dispatch({ type: 'UPDATE_PROFIL', patch: { name, telefon, email, signaturHtml, fotoDataUrl } })
+    dispatch({ type: 'UPDATE_PROFIL', patch: { name, telefon, email, signaturHtml, fotoDataUrl, buchungslink } })
     setGespeichert(true)
     setTimeout(() => setGespeichert(false), 2500)
+  }
+
+  function buchungslinkInSignaturEinfuegen() {
+    if (!buchungslink.trim()) return
+    setSignaturHtml((s) => `${s}\n<p><a href="${buchungslink.trim()}">Termin direkt online buchen</a></p>`)
   }
 
   return (
@@ -72,6 +78,18 @@ export function MeinProfil() {
         </Field>
         <Field label="E-Mail-Adresse">
           <input className={inputClass} type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@amayer-holding.com" />
+        </Field>
+        <Field label="Buchungslink (z. B. Calendly)">
+          <div className="flex gap-2">
+            <input className={inputClass} value={buchungslink} onChange={(e) => setBuchungslink(e.target.value)} placeholder="https://calendly.com/..." />
+            <button
+              onClick={buchungslinkInSignaturEinfuegen}
+              disabled={!buchungslink.trim()}
+              className="flex-shrink-0 rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+            >
+              In Signatur einfügen
+            </button>
+          </div>
         </Field>
       </Card>
 
