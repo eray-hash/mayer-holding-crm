@@ -58,6 +58,38 @@ function createImapClient() {
   })
 }
 
+// Anhänge in denselben Storage-Bucket hochladen, den auch der Posteingang-Webhook (inbound-email)
+// benutzt, mit demselben Pfadschema (`${messageId}/${dateiname}`) — Mails, die der Webhook bereits
+// erfasst hat, laufen zwar nicht noch einmal hier durch, aber ein erneuter Lauf dieses Skripts
+// (z.B. weil Anhänge beim letzten Mal noch fehlten) überschreibt dieselben Pfade einfach erneut.
+async function ladeAnhaengeHoch(messageId, attachments) {
+  const anhaenge = []
+  for (const datei of attachments) {
+    if (!datei.content || datei.content.length === 0) continue
+    const dateiname = datei.filename ?? 'anhang'
+    try {
+      const pfad = `${messageId}/${dateiname}`
+      const { error: uploadError } = await supabase.storage
+        .from('email-anhaenge')
+        .upload(pfad, datei.content, { contentType: datei.contentType || 'application/octet-stream', upsert: true })
+      if (uploadError) {
+        console.error('Anhang-Upload fehlgeschlagen', dateiname, uploadError.message)
+        continue
+      }
+      const { data: urlData } = supabase.storage.from('email-anhaenge').getPublicUrl(pfad)
+      anhaenge.push({
+        filename: dateiname,
+        size: datei.size ?? datei.content.length,
+        contentType: datei.contentType || 'application/octet-stream',
+        url: urlData.publicUrl,
+      })
+    } catch (err) {
+      console.error('Anhang-Upload fehlgeschlagen', dateiname, err.message)
+    }
+  }
+  return anhaenge
+}
+
 async function importMessage(message) {
   const parsed = await simpleParser(message.source)
   const rawFrom = parsed.from?.text ?? 'unbekannt'
@@ -66,6 +98,7 @@ async function importMessage(message) {
   const text = (parsed.text ?? '').trim()
   const messageId = parsed.messageId ?? `imap-uid-${message.uid}`
   const mailDatum = parsed.date ?? new Date()
+  const anhaenge = await ladeAnhaengeHoch(messageId, parsed.attachments ?? [])
 
   return supabase.from('eingegangene_emails').upsert(
     {
@@ -76,6 +109,7 @@ async function importMessage(message) {
       mail_datum: mailDatum.toISOString(),
       ausschnitt: text.slice(0, 500),
       rohdaten: { quelle: 'imap-migration', uid: message.uid },
+      anhaenge: anhaenge.length > 0 ? anhaenge : null,
     },
     { onConflict: 'message_id' },
   )
