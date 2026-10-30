@@ -41,11 +41,17 @@ function sanitizeSearchTerm(query: string): string {
   return query.replace(/[,()%]/g, ' ').trim()
 }
 
+// "nicht_relevant" (automatisch per KI beim Eingang klassifiziert, siehe inbound-email) wird
+// ausgeblendet, aber bewusst nicht gelöscht — relevanz ist bei älteren, vor dieser Klassifizierung
+// importierten Mails NULL und soll trotzdem sichtbar bleiben, daher explizit "oder NULL".
+const NUR_RELEVANTE_MAILS = 'relevanz.is.null,relevanz.neq.nicht_relevant'
+
 export async function fetchStoredEmails(limit = 20): Promise<EingegangeneMail[]> {
   if (!client) throw new Error('E-Mail-Datenbank ist noch nicht konfiguriert (VITE_SUPABASE_EMAIL_URL fehlt).')
   const { data, error } = await client
     .from('eingegangene_emails')
     .select('id, message_id, von, von_name, betreff, mail_datum, ausschnitt, anhaenge')
+    .or(NUR_RELEVANTE_MAILS)
     .order('mail_datum', { ascending: false })
     .limit(limit)
   if (error) throw new Error(error.message)
@@ -62,6 +68,7 @@ export async function searchStoredEmails(query: string, limit = 50): Promise<Ein
     .from('eingegangene_emails')
     .select('id, message_id, von, von_name, betreff, mail_datum, ausschnitt, anhaenge')
     .or(`betreff.ilike.%${term}%,von.ilike.%${term}%,von_name.ilike.%${term}%,ausschnitt.ilike.%${term}%`)
+    .or(NUR_RELEVANTE_MAILS)
     .order('mail_datum', { ascending: false })
     .limit(limit)
   if (error) throw new Error(error.message)

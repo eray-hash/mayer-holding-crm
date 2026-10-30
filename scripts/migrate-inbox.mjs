@@ -36,6 +36,12 @@ function env(name, fallback) {
   return value
 }
 
+// Message-IDs enthalten u.a. spitze Klammern und @ (z.B. "<123@mail.example.com>"), die im
+// Storage-Pfad nicht erlaubt sind — deshalb wird hier auf ein sicheres Zeichenset reduziert.
+function sicheresPfadsegment(s) {
+  return s.replace(/^<|>$/g, '').replace(/[^a-zA-Z0-9._-]/g, '_')
+}
+
 function parseFromHeader(raw) {
   const match = raw.match(/^(.*?)<(.+)>$/)
   if (match) {
@@ -68,7 +74,7 @@ async function ladeAnhaengeHoch(messageId, attachments) {
     if (!datei.content || datei.content.length === 0) continue
     const dateiname = datei.filename ?? 'anhang'
     try {
-      const pfad = `${messageId}/${dateiname}`
+      const pfad = `${sicheresPfadsegment(messageId)}/${sicheresPfadsegment(dateiname)}`
       const { error: uploadError } = await supabase.storage
         .from('email-anhaenge')
         .upload(pfad, datei.content, { contentType: datei.contentType || 'application/octet-stream', upsert: true })

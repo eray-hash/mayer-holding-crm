@@ -13,6 +13,12 @@
 
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
+// Message-IDs enthalten u.a. spitze Klammern und @ (z.B. "<123@mail.example.com>"), die im
+// Storage-Pfad nicht erlaubt sind — deshalb wird hier auf ein sicheres Zeichenset reduziert.
+function sicheresPfadsegment(s: string): string {
+  return s.replace(/^<|>$/g, '').replace(/[^a-zA-Z0-9._-]/g, '_')
+}
+
 function parseFromHeader(raw: string): { email: string; name: string } {
   const match = raw.match(/^(.*?)<(.+)>$/)
   if (match) {
@@ -21,6 +27,58 @@ function parseFromHeader(raw: string): { email: string; name: string } {
     return { email, name: name || email }
   }
   return { email: raw.trim(), name: raw.trim() }
+}
+
+// Live-Gegenstück zu scripts/cleanup-inbox.mjs (dort nur als manueller Einmal-Lauf für den
+// historischen Rückstand): klassifiziert jede neu eingehende Mail direkt beim Eingang, damit das
+// Postfach nicht erneut mit Newslettern/Werbung/automatisierten Rechnungen vollläuft. Bewusst nur
+// verstecken ("nicht_relevant" setzen), nie löschen — bei einer KI-Fehlklassifizierung geht dadurch
+// nichts verloren, siehe Mitarbeiter-Rückfrage vom 30.10.2026. Ein Fehler beim Klassifizieren darf
+// das Einsortieren der Mail selbst nicht verhindern — im Zweifel bleibt sie sichtbar ("kunde").
+async function klassifiziereRelevanz(vonName: string, von: string, betreff: string, ausschnitt: string): Promise<'kunde' | 'nicht_relevant'> {
+  const apiKey = Deno.env.get('ANTHROPIC_API_KEY')
+  if (!apiKey) return 'kunde'
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 256,
+        tools: [{
+          name: 'klassifiziere_email',
+          description: 'Klassifiziert eine eingehende E-Mail danach, ob sie von/an einen echten (potenziellen) Kunden ist oder nicht.',
+          input_schema: {
+            type: 'object',
+            properties: { kategorie: { type: 'string', enum: ['kunde', 'nicht_relevant'] } },
+            required: ['kategorie'],
+          },
+        }],
+        tool_choice: { type: 'tool', name: 'klassifiziere_email' },
+        messages: [{
+          role: 'user',
+          content: `Du hilfst, den E-Mail-Posteingang einer Unternehmensberatung/Immobilien-/Finanzierungsholding (Mayer Holding, info@amayer-holding.com) sauber zu halten. Klassifiziere die folgende eingehende E-Mail:
+
+- "kunde": Eine echte, individuell adressierte Anfrage oder Korrespondenz von/an einen bestehenden oder potenziellen Kunden/Mandanten/Interessenten (z. B. Anfrage zu Beratung, Finanzierung, Immobilien, Vertragsunterlagen, persönliche Korrespondenz zu einem konkreten Anliegen).
+- "nicht_relevant": Newsletter, Werbe-/Marketing-Mails, automatisierte Rechnungen/Belege/Quittungen (z. B. PayPal, Zoom, Telefonanbieter), Spam, Lead-Marktplatz-Benachrichtigungen (z. B. bark.com), Kontoauszüge, Systembenachrichtigungen, Abo-Dienste, Vereins-/Schul-Rundmails ohne direkten Geschäftsbezug.
+
+Im Zweifel (du bist dir nicht sicher, ob Geschäftsbezug zu einem Kunden/Interessenten besteht) wähle "kunde", damit nichts Wichtiges verloren geht.
+
+Von: ${vonName} <${von}>
+Betreff: ${betreff}
+Ausschnitt: ${ausschnitt.slice(0, 300)}`,
+        }],
+      }),
+    })
+    if (!res.ok) return 'kunde'
+    const data = await res.json()
+    const toolUse = data.content?.find((c: { type: string }) => c.type === 'tool_use')
+    const kategorie = toolUse?.input?.kategorie
+    return kategorie === 'nicht_relevant' ? 'nicht_relevant' : 'kunde'
+  } catch (err) {
+    console.error('Relevanz-Klassifizierung fehlgeschlagen', err)
+    return 'kunde'
+  }
 }
 
 Deno.serve(async (req: Request) => {
@@ -110,7 +168,7 @@ Deno.serve(async (req: Request) => {
   const anhaenge: { filename: string; size: number; contentType: string; url: string }[] = []
   for (const datei of gefundeneDateien) {
     try {
-      const pfad = `${messageId}/${datei.name}`
+      const pfad = `${sicheresPfadsegment(messageId)}/${sicheresPfadsegment(datei.name)}`
       const { error: uploadError } = await supabase.storage
         .from('email-anhaenge')
         .upload(pfad, datei, { contentType: datei.type || 'application/octet-stream', upsert: true })
@@ -125,14 +183,18 @@ Deno.serve(async (req: Request) => {
     }
   }
 
+  const ausschnitt = text.slice(0, 500)
+  const relevanz = await klassifiziereRelevanz(vonName, von, betreff, ausschnitt)
+
   const { error } = await supabase.from('eingegangene_emails').insert({
     message_id: messageId,
     von,
     von_name: vonName,
     betreff,
-    ausschnitt: text.slice(0, 500),
+    ausschnitt,
     rohdaten: payload,
     anhaenge: anhaenge.length > 0 ? anhaenge : null,
+    relevanz,
   })
 
   if (error) {
