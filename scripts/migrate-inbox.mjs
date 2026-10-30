@@ -26,6 +26,17 @@
 import { ImapFlow } from 'imapflow'
 import { simpleParser } from 'mailparser'
 import { createClient } from '@supabase/supabase-js'
+import { fileURLToPath } from 'node:url'
+import path from 'node:path'
+
+// Lädt Secrets automatisch aus .env.local (lokal, gitignored — siehe scripts/setup-local-secrets.sh),
+// falls vorhanden. Bereits per Umgebungsvariable gesetzte Werte haben Vorrang (Node überschreibt
+// nicht), daher funktioniert z.B. scripts/run-migration.sh weiterhin als Fallback.
+try {
+  process.loadEnvFile(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.env.local'))
+} catch {
+  // .env.local existiert nicht — Secrets müssen dann per Umgebungsvariable übergeben werden.
+}
 
 function env(name, fallback) {
   const value = process.env[name] ?? fallback
