@@ -16,6 +16,7 @@ export type EingegangeneMail = {
   betreff: string
   datum: string
   ausschnitt: string
+  anhaenge?: { filename: string; size: number; contentType: string; url: string }[]
 }
 
 async function call(body: Record<string, unknown>): Promise<any> {
@@ -107,4 +108,12 @@ export async function answerWithImage(frage: string, imageBase64: string, mediaT
 
 export async function inviteMitarbeiter(email: string): Promise<void> {
   await call({ action: 'invite_mitarbeiter', email })
+}
+
+export type LeadKlassifizierungsErgebnis = { geprueft: number; vorgeschlagen: number; uebersprungen: number }
+
+// Klassifiziert nur neue, noch unbekannte E-Mail-Absender als Lead-Vorschlag (Nachfolger von
+// scripts/extract-leads.mjs — läuft automatisch statt manuell, siehe Postfach.tsx).
+export async function classifyNewLeads(): Promise<LeadKlassifizierungsErgebnis> {
+  return call({ action: 'classify_new_leads' })
 }

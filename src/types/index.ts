@@ -151,6 +151,7 @@ export type Kunde = {
   signaturen?: Signatur[]
   kaeuferprofil?: Kaeuferprofil
   selbstauskunft?: Selbstauskunft
+  dokumente?: Dokument[]
 }
 
 export type Vorlage = {
@@ -205,6 +206,7 @@ export type Dokument = {
   typ: string
   datum: string
   groesse: string
+  url?: string
 }
 
 export type FinanzierungStatus = 'Angefragt' | 'In Prüfung' | 'Zugesagt' | 'Abgelehnt' | 'Ausgezahlt'
@@ -276,6 +278,13 @@ export type ImportiertesDokument = {
 // Posteingang: eine via "email-gateway"-Edge-Function abgerufene echte E-Mail aus
 // info@amayer-holding.com. Wird per messageId dedupliziert, einem Kunden zugeordnet (vorhandener
 // Treffer per E-Mail-Adresse, sonst Text-Vorschlag) oder als neuer Lead übernommen.
+export type EmailAnhang = {
+  filename: string
+  size: number
+  contentType: string
+  url: string
+}
+
 export type EingegangeneEmail = {
   id: string
   messageId: string
@@ -284,6 +293,7 @@ export type EingegangeneEmail = {
   betreff: string
   datum: string
   ausschnitt: string
+  anhaenge?: EmailAnhang[]
   vorschlag?: { bereich: KundeBereich; kundeId: string; kundeName: string }
   zugewiesen?: { bereich: KundeBereich; kundeId: string; kundeName: string }
   ignoriert?: boolean

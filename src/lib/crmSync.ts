@@ -47,6 +47,7 @@ function kundeToRow(bereich: KundeBereich, k: Kunde) {
     signaturen: k.signaturen ?? null,
     kaeuferprofil: k.kaeuferprofil ?? null,
     selbstauskunft: k.selbstauskunft ?? null,
+    dokumente: k.dokumente ?? null,
   }
 }
 
@@ -67,6 +68,7 @@ function rowToKunde(row: any): Kunde {
     signaturen: row.signaturen ?? undefined,
     kaeuferprofil: row.kaeuferprofil ?? undefined,
     selbstauskunft: row.selbstauskunft ?? undefined,
+    dokumente: row.dokumente ?? undefined,
   }
 }
 

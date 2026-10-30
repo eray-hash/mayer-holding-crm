@@ -36,12 +36,25 @@ Deno.serve(async (req: Request) => {
 
   const contentType = req.headers.get('content-type') ?? ''
   let payload: Record<string, unknown>
+  // Anhänge aus dem multipart/form-data-Payload — welchen Feldnamen CloudMailin dafür genau nutzt,
+  // ist nicht dokumentiert/getestet, daher bewusst format-agnostisch: JEDER Form-Teil, der ein
+  // "File" ist (unabhängig vom Feldnamen), wird als Anhang behandelt. Separat gesammelt, damit die
+  // File-Objekte nicht im rohdaten-JSONB landen (das würde den Insert zum Scheitern bringen).
+  const gefundeneDateien: File[] = []
   try {
     if (contentType.includes('application/json')) {
       payload = await req.json()
     } else if (contentType.includes('multipart/form-data') || contentType.includes('application/x-www-form-urlencoded')) {
       const form = await req.formData()
-      payload = Object.fromEntries(form.entries())
+      const entries: [string, FormDataEntryValue][] = []
+      for (const [key, value] of form.entries()) {
+        if (value instanceof File) {
+          if (value.size > 0) gefundeneDateien.push(value)
+        } else {
+          entries.push([key, value])
+        }
+      }
+      payload = Object.fromEntries(entries)
     } else {
       // Unbekanntes/unerwartetes Format — Rohtext unverändert speichern, um das tatsächliche
       // Format des Anbieters zu sehen, statt blind zu raten.
@@ -91,6 +104,27 @@ Deno.serve(async (req: Request) => {
 
   const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
 
+  // Gefundene Anhänge in den Storage-Bucket "email-anhaenge" hochladen (öffentlich lesbar, wie der
+  // Rest dieses Projekts bewusst als internes Tool ohne zusätzliche Zugriffsprüfung behandelt) —
+  // ein fehlgeschlagener Upload darf das Einsortieren der E-Mail selbst nicht verhindern.
+  const anhaenge: { filename: string; size: number; contentType: string; url: string }[] = []
+  for (const datei of gefundeneDateien) {
+    try {
+      const pfad = `${messageId}/${datei.name}`
+      const { error: uploadError } = await supabase.storage
+        .from('email-anhaenge')
+        .upload(pfad, datei, { contentType: datei.type || 'application/octet-stream', upsert: true })
+      if (uploadError) {
+        console.error('Anhang-Upload fehlgeschlagen', datei.name, uploadError)
+        continue
+      }
+      const { data: urlData } = supabase.storage.from('email-anhaenge').getPublicUrl(pfad)
+      anhaenge.push({ filename: datei.name, size: datei.size, contentType: datei.type || 'application/octet-stream', url: urlData.publicUrl })
+    } catch (err) {
+      console.error('Anhang-Upload fehlgeschlagen', datei.name, err)
+    }
+  }
+
   const { error } = await supabase.from('eingegangene_emails').insert({
     message_id: messageId,
     von,
@@ -98,6 +132,7 @@ Deno.serve(async (req: Request) => {
     betreff,
     ausschnitt: text.slice(0, 500),
     rohdaten: payload,
+    anhaenge: anhaenge.length > 0 ? anhaenge : null,
   })
 
   if (error) {

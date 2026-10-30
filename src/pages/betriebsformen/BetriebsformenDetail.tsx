@@ -10,6 +10,7 @@ import { GespraechsprotokolleSection } from '../../components/Gespraechsprotokol
 import { PotenzialAnalyseSection } from '../../components/PotenzialAnalyseSection'
 import { KaeuferprofilSection } from '../../components/KaeuferprofilSection'
 import { SelbstauskunftSection } from '../../components/SelbstauskunftSection'
+import { DokumenteSection } from '../../components/DokumenteSection'
 import type { Prioritaet } from '../../types'
 
 export function BetriebsformenDetail() {
@@ -125,6 +126,11 @@ export function BetriebsformenDetail() {
         <Card className="p-5 lg:col-span-3">
           <h3 className="mb-3 text-sm font-semibold text-slate-700">Selbstauskunft</h3>
           <SelbstauskunftSection bereich="betriebsformen" kundeId={mandant.id} kundeName={mandant.ansprechpartner} />
+        </Card>
+
+        <Card className="p-5 lg:col-span-3">
+          <h3 className="mb-3 text-sm font-semibold text-slate-700">Dokumente</h3>
+          <DokumenteSection bereich="betriebsformen" kundeId={mandant.id} />
         </Card>
       </div>
     </div>

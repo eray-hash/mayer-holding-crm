@@ -12,6 +12,7 @@ import { GespraechsprotokolleSection } from '../../components/Gespraechsprotokol
 import { PotenzialAnalyseSection } from '../../components/PotenzialAnalyseSection'
 import { KaeuferprofilSection } from '../../components/KaeuferprofilSection'
 import { SelbstauskunftSection } from '../../components/SelbstauskunftSection'
+import { DokumenteSection } from '../../components/DokumenteSection'
 import { SendEmailModal } from '../../components/SendEmailModal'
 import type { Prioritaet } from '../../types'
 
@@ -22,6 +23,7 @@ const TABS = [
   { id: 'potenzial', label: 'Potenzial-Analyse' },
   { id: 'kaeuferprofil', label: 'Käuferprofil' },
   { id: 'selbstauskunft', label: 'Selbstauskunft' },
+  { id: 'dokumente', label: 'Dokumente' },
   { id: 'konzepte', label: 'Konzeptvorstellungen' },
   { id: 'vertraege', label: 'Unterschriebene Beratungsverträge' },
 ]
@@ -201,6 +203,8 @@ export function KundenDetail() {
       {tab === 'kaeuferprofil' && <KaeuferprofilSection bereich="beratung" kundeId={kunde.id} kundeName={kunde.ansprechpartner} />}
 
       {tab === 'selbstauskunft' && <SelbstauskunftSection bereich="beratung" kundeId={kunde.id} kundeName={kunde.ansprechpartner} />}
+
+      {tab === 'dokumente' && <DokumenteSection bereich="beratung" kundeId={kunde.id} />}
 
       {tab === 'konzepte' && (
         <Card className="overflow-hidden">

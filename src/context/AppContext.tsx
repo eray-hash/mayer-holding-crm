@@ -272,9 +272,21 @@ type Action =
 
 // Hängt eine Aktivität an den Kunden/Mandanten im richtigen Bereichs-Array — zentrale Stelle, da
 // jeder KundeBereich sein eigenes AppData-Feld hat (siehe kundenBereiche.ts für die Lese-Seite).
-// extraPatch erlaubt, in derselben Operation weitere Felder zu setzen (z.B. followUp).
-function appendKundeActivity(state: AppData, bereich: KundeBereich, kundeId: string, activity: ActivityEntry, extraPatch: Partial<Kunde> = {}): AppData {
-  const patch = (list: Kunde[]) => list.map((k) => (k.id === kundeId ? { ...k, ...extraPatch, activities: [activity, ...k.activities] } : k))
+// extraPatch erlaubt, in derselben Operation weitere Felder zu setzen (z.B. followUp) — als Funktion
+// übergeben, wenn der Patch vom bisherigen Kunden-Stand abhängt (z.B. an ein bestehendes Array anhängen).
+function appendKundeActivity(
+  state: AppData,
+  bereich: KundeBereich,
+  kundeId: string,
+  activity: ActivityEntry,
+  extraPatch: Partial<Kunde> | ((kunde: Kunde) => Partial<Kunde>) = {},
+): AppData {
+  const patch = (list: Kunde[]) =>
+    list.map((k) => {
+      if (k.id !== kundeId) return k
+      const resolved = typeof extraPatch === 'function' ? extraPatch(k) : extraPatch
+      return { ...k, ...resolved, activities: [activity, ...k.activities] }
+    })
   switch (bereich) {
     case 'beratung':
       return { ...state, kunden: patch(state.kunden) }
@@ -733,14 +745,31 @@ function reducer(state: AppData, action: Action): AppData {
       const mail = state.eingegangeneEmails.find((e) => e.id === action.id)
       if (!mail) return state
       const zugewiesenMail = { bereich: action.bereich, kundeId: action.kundeId, kundeName: action.kundeName }
+      const hatAnhaenge = mail.anhaenge && mail.anhaenge.length > 0
       const activity: ActivityEntry = {
         id: uid('act'),
         date: today(),
-        text: `E-Mail zugeordnet: „${mail.betreff}" von ${mail.vonName}`,
+        text: hatAnhaenge
+          ? `E-Mail zugeordnet: „${mail.betreff}" von ${mail.vonName} (${mail.anhaenge!.length} Anhang/Anhänge in Dokumente abgelegt)`
+          : `E-Mail zugeordnet: „${mail.betreff}" von ${mail.vonName}`,
         user: CURRENT_USER,
       }
+      const neueDokumente: Dokument[] = (mail.anhaenge ?? []).map((a) => ({
+        id: uid('dok'),
+        name: a.filename,
+        typ: a.contentType,
+        datum: today(),
+        groesse: a.size < 1024 * 1024 ? `${Math.round(a.size / 1024)} KB` : `${(a.size / (1024 * 1024)).toFixed(1)} MB`,
+        url: a.url,
+      }))
       return {
-        ...appendKundeActivity(state, action.bereich, action.kundeId, activity),
+        ...appendKundeActivity(
+          state,
+          action.bereich,
+          action.kundeId,
+          activity,
+          hatAnhaenge ? (kunde) => ({ dokumente: [...neueDokumente, ...(kunde.dokumente ?? [])] }) : {},
+        ),
         eingegangeneEmails: state.eingegangeneEmails.map((e) => (e.id === action.id ? { ...e, zugewiesen: zugewiesenMail } : e)),
       }
     }

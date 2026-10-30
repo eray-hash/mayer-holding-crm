@@ -27,6 +27,20 @@
 //                                                   Einladungs-Mail (Mitarbeiter setzt sein eigenes
 //                                                   Passwort selbst, landet nie bei uns) — braucht
 //                                                   den Service-Role-Key, läuft daher nur serverseitig
+//   { action: "generate_login_link", email }     -> erzeugt einen Login-/Passwort-setzen-Link ohne
+//                                                   selbst eine Mail zu verschicken (Workaround, da
+//                                                   Supabases eingebauter Mailversand ratelimitiert
+//                                                   und bei manchen Empfängern unzuverlässig ist) —
+//                                                   der Link wird direkt zurückgegeben und muss über
+//                                                   einen anderen Kanal (Chat, Signal, ...) zugestellt
+//                                                   werden
+//   { action: "classify_new_leads" }             -> Nachfolger von scripts/extract-leads.mjs, aber
+//                                                   automatisch statt manuell: findet Absender in
+//                                                   eingegangene_emails, die weder einem bestehenden
+//                                                   Kunden (Tabelle kunden) noch einem bereits
+//                                                   vorhandenen Eintrag in vorgeschlagene_leads
+//                                                   entsprechen, klassifiziert nur diese NEUEN
+//                                                   Absender per KI und legt relevante als Lead an
 //
 // Alle Zugangsdaten kommen ausschließlich aus Supabase Function Secrets (nie im Code, nie im
 // Frontend). Siehe README-Abschnitt "E-Mail-Postfach-Anbindung" für die Einrichtung.
@@ -200,6 +214,7 @@ type ClaudeContentBlock =
 async function callClaudeTool<T>(
   prompt: string | ClaudeContentBlock[],
   tool: { name: string; description: string; input_schema: Record<string, unknown> },
+  maxTokens = 1024,
 ): Promise<T> {
   const apiKey = env('ANTHROPIC_API_KEY')
   const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -211,7 +226,7 @@ async function callClaudeTool<T>(
     },
     body: JSON.stringify({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 1024,
+      max_tokens: maxTokens,
       tools: [tool],
       tool_choice: { type: 'tool', name: tool.name },
       messages: [{ role: 'user', content: prompt }],
@@ -388,6 +403,154 @@ async function answerWithImage(frage: string, imageBase64: string, mediaType: st
   return { antwort: result.antwort.replace(/<\/?[a-zA-Z_][^>]*>/g, '').trim() }
 }
 
+// Nachfolger von scripts/extract-leads.mjs — macht dasselbe, aber automatisch und nur für Absender,
+// die wirklich neu sind (noch kein Kunde, noch kein Lead-Vorschlag), statt bei jedem Lauf alle
+// jemals eingegangenen E-Mails erneut zu klassifizieren.
+const INTERNE_DOMAINS = ['amayer-holding.com', 'fundament-it.de']
+const LEAD_BEREICHE = ['beratung', 'immobilien', 'erben', 'betriebsuebergabe', 'betriebsformen', 'akademie', 'finanzierungen']
+
+type LeadGruppe = { email: string; vonName: string; mails: { betreff: string; ausschnitt: string; datum: string }[] }
+type LeadErgebnis = {
+  email: string
+  relevant: boolean
+  firma?: string
+  name?: string
+  telefon?: string
+  bereich_vorschlag: string
+  notiz: string
+}
+
+async function fetchAlleEingegangeneEmails(supabase: ReturnType<typeof createClient>) {
+  const pageSize = 1000
+  const all: { von: string; von_name: string; betreff: string; ausschnitt: string; mail_datum: string }[] = []
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await supabase
+      .from('eingegangene_emails')
+      .select('von, von_name, betreff, ausschnitt, mail_datum')
+      .order('mail_datum', { ascending: false })
+      .range(from, from + pageSize - 1)
+    if (error) throw new Error(error.message)
+    all.push(...(data ?? []))
+    if (!data || data.length < pageSize) break
+  }
+  return all
+}
+
+async function classifyLeadBatch(gruppen: LeadGruppe[]): Promise<LeadErgebnis[]> {
+  const list = gruppen
+    .map((g, i) => {
+      const beispiele = g.mails
+        .slice(0, 5)
+        .map((m) => `  - "${m.betreff}" (${(m.datum ?? '').slice(0, 10)}): ${(m.ausschnitt ?? '').slice(0, 200)}`)
+        .join('\n')
+      return `${i + 1}. email=${g.email}\nName lt. Absenderfeld: ${g.vonName}\nAnzahl E-Mails: ${g.mails.length}\nBeispiele:\n${beispiele}`
+    })
+    .join('\n\n')
+
+  const result = await callClaudeTool<{ ergebnisse: LeadErgebnis[] }>(
+    `Du hilfst, aus dem E-Mail-Postfach einer Unternehmensberatungs-/Immobilien-/Finanzierungsholding (Mayer Holding, Bereiche: Unternehmensberatung, Immobilien, Erben, Betriebsübergabe, Betriebsformen, Akademie, Finanzierungen) Lead-Vorschläge für das CRM zu extrahieren. Du bekommst pro Absender eine Zusammenfassung mehrerer E-Mails. Bewerte pro Absender, ob es sich um einen echten (potenziellen) Kunden/Mandanten handelt, und falls ja, zu welchem Geschäftsbereich das am besten passt — orientiere dich dabei in erster Linie daran, WER die Leistung in Anspruch nimmt bzw. nehmen möchte (z. B. ein Beratungsmandat läuft über "Unternehmensberatung", auch wenn im Text auch andere Themen wie Immobilien oder Holding-Strukturen erwähnt werden, solange die eigentliche Dienstleistung Unternehmensberatung ist).
+
+Absender:
+
+${list}`,
+    {
+      name: 'lead_vorschlaege',
+      description: 'Extrahiert pro E-Mail-Absender einen strukturierten Lead-Vorschlag für ein CRM.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          ergebnisse: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                email: { type: 'string' },
+                relevant: { type: 'boolean', description: 'true, wenn dies ein echter potenzieller oder bestehender Kunde/Mandant ist, false bei Restrauschen (z.B. interne Kommunikation, Dienstleister, kein Geschäftsbezug).' },
+                firma: { type: 'string', description: 'Firmenname, falls erkennbar, sonst leer lassen.' },
+                name: { type: 'string', description: 'Name der Kontaktperson.' },
+                telefon: { type: 'string', description: 'Telefonnummer, falls im Text erwähnt, sonst leer lassen.' },
+                bereich_vorschlag: { type: 'string', enum: [...LEAD_BEREICHE, 'unklar'], description: 'Welcher Geschäftsbereich am besten passt.' },
+                notiz: { type: 'string', description: 'Ein bis zwei Sätze: worum es geht / aktueller Stand, als Aktivitätsnotiz fürs CRM.' },
+              },
+              required: ['email', 'relevant', 'bereich_vorschlag', 'notiz'],
+            },
+          },
+        },
+        required: ['ergebnisse'],
+      },
+    },
+    4096, // 1024 (Standard) reicht nicht für bis zu 8 Absender mit je eigener Begründung — Antwort
+    // wurde sonst stillschweigend nach wenigen Einträgen abgeschnitten.
+  )
+  return result.ergebnisse ?? []
+}
+
+async function classifyNewLeads(): Promise<{ geprueft: number; vorgeschlagen: number; uebersprungen: number }> {
+  const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+
+  const emails = await fetchAlleEingegangeneEmails(supabase)
+  const gruppenMap = new Map<string, LeadGruppe>()
+  for (const e of emails) {
+    const email = (e.von ?? '').trim().toLowerCase()
+    if (!email || !email.includes('@')) continue
+    const domain = email.split('@')[1]
+    if (INTERNE_DOMAINS.includes(domain)) continue
+    if (!gruppenMap.has(email)) gruppenMap.set(email, { email, vonName: e.von_name, mails: [] })
+    gruppenMap.get(email)!.mails.push({ betreff: e.betreff, ausschnitt: e.ausschnitt, datum: e.mail_datum })
+  }
+
+  // Bereits bekannte Absender (bestehender Kunde ODER schon mal bewerteter Lead-Vorschlag,
+  // unabhängig vom Status) werden nicht erneut klassifiziert.
+  const [{ data: bekannteKunden }, { data: bekannteLeads }] = await Promise.all([
+    supabase.from('kunden').select('email'),
+    supabase.from('vorgeschlagene_leads').select('email'),
+  ])
+  const bekannt = new Set([...(bekannteKunden ?? []), ...(bekannteLeads ?? [])].map((r: { email: string }) => (r.email ?? '').trim().toLowerCase()))
+
+  const neueGruppen = [...gruppenMap.values()].filter((g) => !bekannt.has(g.email))
+  if (neueGruppen.length === 0) return { geprueft: 0, vorgeschlagen: 0, uebersprungen: 0 }
+
+  const byEmail = new Map(neueGruppen.map((g) => [g.email, g]))
+  const batches: LeadGruppe[][] = []
+  for (let i = 0; i < neueGruppen.length; i += 8) batches.push(neueGruppen.slice(i, i + 8))
+
+  let vorgeschlagen = 0
+  let uebersprungen = 0
+  for (const batch of batches) {
+    const ergebnisse = await classifyLeadBatch(batch)
+    for (const r of ergebnisse) {
+      const gruppe = byEmail.get((r.email ?? '').trim().toLowerCase())
+      if (!gruppe) continue
+      if (!r.relevant) {
+        // Trotzdem anlegen (Status "nicht_relevant", taucht nie unter "Neue Leads" auf) — sonst würde
+        // dieser Absender bei jedem künftigen Lauf erneut (unnötig) klassifiziert werden.
+        await supabase.from('vorgeschlagene_leads').upsert(
+          { quelle: 'email-analyse', email: gruppe.email, name: r.name || gruppe.vonName, status: 'nicht_relevant', notiz: r.notiz },
+          { onConflict: 'email' },
+        )
+        uebersprungen++
+        continue
+      }
+      const { error } = await supabase.from('vorgeschlagene_leads').upsert(
+        {
+          quelle: 'email-analyse',
+          email: gruppe.email,
+          name: r.name || gruppe.vonName,
+          firma: r.firma || null,
+          telefon: r.telefon || null,
+          bereich_vorschlag: r.bereich_vorschlag,
+          notiz: r.notiz,
+          status: 'offen',
+          rohdaten: { anzahl_mails: gruppe.mails.length, erste_mail: gruppe.mails.at(-1)?.datum, letzte_mail: gruppe.mails[0]?.datum },
+        },
+        { onConflict: 'email' },
+      )
+      if (!error) vorgeschlagen++
+    }
+  }
+  return { geprueft: neueGruppen.length, vorgeschlagen, uebersprungen }
+}
+
 type KampagnenEntwurf = { betreff: string; text: string }
 
 // Entwirft Betreff + Text für eine Segment-/Kampagnen-Mail (z.B. den zweiwöchentlichen Newsletter)
@@ -508,6 +671,24 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ ok: true }), { headers })
     }
 
+    if (body.action === 'generate_login_link') {
+      const { email } = body
+      if (!email || typeof email !== 'string' || !email.trim()) {
+        return new Response(JSON.stringify({ error: 'email ist ein Pflichtfeld' }), { status: 400, headers })
+      }
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const { data, error: linkError } = await admin.auth.admin.generateLink({ type: 'recovery', email: email.trim() })
+      if (linkError) {
+        return new Response(JSON.stringify({ error: linkError.message }), { status: 400, headers })
+      }
+      return new Response(JSON.stringify({ link: data.properties?.action_link }), { headers })
+    }
+
+    if (body.action === 'classify_new_leads') {
+      const ergebnis = await classifyNewLeads()
+      return new Response(JSON.stringify(ergebnis), { headers })
+    }
+
     if (body.action === 'draft_campaign') {
       const { ziel } = body
       if (!ziel || typeof ziel !== 'string' || !ziel.trim()) {
@@ -526,7 +707,7 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ antwort }), { headers })
     }
 
-    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision" oder "invite_mitarbeiter"' }), { status: 400, headers })
+    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link" oder "classify_new_leads"' }), { status: 400, headers })
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }

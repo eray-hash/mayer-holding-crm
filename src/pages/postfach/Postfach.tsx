@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Inbox, Send, RefreshCw, UserPlus, Check, X, AlertTriangle, Plus, Reply, ListPlus, Search, Sparkles, Megaphone } from 'lucide-react'
+import { Inbox, Send, RefreshCw, UserPlus, Check, X, AlertTriangle, Plus, Reply, ListPlus, Search, Sparkles, Megaphone, Paperclip } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { isEmailInboxDbConfigured, fetchStoredEmails, searchStoredEmails } from '../../lib/emailInboxDb'
 import { isSentEmailsDbConfigured, fetchSentEmails, searchSentEmails } from '../../lib/sentEmailsDb'
 import { isLeadsDbConfigured, fetchOffeneLeads, setLeadStatus } from '../../lib/leadsDb'
+import { isEmailGatewayConfigured, classifyNewLeads } from '../../lib/emailGateway'
 import { matchKundeByEmail, suggestKunde } from '../../lib/matchKunde'
 import { KUNDEN_BEREICHE, kundeBereichLabel } from '../../data/kundenBereiche'
 import { uid, today, addDays, fmtDateTime } from '../../lib/dates'
@@ -15,6 +16,12 @@ import { PrimaryButton, SecondaryButton, EmptyState, inputClass } from '../../co
 import type { EingegangeneEmail, GesendeteEmail, KundeBereich, VorgeschlagenerLead } from '../../types'
 
 type Ordner = 'posteingang' | 'gesendet' | 'leads'
+
+function fmtGroesse(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
 
 function neuerKunde(lead: VorgeschlagenerLead) {
   return {
@@ -66,6 +73,7 @@ export function Postfach() {
   const [leads, setLeads] = useState<VorgeschlagenerLead[]>([])
   const [leadsLoading, setLeadsLoading] = useState(false)
   const [leadBereichWahl, setLeadBereichWahl] = useState<Record<string, KundeBereich>>({})
+  const [klassifiziereNeueLeads, setKlassifiziereNeueLeads] = useState(false)
 
   const [composeOpen, setComposeOpen] = useState(false)
   const [vorlagenOpen, setVorlagenOpen] = useState(false)
@@ -118,6 +126,17 @@ export function Postfach() {
 
   useEffect(() => {
     if (isEmailInboxDbConfigured) ladePosteingang(limit)
+    if (isEmailGatewayConfigured && isLeadsDbConfigured) {
+      setKlassifiziereNeueLeads(true)
+      classifyNewLeads()
+        .then((ergebnis) => {
+          if (ergebnis.vorgeschlagen > 0 && ordner === 'leads') ladeLeads()
+        })
+        .catch(() => {
+          // still best effort — der manuelle "npm run extract-leads"-Lauf bleibt als Fallback nutzbar
+        })
+        .finally(() => setKlassifiziereNeueLeads(false))
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -274,6 +293,9 @@ export function Postfach() {
             <Sparkles size={15} /> Neue Leads
             {leads.length > 0 && <span className="ml-auto rounded-full bg-rose-500 px-1.5 text-xs font-semibold text-white">{leads.length}</span>}
           </button>
+          {klassifiziereNeueLeads && (
+            <p className="px-3 pt-1 text-[11px] text-slate-400">Neue Absender werden im Hintergrund geprüft …</p>
+          )}
         </nav>
         <button
           onClick={() => navigate('/kampagnen')}
@@ -434,7 +456,24 @@ export function Postfach() {
                   </SecondaryButton>
                 </div>
 
-                <p className="mb-6 whitespace-pre-wrap text-sm text-slate-700">{selectedMail.ausschnitt || '(kein Textausschnitt verfügbar)'}</p>
+                <p className="mb-4 whitespace-pre-wrap text-sm text-slate-700">{selectedMail.ausschnitt || '(kein Textausschnitt verfügbar)'}</p>
+
+                {selectedMail.anhaenge && selectedMail.anhaenge.length > 0 && (
+                  <div className="mb-6 space-y-1.5">
+                    <p className="text-xs font-semibold text-slate-500">Anhänge</p>
+                    {selectedMail.anhaenge.map((a) => (
+                      <a
+                        key={a.url}
+                        href={a.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="flex items-center gap-1.5 text-sm text-accent-600 hover:underline"
+                      >
+                        <Paperclip size={13} /> {a.filename} <span className="text-xs text-slate-400">({fmtGroesse(a.size)})</span>
+                      </a>
+                    ))}
+                  </div>
+                )}
 
                 {selectedMail.zugewiesen ? (
                   <div className="flex items-center gap-1.5 text-sm font-medium text-emerald-600">

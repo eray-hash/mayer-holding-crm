@@ -12,6 +12,7 @@ import { GespraechsprotokolleSection } from '../../components/Gespraechsprotokol
 import { PotenzialAnalyseSection } from '../../components/PotenzialAnalyseSection'
 import { KaeuferprofilSection } from '../../components/KaeuferprofilSection'
 import { SelbstauskunftSection } from '../../components/SelbstauskunftSection'
+import { DokumenteSection } from '../../components/DokumenteSection'
 import type { Prioritaet } from '../../types'
 
 const TABS = [
@@ -21,6 +22,7 @@ const TABS = [
   { id: 'potenzial', label: 'Potenzial-Analyse' },
   { id: 'kaeuferprofil', label: 'Käuferprofil' },
   { id: 'selbstauskunft', label: 'Selbstauskunft' },
+  { id: 'dokumente', label: 'Dokumente' },
 ]
 
 export function ErbenDetail() {
@@ -206,6 +208,8 @@ export function ErbenDetail() {
       {tab === 'kaeuferprofil' && <KaeuferprofilSection bereich="erben" kundeId={mandant.id} kundeName={mandant.ansprechpartner} />}
 
       {tab === 'selbstauskunft' && <SelbstauskunftSection bereich="erben" kundeId={mandant.id} kundeName={mandant.ansprechpartner} />}
+
+      {tab === 'dokumente' && <DokumenteSection bereich="erben" kundeId={mandant.id} />}
     </div>
   )
 }
