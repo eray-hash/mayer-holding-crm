@@ -1,7 +1,12 @@
 // Edge Function "email-gateway" — Brücke zwischen dem CRM-Frontend und echten externen Diensten,
 // die einen Server-seitigen Schlüssel/Zugangsdaten brauchen. Aktionen über denselben Endpunkt:
 //   { action: "sync" }                          -> letzte E-Mails aus dem IONOS-Posteingang lesen
-//   { action: "send", to, subject, text, html }  -> E-Mail über dasselbe Postfach versenden
+//   { action: "send", to, subject, text, html, attachments? }
+//                                                -> E-Mail über dasselbe Postfach versenden.
+//                                                   attachments: [{ filename, contentBase64? oder
+//                                                   url?, contentType? }] — z.B. um ein signiertes
+//                                                   Dokument automatisiert an eine Behörde zu
+//                                                   schicken (siehe public_submit_formular-Folgen)
 //   { action: "summarize", transcript }          -> Gesprächstranskript per Claude strukturiert
 //                                                    zusammenfassen (Kernthemen/Vereinbarungen/
 //                                                    offene Punkte/Stimmung), für die
@@ -50,10 +55,15 @@
 //                                                   eingeloggt ist und die kunden-RLS-Policy sonst
 //                                                   jeden Zugriff verweigern würde
 //   { action: "public_submit_formular", bereich, kundeId, aktivitaetText, aktivitaetUser?,
-//     signatur?, selbstauskunft? }                -> schreibt die Antwort/Unterschrift eines
+//     signatur?, selbstauskunft?, behoerde? }      -> schreibt die Antwort/Unterschrift eines
 //                                                   öffentlichen Formulars direkt in die
 //                                                   bestehende kunden-Zeile (aus demselben Grund
-//                                                   serverseitig statt über das Frontend)
+//                                                   serverseitig statt über das Frontend).
+//                                                   behoerde: { email, name? } -> Modul 8: schickt
+//                                                   die Signatur automatisch als Anhang an diese
+//                                                   Adresse und legt eine Wiedervorlage an (wird
+//                                                   beim Versenden des Formular-Links festgelegt,
+//                                                   siehe PublicVollmachtBeratung.tsx)
 //   { action: "public_create_lead", firma, email, ... , aktivitaetText, signatur? }
 //                                                -> legt aus dem öffentlichen Feedbackbogen einen
 //                                                   neuen Kunden (Bereich "beratung") an
@@ -147,7 +157,12 @@ async function syncInbox(limit: number) {
   return mails.reverse() // neueste zuerst
 }
 
-async function sendMail(to: string, subject: string, text: string, html?: string) {
+// Anhänge entweder als Base64 (z.B. eine Signatur-dataUrl ohne das "data:...;base64,"-Präfix) oder
+// als URL (z.B. ein bereits in Supabase Storage liegendes Dokument) — nodemailer unterstützt beides
+// nativ. Für die Behörden-Automatisierung (signiertes Dokument mitschicken) gebraucht.
+type MailAnhang = { filename: string; contentBase64?: string; url?: string; contentType?: string }
+
+async function sendMail(to: string, subject: string, text: string, html?: string, attachments?: MailAnhang[]) {
   const transporter = nodemailer.createTransport({
     host: Deno.env.get('SMTP_HOST') ?? 'smtp.ionos.de',
     port: Number(Deno.env.get('SMTP_PORT') ?? '587'),
@@ -160,6 +175,11 @@ async function sendMail(to: string, subject: string, text: string, html?: string
     subject,
     text,
     html,
+    attachments: (attachments ?? []).map((a) =>
+      a.contentBase64
+        ? { filename: a.filename, content: a.contentBase64, encoding: 'base64', contentType: a.contentType }
+        : { filename: a.filename, path: a.url, contentType: a.contentType },
+    ),
   })
 }
 
@@ -622,11 +642,11 @@ Deno.serve(async (req: Request) => {
     }
 
     if (body.action === 'send') {
-      const { to, toName, subject, text, html, kundeBereich, kundeId, kundeName } = body
+      const { to, toName, subject, text, html, kundeBereich, kundeId, kundeName, attachments } = body
       if (!to || !subject || !text) {
         return new Response(JSON.stringify({ error: 'to, subject und text sind Pflichtfelder' }), { status: 400, headers })
       }
-      await sendMail(to, subject, text, html)
+      await sendMail(to, subject, text, html, attachments)
 
       // Für den "Gesendet"-Ordner im Postfach mitschreiben — best effort, ein Fehler hier darf den
       // bereits erfolgreich versendeten Mailversand nicht als fehlgeschlagen melden.
@@ -766,14 +786,14 @@ Deno.serve(async (req: Request) => {
     }
 
     if (body.action === 'public_submit_formular') {
-      const { bereich, kundeId, aktivitaetText, aktivitaetUser, signatur, selbstauskunft } = body
+      const { bereich, kundeId, aktivitaetText, aktivitaetUser, signatur, selbstauskunft, behoerde } = body
       if (!bereich || !kundeId || !aktivitaetText) {
         return new Response(JSON.stringify({ error: 'bereich, kundeId und aktivitaetText sind Pflichtfelder' }), { status: 400, headers })
       }
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
       const { data: bestehend, error: selectError } = await admin
         .from('kunden')
-        .select('activities, signaturen')
+        .select('firma, ansprechpartner, activities, signaturen, follow_up')
         .eq('id', kundeId)
         .eq('bereich', bereich)
         .maybeSingle()
@@ -781,11 +801,11 @@ Deno.serve(async (req: Request) => {
       if (!bestehend) return new Response(JSON.stringify({ error: 'Kunde/Mandant nicht gefunden' }), { status: 404, headers })
 
       const heute = new Date().toISOString().slice(0, 10)
-      const neueActivity = { id: crypto.randomUUID(), date: heute, text: aktivitaetText, user: aktivitaetUser || 'Kunde (Formular)' }
-      const patch: Record<string, unknown> = {
-        letzte_aktivitaet: heute,
-        activities: [neueActivity, ...((bestehend.activities as unknown[]) ?? [])],
-      }
+      const activities: unknown[] = [
+        { id: crypto.randomUUID(), date: heute, text: aktivitaetText, user: aktivitaetUser || 'Kunde (Formular)' },
+        ...((bestehend.activities as unknown[]) ?? []),
+      ]
+      const patch: Record<string, unknown> = { letzte_aktivitaet: heute, activities }
       if (signatur) {
         patch.signaturen = [
           { id: crypto.randomUUID(), name: signatur.name, dataUrl: signatur.dataUrl, datum: heute, kontext: signatur.kontext },
@@ -793,6 +813,45 @@ Deno.serve(async (req: Request) => {
         ]
       }
       if (selbstauskunft) patch.selbstauskunft = selbstauskunft
+
+      // Behörden-Automatisierung (Modul 8): wenn beim Versenden des Formular-Links eine
+      // Behörden-Adresse hinterlegt wurde (siehe FormularLinkButtons-Aufrufe mit ?behoerde=...),
+      // wird nach erfolgreicher Unterschrift automatisch eine E-Mail mit der Signatur als Anhang an
+      // diese Adresse geschickt und eine Wiedervorlage angelegt — kein manueller Schritt mehr nötig.
+      // Ein Fehler hier darf das eigentliche Speichern der Formular-Antwort nicht verhindern.
+      if (behoerde?.email && signatur) {
+        try {
+          const betreff = `${signatur.kontext} — ${bestehend.firma}`
+          const text = `Sehr geehrte Damen und Herren,\n\nim Anhang erhalten Sie die digital unterschriebene "${signatur.kontext}" für ${bestehend.ansprechpartner} (${bestehend.firma}).\n\nMit freundlichen Grüßen\nAndreas Mayer Holding`
+          const base64 = signatur.dataUrl.split(',')[1] ?? signatur.dataUrl
+          await sendMail(behoerde.email, betreff, text, undefined, [
+            { filename: 'unterschrift.png', contentBase64: base64, contentType: 'image/png' },
+          ])
+          try {
+            await admin.from('gesendete_emails').insert({
+              an: behoerde.email,
+              an_name: behoerde.name ?? behoerde.email,
+              betreff,
+              text,
+              kunde_bereich: bereich,
+              kunde_id: kundeId,
+              kunde_name: `${bestehend.firma} (${bestehend.ansprechpartner})`,
+            })
+          } catch (logErr) {
+            console.error('Konnte Behörden-Mail nicht protokollieren:', logErr)
+          }
+          activities.unshift({
+            id: crypto.randomUUID(),
+            date: heute,
+            text: `Automatisch an ${behoerde.name ?? behoerde.email} gesendet (${signatur.kontext}).`,
+            user: 'System (automatisiert)',
+          })
+          patch.activities = activities
+          patch.follow_up = { date: new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10), note: `Rückmeldung von ${behoerde.name ?? 'Behörde'} prüfen`, done: false }
+        } catch (mailErr) {
+          console.error('Automatische Behörden-Mail fehlgeschlagen:', mailErr)
+        }
+      }
 
       const { error: updateError } = await admin.from('kunden').update(patch).eq('id', kundeId).eq('bereich', bereich)
       if (updateError) return new Response(JSON.stringify({ error: updateError.message }), { status: 500, headers })

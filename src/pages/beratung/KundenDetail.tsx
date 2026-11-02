@@ -37,6 +37,7 @@ export function KundenDetail() {
   const { state, dispatch } = useApp()
   const [sendEmailOpen, setSendEmailOpen] = useState(false)
   const [editFollowUp, setEditFollowUp] = useState(false)
+  const [finanzamtEmail, setFinanzamtEmail] = useState('')
 
   const kunde = state.kunden.find((k) => k.id === id)
   const tab = params.get('tab') ?? 'uebersicht'
@@ -133,7 +134,20 @@ export function KundenDetail() {
             </div>
             <div className="mt-4 border-t border-slate-100 pt-4">
               <div className="mb-1.5 text-xs font-medium text-slate-400">Vollmacht Finanzamt digital versenden</div>
-              <FormularLinkButtons pfad={`/formular/vollmacht/beratung/finanzamt/${kunde.id}`} />
+              <input
+                className={`${inputClass} mb-1.5 text-xs`}
+                placeholder="E-Mail Finanzamt (für automatischen Versand nach Unterschrift, optional)"
+                value={finanzamtEmail}
+                onChange={(e) => setFinanzamtEmail(e.target.value)}
+              />
+              <FormularLinkButtons
+                pfad={`/formular/vollmacht/beratung/finanzamt/${kunde.id}${finanzamtEmail.trim() ? `?behoerde=${encodeURIComponent(finanzamtEmail.trim())}` : ''}`}
+              />
+              {finanzamtEmail.trim() && (
+                <p className="mt-1 text-xs text-slate-400">
+                  Sobald unterschrieben, wird die Vollmacht automatisch an {finanzamtEmail.trim()} geschickt und eine Wiedervorlage angelegt.
+                </p>
+              )}
             </div>
             <div className="mt-3">
               <div className="mb-1.5 text-xs font-medium text-slate-400">Vollmacht Bank digital versenden</div>

@@ -49,8 +49,17 @@ export type SendEmailKundeKontext = {
   kundeName?: string
 }
 
-export async function sendEmail(to: string, subject: string, text: string, html?: string, kontext?: SendEmailKundeKontext): Promise<void> {
-  await call({ action: 'send', to, subject, text, html, ...kontext })
+export type MailAnhang = { filename: string; contentBase64?: string; url?: string; contentType?: string }
+
+export async function sendEmail(
+  to: string,
+  subject: string,
+  text: string,
+  html?: string,
+  kontext?: SendEmailKundeKontext,
+  attachments?: MailAnhang[],
+): Promise<void> {
+  await call({ action: 'send', to, subject, text, html, attachments, ...kontext })
 }
 
 export type Gespraechszusammenfassung = {
@@ -145,6 +154,10 @@ export async function sendePublicFormular(params: {
   aktivitaetUser?: string
   signatur?: { name: string; dataUrl: string; kontext: string }
   selbstauskunft?: import('../types').Selbstauskunft
+  // Modul 8 (Behörden-Automatisierung): wenn gesetzt, schickt die Signatur automatisch als Anhang
+  // an diese Adresse und legt eine Wiedervorlage an — kommt aus dem ?behoerde=.../&behoerdeName=...
+  // Query-Parameter des Formular-Links, den der Mitarbeiter beim Versenden festlegt.
+  behoerde?: { email: string; name?: string }
 }): Promise<void> {
   await call({ action: 'public_submit_formular', ...params })
 }

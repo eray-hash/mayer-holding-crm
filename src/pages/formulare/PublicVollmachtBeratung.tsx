@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useSearchParams } from 'react-router-dom'
 import { CheckCircle2, Loader2, Printer } from 'lucide-react'
 import { Card, Field, inputClass, PrimaryButton, SecondaryButton } from '../../components/ui'
 import { SignaturePad } from '../../components/SignaturePad'
@@ -28,6 +28,9 @@ const ERLAEUTERUNG: Record<VollmachtTyp, string> = {
 
 export function PublicVollmachtBeratung() {
   const { typ, kundeId } = useParams<{ typ: VollmachtTyp; kundeId: string }>()
+  const [searchParams] = useSearchParams()
+  const behoerdeEmail = searchParams.get('behoerde')
+  const behoerdeName = searchParams.get('behoerdeName')
   const [kunde, setKunde] = useState<PublicKunde | null | undefined>(undefined)
   const [submitted, setSubmitted] = useState(false)
   const [senden, setSenden] = useState(false)
@@ -90,6 +93,7 @@ export function PublicVollmachtBeratung() {
         aktivitaetText: `${TITEL[gueltigerTyp]} digital ausgefüllt und unterschrieben. ${details}`,
         aktivitaetUser: `${kunde!.ansprechpartner} (Formular)`,
         signatur: { name: kunde!.ansprechpartner, dataUrl: signatur, kontext: TITEL[gueltigerTyp] },
+        behoerde: behoerdeEmail ? { email: behoerdeEmail, name: behoerdeName || 'Finanzamt' } : undefined,
       })
       setSubmitted(true)
     } catch (err) {
