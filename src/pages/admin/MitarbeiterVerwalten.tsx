@@ -1,23 +1,29 @@
 import { useEffect, useState } from 'react'
-import { Mail, Plus, UserCheck, UserX } from 'lucide-react'
+import { Mail, Plus, UserCheck, UserX, Pencil, Save, XCircle, ShieldCheck } from 'lucide-react'
 import { supabase, isSupabaseConfigured } from '../../lib/supabaseClient'
 import { inviteMitarbeiter } from '../../lib/emailGateway'
-import { KUNDEN_BEREICHE, kundeBereichLabel } from '../../data/kundenBereiche'
+import { ALLE_BEREICHE, bereichLabel } from '../../data/bereiche'
 import { Card, Field, inputClass, PrimaryButton, EmptyState } from '../../components/ui'
-import type { KundeBereich } from '../../types'
+import type { Bereich } from '../../types'
 
 type MitarbeiterRow = {
   id: string
   name: string
   email: string
   rolle: 'geschaeftsfuehrung' | 'mitarbeiter'
-  bereiche: KundeBereich[]
+  bereiche: Bereich[]
   aktiv: boolean
+  ist_admin: boolean
 }
+
+const ALLE_BEREICH_IDS = ALLE_BEREICHE.map((b) => b.id)
 
 // Mitarbeiter-Verwaltung "von innen" (Geschäftsführungs-Anforderung): neue Mitarbeiter anlegen,
 // Bereiche zuweisen, Einladungs-Mail auslösen (Supabase Auth — Mitarbeiter setzt sein eigenes
-// Passwort selbst), bestehende deaktivieren. RLS erlaubt Schreiben hier nur Geschäftsführung.
+// Passwort selbst), bestehende bearbeiten/deaktivieren. RLS erlaubt Schreiben hier nur
+// Geschäftsführung. "Admin" ist unabhängig von der Rolle "Geschäftsführung" schaltbar (z.B. ein
+// technischer Admin-Zugang ohne GF-Titel) — Beschluss vom 2026-11-02: Default bei Anlage ist
+// Zugriff auf alle Bereiche, Einschränkung ist die Ausnahme.
 export function MitarbeiterVerwalten() {
   const [mitarbeiter, setMitarbeiter] = useState<MitarbeiterRow[]>([])
   const [loading, setLoading] = useState(true)
@@ -26,15 +32,26 @@ export function MitarbeiterVerwalten() {
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [rolle, setRolle] = useState<MitarbeiterRow['rolle']>('mitarbeiter')
-  const [bereiche, setBereiche] = useState<Set<KundeBereich>>(new Set())
+  const [bereiche, setBereiche] = useState<Set<Bereich>>(new Set(ALLE_BEREICH_IDS))
+  const [istAdmin, setIstAdmin] = useState(false)
   const [anlegen, setAnlegen] = useState(false)
   const [anlegenFehler, setAnlegenFehler] = useState('')
   const [erfolg, setErfolg] = useState('')
 
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editRolle, setEditRolle] = useState<MitarbeiterRow['rolle']>('mitarbeiter')
+  const [editBereiche, setEditBereiche] = useState<Set<Bereich>>(new Set())
+  const [editAdmin, setEditAdmin] = useState(false)
+  const [editSpeichern, setEditSpeichern] = useState(false)
+  const [editFehler, setEditFehler] = useState('')
+
   async function laden() {
     if (!supabase) return
     setLoading(true)
-    const { data, error } = await supabase.from('mitarbeiter').select('id, name, email, rolle, bereiche, aktiv').order('created_at')
+    const { data, error } = await supabase
+      .from('mitarbeiter')
+      .select('id, name, email, rolle, bereiche, aktiv, ist_admin')
+      .order('created_at')
     if (error) setError(error.message)
     else setMitarbeiter((data ?? []) as MitarbeiterRow[])
     setLoading(false)
@@ -44,8 +61,17 @@ export function MitarbeiterVerwalten() {
     laden()
   }, [])
 
-  function toggleBereich(b: KundeBereich) {
+  function toggleBereich(b: Bereich) {
     setBereiche((s) => {
+      const next = new Set(s)
+      if (next.has(b)) next.delete(b)
+      else next.add(b)
+      return next
+    })
+  }
+
+  function toggleEditBereich(b: Bereich) {
+    setEditBereiche((s) => {
       const next = new Set(s)
       if (next.has(b)) next.delete(b)
       else next.add(b)
@@ -63,7 +89,8 @@ export function MitarbeiterVerwalten() {
         name: name.trim(),
         email: email.trim(),
         rolle,
-        bereiche: rolle === 'geschaeftsfuehrung' ? KUNDEN_BEREICHE.map((b) => b.id) : Array.from(bereiche),
+        bereiche: rolle === 'geschaeftsfuehrung' ? ALLE_BEREICH_IDS : Array.from(bereiche),
+        ist_admin: istAdmin,
         aktiv: true,
       })
       if (insertError) throw new Error(insertError.message)
@@ -72,7 +99,8 @@ export function MitarbeiterVerwalten() {
       setName('')
       setEmail('')
       setRolle('mitarbeiter')
-      setBereiche(new Set())
+      setBereiche(new Set(ALLE_BEREICH_IDS))
+      setIstAdmin(false)
       laden()
     } catch (err) {
       setAnlegenFehler(err instanceof Error ? err.message : 'Anlegen fehlgeschlagen.')
@@ -85,6 +113,42 @@ export function MitarbeiterVerwalten() {
     if (!supabase) return
     await supabase.from('mitarbeiter').update({ aktiv: !m.aktiv }).eq('id', m.id)
     laden()
+  }
+
+  function beginnEdit(m: MitarbeiterRow) {
+    setEditingId(m.id)
+    setEditRolle(m.rolle)
+    setEditBereiche(new Set(m.bereiche))
+    setEditAdmin(m.ist_admin)
+    setEditFehler('')
+  }
+
+  function editAbbrechen() {
+    setEditingId(null)
+    setEditFehler('')
+  }
+
+  async function editSpeichernKlick() {
+    if (!supabase || !editingId) return
+    setEditSpeichern(true)
+    setEditFehler('')
+    try {
+      const { error: updateError } = await supabase
+        .from('mitarbeiter')
+        .update({
+          rolle: editRolle,
+          bereiche: editRolle === 'geschaeftsfuehrung' ? ALLE_BEREICH_IDS : Array.from(editBereiche),
+          ist_admin: editAdmin,
+        })
+        .eq('id', editingId)
+      if (updateError) throw new Error(updateError.message)
+      setEditingId(null)
+      laden()
+    } catch (err) {
+      setEditFehler(err instanceof Error ? err.message : 'Speichern fehlgeschlagen.')
+    } finally {
+      setEditSpeichern(false)
+    }
   }
 
   if (!isSupabaseConfigured) {
@@ -115,7 +179,7 @@ export function MitarbeiterVerwalten() {
         {rolle === 'mitarbeiter' && (
           <Field label="Bereiche">
             <div className="flex flex-wrap gap-3">
-              {KUNDEN_BEREICHE.map((b) => (
+              {ALLE_BEREICHE.map((b) => (
                 <label key={b.id} className="flex items-center gap-1.5 text-sm text-slate-600">
                   <input type="checkbox" className="rounded" checked={bereiche.has(b.id)} onChange={() => toggleBereich(b.id)} />
                   {b.label}
@@ -125,6 +189,13 @@ export function MitarbeiterVerwalten() {
           </Field>
         )}
         {rolle === 'geschaeftsfuehrung' && <p className="mb-3 text-xs text-slate-400">Geschäftsführung sieht automatisch alle Bereiche.</p>}
+
+        <Field label="Admin">
+          <label className="flex items-center gap-1.5 text-sm text-slate-600">
+            <input type="checkbox" className="rounded" checked={istAdmin} onChange={(e) => setIstAdmin(e.target.checked)} />
+            Admin-Rechte (unabhängig von der Rolle, z.B. für technische Verwaltung)
+          </label>
+        </Field>
 
         {anlegenFehler && <p className="mb-3 text-sm font-medium text-rose-600">{anlegenFehler}</p>}
         {erfolg && <p className="mb-3 text-sm font-medium text-emerald-600">{erfolg}</p>}
@@ -141,25 +212,85 @@ export function MitarbeiterVerwalten() {
       ) : (
         <div className="space-y-2">
           {mitarbeiter.map((m) => (
-            <Card key={m.id} className="flex items-center justify-between gap-3 p-3">
-              <div className="min-w-0">
-                <p className="truncate text-sm font-medium text-slate-800">
-                  {m.name} {!m.aktiv && <span className="ml-1 text-xs font-normal text-rose-500">(gesperrt)</span>}
-                </p>
-                <p className="truncate text-xs text-slate-500">
-                  <Mail size={11} className="mr-1 inline" />
-                  {m.email} · {m.rolle === 'geschaeftsfuehrung' ? 'Geschäftsführung' : 'Mitarbeiter'} ·{' '}
-                  {m.rolle === 'geschaeftsfuehrung' ? 'alle Bereiche' : m.bereiche.map(kundeBereichLabel).join(', ') || 'kein Bereich'}
-                </p>
+            <Card key={m.id} className="p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium text-slate-800">
+                    {m.name} {!m.aktiv && <span className="ml-1 text-xs font-normal text-rose-500">(gesperrt)</span>}
+                    {m.ist_admin && (
+                      <span className="ml-1.5 inline-flex items-center gap-0.5 rounded-full bg-accent-50 px-1.5 py-0.5 text-[10px] font-medium text-accent-700">
+                        <ShieldCheck size={10} /> Admin
+                      </span>
+                    )}
+                  </p>
+                  <p className="truncate text-xs text-slate-500">
+                    <Mail size={11} className="mr-1 inline" />
+                    {m.email} · {m.rolle === 'geschaeftsfuehrung' ? 'Geschäftsführung' : 'Mitarbeiter'} ·{' '}
+                    {m.rolle === 'geschaeftsfuehrung' ? 'alle Bereiche' : m.bereiche.map(bereichLabel).join(', ') || 'kein Bereich'}
+                  </p>
+                </div>
+                <div className="flex flex-shrink-0 items-center gap-2">
+                  <button
+                    onClick={() => (editingId === m.id ? editAbbrechen() : beginnEdit(m))}
+                    className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                  >
+                    {editingId === m.id ? <XCircle size={13} /> : <Pencil size={13} />} {editingId === m.id ? 'Abbrechen' : 'Bearbeiten'}
+                  </button>
+                  <button
+                    onClick={() => aktivTogglen(m)}
+                    className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium ${
+                      m.aktiv ? 'border-slate-200 text-slate-600 hover:bg-slate-50' : 'border-emerald-200 text-emerald-700 hover:bg-emerald-50'
+                    }`}
+                  >
+                    {m.aktiv ? <UserX size={13} /> : <UserCheck size={13} />} {m.aktiv ? 'Sperren' : 'Entsperren'}
+                  </button>
+                </div>
               </div>
-              <button
-                onClick={() => aktivTogglen(m)}
-                className={`flex flex-shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium ${
-                  m.aktiv ? 'border-slate-200 text-slate-600 hover:bg-slate-50' : 'border-emerald-200 text-emerald-700 hover:bg-emerald-50'
-                }`}
-              >
-                {m.aktiv ? <UserX size={13} /> : <UserCheck size={13} />} {m.aktiv ? 'Sperren' : 'Entsperren'}
-              </button>
+
+              {editingId === m.id && (
+                <div className="mt-3 border-t border-slate-100 pt-3">
+                  <Field label="Rolle">
+                    <select
+                      className={inputClass}
+                      value={editRolle}
+                      onChange={(e) => setEditRolle(e.target.value as MitarbeiterRow['rolle'])}
+                    >
+                      <option value="mitarbeiter">Mitarbeiter</option>
+                      <option value="geschaeftsfuehrung">Geschäftsführung</option>
+                    </select>
+                  </Field>
+                  {editRolle === 'mitarbeiter' && (
+                    <Field label="Bereiche">
+                      <div className="flex flex-wrap gap-3">
+                        {ALLE_BEREICHE.map((b) => (
+                          <label key={b.id} className="flex items-center gap-1.5 text-sm text-slate-600">
+                            <input
+                              type="checkbox"
+                              className="rounded"
+                              checked={editBereiche.has(b.id)}
+                              onChange={() => toggleEditBereich(b.id)}
+                            />
+                            {b.label}
+                          </label>
+                        ))}
+                      </div>
+                    </Field>
+                  )}
+                  {editRolle === 'geschaeftsfuehrung' && (
+                    <p className="mb-3 text-xs text-slate-400">Geschäftsführung sieht automatisch alle Bereiche.</p>
+                  )}
+                  <Field label="Admin">
+                    <label className="flex items-center gap-1.5 text-sm text-slate-600">
+                      <input type="checkbox" className="rounded" checked={editAdmin} onChange={(e) => setEditAdmin(e.target.checked)} />
+                      Admin-Rechte
+                    </label>
+                  </Field>
+                  {editFehler && <p className="mb-3 text-sm font-medium text-rose-600">{editFehler}</p>}
+                  <PrimaryButton onClick={editSpeichernKlick} disabled={editSpeichern}>
+                    <Save size={14} /> {editSpeichern ? 'Wird gespeichert …' : 'Speichern'}
+                  </PrimaryButton>
+                </div>
+              )}
             </Card>
           ))}
           {mitarbeiter.length === 0 && <EmptyState text="Noch keine Mitarbeiter angelegt." />}

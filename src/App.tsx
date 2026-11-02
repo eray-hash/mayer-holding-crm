@@ -50,6 +50,7 @@ import { PublicMandantenfragebogenErben } from './pages/formulare/PublicMandante
 import { PublicVollmachtBeratung } from './pages/formulare/PublicVollmachtBeratung'
 import { PublicSelbstauskunft } from './pages/formulare/PublicSelbstauskunft'
 import { PublicNda } from './pages/formulare/PublicNda'
+import type { Bereich } from './types'
 
 function RootRedirect() {
   return <Navigate to="/heute" replace />
@@ -64,45 +65,45 @@ function AdminRoutesContent() {
         <Route path="/postfach" element={<Postfach />} />
         <Route path="/kampagnen" element={<Kampagnen />} />
         <Route path="/profil" element={<MeinProfil />} />
-        <Route path="/mitarbeiter" element={<MitarbeiterVerwalten />} />
+        <Route path="/mitarbeiter" element={<RequireAdmin><MitarbeiterVerwalten /></RequireAdmin>} />
 
-        <Route path="/beratung" element={<KundenListe />} />
-        <Route path="/beratung/kunden/:id" element={<KundenDetail />} />
-        <Route path="/beratung/vorlagen/:kind" element={<VorlagenPage />} />
-        <Route path="/beratung/mahnwesen" element={<Mahnwesen />} />
-        <Route path="/beratung/rechnungen" element={<Rechnungen />} />
-        <Route path="/beratung/projekte" element={<ProjekteListe />} />
+        <Route path="/beratung" element={<RequireBereich bereich="beratung"><KundenListe /></RequireBereich>} />
+        <Route path="/beratung/kunden/:id" element={<RequireBereich bereich="beratung"><KundenDetail /></RequireBereich>} />
+        <Route path="/beratung/vorlagen/:kind" element={<RequireBereich bereich="beratung"><VorlagenPage /></RequireBereich>} />
+        <Route path="/beratung/mahnwesen" element={<RequireBereich bereich="beratung"><Mahnwesen /></RequireBereich>} />
+        <Route path="/beratung/rechnungen" element={<RequireBereich bereich="beratung"><Rechnungen /></RequireBereich>} />
+        <Route path="/beratung/projekte" element={<RequireBereich bereich="beratung"><ProjekteListe /></RequireBereich>} />
 
-        <Route path="/immobilien" element={<ObjektListe />} />
-        <Route path="/immobilien/objekte/:id" element={<ObjektDetail />} />
-        <Route path="/immobilien/finanzierungen" element={<Finanzierungen />} />
-        <Route path="/immobilien/vorlagen/:kind" element={<VorlagenPageImmobilien />} />
-        <Route path="/immobilien/projekte" element={<ProjekteListe />} />
+        <Route path="/immobilien" element={<RequireBereich bereich="immobilien"><ObjektListe /></RequireBereich>} />
+        <Route path="/immobilien/objekte/:id" element={<RequireBereich bereich="immobilien"><ObjektDetail /></RequireBereich>} />
+        <Route path="/immobilien/finanzierungen" element={<RequireBereich bereich="immobilien"><Finanzierungen /></RequireBereich>} />
+        <Route path="/immobilien/vorlagen/:kind" element={<RequireBereich bereich="immobilien"><VorlagenPageImmobilien /></RequireBereich>} />
+        <Route path="/immobilien/projekte" element={<RequireBereich bereich="immobilien"><ProjekteListe /></RequireBereich>} />
 
-        <Route path="/erben" element={<ErbenListe />} />
-        <Route path="/erben/mandanten/:id" element={<ErbenDetail />} />
-        <Route path="/erben/vorlagen/:kind" element={<VorlagenPageErben />} />
-        <Route path="/erben/projekte" element={<ProjekteListe />} />
+        <Route path="/erben" element={<RequireBereich bereich="erben"><ErbenListe /></RequireBereich>} />
+        <Route path="/erben/mandanten/:id" element={<RequireBereich bereich="erben"><ErbenDetail /></RequireBereich>} />
+        <Route path="/erben/vorlagen/:kind" element={<RequireBereich bereich="erben"><VorlagenPageErben /></RequireBereich>} />
+        <Route path="/erben/projekte" element={<RequireBereich bereich="erben"><ProjekteListe /></RequireBereich>} />
 
-        <Route path="/betriebsuebergabe" element={<BetriebsuebergabeListe />} />
-        <Route path="/betriebsuebergabe/mandanten/:id" element={<BetriebsuebergabeDetail />} />
-        <Route path="/betriebsuebergabe/vorlagen/:kind" element={<VorlagenPageBetriebsuebergabe />} />
-        <Route path="/betriebsuebergabe/projekte" element={<ProjekteListe />} />
+        <Route path="/betriebsuebergabe" element={<RequireBereich bereich="betriebsuebergabe"><BetriebsuebergabeListe /></RequireBereich>} />
+        <Route path="/betriebsuebergabe/mandanten/:id" element={<RequireBereich bereich="betriebsuebergabe"><BetriebsuebergabeDetail /></RequireBereich>} />
+        <Route path="/betriebsuebergabe/vorlagen/:kind" element={<RequireBereich bereich="betriebsuebergabe"><VorlagenPageBetriebsuebergabe /></RequireBereich>} />
+        <Route path="/betriebsuebergabe/projekte" element={<RequireBereich bereich="betriebsuebergabe"><ProjekteListe /></RequireBereich>} />
 
-        <Route path="/betriebsformen" element={<BetriebsformenListe />} />
-        <Route path="/betriebsformen/mandanten/:id" element={<BetriebsformenDetail />} />
-        <Route path="/betriebsformen/vorlagen/:kind" element={<VorlagenPageBetriebsformen />} />
-        <Route path="/betriebsformen/projekte" element={<ProjekteListe />} />
+        <Route path="/betriebsformen" element={<RequireBereich bereich="betriebsformen"><BetriebsformenListe /></RequireBereich>} />
+        <Route path="/betriebsformen/mandanten/:id" element={<RequireBereich bereich="betriebsformen"><BetriebsformenDetail /></RequireBereich>} />
+        <Route path="/betriebsformen/vorlagen/:kind" element={<RequireBereich bereich="betriebsformen"><VorlagenPageBetriebsformen /></RequireBereich>} />
+        <Route path="/betriebsformen/projekte" element={<RequireBereich bereich="betriebsformen"><ProjekteListe /></RequireBereich>} />
 
-        <Route path="/akademie" element={<AkademieListe />} />
-        <Route path="/akademie/teilnehmer/:id" element={<AkademieDetail />} />
-        <Route path="/akademie/vorlagen/:kind" element={<VorlagenPageAkademie />} />
-        <Route path="/akademie/projekte" element={<ProjekteListe />} />
+        <Route path="/akademie" element={<RequireBereich bereich="akademie"><AkademieListe /></RequireBereich>} />
+        <Route path="/akademie/teilnehmer/:id" element={<RequireBereich bereich="akademie"><AkademieDetail /></RequireBereich>} />
+        <Route path="/akademie/vorlagen/:kind" element={<RequireBereich bereich="akademie"><VorlagenPageAkademie /></RequireBereich>} />
+        <Route path="/akademie/projekte" element={<RequireBereich bereich="akademie"><ProjekteListe /></RequireBereich>} />
 
-        <Route path="/finanzierungen" element={<FinanzierungenListe />} />
-        <Route path="/finanzierungen/mandanten/:id" element={<FinanzierungenDetail />} />
-        <Route path="/finanzierungen/vorlagen/:kind" element={<VorlagenPageFinanzierungen />} />
-        <Route path="/finanzierungen/projekte" element={<ProjekteListe />} />
+        <Route path="/finanzierungen" element={<RequireBereich bereich="finanzierungen"><FinanzierungenListe /></RequireBereich>} />
+        <Route path="/finanzierungen/mandanten/:id" element={<RequireBereich bereich="finanzierungen"><FinanzierungenDetail /></RequireBereich>} />
+        <Route path="/finanzierungen/vorlagen/:kind" element={<RequireBereich bereich="finanzierungen"><VorlagenPageFinanzierungen /></RequireBereich>} />
+        <Route path="/finanzierungen/projekte" element={<RequireBereich bereich="finanzierungen"><ProjekteListe /></RequireBereich>} />
 
         <Route path="*" element={<RootRedirect />} />
       </Routes>
@@ -160,6 +161,25 @@ function AdminRoutes() {
     )
   }
   return <AdminRoutesContent />
+}
+
+// Setzt mitarbeiter.bereiche/ist_admin tatsächlich am Routing durch (Beschluss 2026-11-02) — bis
+// dahin sah ein eingeloggter Mitarbeiter trotz gesetzter Felder jeden Bereich. Im Demo-Modus (ohne
+// Supabase) gibt es keine Mitarbeiter-Zugriffssteuerung, also ungefiltert durchlassen.
+function RequireBereich({ bereich, children }: { bereich: Bereich; children: ReactNode }) {
+  const { mitarbeiter } = useAuth()
+  if (!isSupabaseConfigured) return <>{children}</>
+  const erlaubt = !mitarbeiter || mitarbeiter.rolle === 'geschaeftsfuehrung' || mitarbeiter.ist_admin || mitarbeiter.bereiche.includes(bereich)
+  if (!erlaubt) return <Navigate to="/heute" replace />
+  return <>{children}</>
+}
+
+function RequireAdmin({ children }: { children: ReactNode }) {
+  const { mitarbeiter } = useAuth()
+  if (!isSupabaseConfigured) return <>{children}</>
+  const erlaubt = !mitarbeiter || mitarbeiter.rolle === 'geschaeftsfuehrung' || mitarbeiter.ist_admin
+  if (!erlaubt) return <Navigate to="/heute" replace />
+  return <>{children}</>
 }
 
 function RequirePortalAuth({ children }: { children: ReactNode }) {

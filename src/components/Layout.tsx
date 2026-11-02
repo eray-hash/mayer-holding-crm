@@ -69,6 +69,12 @@ export function Layout({ children }: { children: ReactNode }) {
   const navigate = useNavigate()
 
   const aktuellerBereich = BEREICHE.find((b) => b.id === state.bereich) ?? BEREICHE[0]
+  // Rollenbasierte Bereichs-Einschränkung (Beschluss 2026-11-02): Geschäftsführung und Admins sehen
+  // immer alles, ein eingeschränkter Mitarbeiter nur die ihm zugewiesenen Bereiche.
+  const sichtbareBereiche =
+    isSupabaseConfigured && session && mitarbeiter && mitarbeiter.rolle !== 'geschaeftsfuehrung' && !mitarbeiter.ist_admin
+      ? BEREICHE.filter((b) => mitarbeiter.bereiche.includes(b.id))
+      : BEREICHE
   const { prioritaeten } = collectPriorityEntries(state.projekte)
   const followUps = collectFollowUpPriorities(state)
 
@@ -242,7 +248,7 @@ export function Layout({ children }: { children: ReactNode }) {
                         )}
                       </>
                     )}
-                    {isSupabaseConfigured && session && mitarbeiter?.rolle === 'geschaeftsfuehrung' && (
+                    {isSupabaseConfigured && session && (mitarbeiter?.rolle === 'geschaeftsfuehrung' || mitarbeiter?.ist_admin) && (
                       <MenuItem icon={<Users size={15} />} onClick={() => { setProfilMenuOpen(false); navigate('/mitarbeiter') }}>
                         Mitarbeiter verwalten
                       </MenuItem>
@@ -304,7 +310,7 @@ export function Layout({ children }: { children: ReactNode }) {
 
               <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-400">Bereich wechseln</h3>
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                {BEREICHE.map((b) => (
+                {sichtbareBereiche.map((b) => (
                   <button
                     key={b.id}
                     onClick={() => chooseBereich(b.id)}
