@@ -41,6 +41,22 @@
 //                                                   vorhandenen Eintrag in vorgeschlagene_leads
 //                                                   entsprechen, klassifiziert nur diese NEUEN
 //                                                   Absender per KI und legt relevante als Lead an
+//   { action: "public_get_kunde", bereich, kundeId }
+//                                                -> liest Stammdaten (nur firma/ansprechpartner/
+//                                                   email/selbstauskunft) für ein öffentliches
+//                                                   Formular (src/pages/formulare/Public*.tsx) —
+//                                                   läuft serverseitig mit Service-Role-Key, da der
+//                                                   Kunde beim Ausfüllen nicht als Mitarbeiter
+//                                                   eingeloggt ist und die kunden-RLS-Policy sonst
+//                                                   jeden Zugriff verweigern würde
+//   { action: "public_submit_formular", bereich, kundeId, aktivitaetText, aktivitaetUser?,
+//     signatur?, selbstauskunft? }                -> schreibt die Antwort/Unterschrift eines
+//                                                   öffentlichen Formulars direkt in die
+//                                                   bestehende kunden-Zeile (aus demselben Grund
+//                                                   serverseitig statt über das Frontend)
+//   { action: "public_create_lead", firma, email, ... , aktivitaetText, signatur? }
+//                                                -> legt aus dem öffentlichen Feedbackbogen einen
+//                                                   neuen Kunden (Bereich "beratung") an
 //
 // Alle Zugangsdaten kommen ausschließlich aus Supabase Function Secrets (nie im Code, nie im
 // Frontend). Siehe README-Abschnitt "E-Mail-Postfach-Anbindung" für die Einrichtung.
@@ -717,7 +733,94 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ antwort }), { headers })
     }
 
-    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link" oder "classify_new_leads"' }), { status: 400, headers })
+    // Die folgenden drei Aktionen sind für die öffentlichen, unauthentifizierten Formulare unter
+    // /formular/* gedacht (src/pages/formulare/Public*.tsx). Diese Seiten laufen ohne Mitarbeiter-
+    // Login, die kunden-Tabelle in Supabase lässt per RLS aber nur Lese-/Schreibzugriff für
+    // eingeloggte Mitarbeiter zu (ist_aktiver_mitarbeiter()) — ein Kunde, der extern einen
+    // Formular-Link öffnet, hätte sonst weder Zugriff auf seine eigenen Stammdaten noch könnte seine
+    // Antwort/Unterschrift je im echten CRM ankommen (sie würde nur im eigenen Browser verpuffen).
+    // Diese drei Aktionen laufen deshalb serverseitig mit dem Service-Role-Key, exakt wie
+    // generate_login_link/invite_mitarbeiter oben — die Autorisierung ist das geteilte
+    // x-crm-secret (oben bereits geprüft) plus die praktisch unerratbare Kunden-ID in der URL.
+
+    if (body.action === 'public_get_kunde') {
+      const { bereich, kundeId } = body
+      if (!bereich || !kundeId) {
+        return new Response(JSON.stringify({ error: 'bereich und kundeId sind Pflichtfelder' }), { status: 400, headers })
+      }
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const { data, error: selectError } = await admin
+        .from('kunden')
+        .select('firma, ansprechpartner, email, selbstauskunft')
+        .eq('id', kundeId)
+        .eq('bereich', bereich)
+        .maybeSingle()
+      if (selectError) return new Response(JSON.stringify({ error: selectError.message }), { status: 500, headers })
+      return new Response(JSON.stringify({ kunde: data ?? null }), { headers })
+    }
+
+    if (body.action === 'public_submit_formular') {
+      const { bereich, kundeId, aktivitaetText, aktivitaetUser, signatur, selbstauskunft } = body
+      if (!bereich || !kundeId || !aktivitaetText) {
+        return new Response(JSON.stringify({ error: 'bereich, kundeId und aktivitaetText sind Pflichtfelder' }), { status: 400, headers })
+      }
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const { data: bestehend, error: selectError } = await admin
+        .from('kunden')
+        .select('activities, signaturen')
+        .eq('id', kundeId)
+        .eq('bereich', bereich)
+        .maybeSingle()
+      if (selectError) return new Response(JSON.stringify({ error: selectError.message }), { status: 500, headers })
+      if (!bestehend) return new Response(JSON.stringify({ error: 'Kunde/Mandant nicht gefunden' }), { status: 404, headers })
+
+      const heute = new Date().toISOString().slice(0, 10)
+      const neueActivity = { id: crypto.randomUUID(), date: heute, text: aktivitaetText, user: aktivitaetUser || 'Kunde (Formular)' }
+      const patch: Record<string, unknown> = {
+        letzte_aktivitaet: heute,
+        activities: [neueActivity, ...((bestehend.activities as unknown[]) ?? [])],
+      }
+      if (signatur) {
+        patch.signaturen = [
+          { id: crypto.randomUUID(), name: signatur.name, dataUrl: signatur.dataUrl, datum: heute, kontext: signatur.kontext },
+          ...((bestehend.signaturen as unknown[]) ?? []),
+        ]
+      }
+      if (selbstauskunft) patch.selbstauskunft = selbstauskunft
+
+      const { error: updateError } = await admin.from('kunden').update(patch).eq('id', kundeId).eq('bereich', bereich)
+      if (updateError) return new Response(JSON.stringify({ error: updateError.message }), { status: 500, headers })
+      return new Response(JSON.stringify({ ok: true }), { headers })
+    }
+
+    if (body.action === 'public_create_lead') {
+      const { firma, ansprechpartner, email, telefon, prioritaet, followUp, aktivitaetText, aktivitaetUser, signatur } = body
+      if (!firma || !email || !aktivitaetText) {
+        return new Response(JSON.stringify({ error: 'firma, email und aktivitaetText sind Pflichtfelder' }), { status: 400, headers })
+      }
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const heute = new Date().toISOString().slice(0, 10)
+      const id = `k_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`
+      const { error: insertError } = await admin.from('kunden').insert({
+        id,
+        bereich: 'beratung',
+        firma,
+        ansprechpartner: ansprechpartner || firma,
+        email,
+        telefon: telefon || '',
+        prioritaet: prioritaet || 'Mittel',
+        status: 'lead',
+        follow_up: followUp ?? { date: heute, note: 'Erstkontakt aufnehmen', done: false },
+        verantwortlich: 'Andreas Mayer',
+        letzte_aktivitaet: heute,
+        activities: [{ id: crypto.randomUUID(), date: heute, text: aktivitaetText, user: aktivitaetUser || 'Kunde (Formular)' }],
+        signaturen: signatur ? [{ id: crypto.randomUUID(), name: signatur.name, dataUrl: signatur.dataUrl, datum: heute, kontext: signatur.kontext }] : null,
+      })
+      if (insertError) return new Response(JSON.stringify({ error: insertError.message }), { status: 500, headers })
+      return new Response(JSON.stringify({ ok: true, id }), { headers })
+    }
+
+    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "classify_new_leads", "public_get_kunde", "public_submit_formular" oder "public_create_lead"' }), { status: 400, headers })
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }

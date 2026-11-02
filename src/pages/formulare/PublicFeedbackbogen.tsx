@@ -1,10 +1,9 @@
 import { useState } from 'react'
 import { CheckCircle2 } from 'lucide-react'
-import { useApp } from '../../context/AppContext'
 import { Card, Field, inputClass, PrimaryButton } from '../../components/ui'
 import { SignaturePad } from '../../components/SignaturePad'
-import { MITARBEITER } from '../../data/constants'
-import { addDays, today, uid } from '../../lib/dates'
+import { addDays, today } from '../../lib/dates'
+import { erstellePublicLead } from '../../lib/emailGateway'
 import type { Prioritaet } from '../../types'
 
 const FEEDBACK_KRITERIEN = [
@@ -15,8 +14,8 @@ const FEEDBACK_KRITERIEN = [
 ]
 
 export function PublicFeedbackbogen() {
-  const { dispatch } = useApp()
   const [submitted, setSubmitted] = useState(false)
+  const [senden, setSenden] = useState(false)
 
   const [veranstaltung, setVeranstaltung] = useState('Vermögensschutz in unsicheren Zeiten')
   const [anrede, setAnrede] = useState('Herr')
@@ -38,7 +37,7 @@ export function PublicFeedbackbogen() {
     setFeedback((f) => ({ ...f, [k]: !f[k] }))
   }
 
-  function submit() {
+  async function submit() {
     if (!name.trim() || !email.trim()) {
       setError('Bitte Name und E-Mail ausfüllen.')
       return
@@ -52,6 +51,7 @@ export function PublicFeedbackbogen() {
       return
     }
     setError('')
+    setSenden(true)
 
     const angekreuzt = FEEDBACK_KRITERIEN.filter((k) => feedback[k])
     const prioritaet: Prioritaet = terminWunsch === 'ja' ? 'Hoch' : 'Niedrig'
@@ -66,29 +66,28 @@ export function PublicFeedbackbogen() {
       `Beratungsgespräch (3.250 € zzgl. USt für Sichtung/Erstbewertung) gewünscht: ${terminWunsch === 'ja' ? 'Ja' : 'Nein'}.`,
     ].filter(Boolean)
 
-    dispatch({
-      type: 'ADD_KUNDE',
-      kunde: {
-        id: uid('k'),
+    try {
+      await erstellePublicLead({
         firma: name,
         ansprechpartner: name,
         email,
         telefon,
         prioritaet,
-        status: 'lead',
         followUp: {
           date: addDays(today(), terminWunsch === 'ja' ? 1 : 5),
           note: terminWunsch === 'ja' ? 'Rückruf: Termin für Beratungsgespräch vereinbaren' : 'Nachfassen nach Feedbackbogen',
           done: false,
         },
-        verantwortlich: MITARBEITER[0],
-        letzteAktivitaet: today(),
-        activities: [{ id: uid('act'), date: today(), text: activityLines.join(' '), user: 'Kunde (Formular)' }],
-        signaturen: [{ id: uid('sig'), name, dataUrl: signatur, datum: today(), kontext: `Feedbackbogen – ${veranstaltung}` }],
-      },
-    })
-
-    setSubmitted(true)
+        aktivitaetText: activityLines.join(' '),
+        aktivitaetUser: 'Kunde (Formular)',
+        signatur: { name, dataUrl: signatur, kontext: `Feedbackbogen – ${veranstaltung}` },
+      })
+      setSubmitted(true)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Übermittlung fehlgeschlagen. Bitte versuchen Sie es erneut.')
+    } finally {
+      setSenden(false)
+    }
   }
 
   if (submitted) {
@@ -230,8 +229,8 @@ export function PublicFeedbackbogen() {
 
           {error && <p className="mb-3 text-sm font-medium text-rose-600">{error}</p>}
 
-          <PrimaryButton onClick={submit} className="w-full justify-center">
-            Absenden
+          <PrimaryButton onClick={submit} disabled={senden} className="w-full justify-center">
+            {senden ? 'Wird übermittelt …' : 'Absenden'}
           </PrimaryButton>
         </Card>
       </div>

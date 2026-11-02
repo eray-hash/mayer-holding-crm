@@ -1,30 +1,59 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { CheckCircle2 } from 'lucide-react'
-import { useApp } from '../../context/AppContext'
+import { CheckCircle2, Loader2 } from 'lucide-react'
 import { KUNDEN_BEREICHE } from '../../data/kundenBereiche'
+import { DEFAULT_FRAGENKATALOG } from '../../data/fragenkataloge'
 import { Card, Field, inputClass, PrimaryButton } from '../../components/ui'
 import { SignaturePad } from '../../components/SignaturePad'
 import { today } from '../../lib/dates'
+import { holePublicKunde, sendePublicFormular, type PublicKunde } from '../../lib/emailGateway'
 import type { KundeBereich } from '../../types'
 
 // Öffentliches, nicht-authentifiziertes Selbstauskunft-Formular für einen bereits angelegten
-// Kunden/Mandanten — der Fragenkatalog kommt aus state.fragenkataloge (im CRM pro Bereich frei
-// editierbar, siehe FragenkatalogModal) statt hartcodiert zu sein. Eine komplett neue öffentliche
-// Lead-Gen-Website pro Bereich ist bewusst nicht Teil dieses Formulars.
+// Kunden/Mandanten. Der Fragenkatalog kommt bewusst aus dem festen DEFAULT_FRAGENKATALOG statt aus
+// dem im CRM editierbaren state.fragenkataloge — Letzteres wird aktuell nicht nach Supabase
+// synchronisiert (lebt nur im Browser des jeweiligen Mitarbeiters), ein unauthentifizierter externer
+// Besucher könnte es also ohnehin nie sehen. Eine komplett neue öffentliche Lead-Gen-Website pro
+// Bereich ist bewusst nicht Teil dieses Formulars.
 export function PublicSelbstauskunft() {
   const { bereich: bereichParam, kundeId } = useParams()
-  const { state, dispatch } = useApp()
+  const [kunde, setKunde] = useState<PublicKunde | null | undefined>(undefined)
   const [submitted, setSubmitted] = useState(false)
+  const [senden, setSenden] = useState(false)
   const [antworten, setAntworten] = useState<Record<string, string>>({})
   const [einverstanden, setEinverstanden] = useState(false)
   const [signatur, setSignatur] = useState<string | null>(null)
   const [error, setError] = useState('')
 
   const bereichRoh = KUNDEN_BEREICHE.find((b) => b.id === bereichParam)?.id as KundeBereich | undefined
-  const kunde = bereichRoh ? KUNDEN_BEREICHE.find((b) => b.id === bereichRoh)!.get(state).find((k) => k.id === kundeId) : undefined
 
-  if (!bereichRoh || !kunde) {
+  useEffect(() => {
+    if (!bereichRoh || !kundeId) return
+    holePublicKunde(bereichRoh, kundeId)
+      .then(setKunde)
+      .catch(() => setKunde(null))
+  }, [bereichRoh, kundeId])
+
+  if (!bereichRoh) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
+        <Card className="max-w-md p-8 text-center">
+          <h1 className="mb-2 text-lg font-semibold text-slate-800">Link ungültig</h1>
+          <p className="text-sm text-slate-500">Dieser Fragebogen-Link ist nicht mehr verfügbar. Bitte fordern Sie einen neuen Link an.</p>
+        </Card>
+      </div>
+    )
+  }
+
+  if (kunde === undefined) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
+        <Loader2 className="animate-spin text-slate-400" size={28} />
+      </div>
+    )
+  }
+
+  if (!kunde) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
         <Card className="max-w-md p-8 text-center">
@@ -36,14 +65,14 @@ export function PublicSelbstauskunft() {
   }
   const bereich: KundeBereich = bereichRoh
 
-  const fragen = state.fragenkataloge.filter((f) => f.bereich === bereich)
+  const fragen = DEFAULT_FRAGENKATALOG.filter((f) => f.bereich === bereich)
   const bereitsEingereicht = !!kunde.selbstauskunft
 
   function setAntwort(frageId: string, wert: string) {
     setAntworten((a) => ({ ...a, [frageId]: wert }))
   }
 
-  function submit() {
+  async function submit() {
     const fehlendePflichtfrage = fragen.find((f) => f.pflichtfeld && !antworten[f.id]?.trim())
     if (fehlendePflichtfrage) {
       setError(`Bitte beantworten Sie: „${fehlendePflichtfrage.text}"`)
@@ -58,17 +87,25 @@ export function PublicSelbstauskunft() {
       return
     }
     setError('')
-    dispatch({
-      type: 'SET_SELBSTAUSKUNFT',
-      bereich,
-      kundeId: kunde!.id,
-      selbstauskunft: {
-        antworten: fragen.map((f) => ({ frageId: f.id, frageText: f.text, antwort: antworten[f.id] ?? '' })),
-        signaturDataUrl: signatur,
-        eingereichtAm: today(),
-      },
-    })
-    setSubmitted(true)
+    setSenden(true)
+    try {
+      await sendePublicFormular({
+        bereich,
+        kundeId: kundeId!,
+        aktivitaetText: 'Selbstauskunft digital ausgefüllt und unterschrieben.',
+        aktivitaetUser: `${kunde!.ansprechpartner} (Formular)`,
+        selbstauskunft: {
+          antworten: fragen.map((f) => ({ frageId: f.id, frageText: f.text, antwort: antworten[f.id] ?? '' })),
+          signaturDataUrl: signatur,
+          eingereichtAm: today(),
+        },
+      })
+      setSubmitted(true)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Übermittlung fehlgeschlagen. Bitte versuchen Sie es erneut.')
+    } finally {
+      setSenden(false)
+    }
   }
 
   if (submitted || bereitsEingereicht) {
@@ -132,8 +169,8 @@ export function PublicSelbstauskunft() {
 
           {error && <p className="mb-3 text-sm font-medium text-rose-600">{error}</p>}
 
-          <PrimaryButton onClick={submit} className="w-full justify-center">
-            Absenden
+          <PrimaryButton onClick={submit} disabled={senden} className="w-full justify-center">
+            {senden ? 'Wird übermittelt …' : 'Absenden'}
           </PrimaryButton>
         </Card>
       </div>

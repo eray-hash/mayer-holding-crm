@@ -1,17 +1,15 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { CheckCircle2 } from 'lucide-react'
-import { useApp } from '../../context/AppContext'
+import { CheckCircle2, Loader2 } from 'lucide-react'
 import { Card, Field, inputClass, PrimaryButton } from '../../components/ui'
 import { SignaturePad } from '../../components/SignaturePad'
-import { today, uid } from '../../lib/dates'
+import { holePublicKunde, sendePublicFormular, type PublicKunde } from '../../lib/emailGateway'
 
 export function PublicVollmachtErben() {
   const { mandantId } = useParams()
-  const { state, dispatch } = useApp()
+  const [mandant, setMandant] = useState<PublicKunde | null | undefined>(undefined)
   const [submitted, setSubmitted] = useState(false)
-
-  const mandant = state.erbenMandanten.find((k) => k.id === mandantId)
+  const [senden, setSenden] = useState(false)
 
   const [bevollmaechtigterName, setBevollmaechtigterName] = useState('')
   const [bevollmaechtigterWohnhaft, setBevollmaechtigterWohnhaft] = useState('')
@@ -19,6 +17,21 @@ export function PublicVollmachtErben() {
   const [ort, setOrt] = useState('Ulm')
   const [signatur, setSignatur] = useState<string | null>(null)
   const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (!mandantId) return
+    holePublicKunde('erben', mandantId)
+      .then(setMandant)
+      .catch(() => setMandant(null))
+  }, [mandantId])
+
+  if (mandant === undefined) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
+        <Loader2 className="animate-spin text-slate-400" size={28} />
+      </div>
+    )
+  }
 
   if (!mandant) {
     return (
@@ -31,7 +44,7 @@ export function PublicVollmachtErben() {
     )
   }
 
-  function submit() {
+  async function submit() {
     if (!bevollmaechtigterName.trim() || !rechtsgeschaeft.trim()) {
       setError('Bitte bevollmächtigte Person und Rechtsgeschäft ausfüllen.')
       return
@@ -41,23 +54,24 @@ export function PublicVollmachtErben() {
       return
     }
     setError('')
+    setSenden(true)
 
-    const activityText = `Allgemeine Vollmacht digital ausgefüllt und unterschrieben. Bevollmächtigt: ${bevollmaechtigterName}${bevollmaechtigterWohnhaft ? ' (' + bevollmaechtigterWohnhaft + ')' : ''}. Rechtsgeschäft: ${rechtsgeschaeft}.`
+    const aktivitaetText = `Allgemeine Vollmacht digital ausgefüllt und unterschrieben. Bevollmächtigt: ${bevollmaechtigterName}${bevollmaechtigterWohnhaft ? ' (' + bevollmaechtigterWohnhaft + ')' : ''}. Rechtsgeschäft: ${rechtsgeschaeft}.`
 
-    dispatch({
-      type: 'UPDATE_ERBEN_MANDANT',
-      id: mandant!.id,
-      patch: {
-        letzteAktivitaet: today(),
-        activities: [{ id: uid('act'), date: today(), text: activityText, user: `${mandant!.ansprechpartner} (Formular)` }, ...mandant!.activities],
-        signaturen: [
-          { id: uid('sig'), name: mandant!.ansprechpartner, dataUrl: signatur, datum: today(), kontext: 'Allgemeine Vollmacht' },
-          ...(mandant!.signaturen ?? []),
-        ],
-      },
-    })
-
-    setSubmitted(true)
+    try {
+      await sendePublicFormular({
+        bereich: 'erben',
+        kundeId: mandantId!,
+        aktivitaetText,
+        aktivitaetUser: `${mandant!.ansprechpartner} (Formular)`,
+        signatur: { name: mandant!.ansprechpartner, dataUrl: signatur, kontext: 'Allgemeine Vollmacht' },
+      })
+      setSubmitted(true)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Übermittlung fehlgeschlagen. Bitte versuchen Sie es erneut.')
+    } finally {
+      setSenden(false)
+    }
   }
 
   if (submitted) {
@@ -118,8 +132,8 @@ export function PublicVollmachtErben() {
 
           {error && <p className="mb-3 text-sm font-medium text-rose-600">{error}</p>}
 
-          <PrimaryButton onClick={submit} className="w-full justify-center">
-            Vollmacht unterschreiben &amp; absenden
+          <PrimaryButton onClick={submit} disabled={senden} className="w-full justify-center">
+            {senden ? 'Wird übermittelt …' : 'Vollmacht unterschreiben & absenden'}
           </PrimaryButton>
         </Card>
       </div>

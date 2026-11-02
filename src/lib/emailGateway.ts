@@ -120,3 +120,44 @@ export type LeadKlassifizierungsErgebnis = { geprueft: number; vorgeschlagen: nu
 export async function classifyNewLeads(): Promise<LeadKlassifizierungsErgebnis> {
   return call({ action: 'classify_new_leads' })
 }
+
+// Öffentliche, unauthentifizierte Formulare (src/pages/formulare/Public*.tsx) dürfen die
+// kunden-Tabelle nicht direkt per Supabase-Client lesen/schreiben (RLS verlangt einen eingeloggten
+// Mitarbeiter) — diese drei Aktionen laufen stattdessen serverseitig mit dem Service-Role-Key,
+// siehe supabase/functions/email-gateway/index.ts.
+export type PublicKunde = {
+  firma: string
+  ansprechpartner: string
+  email: string
+  selbstauskunft?: import('../types').Selbstauskunft
+}
+
+export async function holePublicKunde(bereich: string, kundeId: string): Promise<PublicKunde | null> {
+  const data = await call({ action: 'public_get_kunde', bereich, kundeId })
+  return data.kunde ?? null
+}
+
+export async function sendePublicFormular(params: {
+  bereich: string
+  kundeId: string
+  aktivitaetText: string
+  aktivitaetUser?: string
+  signatur?: { name: string; dataUrl: string; kontext: string }
+  selbstauskunft?: import('../types').Selbstauskunft
+}): Promise<void> {
+  await call({ action: 'public_submit_formular', ...params })
+}
+
+export async function erstellePublicLead(params: {
+  firma: string
+  ansprechpartner?: string
+  email: string
+  telefon?: string
+  prioritaet?: 'Hoch' | 'Mittel' | 'Niedrig'
+  followUp?: { date: string; note: string; done: boolean }
+  aktivitaetText: string
+  aktivitaetUser?: string
+  signatur?: { name: string; dataUrl: string; kontext: string }
+}): Promise<void> {
+  await call({ action: 'public_create_lead', ...params })
+}

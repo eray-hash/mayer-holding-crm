@@ -1,10 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { CheckCircle2 } from 'lucide-react'
-import { useApp } from '../../context/AppContext'
+import { CheckCircle2, Loader2 } from 'lucide-react'
 import { Card, Field, inputClass, PrimaryButton } from '../../components/ui'
 import { SignaturePad } from '../../components/SignaturePad'
-import { today, uid } from '../../lib/dates'
+import { holePublicKunde, sendePublicFormular, type PublicKunde } from '../../lib/emailGateway'
 
 type VollmachtTyp = 'finanzamt' | 'bank'
 
@@ -29,10 +28,10 @@ const ERLAEUTERUNG: Record<VollmachtTyp, string> = {
 
 export function PublicVollmachtBeratung() {
   const { typ, kundeId } = useParams<{ typ: VollmachtTyp; kundeId: string }>()
-  const { state, dispatch } = useApp()
+  const [kunde, setKunde] = useState<PublicKunde | null | undefined>(undefined)
   const [submitted, setSubmitted] = useState(false)
+  const [senden, setSenden] = useState(false)
 
-  const kunde = state.kunden.find((k) => k.id === kundeId)
   const gueltigerTyp: VollmachtTyp = typ === 'bank' ? 'bank' : 'finanzamt'
 
   const [geburtsdatum, setGeburtsdatum] = useState('')
@@ -40,6 +39,21 @@ export function PublicVollmachtBeratung() {
   const [steuernummer, setSteuernummer] = useState('')
   const [signatur, setSignatur] = useState<string | null>(null)
   const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (!kundeId) return
+    holePublicKunde('beratung', kundeId)
+      .then(setKunde)
+      .catch(() => setKunde(null))
+  }, [kundeId])
+
+  if (kunde === undefined) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
+        <Loader2 className="animate-spin text-slate-400" size={28} />
+      </div>
+    )
+  }
 
   if (!kunde) {
     return (
@@ -52,7 +66,7 @@ export function PublicVollmachtBeratung() {
     )
   }
 
-  function submit() {
+  async function submit() {
     if (!adresse.trim() || (gueltigerTyp === 'finanzamt' && (!geburtsdatum.trim() || !steuernummer.trim()))) {
       setError('Bitte alle Felder ausfüllen.')
       return
@@ -62,29 +76,27 @@ export function PublicVollmachtBeratung() {
       return
     }
     setError('')
+    setSenden(true)
 
     const details =
       gueltigerTyp === 'finanzamt'
         ? `Geburtsdatum: ${geburtsdatum}, Adresse: ${adresse}, Steuernummer: ${steuernummer}.`
         : `Wohnhaft: ${adresse}.`
 
-    dispatch({
-      type: 'UPDATE_KUNDE',
-      id: kunde!.id,
-      patch: {
-        letzteAktivitaet: today(),
-        activities: [
-          { id: uid('act'), date: today(), text: `${TITEL[gueltigerTyp]} digital ausgefüllt und unterschrieben. ${details}`, user: `${kunde!.ansprechpartner} (Formular)` },
-          ...kunde!.activities,
-        ],
-        signaturen: [
-          { id: uid('sig'), name: kunde!.ansprechpartner, dataUrl: signatur, datum: today(), kontext: TITEL[gueltigerTyp] },
-          ...(kunde!.signaturen ?? []),
-        ],
-      },
-    })
-
-    setSubmitted(true)
+    try {
+      await sendePublicFormular({
+        bereich: 'beratung',
+        kundeId: kundeId!,
+        aktivitaetText: `${TITEL[gueltigerTyp]} digital ausgefüllt und unterschrieben. ${details}`,
+        aktivitaetUser: `${kunde!.ansprechpartner} (Formular)`,
+        signatur: { name: kunde!.ansprechpartner, dataUrl: signatur, kontext: TITEL[gueltigerTyp] },
+      })
+      setSubmitted(true)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Übermittlung fehlgeschlagen. Bitte versuchen Sie es erneut.')
+    } finally {
+      setSenden(false)
+    }
   }
 
   if (submitted) {
@@ -139,8 +151,8 @@ export function PublicVollmachtBeratung() {
 
           {error && <p className="mb-3 text-sm font-medium text-rose-600">{error}</p>}
 
-          <PrimaryButton onClick={submit} className="w-full justify-center">
-            Vollmacht unterschreiben &amp; absenden
+          <PrimaryButton onClick={submit} disabled={senden} className="w-full justify-center">
+            {senden ? 'Wird übermittelt …' : 'Vollmacht unterschreiben & absenden'}
           </PrimaryButton>
         </Card>
       </div>
