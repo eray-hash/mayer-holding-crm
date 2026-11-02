@@ -666,22 +666,21 @@ export async function hydrateFromSupabase(): Promise<HydratedData | null> {
   }
 }
 
-// Einmalige Migration: die elf oben neu an Supabase angeschlossenen Collections lagen bis
-// 2026-11-02 ausschließlich in localStorage — ein echter Mitarbeiter kann zu diesem Zeitpunkt
-// bereits echte Vorlagen/Rechnungen/Kanban-Karten/Notizen etc. in seinem Browser haben. Käme beim
-// ersten Laden nach diesem Update einfach die (anfangs leere) Supabase-Tabelle zum Zug, würden
-// diese Daten faktisch verschwinden (und beim nächsten localStorage-Schreiben sogar überschrieben).
-// Darum: ist eine Tabelle serverseitig leer, aber lokal vorhanden, wird der lokale Stand einmalig
-// hochgeladen und direkt mit angezeigt, statt verworfen zu werden. Sobald einmal migriert, ist die
-// Tabelle nicht mehr leer und dieser Pfad greift nie wieder.
+// Einmalige Migration: die oben neu an Supabase angeschlossenen Collections lagen bis 2026-11-02
+// ausschließlich in localStorage — ein echter Mitarbeiter kann zu diesem Zeitpunkt bereits echte
+// Vorlagen/Rechnungen/Kanban-Karten/Notizen etc. in seinem Browser haben. Käme beim ersten Laden
+// nach diesem Update einfach die (anfangs leere) Supabase-Tabelle zum Zug, würden diese Daten
+// faktisch verschwinden (und beim nächsten localStorage-Schreiben sogar überschrieben). Darum: ist
+// eine Tabelle serverseitig leer, aber lokal vorhanden, wird der lokale Stand einmalig hochgeladen
+// und direkt mit angezeigt, statt verworfen zu werden. Sobald einmal migriert, ist die Tabelle
+// nicht mehr leer und dieser Pfad greift nie wieder.
+//
+// fondsInvestoren/fondsDokumenteAllgemein sind bewusst NICHT dabei: die lokalen Demo-Seed-Daten
+// dort sind erfundene Platzhalter-Investoren (z.B. "Dr. Michael Ostermann") — ein unberührter
+// Mitarbeiter-Browser hat die noch unverändert, und die würden sonst als scheinbar echte
+// Investoren-Datensätze in der Produktions-DB landen.
 const SIMPLE_MIGRATIONEN: { key: keyof AppData; table: string; toRow: (item: any) => Record<string, unknown> }[] = [
-  { key: 'rechnungen', table: 'rechnungen', toRow: rechnungToRow },
-  { key: 'konzepte', table: 'konzepte', toRow: konzeptToRow },
-  { key: 'vertraege', table: 'vertraege', toRow: vertragToRow },
-  { key: 'finanzierungen', table: 'objekt_finanzierungen', toRow: objektFinanzierungToRow },
   { key: 'projekte', table: 'projekte', toRow: projektToRow },
-  { key: 'fondsInvestoren', table: 'fonds_investoren', toRow: fondsInvestorToRow },
-  { key: 'fondsDokumenteAllgemein', table: 'fonds_dokumente_allgemein', toRow: fondsDokumentAllgemeinToRow },
   { key: 'importierteDokumente', table: 'importierte_dokumente', toRow: importDokToRow },
   { key: 'mailVorlagen', table: 'mail_vorlagen', toRow: mailVorlageToRow },
   { key: 'notizen', table: 'notizen', toRow: notizToRow },
@@ -703,6 +702,38 @@ export async function migriereLokaleDatenFallsLeer(hydrated: HydratedData, lokal
     }
     ;(result as any)[key] = lokaleListe
   }
+
+  // Rechnungen/Konzepte/Verträge/Objekt-Finanzierungen referenzieren einen Kunden bzw. ein Objekt
+  // per id — die ursprünglichen Demo-Seed-Daten verweisen auf erfundene ids (z.B. "k7", "o1"), die
+  // es in der echten, bereits per Supabase geteilten kunden/objekte-Tabelle nie gab. Nur Einträge
+  // migrieren, deren referenzierter Kunde/Objekt tatsächlich real existiert — alles andere ist mit
+  // hoher Sicherheit unangetasteter Demo-Datenmüll, kein echtes Arbeitsergebnis.
+  const echteKundenIds = new Set(Object.values(result.kunden).flat().map((k) => k.id))
+  const echteObjektIds = new Set(result.objekte.map((o) => o.id))
+
+  async function migriereGefiltert<T extends { id: string }>(
+    key: keyof AppData,
+    table: string,
+    toRow: (item: T) => Record<string, unknown>,
+    gueltig: (item: T) => boolean,
+  ) {
+    const serverListe = (result as any)[key] as { id: string }[]
+    const lokaleListe = (lokal as any)[key] as T[] | undefined
+    if (serverListe.length > 0 || !Array.isArray(lokaleListe) || lokaleListe.length === 0) return
+    const echte = lokaleListe.filter(gueltig)
+    if (echte.length === 0) return
+    const { error } = await client.from(table).upsert(echte.map(toRow))
+    if (error) {
+      console.error(`Migration fehlgeschlagen (${table}):`, error.message)
+      return
+    }
+    ;(result as any)[key] = echte
+  }
+
+  await migriereGefiltert<Rechnung>('rechnungen', 'rechnungen', rechnungToRow, (r) => echteKundenIds.has(r.kundeId))
+  await migriereGefiltert<Konzept>('konzepte', 'konzepte', konzeptToRow, (k) => echteKundenIds.has(k.kundeId))
+  await migriereGefiltert<Beratungsvertrag>('vertraege', 'vertraege', vertragToRow, (v) => echteKundenIds.has(v.kundeId))
+  await migriereGefiltert<Finanzierung>('finanzierungen', 'objekt_finanzierungen', objektFinanzierungToRow, (f) => echteObjektIds.has(f.objektId))
 
   for (const { bereich, key } of VORLAGEN_KEYS) {
     const serverListe = result.vorlagen[bereich]
