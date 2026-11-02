@@ -50,7 +50,9 @@ export const VORLAGEN_KATEGORIEN: { id: 'vollmacht' | 'schreiben' | 'vertraege';
   { id: 'vertraege', label: 'Verträge' },
 ]
 
-export const MITARBEITER = ['Thomas Berger', 'Julia Hartmann', 'Markus Lehmann', 'Sandra Peters']
+// "Andreas Mayer" ist der echte Geschäftsführer (siehe Dropdown in allen Kunden-/Mandanten-Listen) —
+// die übrigen sind Platzhalter-Namen, solange es noch kein echtes Mitarbeiter-/Berechtigungssystem gibt.
+export const MITARBEITER = ['Andreas Mayer', 'Thomas Berger', 'Julia Hartmann', 'Markus Lehmann', 'Sandra Peters']
 
 // Die echten Lukrativitäts-Einstufungen aus dem separaten ImmoRadar-Tool (eigenständiges
 // Scan-/Scoring-Projekt, läuft unter eray-hash.github.io/immobilien-radar).
