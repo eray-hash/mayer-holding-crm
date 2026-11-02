@@ -39,6 +39,7 @@ import { MeinProfil } from './pages/profil/MeinProfil'
 import { MitarbeiterVerwalten } from './pages/admin/MitarbeiterVerwalten'
 import { ProjekteListe } from './pages/projekte/ProjekteListe'
 import { PortalLogin } from './pages/portal/PortalLogin'
+import { PortalMagicLink } from './pages/portal/PortalMagicLink'
 import { PortalOverview } from './pages/portal/PortalOverview'
 import { PortalRendite } from './pages/portal/PortalRendite'
 import { PortalAuszahlungen } from './pages/portal/PortalAuszahlungen'
@@ -183,8 +184,9 @@ function RequireAdmin({ children }: { children: ReactNode }) {
 }
 
 function RequirePortalAuth({ children }: { children: ReactNode }) {
-  const { investorId } = usePortalAuth()
-  if (!investorId) return <Navigate to="/portal/login" replace />
+  const { ready, investor } = usePortalAuth()
+  if (!ready) return <LadeBildschirm text="Lädt …" />
+  if (!investor) return <Navigate to="/portal/login" replace />
   return <>{children}</>
 }
 
@@ -192,6 +194,7 @@ function PortalRoutes() {
   return (
     <Routes>
       <Route path="/portal/login" element={<PortalLogin />} />
+      <Route path="/portal/magic/:token" element={<PortalMagicLink />} />
       <Route
         path="/portal"
         element={

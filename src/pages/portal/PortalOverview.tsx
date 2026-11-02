@@ -1,6 +1,5 @@
 import { Navigate } from 'react-router-dom'
 import { TrendingUp, Wallet, CalendarClock, PiggyBank } from 'lucide-react'
-import { useApp } from '../../context/AppContext'
 import { usePortalAuth } from '../../context/PortalAuthContext'
 import { Card } from '../../components/ui'
 import { fmtDate, fmtEUR, today } from '../../lib/dates'
@@ -20,9 +19,7 @@ function StatCard({ icon, label, value, sub }: { icon: React.ReactNode; label: s
 }
 
 export function PortalOverview() {
-  const { state } = useApp()
-  const { investorId } = usePortalAuth()
-  const investor = state.fondsInvestoren.find((i) => i.id === investorId)
+  const { investor } = usePortalAuth()
   if (!investor) return <Navigate to="/portal/login" replace />
 
   const ref = today()

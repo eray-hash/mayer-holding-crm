@@ -2,7 +2,6 @@ import { type ReactNode } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { LayoutDashboard, LineChart, FileText, Banknote, LogOut, ShieldCheck } from 'lucide-react'
 import { usePortalAuth } from '../context/PortalAuthContext'
-import { useApp } from '../context/AppContext'
 
 function PortalNavItem({ to, icon, children }: { to: string; icon: ReactNode; children: ReactNode }) {
   return (
@@ -22,10 +21,8 @@ function PortalNavItem({ to, icon, children }: { to: string; icon: ReactNode; ch
 }
 
 export function PortalLayout({ children }: { children: ReactNode }) {
-  const { investorId, logout } = usePortalAuth()
-  const { state } = useApp()
+  const { investor, logout } = usePortalAuth()
   const navigate = useNavigate()
-  const investor = state.fondsInvestoren.find((i) => i.id === investorId)
 
   function handleLogout() {
     logout()

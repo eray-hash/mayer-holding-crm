@@ -1,5 +1,4 @@
 import { Navigate } from 'react-router-dom'
-import { useApp } from '../../context/AppContext'
 import { usePortalAuth } from '../../context/PortalAuthContext'
 import { Card } from '../../components/ui'
 import { fmtEUR, today } from '../../lib/dates'
@@ -54,9 +53,7 @@ function RenditeChart({ investorJahre }: { investorJahre: number[] }) {
 }
 
 export function PortalRendite() {
-  const { state } = useApp()
-  const { investorId } = usePortalAuth()
-  const investor = state.fondsInvestoren.find((i) => i.id === investorId)
+  const { investor } = usePortalAuth()
   if (!investor) return <Navigate to="/portal/login" replace />
 
   const ref = today()

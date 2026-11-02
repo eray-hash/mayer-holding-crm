@@ -1,14 +1,11 @@
 import { Navigate } from 'react-router-dom'
 import { CheckCircle2, Clock } from 'lucide-react'
-import { useApp } from '../../context/AppContext'
 import { usePortalAuth } from '../../context/PortalAuthContext'
 import { Card, EmptyState } from '../../components/ui'
 import { fmtDate, fmtEUR } from '../../lib/dates'
 
 export function PortalAuszahlungen() {
-  const { state } = useApp()
-  const { investorId } = usePortalAuth()
-  const investor = state.fondsInvestoren.find((i) => i.id === investorId)
+  const { investor } = usePortalAuth()
   if (!investor) return <Navigate to="/portal/login" replace />
 
   const sorted = [...investor.ausschuettungen].sort((a, b) => b.datum.localeCompare(a.datum))

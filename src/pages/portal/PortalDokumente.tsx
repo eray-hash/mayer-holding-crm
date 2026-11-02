@@ -51,8 +51,7 @@ function DokumentGruppe({ titel, dokumente }: { titel: string; dokumente: FondsD
 
 export function PortalDokumente() {
   const { state } = useApp()
-  const { investorId } = usePortalAuth()
-  const investor = state.fondsInvestoren.find((i) => i.id === investorId)
+  const { investor } = usePortalAuth()
   if (!investor) return <Navigate to="/portal/login" replace />
 
   const alle = [...investor.dokumente, ...state.fondsDokumenteAllgemein]
