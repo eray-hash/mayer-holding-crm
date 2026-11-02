@@ -4,6 +4,8 @@ import { CheckCircle2, Loader2, Printer } from 'lucide-react'
 import { Card, Field, inputClass, PrimaryButton, SecondaryButton } from '../../components/ui'
 import { SignaturePad } from '../../components/SignaturePad'
 import { holePublicKunde, sendePublicFormular, type PublicKunde } from '../../lib/emailGateway'
+import { generateDokumentPdf } from '../../lib/generateDokumentPdf'
+import { today } from '../../lib/dates'
 
 type VollmachtTyp = 'finanzamt' | 'bank'
 
@@ -87,13 +89,36 @@ export function PublicVollmachtBeratung() {
         : `Wohnhaft: ${adresse}.`
 
     try {
+      let behoerde: { email: string; name?: string; pdfBase64?: string; pdfFilename?: string } | undefined
+      if (behoerdeEmail) {
+        const felder: { label: string; value: string }[] = [
+          { label: 'Vollmachtgeber', value: `${kunde!.ansprechpartner} (${kunde!.firma})` },
+          { label: 'E-Mail', value: kunde!.email },
+        ]
+        if (gueltigerTyp === 'finanzamt') {
+          felder.push({ label: 'Geburtsdatum', value: geburtsdatum }, { label: 'Steuernummer', value: steuernummer }, { label: 'Adresse', value: adresse })
+        } else {
+          felder.push({ label: 'Wohnhaft', value: adresse })
+        }
+        const pdf = generateDokumentPdf({
+          titel: TITEL[gueltigerTyp],
+          absatzVorFeldern: `Diese Vollmacht wird für ${kunde!.ansprechpartner} (${kunde!.firma}) erstellt.`,
+          felder,
+          erlaeuterung: ERLAEUTERUNG[gueltigerTyp],
+          signaturDataUrl: signatur,
+          ort: 'Ulm',
+          datum: today(),
+        })
+        behoerde = { email: behoerdeEmail, name: behoerdeName || 'Finanzamt', pdfBase64: pdf.base64, pdfFilename: `${TITEL[gueltigerTyp]}.pdf` }
+      }
+
       await sendePublicFormular({
         bereich: 'beratung',
         kundeId: kundeId!,
         aktivitaetText: `${TITEL[gueltigerTyp]} digital ausgefüllt und unterschrieben. ${details}`,
         aktivitaetUser: `${kunde!.ansprechpartner} (Formular)`,
         signatur: { name: kunde!.ansprechpartner, dataUrl: signatur, kontext: TITEL[gueltigerTyp] },
-        behoerde: behoerdeEmail ? { email: behoerdeEmail, name: behoerdeName || 'Finanzamt' } : undefined,
+        behoerde,
       })
       setSubmitted(true)
     } catch (err) {

@@ -823,10 +823,14 @@ Deno.serve(async (req: Request) => {
         try {
           const betreff = `${signatur.kontext} — ${bestehend.firma}`
           const text = `Sehr geehrte Damen und Herren,\n\nim Anhang erhalten Sie die digital unterschriebene "${signatur.kontext}" für ${bestehend.ansprechpartner} (${bestehend.firma}).\n\nMit freundlichen Grüßen\nAndreas Mayer Holding`
-          const base64 = signatur.dataUrl.split(',')[1] ?? signatur.dataUrl
-          await sendMail(behoerde.email, betreff, text, undefined, [
-            { filename: 'unterschrift.png', contentBase64: base64, contentType: 'image/png' },
-          ])
+          // Bevorzugt das vom Frontend mitgeschickte vollständige PDF (Dokumenttext + ausgefüllte
+          // Felder + Signatur, siehe src/lib/generateDokumentPdf.ts) — nur die isolierte Unterschrift
+          // als Anhang wäre für die Behörde nicht nachvollziehbar/nutzbar (Nutzer-Feedback 2026-11-02).
+          // Fällt auf die reine Signatur zurück, falls kein PDF mitgeschickt wurde.
+          const anhang = behoerde.pdfBase64
+            ? { filename: behoerde.pdfFilename || 'dokument.pdf', contentBase64: behoerde.pdfBase64, contentType: 'application/pdf' }
+            : { filename: 'unterschrift.png', contentBase64: signatur.dataUrl.split(',')[1] ?? signatur.dataUrl, contentType: 'image/png' }
+          await sendMail(behoerde.email, betreff, text, undefined, [anhang])
           try {
             await admin.from('gesendete_emails').insert({
               an: behoerde.email,
