@@ -66,7 +66,7 @@ const ERSTER_STATUS = {
   betriebsuebergabe: 'erstkontakt',
   betriebsformen: 'erstkontakt',
   akademie: 'interessent',
-  finanzierungen: 'erstkontakt',
+  finanzierungen: 'interessent',
 }
 
 function leadToKundeRow(lead, bereich) {
