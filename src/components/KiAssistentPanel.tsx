@@ -4,7 +4,7 @@ import { useApp } from '../context/AppContext'
 import { useSpeechRecognition } from '../lib/useSpeechRecognition'
 import { speak, isSpeechSynthesisSupported } from '../lib/useSpeechSynthesis'
 import { isEmailGatewayConfigured, classifyAssistantInput, answerAssistantQuestion, answerWithImage } from '../lib/emailGateway'
-import { suggestKunde } from '../lib/matchKunde'
+import { suggestKunde, type KundeMatch } from '../lib/matchKunde'
 import { KUNDEN_BEREICHE } from '../data/kundenBereiche'
 import { getStatusMap } from '../data/statusNetworks'
 import { CallRecorder } from './CallRecorder'
@@ -32,6 +32,13 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
   const [pastedImage, setPastedImage] = useState<PastedImage | null>(null)
   const [aufnahmeKunde, setAufnahmeKunde] = useState<AufnahmeKunde | null>(null)
   const [recorderOpen, setRecorderOpen] = useState(false)
+  // Woher kam die aktuell im Eingabefeld stehende Eingabe — bestimmt, ob die Antwort gesprochen
+  // oder nur als Text zurückkommt (gesprochen rein -> gesprochen zurück, getippt rein -> Text
+  // zurück), statt wie bisher eines globalen "immer vorlesen, wenn eingeschaltet"-Schalters.
+  const [inputModus, setInputModus] = useState<'sprache' | 'text'>('text')
+  // Zuletzt im Gespräch erkannter Kunde — Fallback, falls eine Folgeäußerung ("ja, leg ihn auf
+  // Wiedervorlage") keinen Namen mehr nennt, sich aber offensichtlich auf denselben Kunden bezieht.
+  const [letzterKunde, setLetzterKunde] = useState<KundeMatch | null>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -62,6 +69,8 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
     const text = (interim ? `${transcript} ${interim}` : transcript).trim()
     if (!text && !pastedImage) return
     setTranscript('')
+    // Gesprochen rein -> gesprochen zurück, getippt rein -> nur Text zurück (siehe inputModus oben).
+    const sprechen = inputModus === 'sprache' && ttsEnabled
 
     if (pastedImage) {
       const bild = pastedImage
@@ -70,9 +79,9 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
       setVerarbeiten(true)
       try {
         const antwort = await answerWithImage(text, bild.base64, bild.mediaType)
-        addMessage('assistant', antwort, true)
+        addMessage('assistant', antwort, sprechen)
       } catch (err) {
-        addMessage('assistant', `Bild konnte nicht analysiert werden: ${err instanceof Error ? err.message : 'Fehler'}`, true)
+        addMessage('assistant', `Bild konnte nicht analysiert werden: ${err instanceof Error ? err.message : 'Fehler'}`, sprechen)
       } finally {
         setVerarbeiten(false)
       }
@@ -84,12 +93,15 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
     setVerarbeiten(true)
     try {
       const klass = await classifyAssistantInput(text, today())
-      const match = (klass.erkannter_name && suggestKunde(state, klass.erkannter_name)) || suggestKunde(state, text)
+      // Fallback auf den zuletzt besprochenen Kunden, wenn die aktuelle Äußerung keinen Namen mehr
+      // nennt (z.B. "ja, leg ihn auf Wiedervorlage" als Antwort auf einen proaktiven Vorschlag).
+      const match = (klass.erkannter_name && suggestKunde(state, klass.erkannter_name)) || suggestKunde(state, text) || letzterKunde
+      if (match) setLetzterKunde(match)
 
       if (klass.typ === 'frage') {
         const frageText = klass.frage ?? text
         if (!match) {
-          addMessage('assistant', 'Dazu habe ich keinen passenden Kunden gefunden — nenn mir bitte den Namen etwas genauer.', true)
+          addMessage('assistant', 'Dazu habe ich keinen passenden Kunden gefunden — nenn mir bitte den Namen etwas genauer.', sprechen)
         } else {
           addMessage('assistant', `Frage zu ${match.kundeName}: „${frageText}" — ich schaue nach …`)
           const kunde = KUNDEN_BEREICHE.find((b) => b.id === match.bereich)!.get(state).find((k) => k.id === match.kundeId)!
@@ -103,24 +115,40 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
             'Aktivitäten (neueste zuerst):',
             ...kunde.activities.slice(0, 20).map((a) => `- ${fmtDate(a.date)}: ${a.text}`),
             '',
-            'Gesprächsprotokolle:',
+            'Gesprächsprotokolle (neueste zuerst):',
             ...(protokolle.length > 0
-              ? protokolle.map((p) => `- ${fmtDate(p.datum)} "${p.betreff}" (Teilnehmer: ${p.teilnehmer}): ${p.kiZusammenfassung ?? p.text}`)
+              ? protokolle.flatMap((p) => [
+                  `- ${fmtDate(p.datum)} "${p.betreff}" (Teilnehmer: ${p.teilnehmer}):`,
+                  `  Zusammenfassung: ${p.kiZusammenfassung ?? p.text}`,
+                  ...(p.kernthemen?.length ? [`  Kernthemen: ${p.kernthemen.join(', ')}`] : []),
+                  ...(p.vereinbarungen?.length ? [`  Vereinbarungen: ${p.vereinbarungen.join(', ')}`] : []),
+                  ...(p.offenePunkte?.length ? [`  Offene Punkte: ${p.offenePunkte.join(', ')}`] : []),
+                ])
               : ['(keine)']),
+            '',
+            'Vorhandene Dokumente:',
+            ...(kunde.dokumente && kunde.dokumente.length > 0 ? kunde.dokumente.map((d) => `- ${d.name}`) : ['(keine)']),
+            ...(kunde.unterlagenCheckliste
+              ? [
+                  '',
+                  'Unterlagen-Checkliste:',
+                  ...Object.entries(kunde.unterlagenCheckliste).map(([punkt, erledigt]) => `- ${punkt}: ${erledigt ? 'vorhanden' : 'FEHLT NOCH'}`),
+                ]
+              : []),
           ].join('\n')
           try {
             const antwort = await answerAssistantQuestion(frageText, kontext)
-            addMessage('assistant', antwort, true)
+            addMessage('assistant', antwort, sprechen)
           } catch (err) {
-            addMessage('assistant', `Antwort konnte nicht abgerufen werden: ${err instanceof Error ? err.message : 'Fehler'}`, true)
+            addMessage('assistant', `Antwort konnte nicht abgerufen werden: ${err instanceof Error ? err.message : 'Fehler'}`, sprechen)
           }
         }
       } else if (klass.typ === 'aufnahme') {
         if (!match) {
-          addMessage('assistant', 'Für welchen Kunden/Mandanten soll ich aufzeichnen? Nenn mir bitte den Namen.', true)
+          addMessage('assistant', 'Für welchen Kunden/Mandanten soll ich aufzeichnen? Nenn mir bitte den Namen.', sprechen)
         } else {
           setAufnahmeKunde({ bereich: match.bereich, kundeId: match.kundeId, kundeName: match.kundeName })
-          addMessage('assistant', `Aufnahme für ${match.kundeName} vorbereitet. Klicke unten auf „Jetzt aufnehmen", sobald es losgeht.`, true)
+          addMessage('assistant', `Aufnahme für ${match.kundeName} vorbereitet. Klicke unten auf „Jetzt aufnehmen", sobald es losgeht.`, sprechen)
         }
       } else {
         const titel = klass.titel ?? text.slice(0, 80)
@@ -135,17 +163,17 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
             followUp: klass.typ === 'aufgabe' ? { date: faelligkeitsDatum, note: titel, done: false } : undefined,
           })
           const falligHinweis = klass.typ === 'aufgabe' ? ` (fällig ${fmtDate(faelligkeitsDatum)})` : ''
-          addMessage('assistant', `Erledigt — ${art}${falligHinweis} bei ${match.kundeName} gespeichert: „${titel}"`, true)
+          addMessage('assistant', `Erledigt — ${art}${falligHinweis} bei ${match.kundeName} gespeichert: „${titel}"`, sprechen)
         } else {
           dispatch({
             type: 'ADD_NOTIZ',
             notiz: { id: uid('notiz'), text: titel, erstelltAm: today(), faelligkeitsDatum: klass.typ === 'aufgabe' ? faelligkeitsDatum : undefined, erledigt: false },
           })
-          addMessage('assistant', `Erledigt — als ${art} auf "Heute" gespeichert: „${titel}" (ich hab keinen passenden Kunden gefunden).`, true)
+          addMessage('assistant', `Erledigt — als ${art} auf "Heute" gespeichert: „${titel}" (ich hab keinen passenden Kunden gefunden).`, sprechen)
         }
       }
     } catch (err) {
-      addMessage('assistant', `Verarbeitung fehlgeschlagen: ${err instanceof Error ? err.message : 'Fehler'}`)
+      addMessage('assistant', `Verarbeitung fehlgeschlagen: ${err instanceof Error ? err.message : 'Fehler'}`, sprechen)
     } finally {
       setVerarbeiten(false)
     }
@@ -256,7 +284,14 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
           )}
           <div className="flex items-end gap-2">
             <button
-              onClick={recording ? stop : start}
+              onClick={() => {
+                if (recording) {
+                  stop()
+                } else {
+                  setInputModus('sprache')
+                  start()
+                }
+              }}
               className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg ${
                 recording ? 'bg-rose-100 text-rose-600' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
               }`}
@@ -269,7 +304,10 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
               className={`${inputClass} max-h-24 flex-1 resize-none text-sm`}
               rows={1}
               value={liveText}
-              onChange={(e) => setTranscript(e.target.value)}
+              onChange={(e) => {
+                setInputModus('text')
+                setTranscript(e.target.value)
+              }}
               onPaste={onPasteInput}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {

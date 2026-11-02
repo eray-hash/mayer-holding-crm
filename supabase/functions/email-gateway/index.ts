@@ -296,7 +296,9 @@ Text:
 // Function selbst hat keinen Datenbankzugriff auf die CRM-Daten, die leben nur im Browser.
 async function answerAssistantQuestion(frage: string, kontext: string): Promise<{ antwort: string }> {
   const result = await callClaudeTool<{ antwort: string }>(
-    `Beantworte die folgende Frage eines Mitarbeiters ausschließlich auf Basis der gegebenen CRM-Daten zu einem Kunden/Mandanten. Antworte auf Deutsch, knapp und konkret, als reiner Fließtext ohne jegliche Tags oder Markup. Wenn die Daten die Frage nicht beantworten können, sage das ehrlich statt zu spekulieren.
+    `Beantworte die folgende Frage eines Mitarbeiters ausschließlich auf Basis der gegebenen CRM-Daten zu einem Kunden/Mandanten. Antworte auf Deutsch, knapp und konkret, als reiner Fließtext ohne jegliche Tags oder Markup (die Antwort wird oft vorgelesen, also keine Aufzählungszeichen/Formatierung, sondern gesprochene Sätze). Wenn die Daten die Frage nicht beantworten können, sage das ehrlich statt zu spekulieren.
+
+Wenn es inhaltlich wirklich passt (z. B. ein offener Punkt aus dem letzten Gespräch, ein fehlendes Dokument, ein überfälliger Follow-up), schlage am Ende EINEN konkreten nächsten Schritt proaktiv vor (z. B. "Soll ich ihn auf Wiedervorlage legen?") — aber nur wenn es wirklich angebracht ist, nicht bei jeder Antwort erzwingen.
 
 CRM-Daten zum Kunden:
 """${kontext}"""
