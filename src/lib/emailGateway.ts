@@ -164,6 +164,29 @@ export async function sendePublicFormular(params: {
   await call({ action: 'public_submit_formular', ...params })
 }
 
+export type ImmoRadarTreffer = {
+  id: string
+  url: string
+  titel: string
+  ort: string
+  bundesland: string
+  flaecheM2: number | null
+  kaufpreis: number | null
+  preisProM2: number | null
+  objektTypLabel: string
+  lukrativitaet: string
+  score: number
+  beschreibung: string
+  kiEinschaetzung: string | null
+}
+
+// Modul 3: ersetzt das manuelle Copy/Paste aus dem ImmoRadar-Dashboard — lädt serverseitig
+// gefilterte, vielversprechende Treffer (siehe email-gateway/index.ts fetchImmoRadarTopListings).
+export async function holeImmoRadarTopListings(): Promise<ImmoRadarTreffer[]> {
+  const data = await call({ action: 'immoradar_top' })
+  return data.listings ?? []
+}
+
 export async function erstellePublicLead(params: {
   firma: string
   ansprechpartner?: string

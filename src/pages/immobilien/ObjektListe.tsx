@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Plus, List, LayoutGrid, ArrowRight, Radar } from 'lucide-react'
 import { useApp, useAdvanceStatus } from '../../context/AppContext'
 import { IMMOBILIEN_STATUS } from '../../data/statusNetworks'
+import { holeImmoRadarTopListings, type ImmoRadarTreffer } from '../../lib/emailGateway'
 import {
   PRIORITAET_ORDER,
   MITARBEITER,
@@ -172,7 +173,27 @@ export function ObjektListe() {
   )
 }
 
+// Bildet die freien Objekttyp-Bezeichnungen des ImmoRadar-Scrapers auf die 5 festen ObjektTyp-Werte
+// des CRM ab — das Radar unterscheidet z.B. mehrere Gewerbe-Unterarten, die hier alle auf "Gewerbe"
+// zusammenfallen, da das CRM dafür keine feinere Kategorie führt.
+const OBJEKT_TYP_MAPPING: Record<string, ObjektTyp> = {
+  Mehrfamilienhaus: 'Haus',
+  Eigentumswohnung: 'Wohnung',
+  Baugrundstück: 'Grundstück',
+  'Büro/Praxis': 'Gewerbe',
+  'Weitere Gewerbeeinheit': 'Gewerbe',
+  'Lager/Halle/Produktion': 'Gewerbe',
+  'Einzelhandel/Kiosk': 'Gewerbe',
+  'Gastronomie/Hotel': 'Gewerbe',
+  'Garage/Stellplatz': 'Gewerbe',
+}
+
 function ImmoRadarUebernehmenModal({ open, onClose, onCreate }: { open: boolean; onClose: () => void; onCreate: (o: Objekt) => void }) {
+  const [listings, setListings] = useState<ImmoRadarTreffer[] | null>(null)
+  const [ladeFehler, setLadeFehler] = useState('')
+  const [suche, setSuche] = useState('')
+  const [ausgewaehlt, setAusgewaehlt] = useState<ImmoRadarTreffer | null>(null)
+
   const [bezeichnung, setBezeichnung] = useState('')
   const [adresse, setAdresse] = useState('')
   const [typ, setTyp] = useState<ObjektTyp>('Wohnung')
@@ -181,8 +202,47 @@ function ImmoRadarUebernehmenModal({ open, onClose, onCreate }: { open: boolean;
   const [lukrativitaet, setLukrativitaet] = useState<string>(LUKRATIVITAET_OPTIONS[1])
   const [verantwortlich, setVerantwortlich] = useState(MITARBEITER[0])
 
+  useEffect(() => {
+    if (!open || listings !== null) return
+    setLadeFehler('')
+    holeImmoRadarTopListings()
+      .then(setListings)
+      .catch((err) => setLadeFehler(err instanceof Error ? err.message : 'ImmoRadar-Daten konnten nicht geladen werden.'))
+  }, [open, listings])
+
+  const gefiltert = useMemo(() => {
+    if (!listings) return []
+    const q = suche.trim().toLowerCase()
+    if (!q) return listings
+    return listings.filter((l) => `${l.titel} ${l.ort}`.toLowerCase().includes(q))
+  }, [listings, suche])
+
+  function waehlen(t: ImmoRadarTreffer) {
+    setAusgewaehlt(t)
+    setBezeichnung(t.titel)
+    setAdresse(t.ort)
+    setTyp(OBJEKT_TYP_MAPPING[t.objektTypLabel] ?? 'Wohnung')
+    setKaufpreis(t.kaufpreis ?? 0)
+    setImmoRadarLink(t.url)
+    setLukrativitaet((LUKRATIVITAET_OPTIONS as readonly string[]).includes(t.lukrativitaet) ? t.lukrativitaet : LUKRATIVITAET_OPTIONS[1])
+  }
+
+  function zurueckZurListe() {
+    setAusgewaehlt(null)
+  }
+
+  function schliessenUndZuruecksetzen() {
+    setAusgewaehlt(null)
+    setSuche('')
+    onClose()
+  }
+
   function submit() {
     if (!bezeichnung.trim()) return
+    const kontextZeilen = [
+      `Aus ImmoRadar übernommen (Lukrativität: ${lukrativitaet}).`,
+      ausgewaehlt?.kiEinschaetzung ? `KI-Einschätzung: ${ausgewaehlt.kiEinschaetzung}` : '',
+    ].filter(Boolean)
     onCreate({
       id: uid('o'),
       bezeichnung,
@@ -194,50 +254,89 @@ function ImmoRadarUebernehmenModal({ open, onClose, onCreate }: { open: boolean;
       status: 'akquise',
       followUp: { date: today(), note: 'Aus ImmoRadar übernommen — erste Prüfung einplanen', done: false },
       verantwortlich,
-      activities: [{ id: uid('act'), date: today(), text: `Aus ImmoRadar übernommen (Lukrativität: ${lukrativitaet})`, user: verantwortlich }],
+      activities: [{ id: uid('act'), date: today(), text: kontextZeilen.join(' '), user: verantwortlich }],
       dokumente: {},
       quelle: 'immoradar',
       immoRadarLink: immoRadarLink || undefined,
       lukrativitaet,
     })
-    setBezeichnung(''); setAdresse(''); setImmoRadarLink('')
+    setBezeichnung(''); setAdresse(''); setImmoRadarLink(''); setAusgewaehlt(null); setSuche('')
     onClose()
   }
 
   return (
-    <Modal open={open} onClose={onClose} title="Objekt aus ImmoRadar übernehmen">
-      <p className="mb-4 text-xs text-slate-500">
-        Trag hier die Eckdaten eines Inserats ein, das du im{' '}
-        <a href="https://eray-hash.github.io/immobilien-radar/" target="_blank" rel="noreferrer" className="text-accent-600 underline">
-          ImmoRadar-Dashboard
-        </a>{' '}
-        gefunden hast — es landet als normales Objekt in dieser Liste.
-      </p>
-      <Field label="Bezeichnung"><input className={inputClass} value={bezeichnung} onChange={(e) => setBezeichnung(e.target.value)} /></Field>
-      <Field label="Adresse"><input className={inputClass} value={adresse} onChange={(e) => setAdresse(e.target.value)} /></Field>
-      <Field label="Objekttyp">
-        <select className={inputClass} value={typ} onChange={(e) => setTyp(e.target.value as ObjektTyp)}>
-          {OBJEKT_TYPEN.map((t) => <option key={t} value={t}>{t}</option>)}
-        </select>
-      </Field>
-      <Field label="Kaufpreis (€)"><input type="number" className={inputClass} value={kaufpreis} onChange={(e) => setKaufpreis(Number(e.target.value))} /></Field>
-      <Field label="Lukrativität (ImmoRadar-Einschätzung)">
-        <select className={inputClass} value={lukrativitaet} onChange={(e) => setLukrativitaet(e.target.value)}>
-          {LUKRATIVITAET_OPTIONS.map((l) => <option key={l} value={l}>{l}</option>)}
-        </select>
-      </Field>
-      <Field label="ImmoRadar-Link (Original-Inserat)">
-        <input className={inputClass} value={immoRadarLink} onChange={(e) => setImmoRadarLink(e.target.value)} placeholder="https://eray-hash.github.io/immobilien-radar/..." />
-      </Field>
-      <Field label="Verantwortlich">
-        <select className={inputClass} value={verantwortlich} onChange={(e) => setVerantwortlich(e.target.value)}>
-          {MITARBEITER.map((m) => <option key={m} value={m}>{m}</option>)}
-        </select>
-      </Field>
-      <div className="mt-4 flex justify-end gap-2">
-        <button onClick={onClose} className="rounded-lg border border-slate-200 px-3.5 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50">Abbrechen</button>
-        <PrimaryButton onClick={submit}>Objekt übernehmen</PrimaryButton>
-      </div>
+    <Modal open={open} onClose={schliessenUndZuruecksetzen} title="Objekt aus ImmoRadar übernehmen" width="max-w-2xl">
+      {!ausgewaehlt ? (
+        <>
+          <p className="mb-3 text-xs text-slate-500">
+            Zeigt die vom{' '}
+            <a href="https://eray-hash.github.io/immobilien-radar/" target="_blank" rel="noreferrer" className="text-accent-600 underline">
+              ImmoRadar
+            </a>{' '}
+            als "interessant"/"sehr interessant" eingestuften Treffer — auswählen, Eckdaten prüfen, übernehmen.
+          </p>
+          <input
+            className={`${inputClass} mb-3`}
+            placeholder="Suche nach Ort oder Titel …"
+            value={suche}
+            onChange={(e) => setSuche(e.target.value)}
+          />
+          {ladeFehler && <p className="mb-3 text-sm text-rose-600">{ladeFehler}</p>}
+          {!listings && !ladeFehler && <p className="text-sm text-slate-400">Lade ImmoRadar-Treffer …</p>}
+          {listings && (
+            <div className="max-h-96 space-y-1.5 overflow-y-auto">
+              {gefiltert.length === 0 && <p className="text-sm text-slate-400">Keine Treffer.</p>}
+              {gefiltert.map((t) => (
+                <button
+                  key={t.id}
+                  onClick={() => waehlen(t)}
+                  className="flex w-full items-center justify-between gap-3 rounded-lg border border-slate-100 p-2.5 text-left hover:bg-slate-50"
+                >
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-medium text-slate-700">{t.titel}</div>
+                    <div className="text-xs text-slate-400">{t.ort} · {t.objektTypLabel}{t.kaufpreis ? ` · ${fmtEUR(t.kaufpreis)}` : ''}</div>
+                  </div>
+                  <span className={`flex-shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${LUKRATIVITAET_COLOR[t.lukrativitaet] ?? 'bg-slate-100 text-slate-600'}`}>
+                    {t.lukrativitaet}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </>
+      ) : (
+        <>
+          <button onClick={zurueckZurListe} className="mb-3 text-xs font-medium text-accent-600 hover:underline">← Zurück zur Liste</button>
+          <Field label="Bezeichnung"><input className={inputClass} value={bezeichnung} onChange={(e) => setBezeichnung(e.target.value)} /></Field>
+          <Field label="Adresse"><input className={inputClass} value={adresse} onChange={(e) => setAdresse(e.target.value)} /></Field>
+          <Field label="Objekttyp">
+            <select className={inputClass} value={typ} onChange={(e) => setTyp(e.target.value as ObjektTyp)}>
+              {OBJEKT_TYPEN.map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </Field>
+          <Field label="Kaufpreis (€)"><input type="number" className={inputClass} value={kaufpreis} onChange={(e) => setKaufpreis(Number(e.target.value))} /></Field>
+          <Field label="Lukrativität (ImmoRadar-Einschätzung)">
+            <select className={inputClass} value={lukrativitaet} onChange={(e) => setLukrativitaet(e.target.value)}>
+              {LUKRATIVITAET_OPTIONS.map((l) => <option key={l} value={l}>{l}</option>)}
+            </select>
+          </Field>
+          {ausgewaehlt.kiEinschaetzung && (
+            <div className="mb-3 rounded-lg bg-slate-50 p-3 text-xs leading-relaxed text-slate-500">{ausgewaehlt.kiEinschaetzung}</div>
+          )}
+          <Field label="ImmoRadar-Link (Original-Inserat)">
+            <input className={inputClass} value={immoRadarLink} onChange={(e) => setImmoRadarLink(e.target.value)} />
+          </Field>
+          <Field label="Verantwortlich">
+            <select className={inputClass} value={verantwortlich} onChange={(e) => setVerantwortlich(e.target.value)}>
+              {MITARBEITER.map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>
+          </Field>
+          <div className="mt-4 flex justify-end gap-2">
+            <button onClick={schliessenUndZuruecksetzen} className="rounded-lg border border-slate-200 px-3.5 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50">Abbrechen</button>
+            <PrimaryButton onClick={submit}>Objekt übernehmen</PrimaryButton>
+          </div>
+        </>
+      )}
     </Modal>
   )
 }

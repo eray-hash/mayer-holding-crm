@@ -67,6 +67,11 @@
 //   { action: "public_create_lead", firma, email, ... , aktivitaetText, signatur? }
 //                                                -> legt aus dem öffentlichen Feedbackbogen einen
 //                                                   neuen Kunden (Bereich "beratung") an
+//   { action: "immoradar_top" }                  -> lädt die ~40 MB große listings.json des
+//                                                   separaten immobilien-radar-Projekts serverseitig,
+//                                                   filtert auf "interessant"/"sehr interessant" und
+//                                                   gibt nur die fürs Auswahl-Modal nötigen Felder
+//                                                   zurück (Modul 3: Immobilienradar-Integration)
 //
 // Alle Zugangsdaten kommen ausschließlich aus Supabase Function Secrets (nie im Code, nie im
 // Frontend). Siehe README-Abschnitt "E-Mail-Postfach-Anbindung" für die Einrichtung.
@@ -622,6 +627,74 @@ Schreibe einen kurzen, prägnanten Betreff und einen freundlichen, professionell
   )
 }
 
+// Modul 3 (Immobilienradar-Integration): das separate "immobilien-radar"-Projekt (eigenes Repo,
+// eigene GitHub-Pages-Deployment) scrapt kleinanzeigen.de 3x täglich und veröffentlicht die
+// Ergebnisse als öffentliche, aber ~40 MB große JSON-Datei. Vorher musste ein Mitarbeiter das
+// Dashboard von Hand durchsuchen und Eckdaten per Copy/Paste in ein Formular übertragen — diese
+// Funktion lädt die Datei stattdessen serverseitig, filtert auf die vielversprechendsten Treffer
+// und reicht nur die fürs Auswahl-Modal nötigen Felder weiter (nicht die vollen ~40 MB, die ein
+// Mitarbeiter-Browser nicht laden sollte).
+type ImmoRadarRohTreffer = {
+  id: string
+  url: string
+  title: string
+  plz?: string
+  ort?: string
+  bundesland?: string
+  wohnflaeche_m2?: number
+  grundstuecksflaeche_m2?: number
+  preis_eur?: number
+  preis_pro_m2?: number
+  objekt_typ_label?: string
+  beschreibung?: string
+  lukrativitaet?: { label?: string; score?: number; chancen?: string[]; risiken?: string[] }
+  ki_einschaetzung?: { status?: string; text?: string }
+}
+
+export type ImmoRadarTreffer = {
+  id: string
+  url: string
+  titel: string
+  ort: string
+  bundesland: string
+  flaecheM2: number | null
+  kaufpreis: number | null
+  preisProM2: number | null
+  objektTypLabel: string
+  lukrativitaet: string
+  score: number
+  beschreibung: string
+  kiEinschaetzung: string | null
+}
+
+const LUKRATIVITAET_RANG: Record<string, number> = { sehr_interessant: 5, interessant: 4, neutral: 3, zu_wenig_daten: 2, eher_unattraktiv: 1, unattraktiv: 0 }
+
+async function fetchImmoRadarTopListings(): Promise<ImmoRadarTreffer[]> {
+  const res = await fetch('https://eray-hash.github.io/immobilien-radar/data/listings.json')
+  if (!res.ok) throw new Error(`ImmoRadar-Daten konnten nicht geladen werden (${res.status})`)
+  const data = (await res.json()) as { listings: ImmoRadarRohTreffer[] }
+
+  return data.listings
+    .filter((l) => l.lukrativitaet?.label === 'sehr_interessant' || l.lukrativitaet?.label === 'interessant')
+    .sort((a, b) => (LUKRATIVITAET_RANG[b.lukrativitaet?.label ?? ''] ?? 0) - (LUKRATIVITAET_RANG[a.lukrativitaet?.label ?? ''] ?? 0) || (b.lukrativitaet?.score ?? 0) - (a.lukrativitaet?.score ?? 0))
+    .slice(0, 150)
+    .map((l) => ({
+      id: l.id,
+      url: l.url,
+      titel: l.title,
+      ort: [l.plz, l.ort].filter(Boolean).join(' '),
+      bundesland: l.bundesland ?? '',
+      flaecheM2: l.wohnflaeche_m2 ?? l.grundstuecksflaeche_m2 ?? null,
+      kaufpreis: l.preis_eur ?? null,
+      preisProM2: l.preis_pro_m2 ?? null,
+      objektTypLabel: l.objekt_typ_label ?? '',
+      lukrativitaet: (l.lukrativitaet?.label ?? 'neutral').replace(/_/g, ' '),
+      score: l.lukrativitaet?.score ?? 0,
+      beschreibung: (l.beschreibung ?? '').slice(0, 400),
+      kiEinschaetzung: l.ki_einschaetzung?.status === 'ok' ? l.ki_einschaetzung.text ?? null : null,
+    }))
+}
+
 Deno.serve(async (req: Request) => {
   const origin = req.headers.get('origin')
   const headers = corsHeaders(origin)
@@ -889,7 +962,12 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ ok: true, id }), { headers })
     }
 
-    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "classify_new_leads", "public_get_kunde", "public_submit_formular" oder "public_create_lead"' }), { status: 400, headers })
+    if (body.action === 'immoradar_top') {
+      const listings = await fetchImmoRadarTopListings()
+      return new Response(JSON.stringify({ listings }), { headers })
+    }
+
+    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead" oder "immoradar_top"' }), { status: 400, headers })
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }
