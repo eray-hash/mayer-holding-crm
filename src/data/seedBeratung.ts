@@ -204,7 +204,7 @@ Geburtsdatum: _______________________
 Adresse: _______________________
 Steuernummer: _______________________
 
-Hiermit bevollmächtige ich die Unternehmensberatung Andreas Mayer, Andreas Mayer und seine Mitarbeiter, Schwabstrasse 3, 89075 Ulm, mich in allen steuerlichen Angelegenheiten gegenüber dem Finanzamt zu vertreten.
+Hiermit bevollmächtige ich die Unternehmensberatung Andreas Mayer sowie deren Mitarbeiter, Schwabstrasse 3, 89075 Ulm, mich in allen steuerlichen Angelegenheiten gegenüber dem Finanzamt zu vertreten.
 
 Die Vollmacht umfasst insbesondere das Recht:
 • zur Einsichtnahme in meine Steuerakten,

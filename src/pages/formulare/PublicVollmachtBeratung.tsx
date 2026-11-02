@@ -16,7 +16,7 @@ const TITEL: Record<VollmachtTyp, string> = {
 
 const ERLAEUTERUNG: Record<VollmachtTyp, string> = {
   finanzamt:
-    'Hiermit bevollmächtigen Sie die Unternehmensberatung Andreas Mayer, Andreas Mayer und seine Mitarbeiter, Schwabstrasse 3, ' +
+    'Hiermit bevollmächtigen Sie die Unternehmensberatung Andreas Mayer sowie deren Mitarbeiter, Schwabstrasse 3, ' +
     '89075 Ulm, Sie in allen steuerlichen Angelegenheiten gegenüber dem Finanzamt zu vertreten — insbesondere zur Einsichtnahme in ' +
     'Ihre Steuerakten, zur Entgegennahme und Abgabe von Steuerbescheiden und Schriftstücken, zur Stellung und Entgegennahme von ' +
     'Anträgen, zur Teilnahme an Besprechungen und Verhandlungen sowie zur Einlegung und Rücknahme von Rechtsbehelfen. Die Vollmacht ' +
