@@ -1,15 +1,18 @@
 import { useState } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
-import { ArrowLeft, Folder, FolderOpen, File, Upload, Plus, Radar, ExternalLink, Users } from 'lucide-react'
+import { ArrowLeft, Folder, FolderOpen, File, Upload, Plus, Radar, ExternalLink, Users, Sparkles, CheckCircle2, XCircle } from 'lucide-react'
 import { useApp, type AppData } from '../../context/AppContext'
 import { StatusWidget } from '../../components/StatusWidget'
-import { Card, Modal, Field, inputClass, PrimaryButton, EmptyState, StatusBadge } from '../../components/ui'
+import { Card, Modal, Field, inputClass, PrimaryButton, SecondaryButton, EmptyState, StatusBadge } from '../../components/ui'
 import { FormularLinkButtons } from '../../components/FormularLink'
 import { KUNDEN_BEREICHE, kundeBereichLabel } from '../../data/kundenBereiche'
 import { fmtDate, isOverdue, today, uid, fmtEUR } from '../../lib/dates'
 import { PRIORITAETEN, gruppeLabel, LUKRATIVITAET_COLOR } from '../../data/constants'
 import { DOKUMENT_ORDNER } from '../../types'
-import type { DokumentOrdnerName, Prioritaet, FinanzierungStatus, KundeBereich } from '../../types'
+import type { DokumentOrdnerName, Prioritaet, FinanzierungStatus, KundeBereich, Dokument } from '../../types'
+import { pruefeUnterlagenVollstaendigkeit } from '../../data/objektUnterlagenPflicht'
+import { ladeObjektDokumentHoch, erzeugeDownloadUrl, leseAlsBase64 } from '../../lib/objektDokumenteStorage'
+import { classifyObjektDokument } from '../../lib/emailGateway'
 
 const TABS = [
   { id: 'uebersicht', label: 'Übersicht' },
@@ -32,6 +35,8 @@ export function ObjektDetail() {
   const { state, dispatch } = useApp()
   const [finOpen, setFinOpen] = useState(false)
   const [vorschlagOpen, setVorschlagOpen] = useState(false)
+  const [uploadOpen, setUploadOpen] = useState(false)
+  const [oeffneFehler, setOeffneFehler] = useState('')
 
   const objekt = state.objekte.find((o) => o.id === id)
   const tab = params.get('tab') ?? 'uebersicht'
@@ -61,14 +66,22 @@ export function ObjektDetail() {
     setParams({ tab: 'dokumente', ordner: name })
   }
 
-  function uploadDummy(name: DokumentOrdnerName) {
-    dispatch({
-      type: 'ADD_DOKUMENT',
-      objektId,
-      ordner: name,
-      dokument: { id: uid('doc'), name: `Neues_Dokument_${Math.floor(Math.random() * 900 + 100)}.pdf`, typ: 'PDF', datum: today(), groesse: '120 KB' },
-    })
+  function dokumentGespeichert(zielOrdner: DokumentOrdnerName, dokument: Dokument) {
+    dispatch({ type: 'ADD_DOKUMENT', objektId, ordner: zielOrdner, dokument })
   }
+
+  async function dokumentOeffnen(d: Dokument) {
+    if (!d.url) return
+    setOeffneFehler('')
+    try {
+      const url = await erzeugeDownloadUrl(d.url)
+      window.open(url, '_blank', 'noopener,noreferrer')
+    } catch (err) {
+      setOeffneFehler(err instanceof Error ? err.message : 'Datei konnte nicht geöffnet werden.')
+    }
+  }
+
+  const unterlagenCheck = pruefeUnterlagenVollstaendigkeit(objekt)
 
   return (
     <div>
@@ -163,7 +176,45 @@ export function ObjektDetail() {
               <div className={`text-sm ${overdue ? 'font-medium text-rose-600' : 'text-slate-700'}`}>{fmtDate(objekt.followUp.date)} — {objekt.followUp.note}</div>
             </div>
           </Card>
-          <Card className="p-5 lg:col-span-2">
+
+          <Card className="p-5 lg:col-span-1">
+            <h3 className="mb-3 text-sm font-semibold text-slate-700">Unterlagen-Vollständigkeit</h3>
+            <div className="mb-3 flex items-center gap-2">
+              <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-100">
+                <div
+                  className={`h-full rounded-full ${unterlagenCheck.prozent === 100 ? 'bg-emerald-500' : 'bg-accent-500'}`}
+                  style={{ width: `${unterlagenCheck.prozent}%` }}
+                />
+              </div>
+              <span className="text-sm font-semibold text-slate-700">{unterlagenCheck.prozent} %</span>
+            </div>
+            {unterlagenCheck.pflicht.length === 0 ? (
+              <p className="text-xs text-slate-400">Für den Typ "{objekt.typ}" sind keine Pflicht-Unterlagen hinterlegt.</p>
+            ) : (
+              <ul className="space-y-1.5 text-sm">
+                {unterlagenCheck.pflicht.map((name) => {
+                  const vorhanden = unterlagenCheck.vorhanden.includes(name)
+                  return (
+                    <li key={name}>
+                      <button
+                        onClick={() => openOrdner(name)}
+                        className="flex w-full items-center gap-2 rounded-md px-1 py-0.5 text-left hover:bg-slate-50"
+                      >
+                        {vorhanden ? (
+                          <CheckCircle2 size={14} className="flex-shrink-0 text-emerald-500" />
+                        ) : (
+                          <XCircle size={14} className="flex-shrink-0 text-rose-400" />
+                        )}
+                        <span className={vorhanden ? 'text-slate-600' : 'font-medium text-slate-700'}>{name}</span>
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+          </Card>
+
+          <Card className="p-5 lg:col-span-1">
             <h3 className="mb-3 text-sm font-semibold text-slate-700">Aktivitäten-Timeline</h3>
             <ul className="space-y-3">
               {objekt.activities.map((a) => (
@@ -182,8 +233,14 @@ export function ObjektDetail() {
       )}
 
       {tab === 'dokumente' && !ordner && (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-          {DOKUMENT_ORDNER.map((name) => {
+        <div>
+          <div className="mb-3 flex justify-end">
+            <PrimaryButton onClick={() => setUploadOpen(true)}>
+              <Sparkles size={14} /> Dokument hochladen (KI sortiert automatisch)
+            </PrimaryButton>
+          </div>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+            {DOKUMENT_ORDNER.map((name) => {
             const count = objekt.dokumente[name]?.length ?? 0
             return (
               <button
@@ -197,6 +254,7 @@ export function ObjektDetail() {
               </button>
             )
           })}
+          </div>
         </div>
       )}
 
@@ -206,10 +264,11 @@ export function ObjektDetail() {
             <button onClick={() => setParams({ tab: 'dokumente' })} className="flex items-center gap-1.5 text-sm font-medium text-slate-600 hover:text-slate-800">
               <FolderOpen size={16} className="text-accent-500" /> {ordner}
             </button>
-            <button onClick={() => uploadDummy(ordner)} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50">
+            <button onClick={() => setUploadOpen(true)} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50">
               <Upload size={13} /> Datei hochladen
             </button>
           </div>
+          {oeffneFehler && <p className="mb-3 text-sm font-medium text-rose-600">{oeffneFehler}</p>}
           <Card className="overflow-hidden">
             <table className="w-full text-sm">
               <thead>
@@ -220,7 +279,15 @@ export function ObjektDetail() {
               <tbody>
                 {(objekt.dokumente[ordner] ?? []).map((d) => (
                   <tr key={d.id} className="border-b border-slate-50 last:border-0">
-                    <td className="px-4 py-3 font-medium text-slate-700"><span className="flex items-center gap-2"><File size={14} className="text-slate-400" />{d.name}</span></td>
+                    <td className="px-4 py-3 font-medium text-slate-700">
+                      {d.url ? (
+                        <button onClick={() => dokumentOeffnen(d)} className="flex items-center gap-2 text-left hover:text-accent-700 hover:underline">
+                          <File size={14} className="text-slate-400" />{d.name}
+                        </button>
+                      ) : (
+                        <span className="flex items-center gap-2"><File size={14} className="text-slate-400" />{d.name}</span>
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-slate-500">{d.typ}</td>
                     <td className="px-4 py-3 text-slate-500">{fmtDate(d.datum)}</td>
                     <td className="px-4 py-3 text-slate-500">{d.groesse}</td>
@@ -313,7 +380,163 @@ export function ObjektDetail() {
           }}
         />
       </Modal>
+
+      <ObjektDokumentUploadModal
+        open={uploadOpen}
+        onClose={() => setUploadOpen(false)}
+        objektId={objekt.id}
+        vorausgewaehlterOrdner={ordner ?? undefined}
+        onGespeichert={dokumentGespeichert}
+      />
     </div>
+  )
+}
+
+// KI-Dokumentenverarbeitung (Immobilienabteilung, siehe Projektnotiz 2026-11-02): Bild/PDF
+// hochladen -> Claude erkennt Unterlagen-Kategorie, schlägt Dateinamen + Datum vor -> Mitarbeiter
+// prüft/korrigiert -> echte Datei landet im privaten Supabase-Storage-Bucket "objekt-dokumente".
+function ObjektDokumentUploadModal({
+  open,
+  onClose,
+  objektId,
+  vorausgewaehlterOrdner,
+  onGespeichert,
+}: {
+  open: boolean
+  onClose: () => void
+  objektId: string
+  vorausgewaehlterOrdner?: DokumentOrdnerName
+  onGespeichert: (ordner: DokumentOrdnerName, dokument: Dokument) => void
+}) {
+  const [file, setFile] = useState<File | null>(null)
+  const [pruefeKi, setPruefeKi] = useState(false)
+  const [kiHinweis, setKiHinweis] = useState('')
+  const [kiVorschlag, setKiVorschlag] = useState(false)
+  const [ordner, setOrdner] = useState<DokumentOrdnerName>(vorausgewaehlterOrdner ?? 'Sonstiges')
+  const [dateiname, setDateiname] = useState('')
+  const [datum, setDatum] = useState(today())
+  const [speichern, setSpeichern] = useState(false)
+  const [speicherFehler, setSpeicherFehler] = useState('')
+
+  function reset() {
+    setFile(null)
+    setPruefeKi(false)
+    setKiHinweis('')
+    setKiVorschlag(false)
+    setOrdner(vorausgewaehlterOrdner ?? 'Sonstiges')
+    setDateiname('')
+    setDatum(today())
+    setSpeichern(false)
+    setSpeicherFehler('')
+  }
+
+  function handleClose() {
+    reset()
+    onClose()
+  }
+
+  async function handleFile(f: File | undefined) {
+    if (!f) return
+    setFile(f)
+    setDateiname(f.name)
+    setKiVorschlag(false)
+    setKiHinweis('')
+    const unterstuetzt = f.type.startsWith('image/') || f.type === 'application/pdf'
+    if (!unterstuetzt) {
+      setKiHinweis('Automatische Erkennung funktioniert nur bei Bildern/PDFs — bitte Kategorie manuell wählen.')
+      return
+    }
+    setPruefeKi(true)
+    try {
+      const base64 = await leseAlsBase64(f)
+      const klass = await classifyObjektDokument(base64, f.type, f.name)
+      setOrdner(klass.ordner)
+      setDateiname(klass.vorgeschlagener_dateiname || f.name)
+      if (klass.erkanntes_datum) setDatum(klass.erkanntes_datum)
+      setKiVorschlag(true)
+    } catch (err) {
+      setKiHinweis(err instanceof Error ? err.message : 'KI-Erkennung fehlgeschlagen — bitte manuell einordnen.')
+    } finally {
+      setPruefeKi(false)
+    }
+  }
+
+  async function speichernKlick() {
+    if (!file) return
+    setSpeichern(true)
+    setSpeicherFehler('')
+    try {
+      const { pfad, groesse } = await ladeObjektDokumentHoch(objektId, file)
+      const dokument: Dokument = {
+        id: uid('dok'),
+        name: dateiname.trim() || file.name,
+        typ: file.type || 'Datei',
+        datum,
+        groesse,
+        url: pfad,
+      }
+      onGespeichert(ordner, dokument)
+      handleClose()
+    } catch (err) {
+      setSpeicherFehler(err instanceof Error ? err.message : 'Hochladen fehlgeschlagen.')
+    } finally {
+      setSpeichern(false)
+    }
+  }
+
+  return (
+    <Modal open={open} onClose={handleClose} title="Dokument hochladen" width="max-w-lg">
+      <p className="mb-3 text-xs text-slate-500">
+        Bild oder PDF hochladen — die KI erkennt automatisch die passende Unterlagen-Kategorie und schlägt einen
+        Dateinamen vor. Bitte vor dem Speichern kurz prüfen.
+      </p>
+
+      <input
+        type="file"
+        accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx"
+        onChange={(e) => handleFile(e.target.files?.[0])}
+        className="mb-4 block w-full text-sm text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-accent-50 file:px-3 file:py-2 file:text-sm file:font-medium file:text-accent-700 hover:file:bg-accent-100"
+      />
+
+      {pruefeKi && (
+        <p className="mb-3 flex items-center gap-1.5 text-xs text-accent-600">
+          <Sparkles size={13} className="animate-pulse" /> KI erkennt Dokumenttyp …
+        </p>
+      )}
+      {kiHinweis && <p className="mb-3 text-xs text-amber-600">{kiHinweis}</p>}
+      {kiVorschlag && (
+        <p className="mb-3 flex items-center gap-1.5 text-xs font-medium text-emerald-600">
+          <Sparkles size={13} /> Von der KI erkannt — bitte prüfen.
+        </p>
+      )}
+
+      {file && (
+        <>
+          <Field label="Kategorie">
+            <select className={inputClass} value={ordner} onChange={(e) => setOrdner(e.target.value as DokumentOrdnerName)}>
+              {DOKUMENT_ORDNER.map((o) => (
+                <option key={o} value={o}>{o}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Dateiname">
+            <input className={inputClass} value={dateiname} onChange={(e) => setDateiname(e.target.value)} />
+          </Field>
+          <Field label="Datum">
+            <input type="date" className={inputClass} value={datum} onChange={(e) => setDatum(e.target.value)} />
+          </Field>
+        </>
+      )}
+
+      {speicherFehler && <p className="mb-3 text-sm font-medium text-rose-600">{speicherFehler}</p>}
+
+      <div className="mt-4 flex justify-end gap-2">
+        <SecondaryButton onClick={handleClose}>Abbrechen</SecondaryButton>
+        <PrimaryButton onClick={speichernKlick} disabled={!file || speichern || pruefeKi}>
+          <Upload size={14} /> {speichern ? 'Wird hochgeladen …' : 'Speichern'}
+        </PrimaryButton>
+      </div>
+    </Modal>
   )
 }
 

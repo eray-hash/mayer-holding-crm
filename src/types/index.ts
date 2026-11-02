@@ -178,10 +178,14 @@ export type ObjektTyp = 'Wohnung' | 'Haus' | 'Grundstück' | 'Gewerbe' | 'Neubau
 export const DOKUMENT_ORDNER = [
   'Aktennotiz',
   'Angebote',
+  'Baulastenauskunft',
+  'Betriebskostenabrechnung',
   'Bilder',
   'Energieausweis',
   'Exposé',
   'Finanzierung',
+  'Flurkarte',
+  'Gebäudeversicherung',
   'Genehmigung',
   'Grundbuch',
   'Grundrisse',
@@ -189,13 +193,17 @@ export const DOKUMENT_ORDNER = [
   'Kostenaufstellung',
   'Lageplan',
   'Leistungsverzeichnisse',
+  'Mieterliste',
   'Mietverträge',
   'Notarielle Dokumente',
   'Persönliche Daten des Eigentümers',
   'Pläne',
+  'Protokolle',
   'Sanierungsunterlagen',
   'Sonstiges',
+  'Teilungserklärung',
   'Verträge',
+  'Wohnflächenberechnung',
 ] as const
 
 export type DokumentOrdnerName = (typeof DOKUMENT_ORDNER)[number]

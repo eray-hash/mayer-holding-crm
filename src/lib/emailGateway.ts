@@ -212,6 +212,20 @@ export async function classifyPflegeInput(text: string): Promise<PflegeKlassifik
   return data.klassifikation
 }
 
+export type ObjektDokumentKlassifikation = {
+  ordner: import('../types').DokumentOrdnerName
+  vorgeschlagener_dateiname: string
+  erkanntes_datum?: string
+}
+
+// KI-Dokumentenverarbeitung (Immobilienabteilung): erkennt Unterlagen-Kategorie + Dateinamen-
+// Vorschlag + Datum aus einem hochgeladenen Bild/PDF. Siehe objektDokumenteStorage.ts für den Upload
+// selbst (läuft direkt über den authentifizierten Supabase-Storage-Client, nicht über dieses Gateway).
+export async function classifyObjektDokument(dateiBase64: string, mediaType: string, dateiname: string): Promise<ObjektDokumentKlassifikation> {
+  const data = await call({ action: 'classify_objekt_dokument', datei_base64: dateiBase64, media_type: mediaType, dateiname })
+  return data.klassifikation
+}
+
 export async function erstellePublicLead(params: {
   firma: string
   ansprechpartner?: string

@@ -72,6 +72,13 @@
 //                                                   filtert auf "interessant"/"sehr interessant" und
 //                                                   gibt nur die fürs Auswahl-Modal nötigen Felder
 //                                                   zurück (Modul 3: Immobilienradar-Integration)
+//   { action: "classify_objekt_dokument", datei_base64, media_type, dateiname }
+//                                                -> KI-Dokumentenverarbeitung Immobilien: erkennt
+//                                                   anhand des Inhalts (Bild oder PDF) die passende
+//                                                   Unterlagen-Kategorie (DOKUMENT_ORDNER), schlägt
+//                                                   einen Dateinamen vor und liest ggf. ein Datum
+//                                                   aus — die eigentliche Zuordnung bestätigt der
+//                                                   Mitarbeiter im Frontend
 //   { action: "pflege_classify", text }          -> Pflege-Modus (KI-Assistent, nur GF/Admin):
 //                                                   klassifiziert eine Massenkorrektur-Anweisung
 //                                                   ("X ist kein Kunde", "verschiebe X zu Erben",
@@ -254,6 +261,7 @@ async function summarizeTranscript(transcript: string): Promise<Zusammenfassung>
 type ClaudeContentBlock =
   | { type: 'text'; text: string }
   | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }
+  | { type: 'document'; source: { type: 'base64'; media_type: string; data: string } }
 
 // Gemeinsamer Aufruf für die KI-Assistent-Aktionen unten — erzwingt per tool_choice eine
 // strukturierte Antwort im gegebenen Schema, statt Freitext parsen zu müssen. `prompt` kann ein
@@ -499,6 +507,63 @@ async function answerWithImage(frage: string, imageBase64: string, mediaType: st
     },
   )
   return { antwort: result.antwort.replace(/<\/?[a-zA-Z_][^>]*>/g, '').trim() }
+}
+
+// Diese Liste muss mit DOKUMENT_ORDNER in src/types/index.ts übereinstimmen — kein gemeinsames
+// TS-Modul zwischen Frontend und Edge Function in diesem Projekt (Deno-Deploy ist eigenständig),
+// daher wie an anderer Stelle (z.B. pflege_classify) redundant gepflegt.
+const OBJEKT_DOKUMENT_ORDNER = [
+  'Aktennotiz', 'Angebote', 'Baulastenauskunft', 'Betriebskostenabrechnung', 'Bilder', 'Energieausweis',
+  'Exposé', 'Finanzierung', 'Flurkarte', 'Gebäudeversicherung', 'Genehmigung', 'Grundbuch', 'Grundrisse',
+  'Gutachten', 'Kostenaufstellung', 'Lageplan', 'Leistungsverzeichnisse', 'Mieterliste', 'Mietverträge',
+  'Notarielle Dokumente', 'Persönliche Daten des Eigentümers', 'Pläne', 'Protokolle', 'Sanierungsunterlagen',
+  'Sonstiges', 'Teilungserklärung', 'Verträge', 'Wohnflächenberechnung',
+]
+
+type ObjektDokumentKlassifikation = {
+  ordner: string
+  vorgeschlagener_dateiname: string
+  erkanntes_datum?: string
+}
+
+// KI-Dokumentenverarbeitung für die Immobilienabteilung (Quirin Lutzenberger, Immobilienfachwirt:
+// "Mitarbeiter ziehen einfach 50 unsortierte PDFs in einen Eingangsordner, die KI erkennt
+// Dokumenttyp + ordnet zu") — erkennt anhand des hochgeladenen Bilds/PDFs die passende
+// Unterlagen-Kategorie, schlägt einen Dateinamen vor und liest, falls erkennbar, ein Datum aus dem
+// Dokument. Die eigentliche Zuordnung zum Objekt passiert im Frontend nach Bestätigung durch den
+// Mitarbeiter (kein blindes Automatisieren einer potenziell falschen Zuordnung).
+async function classifyObjektDokument(mediaBase64: string, mediaType: string, dateiname: string): Promise<ObjektDokumentKlassifikation> {
+  const istPdf = mediaType === 'application/pdf'
+  const block: ClaudeContentBlock = istPdf
+    ? { type: 'document', source: { type: 'base64', media_type: mediaType, data: mediaBase64 } }
+    : { type: 'image', source: { type: 'base64', media_type: mediaType, data: mediaBase64 } }
+  return callClaudeTool<ObjektDokumentKlassifikation>(
+    [
+      {
+        type: 'text',
+        text: `Ein Mitarbeiter einer Immobilienabteilung hat eine Datei hochgeladen (ursprünglicher Dateiname: "${dateiname}"). Erkenne anhand des tatsächlichen Inhalts, um welche Art von Immobilien-Unterlage es sich handelt, und ordne sie genau einer dieser Kategorien zu: ${OBJEKT_DOKUMENT_ORDNER.join(', ')}. Passt wirklich keine davon, nimm "Sonstiges".
+
+Schlage außerdem einen kurzen, aussagekräftigen deutschen Dateinamen vor (mit der ursprünglichen Dateiendung, ohne Leerzeichen, z.B. "Grundbuchauszug_Musterstrasse17.pdf").
+
+Falls im Dokument selbst ein Datum erkennbar ist (z.B. Ausstellungsdatum, Stichtag), gib es im Format YYYY-MM-DD an — sonst lass das Feld weg.`,
+      },
+      block,
+    ],
+    {
+      name: 'objekt_dokument_klassifikation',
+      description: 'Erkennt die Unterlagen-Kategorie, einen Dateinamen-Vorschlag und ein Datum für ein hochgeladenes Immobilien-Dokument.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          ordner: { type: 'string', enum: OBJEKT_DOKUMENT_ORDNER },
+          vorgeschlagener_dateiname: { type: 'string' },
+          erkanntes_datum: { type: 'string' },
+        },
+        required: ['ordner', 'vorgeschlagener_dateiname'],
+      },
+    },
+    512,
+  )
 }
 
 // Nachfolger von scripts/extract-leads.mjs — macht dasselbe, aber automatisch und nur für Absender,
@@ -890,6 +955,15 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ antwort }), { headers })
     }
 
+    if (body.action === 'classify_objekt_dokument') {
+      const { datei_base64, media_type, dateiname } = body
+      if (!datei_base64 || typeof datei_base64 !== 'string') {
+        return new Response(JSON.stringify({ error: 'datei_base64 ist ein Pflichtfeld' }), { status: 400, headers })
+      }
+      const klassifikation = await classifyObjektDokument(datei_base64, media_type || 'application/pdf', dateiname || '')
+      return new Response(JSON.stringify({ klassifikation }), { headers })
+    }
+
     // Die folgenden drei Aktionen sind für die öffentlichen, unauthentifizierten Formulare unter
     // /formular/* gedacht (src/pages/formulare/Public*.tsx). Diese Seiten laufen ohne Mitarbeiter-
     // Login, die kunden-Tabelle in Supabase lässt per RLS aber nur Lese-/Schreibzugriff für
@@ -1031,7 +1105,7 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ listings }), { headers })
     }
 
-    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top" oder "pflege_classify"' }), { status: 400, headers })
+    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify" oder "classify_objekt_dokument"' }), { status: 400, headers })
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }
