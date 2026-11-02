@@ -29,7 +29,7 @@ import type {
 } from '../types'
 import { DEFAULT_FRAGENKATALOG } from '../data/fragenkataloge'
 import { KUNDEN_BEREICHE, kundeBereichLabel } from '../data/kundenBereiche'
-import { isSupabaseConfigured, hydrateFromSupabase, syncAfterDispatch, type HydratedData } from '../lib/crmSync'
+import { isSupabaseConfigured, hydrateFromSupabase, syncAfterDispatch, migriereLokaleDatenFallsLeer, type HydratedData } from '../lib/crmSync'
 import type { Projekt, Aufgabe, AufgabenStatus, Meilenstein } from '../types/project'
 import { seedKunden, seedRechnungen, seedProtokolle, seedKonzepte, seedVertraege, seedVorlagen } from '../data/seedBeratung'
 import { seedObjekte, seedFinanzierungen } from '../data/seedImmobilien'
@@ -93,10 +93,10 @@ export type AppData = {
 
 const STORAGE_KEY = 'mayer-holding-crm-data-v1'
 
-// Kunden/Objekte/Protokolle/Objekt-Vorschläge kommen jetzt, sobald Supabase konfiguriert ist, aus
-// der geteilten Datenbank (siehe lib/crmSync.ts) statt aus den lokalen Demo-Seed-Daten — sonst
-// würde beim ersten Laden kurz Fake-Daten aufblitzen, und ein versehentliches "Daten zurücksetzen"
-// könnte echte Kundendaten lokal überschreiben.
+// Alle über Supabase geteilten Entitäten kommen jetzt, sobald Supabase konfiguriert ist, aus der
+// geteilten Datenbank (siehe lib/crmSync.ts) statt aus den lokalen Demo-Seed-Daten — sonst würde
+// beim ersten Laden kurz Fake-Daten aufblitzen, und ein versehentliches "Daten zurücksetzen" könnte
+// echte Daten lokal überschreiben.
 function leereGeteilteEntities(data: AppData): AppData {
   if (!isSupabaseConfigured) return data
   return {
@@ -110,6 +110,23 @@ function leereGeteilteEntities(data: AppData): AppData {
     objekte: [],
     protokolle: [],
     objektVorschlaege: [],
+    vorlagenBeratung: [],
+    vorlagenImmobilien: [],
+    vorlagenErben: [],
+    vorlagenBetriebsuebergabe: [],
+    vorlagenBetriebsformen: [],
+    vorlagenAkademie: [],
+    vorlagenFinanzierungen: [],
+    rechnungen: [],
+    konzepte: [],
+    vertraege: [],
+    finanzierungen: [],
+    projekte: [],
+    fondsInvestoren: [],
+    fondsDokumenteAllgemein: [],
+    importierteDokumente: [],
+    mailVorlagen: [],
+    notizen: [],
   }
 }
 
@@ -154,6 +171,14 @@ function buildSeed(): AppData {
   }
 }
 
+// Momentaufnahme des rohen localStorage-Stands BEVOR leereGeteilteEntities() die per Supabase
+// geteilten Felder auf [] setzt — Grundlage für die einmalige Migration lokal vorhandener Daten
+// nach Supabase (siehe migriereLokaleDatenFallsLeer in crmSync.ts). Muss synchron beim ersten
+// loadInitial()-Aufruf eingefangen werden: ein erneutes Lesen von localStorage später (z.B. im
+// Hydrate-Effekt) wäre zu spät, da der "state nach localStorage schreiben"-Effekt bereits vorher
+// greift und den bereits geleerten State zurückschreibt — real beim Testen aufgetreten.
+let lokalerStandVorSync: Partial<AppData> | null = null
+
 function loadInitial(): AppData {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
@@ -189,6 +214,7 @@ function loadInitial(): AppData {
           }
         }
         if (!Array.isArray(parsed.fragenkataloge)) parsed.fragenkataloge = DEFAULT_FRAGENKATALOG
+        lokalerStandVorSync = parsed
         return leereGeteilteEntities(parsed)
       }
     }
@@ -889,6 +915,23 @@ function reducer(state: AppData, action: Action): AppData {
         objekte: action.data.objekte,
         protokolle: action.data.protokolle,
         objektVorschlaege: action.data.objektVorschlaege,
+        vorlagenBeratung: action.data.vorlagen.beratung,
+        vorlagenImmobilien: action.data.vorlagen.immobilien,
+        vorlagenErben: action.data.vorlagen.erben,
+        vorlagenBetriebsuebergabe: action.data.vorlagen.betriebsuebergabe,
+        vorlagenBetriebsformen: action.data.vorlagen.betriebsformen,
+        vorlagenAkademie: action.data.vorlagen.akademie,
+        vorlagenFinanzierungen: action.data.vorlagen.finanzierungen,
+        rechnungen: action.data.rechnungen,
+        konzepte: action.data.konzepte,
+        vertraege: action.data.vertraege,
+        finanzierungen: action.data.finanzierungen,
+        projekte: action.data.projekte,
+        fondsInvestoren: action.data.fondsInvestoren,
+        fondsDokumenteAllgemein: action.data.fondsDokumenteAllgemein,
+        importierteDokumente: action.data.importierteDokumente,
+        mailVorlagen: action.data.mailVorlagen,
+        notizen: action.data.notizen,
       }
     case 'ADD_FRAGE':
       return { ...state, fragenkataloge: [...state.fragenkataloge, action.frage] }
@@ -955,9 +998,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!isSupabaseConfigured) return
     let cancelled = false
     hydrateFromSupabase()
-      .then((data) => {
+      .then(async (data) => {
         if (cancelled || !data) return
-        dispatch({ type: 'HYDRATE_SUPABASE', data })
+        const fertig = lokalerStandVorSync ? await migriereLokaleDatenFallsLeer(data, lokalerStandVorSync) : data
+        if (cancelled) return
+        dispatch({ type: 'HYDRATE_SUPABASE', data: fertig })
         setHydrated(true)
       })
       .catch((err) => {

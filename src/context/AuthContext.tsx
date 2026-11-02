@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import type { Session, User } from '@supabase/supabase-js'
 import { supabase, isSupabaseConfigured } from '../lib/supabaseClient'
+import { setCurrentUser } from '../data/constants'
 
 export type Mitarbeiter = {
   id: string
@@ -60,6 +61,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       cancelled = true
     }
   }, [session?.user?.email])
+
+  // Aktivitäts-Logs/Signaturen im ganzen CRM verwenden CURRENT_USER als Akteur-Namen — ohne das
+  // hier zu setzen, bliebe es für immer beim ursprünglichen Demo-Platzhalter (siehe constants.ts).
+  useEffect(() => {
+    if (mitarbeiter?.name) setCurrentUser(mitarbeiter.name)
+  }, [mitarbeiter?.name])
 
   const value: AuthState = {
     ready,

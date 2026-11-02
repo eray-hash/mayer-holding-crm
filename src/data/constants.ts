@@ -50,9 +50,16 @@ export const VORLAGEN_KATEGORIEN: { id: 'vollmacht' | 'schreiben' | 'vertraege';
   { id: 'vertraege', label: 'Verträge' },
 ]
 
-// "Andreas Mayer" ist der echte Geschäftsführer (siehe Dropdown in allen Kunden-/Mandanten-Listen) —
-// die übrigen sind Platzhalter-Namen, solange es noch kein echtes Mitarbeiter-/Berechtigungssystem gibt.
-export const MITARBEITER = ['Andreas Mayer', 'Thomas Berger', 'Julia Hartmann', 'Markus Lehmann', 'Sandra Peters']
+// "Verantwortlich"-Dropdown in allen Kunden-/Mandanten-/Objekt-/Projekt-Listen. Lebender Binding
+// (kein const) — jetzt, wo es ein echtes Mitarbeiter-/Berechtigungssystem gibt, ersetzt
+// AppContext.tsx diese anfänglichen Platzhalter-Namen beim Laden durch die echte, aktive
+// Mitarbeiter-Liste aus Supabase (siehe hydrateFromSupabase in crmSync.ts). Im Demo-Modus (ohne
+// Supabase) bleiben die Platzhalter bestehen, da es dort keine echten Mitarbeiter-Accounts gibt.
+export let MITARBEITER = ['Andreas Mayer', 'Thomas Berger', 'Julia Hartmann', 'Markus Lehmann', 'Sandra Peters']
+
+export function setMitarbeiterListe(namen: string[]) {
+  if (namen.length > 0) MITARBEITER = namen
+}
 
 // Die echten Lukrativitäts-Einstufungen aus dem separaten ImmoRadar-Tool (eigenständiges
 // Scan-/Scoring-Projekt, läuft unter eray-hash.github.io/immobilien-radar).
@@ -67,4 +74,13 @@ export const LUKRATIVITAET_COLOR: Record<string, string> = {
   'zu wenig Daten': 'bg-slate-100 text-slate-400',
 }
 
-export const CURRENT_USER = 'Eray (Demo)'
+// Name, der als Akteur in Aktivitäts-Logs/Signaturen erscheint ("durch ${CURRENT_USER}"). Lebender
+// Binding (kein const) — AuthContext.tsx ruft setCurrentUser() mit dem Namen des echten
+// eingeloggten Mitarbeiters auf, sobald der verfügbar ist, statt dass hier für immer der
+// ursprüngliche Demo-Platzhalter stehen bleibt (der sonst JEDE Aktivität im echten, geteilten CRM
+// fälschlich "Eray (Demo)" zuschreiben würde, egal wer wirklich eingeloggt ist).
+export let CURRENT_USER = 'Eray (Demo)'
+
+export function setCurrentUser(name: string) {
+  CURRENT_USER = name
+}

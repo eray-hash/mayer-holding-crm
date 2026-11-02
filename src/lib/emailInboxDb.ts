@@ -25,9 +25,11 @@ type Row = {
   zugewiesener_kunde_id: string | null
   zugewiesener_bereich: string | null
   zugewiesener_kunde_name: string | null
+  ignoriert: boolean | null
 }
 
-const SELECT_SPALTEN = 'id, message_id, von, von_name, betreff, mail_datum, ausschnitt, anhaenge, zugewiesener_kunde_id, zugewiesener_bereich, zugewiesener_kunde_name'
+const SELECT_SPALTEN =
+  'id, message_id, von, von_name, betreff, mail_datum, ausschnitt, anhaenge, zugewiesener_kunde_id, zugewiesener_bereich, zugewiesener_kunde_name, ignoriert'
 
 function toMail(row: Row): EingegangeneMail {
   return {
@@ -42,6 +44,7 @@ function toMail(row: Row): EingegangeneMail {
       row.zugewiesener_kunde_id && row.zugewiesener_bereich && row.zugewiesener_kunde_name
         ? { bereich: row.zugewiesener_bereich as KundeBereich, kundeId: row.zugewiesener_kunde_id, kundeName: row.zugewiesener_kunde_name }
         : undefined,
+    ignoriert: row.ignoriert ?? undefined,
   }
 }
 
@@ -66,6 +69,26 @@ export async function fetchStoredEmails(limit = 20): Promise<EingegangeneMail[]>
     .limit(limit)
   if (error) throw new Error(error.message)
   return (data ?? []).map(toMail)
+}
+
+// Schreibt eine manuelle Zuordnung/Ignorieren-Markierung aus dem Postfach zurück in die DB — bis
+// 2026-11-02 passierte das nur lokal im Browser des handelnden Mitarbeiters, ein Kollege auf einem
+// anderen Gerät sah dieselbe E-Mail danach weiterhin als neu/unbearbeitet an. Gleiches
+// Publishable-Key-Muster wie bei vorgeschlagene_leads (siehe leadsDb.ts) — kein Mitarbeiter-Login
+// im Client nötig, da dieser eigenständige Supabase-Client keine Session führt.
+export async function assignMail(messageId: string, bereich: KundeBereich, kundeId: string, kundeName: string): Promise<void> {
+  if (!client) throw new Error('E-Mail-Datenbank ist noch nicht konfiguriert (VITE_SUPABASE_EMAIL_URL fehlt).')
+  const { error } = await client
+    .from('eingegangene_emails')
+    .update({ zugewiesener_bereich: bereich, zugewiesener_kunde_id: kundeId, zugewiesener_kunde_name: kundeName })
+    .eq('message_id', messageId)
+  if (error) throw new Error(error.message)
+}
+
+export async function ignoreMail(messageId: string): Promise<void> {
+  if (!client) throw new Error('E-Mail-Datenbank ist noch nicht konfiguriert (VITE_SUPABASE_EMAIL_URL fehlt).')
+  const { error } = await client.from('eingegangene_emails').update({ ignoriert: true }).eq('message_id', messageId)
+  if (error) throw new Error(error.message)
 }
 
 // Durchsucht Absender, Betreff und Textausschnitt server-seitig (nicht nur die bereits lokal

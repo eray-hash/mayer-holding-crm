@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Inbox, Send, RefreshCw, UserPlus, Check, X, AlertTriangle, Plus, Reply, ListPlus, Search, Sparkles, Megaphone, Paperclip } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
-import { isEmailInboxDbConfigured, fetchStoredEmails, searchStoredEmails } from '../../lib/emailInboxDb'
+import { isEmailInboxDbConfigured, fetchStoredEmails, searchStoredEmails, assignMail, ignoreMail } from '../../lib/emailInboxDb'
 import { isSentEmailsDbConfigured, fetchSentEmails, searchSentEmails } from '../../lib/sentEmailsDb'
 import { isLeadsDbConfigured, fetchOffeneLeads, setLeadStatus } from '../../lib/leadsDb'
 import { isEmailGatewayConfigured, classifyNewLeads } from '../../lib/emailGateway'
@@ -225,7 +225,15 @@ export function Postfach() {
   function zuweisen(mailId: string, bereich: KundeBereich, kundeId: string) {
     const kunde = KUNDEN_BEREICHE.find((b) => b.id === bereich)!.get(state).find((k) => k.id === kundeId)
     if (!kunde) return
-    dispatch({ type: 'ASSIGN_EINGEGANGENE_EMAIL', id: mailId, bereich, kundeId, kundeName: `${kunde.firma} (${kunde.ansprechpartner})` })
+    const kundeName = `${kunde.firma} (${kunde.ansprechpartner})`
+    dispatch({ type: 'ASSIGN_EINGEGANGENE_EMAIL', id: mailId, bereich, kundeId, kundeName })
+    const mail = state.eingegangeneEmails.find((e) => e.id === mailId)
+    if (mail) assignMail(mail.messageId, bereich, kundeId, kundeName).catch((err) => console.error('Zuordnung konnte nicht gespeichert werden:', err))
+  }
+
+  function ignorieren(mail: EingegangeneEmail) {
+    dispatch({ type: 'IGNORE_EINGEGANGENE_EMAIL', id: mail.id })
+    ignoreMail(mail.messageId).catch((err) => console.error('Ignorieren konnte nicht gespeichert werden:', err))
   }
 
   function alsNeuenKundenAnlegen(mail: EingegangeneEmail) {
@@ -245,7 +253,7 @@ export function Postfach() {
         activities: [{ id: uid('act'), date: today(), text: `Als Lead aus E-Mail-Posteingang angelegt: „${mail.betreff}"`, user: 'E-Mail-Posteingang' }],
       },
     })
-    dispatch({ type: 'IGNORE_EINGEGANGENE_EMAIL', id: mail.id })
+    ignorieren(mail)
     setSelectedId(null)
   }
 
@@ -489,7 +497,7 @@ export function Postfach() {
                     onZuweisen={zuweisen}
                     onAlsLead={() => alsNeuenKundenAnlegen(selectedMail)}
                     onIgnorieren={() => {
-                      dispatch({ type: 'IGNORE_EINGEGANGENE_EMAIL', id: selectedMail.id })
+                      ignorieren(selectedMail)
                       setSelectedId(null)
                     }}
                   />

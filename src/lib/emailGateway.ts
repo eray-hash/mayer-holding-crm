@@ -20,6 +20,7 @@ export type EingegangeneMail = {
   // Bei eindeutigem E-Mail-Match automatisch gesetzt (siehe inbound-email/index.ts und
   // scripts/auto-assign-emails.mjs) — kein manuelles Zuordnen im Postfach mehr nötig.
   zugewiesen?: { bereich: import('../types').KundeBereich; kundeId: string; kundeName: string }
+  ignoriert?: boolean
 }
 
 async function call(body: Record<string, unknown>): Promise<any> {
