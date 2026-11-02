@@ -93,13 +93,18 @@ async function fetchAllEmails() {
   return all
 }
 
-function groupBySender(emails) {
+// Echte Mitarbeiter nutzen teils private E-Mail-Adressen (gmx.de, hotmail.com, ...) für
+// Geschäftskorrespondenz statt der amayer-holding.com-Adresse — ohne diesen Abgleich würden sie
+// bei entsprechendem Mail-Volumen fälschlich als externer Lead angelegt (siehe echter Fall: Hasan
+// Süslü/Quirin Lutzenberger wurden so am 02.11.2026 versehentlich als Kunden angelegt).
+function groupBySender(emails, mitarbeiterEmails) {
   const groups = new Map()
   for (const e of emails) {
     const email = (e.von ?? '').trim().toLowerCase()
     if (!email || !email.includes('@')) continue
     const domain = email.split('@')[1]
     if (INTERNE_DOMAINS.includes(domain)) continue
+    if (mitarbeiterEmails.has(email)) continue
     if (!groups.has(email)) groups.set(email, { email, vonName: e.von_name, mails: [] })
     groups.get(email).mails.push({ betreff: e.betreff, ausschnitt: e.ausschnitt, datum: e.mail_datum })
   }
@@ -154,7 +159,11 @@ async function main() {
   const emails = await fetchAllEmails()
   console.log(`${emails.length} E-Mails geladen.`)
 
-  const gruppen = groupBySender(emails)
+  const { data: mitarbeiterRows, error: mitarbeiterError } = await supabase.from('mitarbeiter').select('email')
+  if (mitarbeiterError) throw new Error(mitarbeiterError.message)
+  const mitarbeiterEmails = new Set((mitarbeiterRows ?? []).map((m) => m.email.trim().toLowerCase()))
+
+  const gruppen = groupBySender(emails, mitarbeiterEmails)
   console.log(`${gruppen.length} eindeutige externe Absender gefunden. Klassifiziere in Batches von ${BATCH_SIZE}...`)
 
   const byEmail = new Map(gruppen.map((g) => [g.email, g]))

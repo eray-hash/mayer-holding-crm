@@ -491,12 +491,20 @@ async function classifyNewLeads(): Promise<{ geprueft: number; vorgeschlagen: nu
   const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
 
   const emails = await fetchAlleEingegangeneEmails(supabase)
+  // Echte Mitarbeiter nutzen teils private E-Mail-Adressen (gmx.de, hotmail.com, ...) für
+  // Geschäftskorrespondenz statt der amayer-holding.com-Adresse — ohne diesen Abgleich würden sie
+  // bei entsprechendem Mail-Volumen fälschlich als externer Lead angelegt (siehe echter Fall: Hasan
+  // Süslü/Quirin Lutzenberger wurden so am 02.11.2026 versehentlich als Kunden angelegt).
+  const { data: mitarbeiterRows } = await supabase.from('mitarbeiter').select('email')
+  const mitarbeiterEmails = new Set((mitarbeiterRows ?? []).map((m: { email: string }) => m.email.trim().toLowerCase()))
+
   const gruppenMap = new Map<string, LeadGruppe>()
   for (const e of emails) {
     const email = (e.von ?? '').trim().toLowerCase()
     if (!email || !email.includes('@')) continue
     const domain = email.split('@')[1]
     if (INTERNE_DOMAINS.includes(domain)) continue
+    if (mitarbeiterEmails.has(email)) continue
     if (!gruppenMap.has(email)) gruppenMap.set(email, { email, vonName: e.von_name, mails: [] })
     gruppenMap.get(email)!.mails.push({ betreff: e.betreff, ausschnitt: e.ausschnitt, datum: e.mail_datum })
   }
