@@ -4,7 +4,7 @@ import { useApp } from '../context/AppContext'
 import { useSpeechRecognition } from '../lib/useSpeechRecognition'
 import { speak, isSpeechSynthesisSupported } from '../lib/useSpeechSynthesis'
 import { isEmailGatewayConfigured, classifyAssistantInput, answerAssistantQuestion, answerWithImage } from '../lib/emailGateway'
-import { suggestKunde, type KundeMatch } from '../lib/matchKunde'
+import { suggestKundeKandidaten, type KundeMatch } from '../lib/matchKunde'
 import { KUNDEN_BEREICHE } from '../data/kundenBereiche'
 import { getStatusMap } from '../data/statusNetworks'
 import { CallRecorder } from './CallRecorder'
@@ -39,6 +39,10 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
   // Zuletzt im Gespräch erkannter Kunde — Fallback, falls eine Folgeäußerung ("ja, leg ihn auf
   // Wiedervorlage") keinen Namen mehr nennt, sich aber offensichtlich auf denselben Kunden bezieht.
   const [letzterKunde, setLetzterKunde] = useState<KundeMatch | null>(null)
+  // Gesetzt, wenn der Assistent gerade wegen Mehrdeutigkeit nachgefragt hat ("wen genau meinst
+  // du?") — damit die Antwort darauf (oft nur ein Name) als Klärung der ursprünglichen Frage
+  // behandelt wird statt als neue, kontextlose Äußerung.
+  const [ausstehendeFrage, setAusstehendeFrage] = useState<{ frageText: string; kandidaten: KundeMatch[] } | null>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -48,6 +52,51 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
   function addMessage(role: ChatMessage['role'], text: string, sprechen = false, imageDataUrl?: string) {
     setMessages((m) => [...m, { id: uid('msg'), role, text, imageDataUrl }])
     if (sprechen) speak(text, ttsEnabled)
+  }
+
+  // Baut denselben Kunden-Kontext wie zuvor inline in senden() und fragt das Modell — ausgelagert,
+  // damit sowohl der normale "frage"-Zweig als auch die Auflösung einer Rückfrage (siehe
+  // ausstehendeFrage) dieselbe Logik benutzen, statt sie zu duplizieren.
+  async function beantworteFrage(match: KundeMatch, frageText: string, sprechen: boolean) {
+    addMessage('assistant', `Frage zu ${match.kundeName}: „${frageText}" — ich schaue nach …`)
+    const kunde = KUNDEN_BEREICHE.find((b) => b.id === match.bereich)!.get(state).find((k) => k.id === match.kundeId)!
+    const protokolle = state.protokolle.filter((p) => p.bereich === match.bereich && p.kundeId === kunde.id)
+    const statusLabel = getStatusMap(match.bereich)[kunde.status]?.label ?? kunde.status
+    const kontext = [
+      `Kunde/Mandant: ${kunde.firma} (${kunde.ansprechpartner})`,
+      `Status: ${statusLabel}`,
+      `Follow-up: ${fmtDate(kunde.followUp.date)} — ${kunde.followUp.note}${kunde.followUp.done ? ' (erledigt)' : ''}`,
+      '',
+      'Aktivitäten (neueste zuerst):',
+      ...kunde.activities.slice(0, 20).map((a) => `- ${fmtDate(a.date)}: ${a.text}`),
+      '',
+      'Gesprächsprotokolle (neueste zuerst):',
+      ...(protokolle.length > 0
+        ? protokolle.flatMap((p) => [
+            `- ${fmtDate(p.datum)} "${p.betreff}" (Teilnehmer: ${p.teilnehmer}):`,
+            `  Zusammenfassung: ${p.kiZusammenfassung ?? p.text}`,
+            ...(p.kernthemen?.length ? [`  Kernthemen: ${p.kernthemen.join(', ')}`] : []),
+            ...(p.vereinbarungen?.length ? [`  Vereinbarungen: ${p.vereinbarungen.join(', ')}`] : []),
+            ...(p.offenePunkte?.length ? [`  Offene Punkte: ${p.offenePunkte.join(', ')}`] : []),
+          ])
+        : ['(keine)']),
+      '',
+      'Vorhandene Dokumente:',
+      ...(kunde.dokumente && kunde.dokumente.length > 0 ? kunde.dokumente.map((d) => `- ${d.name}`) : ['(keine)']),
+      ...(kunde.unterlagenCheckliste
+        ? [
+            '',
+            'Unterlagen-Checkliste:',
+            ...Object.entries(kunde.unterlagenCheckliste).map(([punkt, erledigt]) => `- ${punkt}: ${erledigt ? 'vorhanden' : 'FEHLT NOCH'}`),
+          ]
+        : []),
+    ].join('\n')
+    try {
+      const antwort = await answerAssistantQuestion(frageText, kontext)
+      addMessage('assistant', antwort, sprechen)
+    } catch (err) {
+      addMessage('assistant', `Antwort konnte nicht abgerufen werden: ${err instanceof Error ? err.message : 'Fehler'}`, sprechen)
+    }
   }
 
   function onPasteInput(e: React.ClipboardEvent<HTMLTextAreaElement>) {
@@ -89,13 +138,64 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
     }
     if (!text) return
 
+    // Auflösung einer vorherigen Rückfrage ("mehrere passende Kunden gefunden, wen genau meinst
+    // du?") — wenn die aktuelle Äußerung genau einen der damals genannten Kandidaten eindeutig
+    // benennt, wird direkt die ursprüngliche Frage für diesen Kunden beantwortet, statt die Antwort
+    // (z.B. nur ein Name) als komplett neue, kontextlose Äußerung zu klassifizieren.
+    if (ausstehendeFrage) {
+      const pending = ausstehendeFrage
+      setAusstehendeFrage(null)
+      const neueTreffer = new Set(suggestKundeKandidaten(state, text).map((k) => k.kundeId))
+      const aufgeloest = pending.kandidaten.filter((k) => neueTreffer.has(k.kundeId))
+      if (aufgeloest.length === 1) {
+        addMessage('user', text)
+        setLetzterKunde(aufgeloest[0])
+        setVerarbeiten(true)
+        try {
+          await beantworteFrage(aufgeloest[0], pending.frageText, sprechen)
+        } finally {
+          setVerarbeiten(false)
+        }
+        return
+      }
+      // Nicht eindeutig aufgelöst (z.B. User ignoriert die Rückfrage und fragt etwas anderes) ->
+      // ganz normal weiterverarbeiten, nicht in der Rückfrage hängen bleiben.
+    }
+
     addMessage('user', text)
     setVerarbeiten(true)
     try {
       const klass = await classifyAssistantInput(text, today())
+      // Kandidaten aus zwei Quellen zusammenführen (per von der KI erkanntem Namen, und per
+      // komplettem Text) — bei einer KI-Fehlextraktion kann der Text-Treffer trotzdem der eindeutig
+      // bessere sein (siehe echter Fehlgriff beim Testen: "Amberger Feinmechanik" in der Frage, aber
+      // KI extrahierte fälschlich einen komplett anderen Namen). Pro Kunde wird nur der höhere der
+      // beiden Scores behalten, dann werden nur die Kunden mit dem insgesamt höchsten Score behalten.
+      const kandidatenNachId = new Map<string, KundeMatch>()
+      for (const k of [...(klass.erkannter_name ? suggestKundeKandidaten(state, klass.erkannter_name) : []), ...suggestKundeKandidaten(state, text)]) {
+        const vorhanden = kandidatenNachId.get(k.kundeId)
+        if (!vorhanden || k.score > vorhanden.score) kandidatenNachId.set(k.kundeId, k)
+      }
+      const alleKandidaten = [...kandidatenNachId.values()]
+      const topScore = alleKandidaten.length > 0 ? Math.max(...alleKandidaten.map((k) => k.score)) : 0
+      const kandidaten = alleKandidaten.filter((k) => k.score === topScore)
+
+      // Mehrdeutig (z.B. nur ein Vorname genannt, der auf mehrere Kunden zutrifft) -> nachfragen
+      // statt stillschweigend irgendeinen davon zu nehmen. Gilt für jede Art von Äußerung (Frage,
+      // Notiz, Aufgabe, Aufnahme), nicht nur für "frage".
+      if (kandidaten.length > 1) {
+        if (klass.typ === 'frage') setAusstehendeFrage({ frageText: klass.frage ?? text, kandidaten })
+        addMessage(
+          'assistant',
+          `Dazu habe ich mehrere passende Kunden/Mandanten gefunden: ${kandidaten.map((k) => k.kundeName).join(', ')}. Wen genau meinst du?`,
+          sprechen,
+        )
+        return
+      }
+
       // Fallback auf den zuletzt besprochenen Kunden, wenn die aktuelle Äußerung keinen Namen mehr
       // nennt (z.B. "ja, leg ihn auf Wiedervorlage" als Antwort auf einen proaktiven Vorschlag).
-      const match = (klass.erkannter_name && suggestKunde(state, klass.erkannter_name)) || suggestKunde(state, text) || letzterKunde
+      const match = kandidaten[0] ?? letzterKunde
       if (match) setLetzterKunde(match)
 
       if (klass.typ === 'frage') {
@@ -103,45 +203,7 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
         if (!match) {
           addMessage('assistant', 'Dazu habe ich keinen passenden Kunden gefunden — nenn mir bitte den Namen etwas genauer.', sprechen)
         } else {
-          addMessage('assistant', `Frage zu ${match.kundeName}: „${frageText}" — ich schaue nach …`)
-          const kunde = KUNDEN_BEREICHE.find((b) => b.id === match.bereich)!.get(state).find((k) => k.id === match.kundeId)!
-          const protokolle = state.protokolle.filter((p) => p.bereich === match.bereich && p.kundeId === kunde.id)
-          const statusLabel = getStatusMap(match.bereich)[kunde.status]?.label ?? kunde.status
-          const kontext = [
-            `Kunde/Mandant: ${kunde.firma} (${kunde.ansprechpartner})`,
-            `Status: ${statusLabel}`,
-            `Follow-up: ${fmtDate(kunde.followUp.date)} — ${kunde.followUp.note}${kunde.followUp.done ? ' (erledigt)' : ''}`,
-            '',
-            'Aktivitäten (neueste zuerst):',
-            ...kunde.activities.slice(0, 20).map((a) => `- ${fmtDate(a.date)}: ${a.text}`),
-            '',
-            'Gesprächsprotokolle (neueste zuerst):',
-            ...(protokolle.length > 0
-              ? protokolle.flatMap((p) => [
-                  `- ${fmtDate(p.datum)} "${p.betreff}" (Teilnehmer: ${p.teilnehmer}):`,
-                  `  Zusammenfassung: ${p.kiZusammenfassung ?? p.text}`,
-                  ...(p.kernthemen?.length ? [`  Kernthemen: ${p.kernthemen.join(', ')}`] : []),
-                  ...(p.vereinbarungen?.length ? [`  Vereinbarungen: ${p.vereinbarungen.join(', ')}`] : []),
-                  ...(p.offenePunkte?.length ? [`  Offene Punkte: ${p.offenePunkte.join(', ')}`] : []),
-                ])
-              : ['(keine)']),
-            '',
-            'Vorhandene Dokumente:',
-            ...(kunde.dokumente && kunde.dokumente.length > 0 ? kunde.dokumente.map((d) => `- ${d.name}`) : ['(keine)']),
-            ...(kunde.unterlagenCheckliste
-              ? [
-                  '',
-                  'Unterlagen-Checkliste:',
-                  ...Object.entries(kunde.unterlagenCheckliste).map(([punkt, erledigt]) => `- ${punkt}: ${erledigt ? 'vorhanden' : 'FEHLT NOCH'}`),
-                ]
-              : []),
-          ].join('\n')
-          try {
-            const antwort = await answerAssistantQuestion(frageText, kontext)
-            addMessage('assistant', antwort, sprechen)
-          } catch (err) {
-            addMessage('assistant', `Antwort konnte nicht abgerufen werden: ${err instanceof Error ? err.message : 'Fehler'}`, sprechen)
-          }
+          await beantworteFrage(match, frageText, sprechen)
         }
       } else if (klass.typ === 'aufnahme') {
         if (!match) {

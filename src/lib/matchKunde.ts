@@ -4,23 +4,55 @@ import { KUNDEN_BEREICHE } from '../data/kundenBereiche'
 
 export type KundeMatch = { bereich: KundeBereich; kundeId: string; kundeName: string; score: number }
 
+// Häufige, nicht-unterscheidende deutsche Füllwörter — ohne Filter können diese sowohl selbst
+// zufällig als Teilstring in einem Firmen-/E-Mail-Namen auftauchen (z.B. "bei" in
+// "gewerbeimmo-ulm.de") als auch (vor der Umstellung auf Wortgrenzen-Vergleich) andere Namen
+// fälschlich matchen (z.B. "der" in "Alexander") — beides real beim Testen aufgetreten.
+const FUELLWOERTER = new Set([
+  'bei', 'der', 'die', 'das', 'den', 'dem', 'des', 'und', 'ist', 'war', 'wie', 'was', 'wer', 'wen',
+  'wem', 'für', 'mit', 'von', 'vom', 'zum', 'zur', 'auf', 'aus', 'hat', 'hab', 'sein', 'ihr',
+  'ihre', 'dein', 'deine', 'mein', 'meine', 'noch', 'nach', 'vor', 'über', 'unter', 'nur', 'auch',
+  'kein', 'keine', 'man', 'wir', 'ich', 'du', 'sie', 'wird', 'werden', 'kann', 'soll', 'will',
+])
+
+function woerter(text: string): string[] {
+  return (text.toLowerCase().match(/[a-zäöüß]{3,}/g) ?? []).filter((w) => !FUELLWOERTER.has(w))
+}
+
 // Simples, aber echtes Text-Matching: findet den Kunden/Mandanten (über alle Bereiche hinweg),
 // dessen Firmen-/Ansprechpartnername am häufigsten im übergebenen Text vorkommt. Wird sowohl beim
 // Dokumenten-Import als auch beim E-Mail-Posteingang verwendet, damit beide dieselbe Logik teilen.
-export function suggestKunde(state: AppData, text: string): KundeMatch | null {
-  const tokens = text.toLowerCase().match(/[a-zäöüß]{3,}/g) ?? []
-  if (tokens.length === 0) return null
-  let best: KundeMatch | null = null
+//
+// Vergleicht ganze Wörter (nicht Teilstrings) — sonst matcht z.B. die Frage-Füllwörter "bei"/"der"
+// zufällig als Teilstring irgendwo in einem unbeteiligten Firmennamen oder einer E-Mail-Adresse.
+//
+// Gibt ALLE Kunden zurück, die den höchsten Score erreichen (nicht nur den ersten gefundenen) —
+// Grundlage dafür, Mehrdeutigkeit zu erkennen (z.B. nur ein Vorname genannt, der auf mehrere Kunden
+// zutrifft), statt stillschweigend irgendeinen davon zu raten. Siehe KiAssistentPanel.tsx.
+export function suggestKundeKandidaten(state: AppData, text: string): KundeMatch[] {
+  const tokens = woerter(text)
+  if (tokens.length === 0) return []
+  let bestScore = 0
+  let beste: KundeMatch[] = []
   for (const b of KUNDEN_BEREICHE) {
     for (const k of b.get(state)) {
-      const haystack = `${k.firma} ${k.ansprechpartner} ${k.email}`.toLowerCase()
-      const score = tokens.filter((t) => haystack.includes(t)).length
-      if (score > 0 && (!best || score > best.score)) {
-        best = { bereich: b.id, kundeId: k.id, kundeName: `${k.firma} (${k.ansprechpartner})`, score }
+      const haystackWoerter = new Set(woerter(`${k.firma} ${k.ansprechpartner} ${k.email}`))
+      const score = tokens.filter((t) => haystackWoerter.has(t)).length
+      if (score === 0) continue
+      const kandidat: KundeMatch = { bereich: b.id, kundeId: k.id, kundeName: `${k.firma} (${k.ansprechpartner})`, score }
+      if (score > bestScore) {
+        bestScore = score
+        beste = [kandidat]
+      } else if (score === bestScore) {
+        beste.push(kandidat)
       }
     }
   }
-  return best
+  return beste
+}
+
+export function suggestKunde(state: AppData, text: string): KundeMatch | null {
+  return suggestKundeKandidaten(state, text)[0] ?? null
 }
 
 // Exakter Treffer per E-Mail-Adresse (für den Posteingang zuverlässiger als reines Text-Matching).
