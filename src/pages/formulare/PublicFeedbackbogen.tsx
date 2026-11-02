@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { CheckCircle2 } from 'lucide-react'
-import { Card, Field, inputClass, PrimaryButton } from '../../components/ui'
+import { CheckCircle2, Printer } from 'lucide-react'
+import { Card, Field, inputClass, PrimaryButton, SecondaryButton } from '../../components/ui'
 import { SignaturePad } from '../../components/SignaturePad'
 import { addDays, today } from '../../lib/dates'
 import { erstellePublicLead } from '../../lib/emailGateway'
@@ -115,6 +115,12 @@ export function PublicFeedbackbogen() {
           <h1 className="mt-1 text-xl font-bold text-slate-800">Feedbackbogen – {veranstaltung}</h1>
         </div>
 
+        <div className="mb-3 flex justify-end print:hidden">
+          <SecondaryButton onClick={() => window.print()} className="gap-1.5 text-xs">
+            <Printer size={13} /> Zum Ausdrucken (handschriftlich ausfüllen & unterschreiben)
+          </SecondaryButton>
+        </div>
+
         <Card className="p-6">
           <Field label="Veranstaltung">
             <input className={inputClass} value={veranstaltung} onChange={(e) => setVeranstaltung(e.target.value)} />
@@ -223,15 +229,24 @@ export function PublicFeedbackbogen() {
             gespeichert und verarbeitet. Eine Weitergabe an Dritte erfolgt nicht.
           </p>
 
-          <Field label="Unterschrift *">
-            <SignaturePad onChange={setSignatur} />
-          </Field>
+          <div className="print:hidden">
+            <Field label="Unterschrift *">
+              <SignaturePad onChange={setSignatur} />
+            </Field>
+          </div>
+          <div className="hidden print:block print:mt-8">
+            <p className="text-sm text-slate-700">Ort, Datum: ________________________</p>
+            <p className="mt-8 text-sm text-slate-700">Unterschrift: ________________________________</p>
+          </div>
 
           {error && <p className="mb-3 text-sm font-medium text-rose-600">{error}</p>}
 
-          <PrimaryButton onClick={submit} disabled={senden} className="w-full justify-center">
+          <PrimaryButton onClick={submit} disabled={senden} className="w-full justify-center print:hidden">
             {senden ? 'Wird übermittelt …' : 'Absenden'}
           </PrimaryButton>
+          <p className="hidden print:block print:mt-4 print:text-xs print:text-slate-400">
+            Bitte ausgedruckt, handschriftlich ausgefüllt und unterschrieben an die Andreas Mayer Holding zurückgeben (per Post, persönlich oder eingescannt per E-Mail).
+          </p>
         </Card>
       </div>
     </div>

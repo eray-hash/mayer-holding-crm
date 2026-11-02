@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { CheckCircle2, Loader2 } from 'lucide-react'
+import { CheckCircle2, Loader2, Printer } from 'lucide-react'
 import { KUNDEN_BEREICHE } from '../../data/kundenBereiche'
 import { DEFAULT_FRAGENKATALOG } from '../../data/fragenkataloge'
-import { Card, Field, inputClass, PrimaryButton } from '../../components/ui'
+import { Card, Field, inputClass, PrimaryButton, SecondaryButton } from '../../components/ui'
 import { SignaturePad } from '../../components/SignaturePad'
 import { today } from '../../lib/dates'
 import { holePublicKunde, sendePublicFormular, type PublicKunde } from '../../lib/emailGateway'
@@ -129,6 +129,12 @@ export function PublicSelbstauskunft() {
           <p className="mt-1 text-sm text-slate-500">für {kunde.firma}</p>
         </div>
 
+        <div className="mb-3 flex justify-end print:hidden">
+          <SecondaryButton onClick={() => window.print()} className="gap-1.5 text-xs">
+            <Printer size={13} /> Zum Ausdrucken (handschriftlich ausfüllen & unterschreiben)
+          </SecondaryButton>
+        </div>
+
         <Card className="p-6">
           {fragen.map((f) => (
             <Field key={f.id} label={`${f.text}${f.pflichtfeld ? ' *' : ''}`}>
@@ -163,15 +169,24 @@ export function PublicSelbstauskunft() {
             Ihre Daten werden ausschließlich im Rahmen der laufenden Beratung verwendet. Eine Weitergabe an Dritte erfolgt nicht.
           </p>
 
-          <Field label="Unterschrift *">
-            <SignaturePad onChange={setSignatur} />
-          </Field>
+          <div className="print:hidden">
+            <Field label="Unterschrift *">
+              <SignaturePad onChange={setSignatur} />
+            </Field>
+          </div>
+          <div className="hidden print:block print:mt-8">
+            <p className="text-sm text-slate-700">Ort, Datum: ________________________</p>
+            <p className="mt-8 text-sm text-slate-700">Unterschrift: ________________________________</p>
+          </div>
 
           {error && <p className="mb-3 text-sm font-medium text-rose-600">{error}</p>}
 
-          <PrimaryButton onClick={submit} disabled={senden} className="w-full justify-center">
+          <PrimaryButton onClick={submit} disabled={senden} className="w-full justify-center print:hidden">
             {senden ? 'Wird übermittelt …' : 'Absenden'}
           </PrimaryButton>
+          <p className="hidden print:block print:mt-4 print:text-xs print:text-slate-400">
+            Bitte ausgedruckt, handschriftlich ausgefüllt und unterschrieben an die Andreas Mayer Holding zurückgeben (per Post, persönlich oder eingescannt per E-Mail).
+          </p>
         </Card>
       </div>
     </div>
