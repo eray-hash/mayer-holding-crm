@@ -5,6 +5,7 @@
 
 import { createClient } from '@supabase/supabase-js'
 import type { EingegangeneMail } from './emailGateway'
+import type { KundeBereich } from '../types'
 
 const URL = import.meta.env.VITE_SUPABASE_EMAIL_URL as string | undefined
 const ANON_KEY = import.meta.env.VITE_SUPABASE_EMAIL_ANON_KEY as string | undefined
@@ -21,7 +22,12 @@ type Row = {
   mail_datum: string
   ausschnitt: string | null
   anhaenge: { filename: string; size: number; contentType: string; url: string }[] | null
+  zugewiesener_kunde_id: string | null
+  zugewiesener_bereich: string | null
+  zugewiesener_kunde_name: string | null
 }
+
+const SELECT_SPALTEN = 'id, message_id, von, von_name, betreff, mail_datum, ausschnitt, anhaenge, zugewiesener_kunde_id, zugewiesener_bereich, zugewiesener_kunde_name'
 
 function toMail(row: Row): EingegangeneMail {
   return {
@@ -32,6 +38,10 @@ function toMail(row: Row): EingegangeneMail {
     datum: row.mail_datum,
     ausschnitt: row.ausschnitt ?? '',
     anhaenge: row.anhaenge ?? undefined,
+    zugewiesen:
+      row.zugewiesener_kunde_id && row.zugewiesener_bereich && row.zugewiesener_kunde_name
+        ? { bereich: row.zugewiesener_bereich as KundeBereich, kundeId: row.zugewiesener_kunde_id, kundeName: row.zugewiesener_kunde_name }
+        : undefined,
   }
 }
 
@@ -50,7 +60,7 @@ export async function fetchStoredEmails(limit = 20): Promise<EingegangeneMail[]>
   if (!client) throw new Error('E-Mail-Datenbank ist noch nicht konfiguriert (VITE_SUPABASE_EMAIL_URL fehlt).')
   const { data, error } = await client
     .from('eingegangene_emails')
-    .select('id, message_id, von, von_name, betreff, mail_datum, ausschnitt, anhaenge')
+    .select(SELECT_SPALTEN)
     .or(NUR_RELEVANTE_MAILS)
     .order('mail_datum', { ascending: false })
     .limit(limit)
@@ -66,7 +76,7 @@ export async function searchStoredEmails(query: string, limit = 50): Promise<Ein
   if (!term) return fetchStoredEmails(limit)
   const { data, error } = await client
     .from('eingegangene_emails')
-    .select('id, message_id, von, von_name, betreff, mail_datum, ausschnitt, anhaenge')
+    .select(SELECT_SPALTEN)
     .or(`betreff.ilike.%${term}%,von.ilike.%${term}%,von_name.ilike.%${term}%,ausschnitt.ilike.%${term}%`)
     .or(NUR_RELEVANTE_MAILS)
     .order('mail_datum', { ascending: false })

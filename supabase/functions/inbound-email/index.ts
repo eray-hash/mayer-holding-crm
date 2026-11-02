@@ -81,6 +81,63 @@ Ausschnitt: ${ausschnitt.slice(0, 300)}`,
   }
 }
 
+// Live-Gegenstück zu scripts/auto-assign-emails.mjs (dort nur als Einmal-Lauf für den historischen
+// Rückstand): ordnet eine neu eingehende Kunden-Mail automatisch zu, wenn genau ein Kunde/Mandant
+// (über alle Bereiche hinweg) exakt dieselbe E-Mail-Adresse hinterlegt hat — sonst (kein Treffer
+// oder mehrere Kunden teilen sich dieselbe Adresse) bleibt die Mail unzugeordnet und taucht im
+// Postfach weiter zur manuellen Zuordnung auf. Ein Fehler hier darf das Einsortieren der Mail
+// selbst nicht verhindern.
+async function versucheAutomatischeZuordnung(
+  supabase: ReturnType<typeof createClient>,
+  von: string,
+  vonName: string,
+  betreff: string,
+  anhaenge: { filename: string; size: number; contentType: string; url: string }[],
+): Promise<{ kundeId: string; bereich: string; kundeName: string } | null> {
+  try {
+    const { data: treffer, error } = await supabase
+      .from('kunden')
+      .select('id, bereich, firma, ansprechpartner, dokumente, activities')
+      .ilike('email', von.trim())
+    if (error || !treffer || treffer.length !== 1) return null
+
+    const kunde = treffer[0]
+    const hatAnhaenge = anhaenge.length > 0
+    const heute = new Date().toISOString().slice(0, 10)
+    const neueDokumente = anhaenge.map((a) => ({
+      id: crypto.randomUUID(),
+      name: a.filename,
+      typ: a.contentType,
+      datum: heute,
+      groesse: a.size < 1024 * 1024 ? `${Math.round(a.size / 1024)} KB` : `${(a.size / (1024 * 1024)).toFixed(1)} MB`,
+      url: a.url,
+    }))
+    const activity = {
+      id: crypto.randomUUID(),
+      date: heute,
+      text: hatAnhaenge
+        ? `E-Mail automatisch zugeordnet: „${betreff}" von ${vonName} (${anhaenge.length} Anhang/Anhänge in Dokumente abgelegt)`
+        : `E-Mail automatisch zugeordnet: „${betreff}" von ${vonName}`,
+      user: 'System (automatische E-Mail-Zuordnung)',
+    }
+    const { error: updateError } = await supabase
+      .from('kunden')
+      .update({
+        dokumente: [...neueDokumente, ...((kunde.dokumente as unknown[]) ?? [])],
+        activities: [activity, ...((kunde.activities as unknown[]) ?? [])],
+      })
+      .eq('id', kunde.id)
+    if (updateError) {
+      console.error('Automatische Zuordnung fehlgeschlagen (Kunde-Update)', updateError)
+      return null
+    }
+    return { kundeId: kunde.id, bereich: kunde.bereich, kundeName: `${kunde.firma} (${kunde.ansprechpartner})` }
+  } catch (err) {
+    console.error('Automatische Zuordnung fehlgeschlagen', err)
+    return null
+  }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method !== 'POST') {
     return new Response('Method not allowed', { status: 405 })
@@ -185,6 +242,7 @@ Deno.serve(async (req: Request) => {
 
   const ausschnitt = text.slice(0, 500)
   const relevanz = await klassifiziereRelevanz(vonName, von, betreff, ausschnitt)
+  const zuordnung = relevanz === 'kunde' ? await versucheAutomatischeZuordnung(supabase, von, vonName, betreff, anhaenge) : null
 
   const { error } = await supabase.from('eingegangene_emails').insert({
     message_id: messageId,
@@ -195,6 +253,9 @@ Deno.serve(async (req: Request) => {
     rohdaten: payload,
     anhaenge: anhaenge.length > 0 ? anhaenge : null,
     relevanz,
+    zugewiesener_kunde_id: zuordnung?.kundeId ?? null,
+    zugewiesener_bereich: zuordnung?.bereich ?? null,
+    zugewiesener_kunde_name: zuordnung?.kundeName ?? null,
   })
 
   if (error) {

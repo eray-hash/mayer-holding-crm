@@ -17,6 +17,9 @@ export type EingegangeneMail = {
   datum: string
   ausschnitt: string
   anhaenge?: { filename: string; size: number; contentType: string; url: string }[]
+  // Bei eindeutigem E-Mail-Match automatisch gesetzt (siehe inbound-email/index.ts und
+  // scripts/auto-assign-emails.mjs) — kein manuelles Zuordnen im Postfach mehr nötig.
+  zugewiesen?: { bereich: import('../types').KundeBereich; kundeId: string; kundeName: string }
 }
 
 async function call(body: Record<string, unknown>): Promise<any> {
