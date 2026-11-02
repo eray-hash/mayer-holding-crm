@@ -751,12 +751,18 @@ Deno.serve(async (req: Request) => {
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
       const { data, error: selectError } = await admin
         .from('kunden')
-        .select('firma, ansprechpartner, email, selbstauskunft')
+        .select('firma, ansprechpartner, email, selbstauskunft, signaturen')
         .eq('id', kundeId)
         .eq('bereich', bereich)
         .maybeSingle()
       if (selectError) return new Response(JSON.stringify({ error: selectError.message }), { status: 500, headers })
-      return new Response(JSON.stringify({ kunde: data ?? null }), { headers })
+      if (!data) return new Response(JSON.stringify({ kunde: null }), { headers })
+      // Nur ob eine NDA-Signatur existiert zurückgeben, nicht die vollen (teils mehrere MB großen)
+      // Signatur-Bilddaten aller bisherigen Formulare — die werden für kein öffentliches Formular
+      // zur Anzeige gebraucht.
+      const ndaUnterschrieben = ((data.signaturen as { kontext: string }[]) ?? []).some((s) => s.kontext === 'NDA – Geheimhaltungsvereinbarung')
+      const { signaturen: _signaturen, ...kundeOhneSignaturen } = data
+      return new Response(JSON.stringify({ kunde: { ...kundeOhneSignaturen, ndaUnterschrieben } }), { headers })
     }
 
     if (body.action === 'public_submit_formular') {

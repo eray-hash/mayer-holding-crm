@@ -130,6 +130,7 @@ export type PublicKunde = {
   ansprechpartner: string
   email: string
   selbstauskunft?: import('../types').Selbstauskunft
+  ndaUnterschrieben?: boolean
 }
 
 export async function holePublicKunde(bereich: string, kundeId: string): Promise<PublicKunde | null> {
