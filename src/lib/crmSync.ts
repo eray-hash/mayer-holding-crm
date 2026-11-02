@@ -188,6 +188,19 @@ function logFehler(kontext: string, error: { message: string } | null) {
 export function syncAfterDispatch(prev: AppData, next: AppData) {
   if (!supabase) return
 
+  // Echte Löschungen (Pflege-Modus: "loeschen"/"merge") erkennen — wichtig: über ALLE
+  // KundeBereiche hinweg vergleichen, nicht Array für Array. Ein Kunde, der nur von einem
+  // Bereichs-Array ins andere verschoben wurde ("verschieben"), darf NICHT gelöscht werden — er
+  // taucht dann zwar im alten Array nicht mehr auf, aber weiterhin (mit derselben id) im neuen, und
+  // die kunden-Tabelle ist ohnehin ein einziges Bereich-übergreifendes Table (bereich ist nur eine
+  // Spalte) — der Upsert unten mit derselben id aktualisiert dort einfach die bereich-Spalte.
+  const prevIds = new Set(KUNDE_KEYS.flatMap(({ key }) => (prev[key] as Kunde[]).map((k) => k.id)))
+  const nextIds = new Set(KUNDE_KEYS.flatMap(({ key }) => (next[key] as Kunde[]).map((k) => k.id)))
+  const geloeschteIds = [...prevIds].filter((id) => !nextIds.has(id))
+  if (geloeschteIds.length > 0) {
+    supabase.from('kunden').delete().in('id', geloeschteIds).then(({ error }) => logFehler('Kunde löschen', error))
+  }
+
   for (const { bereich, key } of KUNDE_KEYS) {
     const changed = diffById(prev[key] as Kunde[], next[key] as Kunde[])
     for (const k of changed) {

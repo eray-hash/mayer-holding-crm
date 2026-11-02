@@ -187,6 +187,21 @@ export async function holeImmoRadarTopListings(): Promise<ImmoRadarTreffer[]> {
   return data.listings ?? []
 }
 
+export type PflegeKlassifikation = {
+  aktion: 'verschieben' | 'loeschen' | 'merge' | 'unklar'
+  kunde_name?: string
+  kunde_name_2?: string
+  ziel_bereich?: import('../types').KundeBereich
+}
+
+// Pflege-Modus im KI-Assistenten (nur Geschäftsführung/Admin, siehe KiAssistentPanel.tsx) —
+// klassifiziert eine Massenkorrektur-Anweisung, die eigentliche Kundenzuordnung und jede
+// Schreiboperation passiert erst im Frontend nach expliziter Bestätigung.
+export async function classifyPflegeInput(text: string): Promise<PflegeKlassifikation> {
+  const data = await call({ action: 'pflege_classify', text })
+  return data.klassifikation
+}
+
 export async function erstellePublicLead(params: {
   firma: string
   ansprechpartner?: string

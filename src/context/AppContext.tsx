@@ -28,6 +28,7 @@ import type {
   Selbstauskunft,
 } from '../types'
 import { DEFAULT_FRAGENKATALOG } from '../data/fragenkataloge'
+import { KUNDEN_BEREICHE, kundeBereichLabel } from '../data/kundenBereiche'
 import { isSupabaseConfigured, hydrateFromSupabase, syncAfterDispatch, type HydratedData } from '../lib/crmSync'
 import type { Projekt, Aufgabe, AufgabenStatus, Meilenstein } from '../types/project'
 import { seedKunden, seedRechnungen, seedProtokolle, seedKonzepte, seedVertraege, seedVorlagen } from '../data/seedBeratung'
@@ -264,6 +265,9 @@ type Action =
   | { type: 'UPDATE_FRAGE'; id: string; patch: Partial<FragenkatalogFrage> }
   | { type: 'DELETE_FRAGE'; id: string }
   | { type: 'SET_SELBSTAUSKUNFT'; bereich: KundeBereich; kundeId: string; selbstauskunft: Selbstauskunft }
+  | { type: 'PFLEGE_VERSCHIEBE_KUNDE'; id: string; vonBereich: KundeBereich; nachBereich: KundeBereich }
+  | { type: 'PFLEGE_LOESCHE_KUNDE'; id: string; bereich: KundeBereich }
+  | { type: 'PFLEGE_MERGE_KUNDEN'; bereich: KundeBereich; behalteId: string; loescheId: string }
   | { type: 'HYDRATE_SUPABASE'; data: HydratedData }
   | { type: 'ADD_NOTIZ'; notiz: Notiz }
   | { type: 'TOGGLE_NOTIZ'; id: string }
@@ -303,6 +307,32 @@ function appendKundeActivity(
     default:
       return state
   }
+}
+
+// Schreib-Gegenstück zu KUNDEN_BEREICHE's .get() — für Pflege-Modus-Aktionen, die einen Kunden
+// komplett aus seinem bisherigen Bereichs-Array entfernen oder in ein anderes verschieben (anders
+// als appendKundeActivity oben, das nur innerhalb eines Bereichs patcht).
+function setKundenListe(state: AppData, bereich: KundeBereich, liste: Kunde[]): AppData {
+  switch (bereich) {
+    case 'beratung':
+      return { ...state, kunden: liste }
+    case 'erben':
+      return { ...state, erbenMandanten: liste }
+    case 'betriebsuebergabe':
+      return { ...state, betriebsuebergabeMandanten: liste }
+    case 'betriebsformen':
+      return { ...state, betriebsformenMandanten: liste }
+    case 'akademie':
+      return { ...state, akademieTeilnehmer: liste }
+    case 'finanzierungen':
+      return { ...state, finanzierungenMandanten: liste }
+    default:
+      return state
+  }
+}
+
+function getKundenListe(state: AppData, bereich: KundeBereich): Kunde[] {
+  return KUNDEN_BEREICHE.find((b) => b.id === bereich)!.get(state)
 }
 
 function reducer(state: AppData, action: Action): AppData {
@@ -813,6 +843,39 @@ function reducer(state: AppData, action: Action): AppData {
         user: CURRENT_USER,
       }
       return appendKundeActivity(state, action.bereich, action.kundeId, activity, { kaeuferprofil: action.profil })
+    }
+    case 'PFLEGE_VERSCHIEBE_KUNDE': {
+      const quelle = getKundenListe(state, action.vonBereich)
+      const kunde = quelle.find((k) => k.id === action.id)
+      if (!kunde) return state
+      const activity: ActivityEntry = {
+        id: uid('act'),
+        date: today(),
+        text: `Pflege-Modus: von „${kundeBereichLabel(action.vonBereich)}" nach „${kundeBereichLabel(action.nachBereich)}" verschoben durch ${CURRENT_USER}`,
+        user: CURRENT_USER,
+      }
+      const verschoben: Kunde = { ...kunde, activities: [activity, ...kunde.activities] }
+      const ohneQuelle = setKundenListe(state, action.vonBereich, quelle.filter((k) => k.id !== action.id))
+      return setKundenListe(ohneQuelle, action.nachBereich, [verschoben, ...getKundenListe(ohneQuelle, action.nachBereich)])
+    }
+    case 'PFLEGE_LOESCHE_KUNDE': {
+      const liste = getKundenListe(state, action.bereich)
+      return setKundenListe(state, action.bereich, liste.filter((k) => k.id !== action.id))
+    }
+    case 'PFLEGE_MERGE_KUNDEN': {
+      const liste = getKundenListe(state, action.bereich)
+      const behalten = liste.find((k) => k.id === action.behalteId)
+      const loeschen = liste.find((k) => k.id === action.loescheId)
+      if (!behalten || !loeschen) return state
+      const activity: ActivityEntry = {
+        id: uid('act'),
+        date: today(),
+        text: `Pflege-Modus: Dublette „${loeschen.firma}" zusammengeführt durch ${CURRENT_USER}`,
+        user: CURRENT_USER,
+      }
+      const zusammengefuehrt: Kunde = { ...behalten, activities: [activity, ...behalten.activities, ...loeschen.activities] }
+      const neueListe = liste.filter((k) => k.id !== action.loescheId).map((k) => (k.id === action.behalteId ? zusammengefuehrt : k))
+      return setKundenListe(state, action.bereich, neueListe)
     }
     case 'HYDRATE_SUPABASE':
       return {

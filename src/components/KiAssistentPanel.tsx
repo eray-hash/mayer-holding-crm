@@ -1,11 +1,19 @@
 import { useEffect, useRef, useState } from 'react'
-import { Mic, Square, Sparkles, AlertTriangle, Send, X, Volume2, VolumeX, Bot, ImagePlus, Phone } from 'lucide-react'
+import { Mic, Square, Sparkles, AlertTriangle, Send, X, Volume2, VolumeX, Bot, ImagePlus, Phone, Wrench, Check } from 'lucide-react'
 import { useApp } from '../context/AppContext'
+import { useAuth } from '../context/AuthContext'
+import { isSupabaseConfigured } from '../lib/supabaseClient'
 import { useSpeechRecognition } from '../lib/useSpeechRecognition'
 import { speak, isSpeechSynthesisSupported } from '../lib/useSpeechSynthesis'
-import { isEmailGatewayConfigured, classifyAssistantInput, answerAssistantQuestion, answerWithImage } from '../lib/emailGateway'
+import {
+  isEmailGatewayConfigured,
+  classifyAssistantInput,
+  answerAssistantQuestion,
+  answerWithImage,
+  classifyPflegeInput,
+} from '../lib/emailGateway'
 import { suggestKundeKandidaten, type KundeMatch } from '../lib/matchKunde'
-import { KUNDEN_BEREICHE } from '../data/kundenBereiche'
+import { KUNDEN_BEREICHE, kundeBereichLabel } from '../data/kundenBereiche'
 import { getStatusMap } from '../data/statusNetworks'
 import { CallRecorder } from './CallRecorder'
 import { Modal, inputClass } from './ui'
@@ -17,12 +25,28 @@ type ChatMessage = { id: string; role: 'user' | 'assistant'; text: string; image
 type PastedImage = { dataUrl: string; base64: string; mediaType: string }
 type AufnahmeKunde = { bereich: KundeBereich; kundeId: string; kundeName: string }
 
+// Pflege-Modus (nur Geschäftsführung/Admin): Massenkorrekturen an bestehenden Kunden-Datensätzen
+// per Sprache/Text ("X ist kein Kunde", "verschiebe X zu Erben", "X und Y sind dieselbe Firma") —
+// bewusst als eigener Vorschlags-Typ mit Pflicht-Bestätigung VOR jeder Schreiboperation, anders als
+// die übrigen Assistent-Aktionen, die sofort ausgeführt werden (siehe Plan-Beschluss 2026-11-02).
+type PflegeVorschlag = { beschreibung: string } & (
+  | { aktion: 'verschieben'; kundeId: string; vonBereich: KundeBereich; nachBereich: KundeBereich }
+  | { aktion: 'loeschen'; kundeId: string; bereich: KundeBereich }
+  | { aktion: 'merge'; bereich: KundeBereich; behalteId: string; loescheId: string }
+)
+
 // Persistentes Chat-Panel (statt Modal) für den KI-Assistenten — bleibt über die ganze Session
 // gemountet (siehe Layout.tsx), damit der Gesprächsverlauf beim Auf-/Zuklappen erhalten bleibt.
 // Antworten werden zusätzlich per Sprachausgabe vorgelesen (abschaltbar).
 export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: () => void }) {
   const { state, dispatch } = useApp()
+  const { session, mitarbeiter } = useAuth()
   const { supported, recording, transcript, interim, error: recError, start, stop, setTranscript } = useSpeechRecognition()
+  // Im Demo-Modus (ohne Supabase) gibt es keine echten Mitarbeiter-Rollen — dort greift wie überall
+  // sonst in der App state.rolle als Ersatz (siehe Layout.tsx resetData-Gate).
+  const pflegeErlaubt = isSupabaseConfigured
+    ? !!session && (mitarbeiter?.rolle === 'geschaeftsfuehrung' || !!mitarbeiter?.ist_admin)
+    : state.rolle === 'geschaeftsfuehrung'
 
   const [messages, setMessages] = useState<ChatMessage[]>([
     { id: uid('msg'), role: 'assistant', text: 'Hallo! Sag oder tipp mir eine Notiz, eine Aufgabe oder stell mir eine Frage zu einem Kunden.' },
@@ -43,11 +67,22 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
   // du?") — damit die Antwort darauf (oft nur ein Name) als Klärung der ursprünglichen Frage
   // behandelt wird statt als neue, kontextlose Äußerung.
   const [ausstehendeFrage, setAusstehendeFrage] = useState<{ frageText: string; kandidaten: KundeMatch[] } | null>(null)
+  const [pflegeModus, setPflegeModus] = useState(false)
+  const [pflegeVorschlag, setPflegeVorschlag] = useState<PflegeVorschlag | null>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' })
-  }, [messages, aufnahmeKunde])
+  }, [messages, aufnahmeKunde, pflegeVorschlag])
+
+  // Schaltet den Pflege-Modus hart ab, falls die Berechtigung währenddessen wegfällt (z.B. Admin-
+  // Recht entzogen) — ein offener, unbestätigter Vorschlag wird dabei verworfen statt ausgeführt.
+  useEffect(() => {
+    if (!pflegeErlaubt && (pflegeModus || pflegeVorschlag)) {
+      setPflegeModus(false)
+      setPflegeVorschlag(null)
+    }
+  }, [pflegeErlaubt, pflegeModus, pflegeVorschlag])
 
   function addMessage(role: ChatMessage['role'], text: string, sprechen = false, imageDataUrl?: string) {
     setMessages((m) => [...m, { id: uid('msg'), role, text, imageDataUrl }])
@@ -99,6 +134,121 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
     }
   }
 
+  function pflegeBestaetigen() {
+    if (!pflegeVorschlag) return
+    const sprechen = inputModus === 'sprache' && ttsEnabled
+    if (pflegeVorschlag.aktion === 'verschieben') {
+      dispatch({ type: 'PFLEGE_VERSCHIEBE_KUNDE', id: pflegeVorschlag.kundeId, vonBereich: pflegeVorschlag.vonBereich, nachBereich: pflegeVorschlag.nachBereich })
+      addMessage('assistant', `Erledigt — nach „${kundeBereichLabel(pflegeVorschlag.nachBereich)}" verschoben.`, sprechen)
+    } else if (pflegeVorschlag.aktion === 'loeschen') {
+      dispatch({ type: 'PFLEGE_LOESCHE_KUNDE', id: pflegeVorschlag.kundeId, bereich: pflegeVorschlag.bereich })
+      addMessage('assistant', 'Erledigt — Datensatz entfernt.', sprechen)
+    } else {
+      dispatch({ type: 'PFLEGE_MERGE_KUNDEN', bereich: pflegeVorschlag.bereich, behalteId: pflegeVorschlag.behalteId, loescheId: pflegeVorschlag.loescheId })
+      addMessage('assistant', 'Erledigt — zusammengeführt.', sprechen)
+    }
+    setPflegeVorschlag(null)
+  }
+
+  function pflegeVerwerfen() {
+    setPflegeVorschlag(null)
+    addMessage('assistant', 'Verworfen — es wurde nichts geändert.')
+  }
+
+  // Pflege-Modus-Zweig von senden(): klassifiziert die Anweisung, löst genannte Namen gegen die
+  // echten Kundendaten auf (bereichsübergreifend, siehe matchKunde.ts) und erzeugt bei Erfolg einen
+  // PflegeVorschlag — dispatcht aber NIE direkt, das passiert ausschließlich in pflegeBestaetigen().
+  async function pflegeSenden(text: string, sprechen: boolean) {
+    const normalisiert = text.trim().toLowerCase()
+    if (pflegeVorschlag && /^(ja|jep|jap|jo|bestätige|bestätigen|ok|okay|passt|mach das)\b/.test(normalisiert)) {
+      addMessage('user', text)
+      pflegeBestaetigen()
+      return
+    }
+    if (pflegeVorschlag && /^(nein|abbrechen|verwerfen|stopp?|nicht)\b/.test(normalisiert)) {
+      addMessage('user', text)
+      pflegeVerwerfen()
+      return
+    }
+
+    addMessage('user', text)
+    setVerarbeiten(true)
+    try {
+      const klass = await classifyPflegeInput(text)
+      if (klass.aktion === 'unklar' || !klass.kunde_name) {
+        addMessage(
+          'assistant',
+          'Das konnte ich nicht eindeutig als Verschieben/Löschen/Zusammenführen einordnen. Nenn mir bitte den Namen und was genau passieren soll.',
+          sprechen,
+        )
+        return
+      }
+      const kandidaten1 = suggestKundeKandidaten(state, klass.kunde_name)
+      if (kandidaten1.length === 0) {
+        addMessage('assistant', `Ich habe niemanden gefunden, der zu „${klass.kunde_name}" passt.`, sprechen)
+        return
+      }
+      if (kandidaten1.length > 1) {
+        addMessage(
+          'assistant',
+          `Mehrere passende Einträge zu „${klass.kunde_name}" gefunden: ${kandidaten1.map((k) => k.kundeName).join(', ')}. Bitte genauer benennen.`,
+          sprechen,
+        )
+        return
+      }
+      const ziel1 = kandidaten1[0]
+
+      if (klass.aktion === 'merge') {
+        if (!klass.kunde_name_2) {
+          addMessage('assistant', 'Für eine Zusammenführung brauche ich beide Namen.', sprechen)
+          return
+        }
+        const kandidaten2 = suggestKundeKandidaten(state, klass.kunde_name_2)
+        if (kandidaten2.length !== 1) {
+          addMessage('assistant', `„${klass.kunde_name_2}" konnte ich nicht eindeutig finden.`, sprechen)
+          return
+        }
+        const ziel2 = kandidaten2[0]
+        if (ziel1.bereich !== ziel2.bereich) {
+          addMessage('assistant', 'Beide Einträge müssen im selben Bereich sein, um sie zusammenzuführen.', sprechen)
+          return
+        }
+        if (ziel1.kundeId === ziel2.kundeId) {
+          addMessage('assistant', 'Das ist derselbe Datensatz — da gibt es nichts zusammenzuführen.', sprechen)
+          return
+        }
+        const beschreibung = `„${ziel2.kundeName}" wird mit „${ziel1.kundeName}" zusammengeführt (Aktivitäten werden übernommen, „${ziel2.kundeName}" wird danach entfernt).`
+        setPflegeVorschlag({ aktion: 'merge', beschreibung, bereich: ziel1.bereich, behalteId: ziel1.kundeId, loescheId: ziel2.kundeId })
+        addMessage('assistant', `Vorschlag: ${beschreibung} Bestätigen?`, sprechen)
+        return
+      }
+
+      if (klass.aktion === 'loeschen') {
+        const beschreibung = `„${ziel1.kundeName}" wird aus „${kundeBereichLabel(ziel1.bereich)}" entfernt.`
+        setPflegeVorschlag({ aktion: 'loeschen', beschreibung, kundeId: ziel1.kundeId, bereich: ziel1.bereich })
+        addMessage('assistant', `Vorschlag: ${beschreibung} Bestätigen?`, sprechen)
+        return
+      }
+
+      // verschieben
+      if (!klass.ziel_bereich) {
+        addMessage('assistant', 'In welchen Bereich soll ich verschieben?', sprechen)
+        return
+      }
+      if (klass.ziel_bereich === ziel1.bereich) {
+        addMessage('assistant', `„${ziel1.kundeName}" ist bereits in „${kundeBereichLabel(ziel1.bereich)}".`, sprechen)
+        return
+      }
+      const beschreibung = `„${ziel1.kundeName}" wird von „${kundeBereichLabel(ziel1.bereich)}" nach „${kundeBereichLabel(klass.ziel_bereich)}" verschoben.`
+      setPflegeVorschlag({ aktion: 'verschieben', beschreibung, kundeId: ziel1.kundeId, vonBereich: ziel1.bereich, nachBereich: klass.ziel_bereich })
+      addMessage('assistant', `Vorschlag: ${beschreibung} Bestätigen?`, sprechen)
+    } catch (err) {
+      addMessage('assistant', `Pflege-Anweisung konnte nicht verarbeitet werden: ${err instanceof Error ? err.message : 'Fehler'}`, sprechen)
+    } finally {
+      setVerarbeiten(false)
+    }
+  }
+
   function onPasteInput(e: React.ClipboardEvent<HTMLTextAreaElement>) {
     const item = Array.from(e.clipboardData.items).find((i) => i.type.startsWith('image/'))
     if (!item) return
@@ -137,6 +287,11 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
       return
     }
     if (!text) return
+
+    if (pflegeModus) {
+      await pflegeSenden(text, sprechen)
+      return
+    }
 
     // Auflösung einer vorherigen Rückfrage ("mehrere passende Kunden gefunden, wen genau meinst
     // du?") — wenn die aktuelle Äußerung genau einen der damals genannten Kandidaten eindeutig
@@ -265,6 +420,17 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
             <span className="text-sm font-semibold text-slate-800">KI-Assistent</span>
           </div>
           <div className="flex items-center gap-1">
+            {pflegeErlaubt && (
+              <button
+                onClick={() => setPflegeModus((v) => !v)}
+                className={`rounded-md p-1.5 ${
+                  pflegeModus ? 'bg-amber-100 text-amber-700' : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600'
+                }`}
+                title={pflegeModus ? 'Pflege-Modus ausschalten' : 'Pflege-Modus einschalten (Kunden verschieben/löschen/zusammenführen)'}
+              >
+                <Wrench size={15} />
+              </button>
+            )}
             {isSpeechSynthesisSupported && (
               <button
                 onClick={() => setTtsEnabled((v) => !v)}
@@ -279,6 +445,12 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
             </button>
           </div>
         </div>
+
+        {pflegeModus && (
+          <div className="flex flex-shrink-0 items-center gap-1.5 bg-amber-50 px-4 py-1.5 text-xs font-medium text-amber-700">
+            <Wrench size={12} /> Pflege-Modus aktiv — Änderungen werden erst nach Bestätigung gespeichert.
+          </div>
+        )}
 
         {/* Verlauf */}
         <div ref={listRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3">
@@ -315,6 +487,23 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
                   className="flex items-center gap-1.5 rounded-lg bg-accent-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-700"
                 >
                   <Phone size={13} /> Jetzt aufnehmen
+                </button>
+              </div>
+            </div>
+          )}
+
+          {pflegeVorschlag && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
+              <p className="mb-2 text-sm text-slate-700">{pflegeVorschlag.beschreibung}</p>
+              <div className="flex justify-end gap-2">
+                <button onClick={pflegeVerwerfen} className="rounded-lg px-3 py-1.5 text-xs font-medium text-slate-500 hover:bg-white">
+                  Verwerfen
+                </button>
+                <button
+                  onClick={pflegeBestaetigen}
+                  className="flex items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700"
+                >
+                  <Check size={13} /> Bestätigen
                 </button>
               </div>
             </div>
@@ -377,7 +566,13 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
                   senden()
                 }
               }}
-              placeholder={pastedImage ? 'Frage zum Bild (optional) …' : 'Nachricht eingeben, Mikro nutzen oder Bild einfügen …'}
+              placeholder={
+                pastedImage
+                  ? 'Frage zum Bild (optional) …'
+                  : pflegeModus
+                    ? 'z.B. „X ist kein Kunde" oder „verschiebe X zu Erben" …'
+                    : 'Nachricht eingeben, Mikro nutzen oder Bild einfügen …'
+              }
               title="Bilder per Strg/Cmd+V aus der Zwischenablage einfügen"
             />
             <button

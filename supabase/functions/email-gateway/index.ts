@@ -72,6 +72,13 @@
 //                                                   filtert auf "interessant"/"sehr interessant" und
 //                                                   gibt nur die fürs Auswahl-Modal nötigen Felder
 //                                                   zurück (Modul 3: Immobilienradar-Integration)
+//   { action: "pflege_classify", text }          -> Pflege-Modus (KI-Assistent, nur GF/Admin):
+//                                                   klassifiziert eine Massenkorrektur-Anweisung
+//                                                   ("X ist kein Kunde", "verschiebe X zu Erben",
+//                                                   "X und Y sind dieselbe Firma") als
+//                                                   verschieben/loeschen/merge — die eigentliche
+//                                                   Kundenzuordnung und jede Datenänderung passiert
+//                                                   erst nach expliziter Bestätigung im Frontend
 //
 // Alle Zugangsdaten kommen ausschließlich aus Supabase Function Secrets (nie im Code, nie im
 // Frontend). Siehe README-Abschnitt "E-Mail-Postfach-Anbindung" für die Einrichtung.
@@ -327,6 +334,54 @@ Text:
           frage: { type: 'string' },
         },
         required: ['typ'],
+      },
+    },
+  )
+}
+
+const PFLEGE_BEREICHE = ['beratung', 'erben', 'betriebsuebergabe', 'betriebsformen', 'akademie', 'finanzierungen']
+
+type PflegeKlassifikation = {
+  aktion: 'verschieben' | 'loeschen' | 'merge' | 'unklar'
+  kunde_name?: string
+  kunde_name_2?: string
+  ziel_bereich?: string
+}
+
+// Pflege-Modus (nur Geschäftsführung/Admin, siehe KiAssistentPanel.tsx): klassifiziert eine
+// gesprochene/getippte Massenkorrektur-Anweisung. Die KI kennt die echten Kundendaten nicht (genau
+// wie bei classifyAssistantInput) — sie extrahiert nur Namen/Zielbereich, die eigentliche Zuordnung
+// zu einem echten Kunden-Datensatz und jede Schreiboperation passiert ausschließlich im Frontend,
+// erst nachdem der Mitarbeiter den konkreten Vorschlag bestätigt hat.
+async function classifyPflegeInput(text: string): Promise<PflegeKlassifikation> {
+  return callClaudeTool<PflegeKlassifikation>(
+    `Du hilfst einer Geschäftsführung/einem Admin, eine Pflege-/Korrekturanweisung für ein CRM einzuordnen (Pflege-Modus: nachträgliche Korrekturen an bestehenden Kunden-/Mandanten-Datensätzen per Sprache/Text).
+
+Klassifiziere die folgende Anweisung als genau eine von vier Aktionen:
+- "verschieben": ein bestehender Kunde/Mandant soll einem anderen Geschäftsbereich zugeordnet werden, z. B. "verschiebe Kunde X zu Erben" oder "X gehört eigentlich zu Betriebsübergabe, nicht zu Beratung".
+- "loeschen": ein bestehender Datensatz ist fälschlich als Kunde angelegt und soll entfernt werden, z. B. "X ist kein Kunde, das ist ein Mitarbeiter" oder "lösche den Datensatz von Y, der ist doppelt/falsch".
+- "merge": zwei bestehende Datensätze sind Duplikate desselben Kunden und sollen zu einem zusammengeführt werden, z. B. "X und Y sind derselbe Kunde, führe die zusammen".
+- "unklar": die Anweisung passt zu keiner der drei Aktionen oder ist zu vage, um sie umzusetzen.
+
+Extrahiere zusätzlich, falls vorhanden:
+- kunde_name: der Name des betroffenen Kunden/Mandanten/Datensatzes (bei allen drei Aktionen nötig).
+- kunde_name_2: NUR bei "merge" — der Name des zweiten Datensatzes, der mit dem ersten zusammengeführt (und danach entfernt) werden soll.
+- ziel_bereich: NUR bei "verschieben" — der Ziel-Geschäftsbereich, exakt einer von: ${PFLEGE_BEREICHE.join(', ')}.
+
+Anweisung:
+"""${text}"""`,
+    {
+      name: 'pflege_klassifikation',
+      description: 'Klassifiziert eine Pflege-Modus-Anweisung (Kunde verschieben/löschen/zusammenführen) und extrahiert die genannten Namen/Zielbereich.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          aktion: { type: 'string', enum: ['verschieben', 'loeschen', 'merge', 'unklar'] },
+          kunde_name: { type: 'string' },
+          kunde_name_2: { type: 'string' },
+          ziel_bereich: { type: 'string', enum: PFLEGE_BEREICHE },
+        },
+        required: ['aktion'],
       },
     },
   )
@@ -768,6 +823,15 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ antwort }), { headers })
     }
 
+    if (body.action === 'pflege_classify') {
+      const { text } = body
+      if (!text || typeof text !== 'string' || !text.trim()) {
+        return new Response(JSON.stringify({ error: 'text ist ein Pflichtfeld' }), { status: 400, headers })
+      }
+      const klassifikation = await classifyPflegeInput(text)
+      return new Response(JSON.stringify({ klassifikation }), { headers })
+    }
+
     if (body.action === 'potenzial_analyse') {
       const { kontext } = body
       if (!kontext || typeof kontext !== 'string' || !kontext.trim()) {
@@ -967,7 +1031,7 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ listings }), { headers })
     }
 
-    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead" oder "immoradar_top"' }), { status: 400, headers })
+    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top" oder "pflege_classify"' }), { status: 400, headers })
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }
