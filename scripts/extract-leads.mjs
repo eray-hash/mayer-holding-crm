@@ -17,6 +17,14 @@
 //   node scripts/extract-leads.mjs
 
 import { createClient } from '@supabase/supabase-js'
+import { fileURLToPath } from 'node:url'
+import path from 'node:path'
+
+try {
+  process.loadEnvFile(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.env.local'))
+} catch {
+  // .env.local existiert nicht — Secrets müssen dann per Umgebungsvariable übergeben werden.
+}
 
 function env(name, fallback) {
   const value = process.env[name] ?? fallback
