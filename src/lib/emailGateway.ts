@@ -123,6 +123,15 @@ export async function inviteMitarbeiter(email: string): Promise<void> {
   await call({ action: 'invite_mitarbeiter', email })
 }
 
+// Workaround, da Supabases eingebauter Einladungs-/Reset-Mailversand bei manchen Empfängern (z.B.
+// Hotmail) nie ankommt (siehe Projektnotiz "Supabase Email Delivery Broken") — erzeugt denselben
+// Login-/Passwort-setzen-Link ohne selbst eine Mail zu verschicken. Muss über einen anderen Kanal
+// (Chat, Signal, ...) an den Mitarbeiter zugestellt werden.
+export async function generateLoginLink(email: string): Promise<string> {
+  const data = await call({ action: 'generate_login_link', email })
+  return data.link
+}
+
 export type LeadKlassifizierungsErgebnis = { geprueft: number; vorgeschlagen: number; uebersprungen: number }
 
 // Klassifiziert nur neue, noch unbekannte E-Mail-Absender als Lead-Vorschlag (Nachfolger von

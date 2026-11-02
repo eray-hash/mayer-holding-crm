@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
-import { Mail, Plus, UserCheck, UserX, Pencil, Save, XCircle, ShieldCheck } from 'lucide-react'
+import { Mail, Plus, UserCheck, UserX, Pencil, Save, XCircle, ShieldCheck, Link2, Copy, Check } from 'lucide-react'
 import { supabase, isSupabaseConfigured } from '../../lib/supabaseClient'
-import { inviteMitarbeiter } from '../../lib/emailGateway'
+import { inviteMitarbeiter, generateLoginLink } from '../../lib/emailGateway'
 import { ALLE_BEREICHE, bereichLabel } from '../../data/bereiche'
 import { Card, Field, inputClass, PrimaryButton, EmptyState } from '../../components/ui'
 import type { Bereich } from '../../types'
@@ -44,6 +44,11 @@ export function MitarbeiterVerwalten() {
   const [editAdmin, setEditAdmin] = useState(false)
   const [editSpeichern, setEditSpeichern] = useState(false)
   const [editFehler, setEditFehler] = useState('')
+
+  const [linkLaedtId, setLinkLaedtId] = useState<string | null>(null)
+  const [erzeugterLink, setErzeugterLink] = useState<{ id: string; link: string } | null>(null)
+  const [linkFehler, setLinkFehler] = useState<{ id: string; text: string } | null>(null)
+  const [linkKopiert, setLinkKopiert] = useState(false)
 
   async function laden() {
     if (!supabase) return
@@ -113,6 +118,35 @@ export function MitarbeiterVerwalten() {
     if (!supabase) return
     await supabase.from('mitarbeiter').update({ aktiv: !m.aktiv }).eq('id', m.id)
     laden()
+  }
+
+  // Workaround für Mitarbeiter, deren Einladungs-/Reset-Mail von Supabase nie ankommt (z.B.
+  // Hotmail-Adressen, siehe Projektnotiz "Supabase Email Delivery Broken") — erzeugt denselben
+  // Login-/Passwort-setzen-Link direkt, ohne dass Supabase selbst eine Mail verschicken muss. Muss
+  // manuell über einen anderen Kanal (Chat, Signal, ...) an den Mitarbeiter zugestellt werden.
+  async function linkErzeugen(m: MitarbeiterRow) {
+    setLinkLaedtId(m.id)
+    setLinkFehler(null)
+    setErzeugterLink(null)
+    setLinkKopiert(false)
+    try {
+      const link = await generateLoginLink(m.email)
+      setErzeugterLink({ id: m.id, link })
+    } catch (err) {
+      setLinkFehler({ id: m.id, text: err instanceof Error ? err.message : 'Link konnte nicht erzeugt werden.' })
+    } finally {
+      setLinkLaedtId(null)
+    }
+  }
+
+  async function linkKopieren(link: string) {
+    try {
+      await navigator.clipboard.writeText(link)
+      setLinkKopiert(true)
+      setTimeout(() => setLinkKopiert(false), 2000)
+    } catch {
+      // Clipboard-Zugriff kann in manchen Kontexten fehlschlagen — kein Blocker, Link steht ja da.
+    }
   }
 
   function beginnEdit(m: MitarbeiterRow) {
@@ -231,6 +265,14 @@ export function MitarbeiterVerwalten() {
                 </div>
                 <div className="flex flex-shrink-0 items-center gap-2">
                   <button
+                    onClick={() => linkErzeugen(m)}
+                    disabled={linkLaedtId === m.id}
+                    className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                    title="Login-Link erzeugen (falls die Einladungs-/Reset-Mail z.B. bei Hotmail nie ankommt)"
+                  >
+                    <Link2 size={13} /> {linkLaedtId === m.id ? 'Erzeugt …' : 'Login-Link'}
+                  </button>
+                  <button
                     onClick={() => (editingId === m.id ? editAbbrechen() : beginnEdit(m))}
                     className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
                   >
@@ -246,6 +288,20 @@ export function MitarbeiterVerwalten() {
                   </button>
                 </div>
               </div>
+
+              {linkFehler?.id === m.id && <p className="mt-2 text-xs font-medium text-rose-600">{linkFehler.text}</p>}
+
+              {erzeugterLink?.id === m.id && (
+                <div className="mt-3 flex items-center gap-2 rounded-lg border border-accent-200 bg-accent-50 p-2.5">
+                  <input readOnly value={erzeugterLink.link} className="min-w-0 flex-1 truncate bg-transparent text-xs text-slate-700" />
+                  <button
+                    onClick={() => linkKopieren(erzeugterLink.link)}
+                    className="flex flex-shrink-0 items-center gap-1 rounded-md bg-accent-600 px-2 py-1 text-xs font-medium text-white hover:bg-accent-700"
+                  >
+                    {linkKopiert ? <Check size={12} /> : <Copy size={12} />} {linkKopiert ? 'Kopiert' : 'Kopieren'}
+                  </button>
+                </div>
+              )}
 
               {editingId === m.id && (
                 <div className="mt-3 border-t border-slate-100 pt-3">
