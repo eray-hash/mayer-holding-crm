@@ -36,9 +36,23 @@ export function suggestKundeKandidaten(state: AppData, text: string): KundeMatch
   let beste: KundeMatch[] = []
   for (const b of KUNDEN_BEREICHE) {
     for (const k of b.get(state)) {
+      const ansprechpartnerWoerter = woerter(k.ansprechpartner)
       const haystackWoerter = new Set(woerter(`${k.firma} ${k.ansprechpartner} ${k.email}`))
       const score = tokens.filter((t) => haystackWoerter.has(t)).length
       if (score === 0) continue
+      // Ein Treffer NUR auf den Vornamen reicht nicht als sicherer Fund: "Thomas" matcht z.B. sowohl
+      // "Thomas Berger" als auch "Thomas Luther" gleichermaßen — ein häufiger Vorname allein ist zu
+      // unscharf, um sich sicher auf EINEN bestimmten Kunden festzulegen (echter Fehlgriff beim
+      // Testen: "Termin mit Thomas Berger" — ein Mitarbeiter, kein Kunde — landete sonst fälschlich
+      // beim völlig unbeteiligten Kunden "Thomas Luther"). Nachname, Firma oder E-Mail zählen
+      // weiterhin auch einzeln als ausreichend sicher.
+      const matchedWoerter = new Set(tokens.filter((t) => haystackWoerter.has(t)))
+      const nurVorname =
+        ansprechpartnerWoerter.length > 1 &&
+        matchedWoerter.size === 1 &&
+        matchedWoerter.has(ansprechpartnerWoerter[0]) &&
+        !ansprechpartnerWoerter.slice(1).some((w) => matchedWoerter.has(w))
+      if (nurVorname) continue
       const kandidat: KundeMatch = { bereich: b.id, kundeId: k.id, kundeName: `${k.firma} (${k.ansprechpartner})`, score }
       if (score > bestScore) {
         bestScore = score
