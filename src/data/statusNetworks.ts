@@ -160,7 +160,52 @@ export const IMMOBILIEN_STATUS: Record<string, StatusNode> = {
     color: 'bg-indigo-100 text-indigo-700',
     isTerminal: false,
     isMainPath: true,
-    next: ['notartermin', 'vermarktung', 'abgebrochen'],
+    next: ['notarauftrag_vorbereitet', 'vermarktung', 'abgebrochen'],
+  },
+  // Digitaler Notarprozess (Quirin Lutzenberger, Immobilienfachwirt, Beschluss 2026-11-03): ersetzt
+  // den bisherigen einzelnen Status "Notartermin" zwischen Reservierung und Verkauf durch die
+  // einzelnen, von ihm benannten Stufen — "Aufgaben dürfen nicht mehr vom Mitarbeiter abhängen,
+  // sondern das System muss wissen, was als Nächstes kommt" (siehe auch IMMOBILIEN_FOLGEAUFGABE
+  // weiter unten für die dazu automatisch erzeugte Folgeaufgabe je Stufe).
+  notarauftrag_vorbereitet: {
+    id: 'notarauftrag_vorbereitet',
+    label: 'Notarauftrag vorbereitet',
+    color: 'bg-indigo-200 text-indigo-800',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['vertragsentwurf_erhalten', 'abgebrochen'],
+  },
+  vertragsentwurf_erhalten: {
+    id: 'vertragsentwurf_erhalten',
+    label: 'Vertragsentwurf erhalten',
+    color: 'bg-blue-100 text-blue-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['pruefung_verkaeufer', 'abgebrochen'],
+  },
+  pruefung_verkaeufer: {
+    id: 'pruefung_verkaeufer',
+    label: 'Prüfung durch Verkäufer',
+    color: 'bg-sky-200 text-sky-800',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['pruefung_kaeufer', 'abgebrochen'],
+  },
+  pruefung_kaeufer: {
+    id: 'pruefung_kaeufer',
+    label: 'Prüfung durch Käufer',
+    color: 'bg-purple-100 text-purple-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['aenderungswuensche', 'abgebrochen'],
+  },
+  aenderungswuensche: {
+    id: 'aenderungswuensche',
+    label: 'Änderungswünsche klären',
+    color: 'bg-fuchsia-100 text-fuchsia-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['notartermin', 'abgebrochen'],
   },
   notartermin: {
     id: 'notartermin',
@@ -168,11 +213,43 @@ export const IMMOBILIEN_STATUS: Record<string, StatusNode> = {
     color: 'bg-violet-100 text-violet-700',
     isTerminal: false,
     isMainPath: true,
-    next: ['verkauft', 'abgebrochen'],
+    next: ['beurkundet', 'abgebrochen'],
+  },
+  beurkundet: {
+    id: 'beurkundet',
+    label: 'Beurkundet',
+    color: 'bg-pink-100 text-pink-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['faelligkeitsmitteilung', 'abgebrochen'],
+  },
+  faelligkeitsmitteilung: {
+    id: 'faelligkeitsmitteilung',
+    label: 'Fälligkeitsmitteilung versendet',
+    color: 'bg-amber-100 text-amber-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['kaufpreis_gezahlt', 'abgebrochen'],
+  },
+  kaufpreis_gezahlt: {
+    id: 'kaufpreis_gezahlt',
+    label: 'Kaufpreis gezahlt',
+    color: 'bg-lime-100 text-lime-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['besitzuebergang', 'abgebrochen'],
+  },
+  besitzuebergang: {
+    id: 'besitzuebergang',
+    label: 'Besitzübergang',
+    color: 'bg-teal-100 text-teal-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['verkauft'],
   },
   verkauft: {
     id: 'verkauft',
-    label: 'Verkauft',
+    label: 'Verkauft (Grundbuch umgeschrieben)',
     color: 'bg-emerald-100 text-emerald-700',
     isTerminal: false,
     isMainPath: true,
@@ -209,10 +286,38 @@ export const IMMOBILIEN_HAUPTPFAD = [
   'vorbereitung',
   'vermarktung',
   'reserviert',
+  'notarauftrag_vorbereitet',
+  'vertragsentwurf_erhalten',
+  'pruefung_verkaeufer',
+  'pruefung_kaeufer',
+  'aenderungswuensche',
   'notartermin',
+  'beurkundet',
+  'faelligkeitsmitteilung',
+  'kaufpreis_gezahlt',
+  'besitzuebergang',
   'verkauft',
   'archiv',
 ]
+
+// Automatische Folgeaufgabe je Status-Stufe (Quirin Lutzenberger: "Für jede Stufe: automatische
+// Aufgaben + Verantwortlicher + Frist" — Verantwortlicher kommt bereits vom Objekt selbst, hier nur
+// Hinweistext + Frist in Tagen ab Statuswechsel). Wird als Follow-up gesetzt, wenn beim Statuswechsel
+// kein eigenes Follow-up mitgegeben wurde, siehe SET_OBJEKT_STATUS in AppContext.tsx. Bewusst
+// editierbare Standardwerte, keine verbindlichen SLAs — bei Bedarf einfach hier anpassen.
+export const IMMOBILIEN_FOLGEAUFGABE: Record<string, { note: string; tageBisFaellig: number }> = {
+  reserviert: { note: 'Notarauftrag vorbereiten', tageBisFaellig: 3 },
+  notarauftrag_vorbereitet: { note: 'Vertragsentwurf beim Notar anfragen', tageBisFaellig: 5 },
+  vertragsentwurf_erhalten: { note: 'Vertragsentwurf durch Verkäufer prüfen lassen', tageBisFaellig: 3 },
+  pruefung_verkaeufer: { note: 'Vertragsentwurf durch Käufer prüfen lassen', tageBisFaellig: 3 },
+  pruefung_kaeufer: { note: 'Änderungswünsche klären', tageBisFaellig: 3 },
+  aenderungswuensche: { note: 'Notartermin vereinbaren', tageBisFaellig: 5 },
+  notartermin: { note: 'Beurkundung abwarten/durchführen', tageBisFaellig: 7 },
+  beurkundet: { note: 'Fälligkeitsmitteilung an Käufer veranlassen', tageBisFaellig: 3 },
+  faelligkeitsmitteilung: { note: 'Kaufpreiseingang überwachen', tageBisFaellig: 14 },
+  kaufpreis_gezahlt: { note: 'Besitzübergabe vorbereiten', tageBisFaellig: 7 },
+  besitzuebergang: { note: 'Grundbuchumschreibung überwachen', tageBisFaellig: 30 },
+}
 
 // ==========================================================================
 // STATUSNETZ — ERBEN

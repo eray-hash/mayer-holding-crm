@@ -46,13 +46,14 @@ import {
   getNextMainStep,
   BERATUNG_STATUS,
   IMMOBILIEN_STATUS,
+  IMMOBILIEN_FOLGEAUFGABE,
   ERBEN_STATUS,
   BETRIEBSUEBERGABE_STATUS,
   BETRIEBSFORMEN_STATUS,
   AKADEMIE_STATUS,
   FINANZIERUNGEN_STATUS,
 } from '../data/statusNetworks'
-import { uid, today } from '../lib/dates'
+import { uid, today, addDays } from '../lib/dates'
 import { CURRENT_USER } from '../data/constants'
 
 export type Rolle = 'geschaeftsfuehrung' | 'mitarbeiter'
@@ -448,10 +449,18 @@ function reducer(state: AppData, action: Action): AppData {
             text: `Status: ${oldLabel} → ${newLabel} am ${today()} durch ${CURRENT_USER}`,
             user: CURRENT_USER,
           }
+          // "Aufgaben dürfen nicht mehr vom Mitarbeiter abhängen" (Quirin Lutzenberger) — wird beim
+          // Statuswechsel kein eigenes Follow-up mitgegeben, erzeugt das System automatisch eins
+          // passend zur neu erreichten Stufe (siehe IMMOBILIEN_FOLGEAUFGABE), statt das bisherige
+          // Follow-up unverändert (und damit faktisch veraltet) stehen zu lassen.
+          const folgeaufgabe = IMMOBILIEN_FOLGEAUFGABE[action.status]
+          const automatischesFollowUp: FollowUp | undefined = folgeaufgabe
+            ? { date: addDays(today(), folgeaufgabe.tageBisFaellig), note: folgeaufgabe.note, done: false }
+            : undefined
           return {
             ...o,
             status: action.status,
-            followUp: action.followUp ?? o.followUp,
+            followUp: action.followUp ?? automatischesFollowUp ?? o.followUp,
             activities: [activity, ...o.activities],
           }
         }),

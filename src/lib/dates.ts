@@ -1,5 +1,16 @@
+// Date-Strings im App-weiten Format YYYY-MM-DD werden überall als LOKALES Kalenderdatum behandelt
+// (siehe fmtDate: parst mit 'T00:00:00', also lokale Mitternacht). toISOString() liefert dagegen das
+// UTC-Datum, das z.B. in Deutschland (UTC+1/+2) kurz nach lokaler Mitternacht noch auf den Vortag
+// zeigt — daher hier bewusst über die lokalen Date-Komponenten statt toISOString().
+function toLocalISODate(d: Date): string {
+  const year = d.getFullYear()
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
 export function today(): string {
-  return new Date().toISOString().slice(0, 10)
+  return toLocalISODate(new Date())
 }
 
 export function fmtDate(iso: string): string {
@@ -31,7 +42,7 @@ export function fmtEUR(value: number): string {
 export function addDays(iso: string, days: number): string {
   const d = new Date(iso + 'T00:00:00')
   d.setDate(d.getDate() + days)
-  return d.toISOString().slice(0, 10)
+  return toLocalISODate(d)
 }
 
 export function uid(prefix = 'id'): string {
