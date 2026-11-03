@@ -7,10 +7,17 @@ export function SignaturePad({ onChange }: { onChange: (dataUrl: string | null) 
   const drewSomething = useRef(false)
   const [empty, setEmpty] = useState(true)
 
+  // Das Canvas hat eine feste interne Pixelgröße (width/height-Attribute, 500x140), wird aber per
+  // CSS (w-full) auf die tatsächliche Containerbreite skaliert — auf einem schmalen Handy-Bildschirm
+  // (der übliche Fall beim Unterschreiben eines öffentlichen Formulars) ist die angezeigte Breite
+  // oft deutlich kleiner als 500px. Ohne Skalierungsfaktor landete die gezeichnete Linie an der
+  // falschen, zu weit rechts liegenden Stelle relativ zum tatsächlichen Finger/Mauszeiger.
   function getPos(clientX: number, clientY: number) {
     const canvas = canvasRef.current!
     const rect = canvas.getBoundingClientRect()
-    return { x: clientX - rect.left, y: clientY - rect.top }
+    const scaleX = canvas.width / rect.width
+    const scaleY = canvas.height / rect.height
+    return { x: (clientX - rect.left) * scaleX, y: (clientY - rect.top) * scaleY }
   }
 
   function startAt(x: number, y: number) {
