@@ -56,6 +56,8 @@ import {
 } from '../data/statusNetworks'
 import { uid, today, addDays } from '../lib/dates'
 import { CURRENT_USER } from '../data/constants'
+import { useAuth } from './AuthContext'
+import { updateMyProfilRemote } from '../lib/profilSync'
 
 export type Rolle = 'geschaeftsfuehrung' | 'mitarbeiter'
 
@@ -104,6 +106,14 @@ const STORAGE_KEY = 'mayer-holding-crm-data-v1'
 // Speicher hat, lädt sie dann einfach wieder hoch. Genau das ist am 2026-11-03 zweimal real passiert
 // (eine gelöschte Test-Notiz kam über eine andere, noch nicht neu geladene Browser-Session zurück).
 const MIGRATION_FLAG_KEY = 'mayer-holding-crm-migriert-v1'
+
+// Analog zu MIGRATION_FLAG_KEY, aber eigens für das Profil (telefon/signaturHtml/fotoDataUrl/
+// buchungslink) — war bis 2026-11-03 komplett lokal pro Browser, ohne jede Supabase-Anbindung (siehe
+// Bugfixing-Fund: die Profil-Seite verspricht "Signatur wird angehängt", die tatsächlich nie
+// verschickt wurde, UND das Profil folgte einem Mitarbeiter nie über Geräte hinweg). Einmaliger
+// Push des lokalen Stands, falls die eigene mitarbeiter-Zeile noch gar keine Werte hat — danach gilt
+// immer der Serverstand.
+const PROFIL_MIGRATION_FLAG_KEY = 'mayer-holding-crm-profil-migriert-v1'
 
 // Alle über Supabase geteilten Entitäten kommen jetzt, sobald Supabase konfiguriert ist, aus der
 // geteilten Datenbank (siehe lib/crmSync.ts) statt aus den lokalen Demo-Seed-Daten — sonst würde
@@ -1062,6 +1072,36 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
   }, [state])
+
+  // Profil (telefon/signaturHtml/fotoDataUrl/buchungslink) folgt jetzt dem Mitarbeiter über Geräte
+  // hinweg statt rein lokal pro Browser zu leben (Bugfixing-Fund 2026-11-03, siehe
+  // PROFIL_MIGRATION_FLAG_KEY oben). Sobald die eigene mitarbeiter-Zeile lädt: hat sie bereits Werte,
+  // gewinnt ab jetzt immer der Server; ist sie noch komplett leer (frisch hinzugefügte Spalten),
+  // wird der bisherige lokale Stand genau einmal hochgeschoben.
+  const { mitarbeiter } = useAuth()
+  useEffect(() => {
+    if (!mitarbeiter) return
+    const serverHatWerte = !!(mitarbeiter.telefon || mitarbeiter.signatur_html || mitarbeiter.foto_data_url || mitarbeiter.buchungslink)
+    if (serverHatWerte) {
+      dispatch({
+        type: 'UPDATE_PROFIL',
+        patch: {
+          telefon: mitarbeiter.telefon ?? '',
+          signaturHtml: mitarbeiter.signatur_html ?? '',
+          fotoDataUrl: mitarbeiter.foto_data_url ?? undefined,
+          buchungslink: mitarbeiter.buchungslink ?? undefined,
+        },
+      })
+      return
+    }
+    if (localStorage.getItem(PROFIL_MIGRATION_FLAG_KEY) === 'true') return
+    const lokalesProfil = stateRef.current.profil
+    updateMyProfilRemote(lokalesProfil.telefon, lokalesProfil.signaturHtml, lokalesProfil.fotoDataUrl, lokalesProfil.buchungslink).catch((err) =>
+      console.error('Profil-Migration fehlgeschlagen:', err),
+    )
+    localStorage.setItem(PROFIL_MIGRATION_FLAG_KEY, 'true')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mitarbeiter?.id, mitarbeiter?.telefon, mitarbeiter?.signatur_html, mitarbeiter?.foto_data_url, mitarbeiter?.buchungslink])
 
   const value = useMemo(() => ({ state, dispatch, hydrated, hydrateError }), [state, hydrated, hydrateError])
 

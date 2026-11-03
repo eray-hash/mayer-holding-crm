@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, Camera, CheckCircle2, Lock, Plane, Trash2, User } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { useAuth } from '../../context/AuthContext'
@@ -6,6 +6,7 @@ import { supabase, isSupabaseConfigured } from '../../lib/supabaseClient'
 import { Card, Field, inputClass, PrimaryButton } from '../../components/ui'
 import { today, fmtDate, uid } from '../../lib/dates'
 import { CURRENT_USER } from '../../data/constants'
+import { updateMyProfilRemote } from '../../lib/profilSync'
 
 // Vertretungs-Logik (Quirin, Entscheidung 2026-11-03): "offener Pool" ohne feste Vertreter-
 // Zuordnung — jeder trägt seine eigene Abwesenheit (von–bis) selbst ein, GF/Admin sehen während
@@ -153,6 +154,32 @@ export function MeinProfil() {
   const [fotoDataUrl, setFotoDataUrl] = useState(state.profil.fotoDataUrl)
   const [gespeichert, setGespeichert] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const letzterSyncRef = useRef(state.profil)
+
+  // telefon/signaturHtml/fotoDataUrl/buchungslink können jetzt serverseitig NACH dem Mounten dieser
+  // Seite eintreffen (eigene mitarbeiter-Zeile lädt asynchron, siehe AppContext.tsx) — ohne diesen
+  // Effekt bliebe das Formular bei den anfänglichen (ggf. leeren) Werten stehen. Übernimmt neue
+  // Werte aber nur, solange der Nutzer seit dem letzten Sync noch nichts selbst geändert hat, damit
+  // eine laufende Bearbeitung nicht überschrieben wird.
+  useEffect(() => {
+    const unveraendert =
+      name === letzterSyncRef.current.name &&
+      telefon === letzterSyncRef.current.telefon &&
+      email === letzterSyncRef.current.email &&
+      signaturHtml === letzterSyncRef.current.signaturHtml &&
+      (buchungslink || '') === (letzterSyncRef.current.buchungslink ?? '') &&
+      fotoDataUrl === letzterSyncRef.current.fotoDataUrl
+    if (unveraendert) {
+      setName(state.profil.name)
+      setTelefon(state.profil.telefon)
+      setEmail(state.profil.email)
+      setSignaturHtml(state.profil.signaturHtml)
+      setBuchungslink(state.profil.buchungslink ?? '')
+      setFotoDataUrl(state.profil.fotoDataUrl)
+    }
+    letzterSyncRef.current = state.profil
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.profil])
 
   function handleFoto(file: File | undefined) {
     if (!file || !file.type.startsWith('image/')) return
@@ -163,6 +190,9 @@ export function MeinProfil() {
 
   function speichern() {
     dispatch({ type: 'UPDATE_PROFIL', patch: { name, telefon, email, signaturHtml, fotoDataUrl, buchungslink } })
+    updateMyProfilRemote(telefon, signaturHtml, fotoDataUrl, buchungslink).catch((err) =>
+      console.error('Profil konnte nicht geräteübergreifend gespeichert werden:', err),
+    )
     setGespeichert(true)
     setTimeout(() => setGespeichert(false), 2500)
   }

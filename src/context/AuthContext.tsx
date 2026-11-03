@@ -11,6 +11,10 @@ export type Mitarbeiter = {
   bereiche: string[]
   aktiv: boolean
   ist_admin: boolean
+  telefon: string | null
+  signatur_html: string | null
+  foto_data_url: string | null
+  buchungslink: string | null
 }
 
 type AuthState = {
@@ -51,7 +55,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let cancelled = false
     supabase
       .from('mitarbeiter')
-      .select('id, name, email, rolle, bereiche, aktiv, ist_admin')
+      .select('id, name, email, rolle, bereiche, aktiv, ist_admin, telefon, signatur_html, foto_data_url, buchungslink')
       .eq('email', session.user.email)
       .maybeSingle()
       .then(({ data }) => {
