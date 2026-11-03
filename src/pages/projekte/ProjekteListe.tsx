@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import { Plus } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { ProjektKarte } from '../../components/kanban/ProjektKarte'
@@ -11,8 +12,15 @@ import type { Prioritaet } from '../../types'
 export function ProjekteListe() {
   const { state, dispatch } = useApp()
   const [addOpen, setAddOpen] = useState(false)
+  const location = useLocation()
 
-  const bereich: ProjektBereich = state.bereich
+  // Bewusst aus der URL abgeleitet, NICHT aus state.bereich: state.bereich wird nur beim Klick auf
+  // den Sidebar-Bereichs-Umschalter gesetzt (siehe Layout.tsx) — wer stattdessen z.B. über die
+  // "Projekte nach Bereich"-Kacheln auf dem Heute-Screen direkt zu einem anderen Bereich navigiert
+  // (reiner navigate()-Aufruf, kein SET_BEREICH-Dispatch), sah hier sonst weiterhin die Projekte des
+  // zuletzt in der Sidebar gewählten Bereichs statt die des gerade aufgerufenen (echter Fund beim
+  // Bugfixing-Durchgang 2026-11-03).
+  const bereich = location.pathname.split('/')[1] as ProjektBereich
 
   const projekte = useMemo(() => state.projekte.filter((p) => p.bereich === bereich), [state.projekte, bereich])
 
