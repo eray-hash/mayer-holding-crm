@@ -68,7 +68,29 @@ export function SendEmailModal({
     setSending(true)
     setError('')
     try {
-      await sendEmail(toInput.trim(), subject.trim(), text.trim(), undefined, {
+      // "Mein Profil" verspricht: "Wird an gesendete E-Mails aus dem Postfach angehängt" — bisher
+      // wurde signaturHtml nirgendwo tatsächlich gelesen, die Signatur landete nie in einer echten
+      // Mail (echter Fund beim Bugfixing-Durchgang 2026-11-03). Klartext-Mail bekommt eine aus der
+      // HTML-Signatur abgeleitete Textversion angehängt; existiert eine Signatur, wird zusätzlich
+      // eine HTML-Fassung mit der echten Formatierung mitgeschickt.
+      const signaturHtml = state.profil.signaturHtml?.trim()
+      const signaturText = signaturHtml
+        ? signaturHtml
+            .replace(/<br\s*\/?>/gi, '\n')
+            .replace(/<\/p>/gi, '\n\n')
+            .replace(/<[^>]+>/g, '')
+            .replace(/\n{3,}/g, '\n\n')
+            .trim()
+        : ''
+      const finalText = signaturText ? `${text.trim()}\n\n--\n${signaturText}` : text.trim()
+      const finalHtml = signaturHtml
+        ? `<div>${text
+            .trim()
+            .split('\n')
+            .map((line) => `<p>${line || '&nbsp;'}</p>`)
+            .join('')}</div><div>${signaturHtml}</div>`
+        : undefined
+      await sendEmail(toInput.trim(), subject.trim(), finalText, finalHtml, {
         toName: kunde?.name ?? toInput.trim(),
         kundeBereich: kunde?.bereich,
         kundeId: kunde?.id,
