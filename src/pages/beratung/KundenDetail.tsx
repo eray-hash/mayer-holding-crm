@@ -263,7 +263,7 @@ export function KundenDetail() {
                   <td className="px-4 py-3 text-slate-500">{fmtDate(v.datum)}</td>
                   <td className="px-4 py-3 text-slate-500">{v.laufzeit}</td>
                   <td className="px-4 py-3 text-slate-700">{fmtEUR(v.volumen)}</td>
-                  <td className="px-4 py-3 text-accent-700 underline decoration-dotted">{v.datei}</td>
+                  <td className="px-4 py-3 text-slate-500">{v.datei}</td>
                 </tr>
               ))}
               {vertraege.length === 0 && <tr><td colSpan={5} className="px-4 py-8 text-center text-slate-400">Keine unterschriebenen Verträge.</td></tr>}
