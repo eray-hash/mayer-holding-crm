@@ -1,17 +1,17 @@
 // Liest eingegangene E-Mails direkt aus der Supabase-Tabelle public.eingegangene_emails
 // (befüllt von der Edge Function supabase/functions/inbound-email via Webhook-Push, siehe dort).
-// Bewusst ein eigenständiger, read-only Supabase-Client für das "mayer-holding-crm"-Projekt —
-// unabhängig vom (noch ungenutzten) Fundament-Command-Center-Client in supabaseClient.ts.
-
-import { createClient } from '@supabase/supabase-js'
+// Nutzt seit 2026-11-03 den normalen, authentifizierten Mitarbeiter-Client aus supabaseClient.ts —
+// vorher lief das über einen eigenständigen, sessionlosen anon-Client (Altlast aus der Zeit vor der
+// Supabase-Projekt-Zusammenlegung 2026-09-21), wofür die RLS-Policy auf "jeder darf lesen" stehen
+// musste. Das machte den gesamten E-Mail-Posteingang für jeden mit dem öffentlichen Publishable Key
+// lesbar, ganz ohne Mitarbeiter-Login — ein echter Sicherheitsfund beim Audit 2026-11-02, erst jetzt
+// behoben (RLS verlangt jetzt ist_aktiver_mitarbeiter()).
+import { supabase, isSupabaseConfigured } from './supabaseClient'
 import type { EingegangeneMail } from './emailGateway'
 import type { KundeBereich } from '../types'
 
-const URL = import.meta.env.VITE_SUPABASE_EMAIL_URL as string | undefined
-const ANON_KEY = import.meta.env.VITE_SUPABASE_EMAIL_ANON_KEY as string | undefined
-
-export const isEmailInboxDbConfigured = Boolean(URL && ANON_KEY)
-const client = isEmailInboxDbConfigured ? createClient(URL!, ANON_KEY!, { auth: { persistSession: false, autoRefreshToken: false } }) : null
+export const isEmailInboxDbConfigured = isSupabaseConfigured
+const client = supabase
 
 type Row = {
   message_id: string | null
@@ -73,9 +73,7 @@ export async function fetchStoredEmails(limit = 20): Promise<EingegangeneMail[]>
 
 // Schreibt eine manuelle Zuordnung/Ignorieren-Markierung aus dem Postfach zurück in die DB — bis
 // 2026-11-02 passierte das nur lokal im Browser des handelnden Mitarbeiters, ein Kollege auf einem
-// anderen Gerät sah dieselbe E-Mail danach weiterhin als neu/unbearbeitet an. Gleiches
-// Publishable-Key-Muster wie bei vorgeschlagene_leads (siehe leadsDb.ts) — kein Mitarbeiter-Login
-// im Client nötig, da dieser eigenständige Supabase-Client keine Session führt.
+// anderen Gerät sah dieselbe E-Mail danach weiterhin als neu/unbearbeitet an.
 export async function assignMail(messageId: string, bereich: KundeBereich, kundeId: string, kundeName: string): Promise<void> {
   if (!client) throw new Error('E-Mail-Datenbank ist noch nicht konfiguriert (VITE_SUPABASE_EMAIL_URL fehlt).')
   const { error } = await client

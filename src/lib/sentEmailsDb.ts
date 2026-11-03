@@ -1,15 +1,12 @@
 // Liest über das CRM versendete E-Mails direkt aus der Supabase-Tabelle public.gesendete_emails
 // (befüllt von der Edge Function supabase/functions/email-gateway nach erfolgreichem SMTP-Versand,
-// siehe dort). Gleicher read-only Supabase-Client/Projekt wie emailInboxDb.ts.
-
-import { createClient } from '@supabase/supabase-js'
+// siehe dort). Nutzt seit 2026-11-03 den authentifizierten Mitarbeiter-Client, siehe emailInboxDb.ts
+// für den Hintergrund (vorher über öffentlichen Publishable Key ohne Login lesbar).
+import { supabase, isSupabaseConfigured } from './supabaseClient'
 import type { GesendeteEmail, KundeBereich } from '../types'
 
-const URL = import.meta.env.VITE_SUPABASE_EMAIL_URL as string | undefined
-const ANON_KEY = import.meta.env.VITE_SUPABASE_EMAIL_ANON_KEY as string | undefined
-
-export const isSentEmailsDbConfigured = Boolean(URL && ANON_KEY)
-const client = isSentEmailsDbConfigured ? createClient(URL!, ANON_KEY!, { auth: { persistSession: false, autoRefreshToken: false } }) : null
+export const isSentEmailsDbConfigured = isSupabaseConfigured
+const client = supabase
 
 type Row = {
   id: string

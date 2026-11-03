@@ -1,17 +1,13 @@
 // Liest/aktualisiert Lead-Vorschläge aus public.vorgeschlagene_leads (befüllt von
-// scripts/extract-leads.mjs, später auch von öffentlichen Fragenkatalog-Formularen). Gleicher
-// read/update-Client wie emailInboxDb.ts/sentEmailsDb.ts — "update" ist hier absichtlich per
-// RLS-Policy für den Publishable Key erlaubt (nur das status-Feld wird geändert), damit das CRM
-// Leads direkt als "übernommen"/"verworfen" markieren kann, ohne über die Edge Function zu gehen.
-
-import { createClient } from '@supabase/supabase-js'
+// scripts/extract-leads.mjs bzw. der classify_new_leads-Action, beide mit Service-Role-Key, also
+// unabhängig von dieser RLS). Nutzt seit 2026-11-03 den authentifizierten Mitarbeiter-Client, siehe
+// emailInboxDb.ts für den Hintergrund (vorher über öffentlichen Publishable Key ohne Login lesbar
+// UND beschreibbar).
+import { supabase, isSupabaseConfigured } from './supabaseClient'
 import type { VorgeschlagenerLead, KundeBereich } from '../types'
 
-const URL = import.meta.env.VITE_SUPABASE_EMAIL_URL as string | undefined
-const ANON_KEY = import.meta.env.VITE_SUPABASE_EMAIL_ANON_KEY as string | undefined
-
-export const isLeadsDbConfigured = Boolean(URL && ANON_KEY)
-const client = isLeadsDbConfigured ? createClient(URL!, ANON_KEY!, { auth: { persistSession: false, autoRefreshToken: false } }) : null
+export const isLeadsDbConfigured = isSupabaseConfigured
+const client = supabase
 
 type Row = {
   id: string
