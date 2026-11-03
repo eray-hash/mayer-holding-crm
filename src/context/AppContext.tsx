@@ -818,9 +818,20 @@ function reducer(state: AppData, action: Action): AppData {
       }
     }
     case 'ADD_EINGEGANGENE_EMAILS': {
-      const bekannteIds = new Set(state.eingegangeneEmails.map((e) => e.messageId))
-      const neue = action.emails.filter((e) => !bekannteIds.has(e.messageId))
-      return { ...state, eingegangeneEmails: [...neue, ...state.eingegangeneEmails] }
+      // Bisher wurden bereits lokal bekannte Mails beim erneuten Laden komplett verworfen statt
+      // aktualisiert — eine Zuordnung/Ignorieren-Markierung, die ein Kollege auf einem anderen Gerät
+      // gesetzt hat, blieb dadurch auch nach "Aktualisieren" unsichtbar (unterlief den Sync-Fix vom
+      // 2026-11-02, der genau dieses Problem beheben sollte). Jetzt: bekannte Mails werden mit dem
+      // frisch geladenen Serverstand überschrieben, die lokal erzeugte id bleibt erhalten, damit eine
+      // gerade geöffnete Mail (selectedId) nicht durch den Refresh "verschwindet".
+      const vorhandeneNachMessageId = new Map(state.eingegangeneEmails.map((e) => [e.messageId, e]))
+      const aktualisierteMessageIds = new Set(action.emails.map((e) => e.messageId))
+      const aktualisiert = action.emails.map((e) => {
+        const vorhanden = vorhandeneNachMessageId.get(e.messageId)
+        return vorhanden ? { ...e, id: vorhanden.id } : e
+      })
+      const unveraendert = state.eingegangeneEmails.filter((e) => !aktualisierteMessageIds.has(e.messageId))
+      return { ...state, eingegangeneEmails: [...aktualisiert, ...unveraendert] }
     }
     case 'ASSIGN_EINGEGANGENE_EMAIL': {
       const mail = state.eingegangeneEmails.find((e) => e.id === action.id)

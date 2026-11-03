@@ -630,7 +630,10 @@ function ZuordnungsZeile({
   const { state } = useApp()
   const bereich = bereichWahl[mail.id] ?? mail.vorschlag?.bereich ?? KUNDEN_BEREICHE[0].id
   const kundenListe = KUNDEN_BEREICHE.find((b) => b.id === bereich)!.get(state)
-  const kundeId = kundeWahl[mail.id] ?? mail.vorschlag?.kundeId ?? kundenListe[0]?.id ?? ''
+  // Ohne automatischen Vorschlag UND ohne eigene Auswahl bewusst NICHT den erstbesten Kunden der
+  // Liste vorauswählen (sonst wirkt "Zuweisen" sofort klickbar, obwohl de facto kein Treffer
+  // vorliegt — echter Fehlzuordnungs-Fund beim Bugfixing-Durchgang 2026-11-03).
+  const kundeId = kundeWahl[mail.id] ?? mail.vorschlag?.kundeId ?? ''
 
   return (
     <div className="rounded-lg border border-slate-200 p-3">
@@ -650,7 +653,7 @@ function ZuordnungsZeile({
           ))}
         </select>
         <select className={`${inputClass} w-auto`} value={kundeId} onChange={(e) => setKundeWahl((s) => ({ ...s, [mail.id]: e.target.value }))}>
-          {kundenListe.length === 0 && <option value="">– keine Kunden –</option>}
+          {!kundeId && <option value="">{kundenListe.length === 0 ? '– keine Kunden –' : '– Kunde wählen –'}</option>}
           {kundenListe.map((k) => (
             <option key={k.id} value={k.id}>
               {k.firma} ({k.ansprechpartner})
