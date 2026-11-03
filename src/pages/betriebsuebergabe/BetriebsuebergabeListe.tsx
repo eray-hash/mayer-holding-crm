@@ -159,7 +159,9 @@ export function BetriebsuebergabeListe() {
         />
       )}
 
-      <NeuerMandantModal open={addOpen} onClose={() => setAddOpen(false)} onCreate={(k) => dispatch({ type: 'ADD_BETRIEBSUEBERGABE_MANDANT', kunde: k })} />
+      {addOpen && (
+        <NeuerMandantModal open={addOpen} onClose={() => setAddOpen(false)} onCreate={(k) => dispatch({ type: 'ADD_BETRIEBSUEBERGABE_MANDANT', kunde: k })} />
+      )}
     </div>
   )
 }

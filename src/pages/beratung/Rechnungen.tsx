@@ -75,7 +75,9 @@ export function Rechnungen() {
         </table>
       </Card>
 
-      <NeueRechnungModal open={addOpen} onClose={() => setAddOpen(false)} onCreate={(r) => dispatch({ type: 'ADD_RECHNUNG', rechnung: r })} />
+      {addOpen && (
+        <NeueRechnungModal open={addOpen} onClose={() => setAddOpen(false)} onCreate={(r) => dispatch({ type: 'ADD_RECHNUNG', rechnung: r })} />
+      )}
     </div>
   )
 }

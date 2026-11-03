@@ -160,7 +160,9 @@ export function KundenListe() {
         />
       )}
 
-      <NeuerKundeModal open={addOpen} onClose={() => setAddOpen(false)} onCreate={(k) => dispatch({ type: 'ADD_KUNDE', kunde: k })} />
+      {addOpen && (
+        <NeuerKundeModal open={addOpen} onClose={() => setAddOpen(false)} onCreate={(k) => dispatch({ type: 'ADD_KUNDE', kunde: k })} />
+      )}
     </div>
   )
 }

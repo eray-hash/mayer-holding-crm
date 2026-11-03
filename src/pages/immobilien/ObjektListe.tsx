@@ -163,12 +163,16 @@ export function ObjektListe() {
         />
       )}
 
-      <NeuesObjektModal open={addOpen} onClose={() => setAddOpen(false)} onCreate={(o) => dispatch({ type: 'ADD_OBJEKT', objekt: o })} />
-      <ImmoRadarUebernehmenModal
-        open={immoRadarOpen}
-        onClose={() => setImmoRadarOpen(false)}
-        onCreate={(o) => dispatch({ type: 'ADD_OBJEKT', objekt: o })}
-      />
+      {addOpen && (
+        <NeuesObjektModal open={addOpen} onClose={() => setAddOpen(false)} onCreate={(o) => dispatch({ type: 'ADD_OBJEKT', objekt: o })} />
+      )}
+      {immoRadarOpen && (
+        <ImmoRadarUebernehmenModal
+          open={immoRadarOpen}
+          onClose={() => setImmoRadarOpen(false)}
+          onCreate={(o) => dispatch({ type: 'ADD_OBJEKT', objekt: o })}
+        />
+      )}
     </div>
   )
 }

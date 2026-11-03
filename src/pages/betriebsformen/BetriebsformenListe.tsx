@@ -159,7 +159,9 @@ export function BetriebsformenListe() {
         />
       )}
 
-      <NeuerMandantModal open={addOpen} onClose={() => setAddOpen(false)} onCreate={(k) => dispatch({ type: 'ADD_BETRIEBSFORMEN_MANDANT', kunde: k })} />
+      {addOpen && (
+        <NeuerMandantModal open={addOpen} onClose={() => setAddOpen(false)} onCreate={(k) => dispatch({ type: 'ADD_BETRIEBSFORMEN_MANDANT', kunde: k })} />
+      )}
     </div>
   )
 }

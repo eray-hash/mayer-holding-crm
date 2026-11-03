@@ -159,7 +159,9 @@ export function AkademieListe() {
         />
       )}
 
-      <NeuerTeilnehmerModal open={addOpen} onClose={() => setAddOpen(false)} onCreate={(k) => dispatch({ type: 'ADD_AKADEMIE_TEILNEHMER', kunde: k })} />
+      {addOpen && (
+        <NeuerTeilnehmerModal open={addOpen} onClose={() => setAddOpen(false)} onCreate={(k) => dispatch({ type: 'ADD_AKADEMIE_TEILNEHMER', kunde: k })} />
+      )}
     </div>
   )
 }

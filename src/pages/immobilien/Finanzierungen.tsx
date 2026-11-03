@@ -56,7 +56,9 @@ export function Finanzierungen() {
         </table>
       </Card>
 
-      <NeueFinanzierungModal open={addOpen} onClose={() => setAddOpen(false)} onCreate={(f) => dispatch({ type: 'ADD_FINANZIERUNG', finanzierung: f })} />
+      {addOpen && (
+        <NeueFinanzierungModal open={addOpen} onClose={() => setAddOpen(false)} onCreate={(f) => dispatch({ type: 'ADD_FINANZIERUNG', finanzierung: f })} />
+      )}
     </div>
   )
 }

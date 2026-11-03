@@ -80,12 +80,14 @@ export function ProjekteListe() {
         </div>
       )}
 
-      <NeuesProjektModal
-        open={addOpen}
-        onClose={() => setAddOpen(false)}
-        bereich={bereich}
-        onCreate={(projekt) => dispatch({ type: 'ADD_PROJEKT', projekt })}
-      />
+      {addOpen && (
+        <NeuesProjektModal
+          open={addOpen}
+          onClose={() => setAddOpen(false)}
+          bereich={bereich}
+          onCreate={(projekt) => dispatch({ type: 'ADD_PROJEKT', projekt })}
+        />
+      )}
     </div>
   )
 }

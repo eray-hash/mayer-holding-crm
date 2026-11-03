@@ -161,7 +161,9 @@ export function FinanzierungenListe() {
         />
       )}
 
-      <NeuerMandantModal open={addOpen} onClose={() => setAddOpen(false)} onCreate={(k) => dispatch({ type: 'ADD_FINANZIERUNGEN_MANDANT', kunde: k })} />
+      {addOpen && (
+        <NeuerMandantModal open={addOpen} onClose={() => setAddOpen(false)} onCreate={(k) => dispatch({ type: 'ADD_FINANZIERUNGEN_MANDANT', kunde: k })} />
+      )}
     </div>
   )
 }
