@@ -56,7 +56,7 @@ export function PublicVollmachtErben() {
     setError('')
     setSenden(true)
 
-    const aktivitaetText = `Allgemeine Vollmacht digital ausgefüllt und unterschrieben. Bevollmächtigt: ${bevollmaechtigterName}${bevollmaechtigterWohnhaft ? ' (' + bevollmaechtigterWohnhaft + ')' : ''}. Rechtsgeschäft: ${rechtsgeschaeft}.`
+    const aktivitaetText = `Allgemeine Vollmacht digital ausgefüllt und unterschrieben in ${ort || 'Ulm'}. Bevollmächtigt: ${bevollmaechtigterName}${bevollmaechtigterWohnhaft ? ' (' + bevollmaechtigterWohnhaft + ')' : ''}. Rechtsgeschäft: ${rechtsgeschaeft}.`
 
     try {
       await sendePublicFormular({
