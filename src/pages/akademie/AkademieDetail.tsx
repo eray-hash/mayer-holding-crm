@@ -1,8 +1,10 @@
+import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { ArrowLeft } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { StatusWidget } from '../../components/StatusWidget'
-import { Card, EmptyState } from '../../components/ui'
+import { Card, Modal, EmptyState } from '../../components/ui'
+import { FollowUpForm } from '../../components/FollowUpEditor'
 import { fmtDate, isOverdue } from '../../lib/dates'
 import { PRIORITAETEN } from '../../data/constants'
 import { ZugewieseneObjekte } from '../../components/ZugewieseneObjekte'
@@ -18,6 +20,7 @@ export function AkademieDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
   const { state, dispatch } = useApp()
+  const [editFollowUp, setEditFollowUp] = useState(false)
 
   const teilnehmer = state.akademieTeilnehmer.find((k) => k.id === id)
 
@@ -66,8 +69,10 @@ export function AkademieDetail() {
           </div>
           <div>
             <div className="mb-1 text-xs font-medium text-slate-400">Follow-up</div>
-            <div className={`text-sm ${overdue ? 'font-medium text-rose-600' : 'text-slate-700'}`}>{fmtDate(teilnehmer.followUp.date)} {overdue && '· überfällig'}</div>
-            <div className="text-xs text-slate-400">{teilnehmer.followUp.note}</div>
+            <button onClick={() => setEditFollowUp(true)} className="text-left">
+              <div className={`text-sm ${overdue ? 'font-medium text-rose-600' : 'text-slate-700'}`}>{fmtDate(teilnehmer.followUp.date)} {overdue && '· überfällig'}</div>
+              <div className="text-xs text-slate-400">{teilnehmer.followUp.note}</div>
+            </button>
           </div>
           <div>
             <div className="mb-1 text-xs font-medium text-slate-400">Verantwortlich</div>
@@ -138,6 +143,18 @@ export function AkademieDetail() {
           <DokumenteSection bereich="akademie" kundeId={teilnehmer.id} />
         </Card>
       </div>
+
+      <Modal open={editFollowUp} onClose={() => setEditFollowUp(false)} title="Follow-up bearbeiten">
+        <FollowUpForm
+          date={teilnehmer.followUp.date}
+          note={teilnehmer.followUp.note}
+          done={teilnehmer.followUp.done}
+          onSubmit={(followUp) => {
+            dispatch({ type: 'SET_AKADEMIE_FOLLOWUP', id: teilnehmer.id, followUp })
+            setEditFollowUp(false)
+          }}
+        />
+      </Modal>
     </div>
   )
 }

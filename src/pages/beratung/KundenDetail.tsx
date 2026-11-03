@@ -3,7 +3,7 @@ import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, Mail } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { StatusWidget } from '../../components/StatusWidget'
-import { StatusBadge, Card, Modal, Field, inputClass, PrimaryButton, SecondaryButton, EmptyState } from '../../components/ui'
+import { StatusBadge, Card, Modal, inputClass, SecondaryButton, EmptyState } from '../../components/ui'
 import { fmtDate, isOverdue, today, uid, fmtEUR } from '../../lib/dates'
 import { PRIORITAETEN, CURRENT_USER } from '../../data/constants'
 import { ZugewieseneObjekte } from '../../components/ZugewieseneObjekte'
@@ -15,6 +15,7 @@ import { SelbstauskunftSection } from '../../components/SelbstauskunftSection'
 import { NdaSection } from '../../components/NdaSection'
 import { DokumenteSection } from '../../components/DokumenteSection'
 import { SendEmailModal } from '../../components/SendEmailModal'
+import { FollowUpForm } from '../../components/FollowUpEditor'
 import type { Prioritaet } from '../../types'
 
 const TABS = [
@@ -325,30 +326,3 @@ export function RechnungStatusBadge({ status }: { status: string }) {
   return <StatusBadge label={status} color={colors[status] ?? 'bg-slate-100 text-slate-600'} />
 }
 
-function FollowUpForm({
-  date,
-  note,
-  done,
-  onSubmit,
-}: {
-  date: string
-  note: string
-  done: boolean
-  onSubmit: (f: { date: string; note: string; done: boolean }) => void
-}) {
-  const [d, setD] = useState(date)
-  const [n, setN] = useState(note)
-  const [done_, setDone] = useState(done)
-  return (
-    <div>
-      <Field label="Datum"><input type="date" className={inputClass} value={d} onChange={(e) => setD(e.target.value)} /></Field>
-      <Field label="Notiz"><input className={inputClass} value={n} onChange={(e) => setN(e.target.value)} /></Field>
-      <label className="mb-3 flex items-center gap-2 text-sm text-slate-600">
-        <input type="checkbox" checked={done_} onChange={(e) => setDone(e.target.checked)} className="rounded" /> erledigt
-      </label>
-      <div className="flex justify-end">
-        <PrimaryButton onClick={() => onSubmit({ date: d, note: n, done: done_ })}>Speichern</PrimaryButton>
-      </div>
-    </div>
-  )
-}
