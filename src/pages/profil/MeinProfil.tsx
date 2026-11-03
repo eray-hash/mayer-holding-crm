@@ -1,9 +1,83 @@
 import { useRef, useState } from 'react'
-import { AlertTriangle, Camera, CheckCircle2, Lock, User } from 'lucide-react'
+import { AlertTriangle, Camera, CheckCircle2, Lock, Plane, Trash2, User } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { useAuth } from '../../context/AuthContext'
 import { supabase, isSupabaseConfigured } from '../../lib/supabaseClient'
 import { Card, Field, inputClass, PrimaryButton } from '../../components/ui'
+import { today, fmtDate, uid } from '../../lib/dates'
+import { CURRENT_USER } from '../../data/constants'
+
+// Vertretungs-Logik (Quirin, Entscheidung 2026-11-03): "offener Pool" ohne feste Vertreter-
+// Zuordnung — jeder trägt seine eigene Abwesenheit (von–bis) selbst ein, GF/Admin sehen während
+// dieses Zeitraums die offenen Follow-ups/Aufgaben zusätzlich auf dem Heute-Screen (siehe
+// HeuteScreen.tsx), ohne dass verantwortlich/zustaendig umgebucht wird.
+function AbwesenheitVerwalten() {
+  const { state, dispatch } = useApp()
+  const [von, setVon] = useState(today())
+  const [bis, setBis] = useState(today())
+  const [fehler, setFehler] = useState('')
+
+  const eigene = state.abwesenheiten
+    .filter((a) => a.mitarbeiterName === CURRENT_USER)
+    .sort((a, b) => b.von.localeCompare(a.von))
+
+  function hinzufuegen() {
+    if (bis < von) {
+      setFehler('Das Enddatum muss nach dem Startdatum liegen.')
+      return
+    }
+    setFehler('')
+    dispatch({ type: 'ADD_ABWESENHEIT', abwesenheit: { id: uid('abw'), mitarbeiterName: CURRENT_USER, von, bis } })
+  }
+
+  return (
+    <Card className="mb-5 p-5">
+      <h3 className="mb-1 flex items-center gap-1.5 text-sm font-semibold text-slate-700">
+        <Plane size={14} /> Abwesenheit
+      </h3>
+      <p className="mb-3 text-xs text-slate-400">
+        In diesem Zeitraum sehen Geschäftsführung/Admin deine offenen Follow-ups und Aufgaben zusätzlich auf ihrem
+        Heute-Screen — sie bleiben bei dir zugeordnet, werden nur zur Vertretung sichtbar gemacht.
+      </p>
+      <div className="mb-3 grid gap-3 sm:grid-cols-3">
+        <Field label="Von">
+          <input type="date" className={inputClass} value={von} onChange={(e) => setVon(e.target.value)} />
+        </Field>
+        <Field label="Bis">
+          <input type="date" className={inputClass} value={bis} onChange={(e) => setBis(e.target.value)} />
+        </Field>
+        <div className="flex items-end">
+          <button
+            onClick={hinzufuegen}
+            className="w-full rounded-lg bg-accent-600 px-3 py-2 text-sm font-medium text-white hover:bg-accent-700"
+          >
+            Eintragen
+          </button>
+        </div>
+      </div>
+      {fehler && <p className="mb-2 text-sm font-medium text-rose-600">{fehler}</p>}
+      {eigene.length > 0 && (
+        <ul className="flex flex-col gap-2">
+          {eigene.map((a) => (
+            <li key={a.id} className="flex items-center gap-2.5 rounded-lg bg-slate-50 px-3 py-2 text-sm">
+              <span className="flex-1 text-slate-700">
+                {fmtDate(a.von)} – {fmtDate(a.bis)}
+                {a.bis >= today() && a.von <= today() ? <span className="ml-2 text-xs font-medium text-amber-600">aktuell</span> : null}
+              </span>
+              <button
+                onClick={() => dispatch({ type: 'DELETE_ABWESENHEIT', id: a.id })}
+                className="rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-rose-600"
+                title="Löschen"
+              >
+                <Trash2 size={13} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
+  )
+}
 
 function PasswortSetzen() {
   const [passwort, setPasswort] = useState('')
@@ -102,6 +176,8 @@ export function MeinProfil() {
     <div className="mx-auto max-w-2xl">
       <h1 className="mb-1 text-xl font-semibold text-slate-800">Mein Profil</h1>
       <p className="mb-5 text-sm text-slate-500">Persönliche Daten und E-Mail-Signatur.</p>
+
+      <AbwesenheitVerwalten />
 
       {isSupabaseConfigured && session ? (
         <PasswortSetzen />

@@ -20,6 +20,7 @@ import type {
   EingegangeneEmail,
   MailVorlage,
   Notiz,
+  Abwesenheit,
   MitarbeiterProfil,
   KundeBereich,
   ActivityEntry,
@@ -88,6 +89,7 @@ export type AppData = {
   eingegangeneEmails: EingegangeneEmail[]
   mailVorlagen: MailVorlage[]
   notizen: Notiz[]
+  abwesenheiten: Abwesenheit[]
   profil: MitarbeiterProfil
   fragenkataloge: FragenkatalogFrage[]
 }
@@ -128,6 +130,7 @@ function leereGeteilteEntities(data: AppData): AppData {
     importierteDokumente: [],
     mailVorlagen: [],
     notizen: [],
+    abwesenheiten: [],
   }
 }
 
@@ -162,6 +165,7 @@ function buildSeed(): AppData {
     eingegangeneEmails: [],
     mailVorlagen: seedMailVorlagen,
     notizen: [],
+    abwesenheiten: [],
     profil: {
       name: CURRENT_USER,
       telefon: '',
@@ -206,6 +210,7 @@ function loadInitial(): AppData {
         if (!Array.isArray(parsed.eingegangeneEmails)) parsed.eingegangeneEmails = []
         if (!Array.isArray(parsed.mailVorlagen)) parsed.mailVorlagen = seedMailVorlagen
         if (!Array.isArray(parsed.notizen)) parsed.notizen = []
+        if (!Array.isArray(parsed.abwesenheiten)) parsed.abwesenheiten = []
         if (!parsed.profil) {
           parsed.profil = {
             name: CURRENT_USER,
@@ -299,6 +304,8 @@ type Action =
   | { type: 'ADD_NOTIZ'; notiz: Notiz }
   | { type: 'TOGGLE_NOTIZ'; id: string }
   | { type: 'DELETE_NOTIZ'; id: string }
+  | { type: 'ADD_ABWESENHEIT'; abwesenheit: Abwesenheit }
+  | { type: 'DELETE_ABWESENHEIT'; id: string }
   | { type: 'UPDATE_PROFIL'; patch: Partial<MitarbeiterProfil> }
 
 // Hängt eine Aktivität an den Kunden/Mandanten im richtigen Bereichs-Array — zentrale Stelle, da
@@ -941,6 +948,7 @@ function reducer(state: AppData, action: Action): AppData {
         importierteDokumente: action.data.importierteDokumente,
         mailVorlagen: action.data.mailVorlagen,
         notizen: action.data.notizen,
+        abwesenheiten: action.data.abwesenheiten,
       }
     case 'ADD_FRAGE':
       return { ...state, fragenkataloge: [...state.fragenkataloge, action.frage] }
@@ -963,6 +971,10 @@ function reducer(state: AppData, action: Action): AppData {
       return { ...state, notizen: state.notizen.map((n) => (n.id === action.id ? { ...n, erledigt: !n.erledigt } : n)) }
     case 'DELETE_NOTIZ':
       return { ...state, notizen: state.notizen.filter((n) => n.id !== action.id) }
+    case 'ADD_ABWESENHEIT':
+      return { ...state, abwesenheiten: [action.abwesenheit, ...state.abwesenheiten] }
+    case 'DELETE_ABWESENHEIT':
+      return { ...state, abwesenheiten: state.abwesenheiten.filter((a) => a.id !== action.id) }
     case 'UPDATE_PROFIL':
       return { ...state, profil: { ...state.profil, ...action.patch } }
     default:

@@ -13,6 +13,7 @@ export type FollowUpEntry = {
   note: string
   date: string
   kind: FollowUpKind
+  verantwortlich: string
 }
 
 // Sammelt alle fälligen/überfälligen Follow-ups über alle Kunden-Bereiche + Immobilien-Objekte
@@ -33,6 +34,7 @@ export function collectFollowUpPriorities(state: AppData): FollowUpEntry[] {
         note: k.followUp.note,
         date: k.followUp.date,
         kind: k.followUp.date < heute ? 'overdue' : 'today',
+        verantwortlich: k.verantwortlich,
       })
     }
   }
@@ -47,6 +49,7 @@ export function collectFollowUpPriorities(state: AppData): FollowUpEntry[] {
       note: o.followUp.note,
       date: o.followUp.date,
       kind: o.followUp.date < heute ? 'overdue' : 'today',
+      verantwortlich: o.verantwortlich,
     })
   }
 

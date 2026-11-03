@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Bot, PhoneCall, Flame, CalendarClock, StickyNote, Trash2, Check, Clock3, Users } from 'lucide-react'
+import { Bot, PhoneCall, Flame, CalendarClock, StickyNote, Trash2, Check, Clock3, Users, Plane } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { useAuth } from '../../context/AuthContext'
 import { isSupabaseConfigured } from '../../lib/supabaseClient'
@@ -75,8 +75,25 @@ export function HeuteScreen() {
   const followUps = collectFollowUpPriorities(state)
 
   const istGeschaeftsfuehrung = isSupabaseConfigured && session ? mitarbeiter?.rolle === 'geschaeftsfuehrung' : state.rolle === 'geschaeftsfuehrung'
+  const istGfOderAdmin = isSupabaseConfigured && session
+    ? mitarbeiter?.rolle === 'geschaeftsfuehrung' || !!mitarbeiter?.ist_admin
+    : state.rolle === 'geschaeftsfuehrung'
   const gruss = isSupabaseConfigured && session ? mitarbeiter?.name ?? 'Team' : istGeschaeftsfuehrung ? 'Geschäftsführung' : 'Team'
   const offeneNotizen = state.notizen.filter((n) => !n.erledigt)
+
+  // Vertretungs-Logik (offener Pool, Entscheidung 2026-11-03): keine feste Zuordnung, keine
+  // Umbuchung — für GF/Admin werden während der eingetragenen Abwesenheit lediglich die bereits
+  // berechneten Follow-ups/Aufgaben des abwesenden Mitarbeiters zusätzlich herausgefiltert, damit
+  // jemand sie bei Bedarf übernehmen kann.
+  const heuteIso = today()
+  const aktuellAbwesende = istGfOderAdmin
+    ? state.abwesenheiten.filter((a) => a.von <= heuteIso && a.bis >= heuteIso)
+    : []
+  const vertretungen = aktuellAbwesende.map((a) => ({
+    abwesenheit: a,
+    followUps: followUps.filter((f) => f.verantwortlich === a.mitarbeiterName),
+    aufgaben: [...prioritaeten, ...demnaechst].filter((e) => e.aufgabe.zustaendig === a.mitarbeiterName),
+  }))
 
   function followUpErledigt(entry: FollowUpEntry) {
     dispatchFollowUp(dispatch, entry.bereich, entry.id, { date: entry.date, note: entry.note, done: true })
@@ -88,6 +105,44 @@ export function HeuteScreen() {
 
   return (
     <div className="mx-auto max-w-3xl">
+      {vertretungen.some((v) => v.followUps.length > 0 || v.aufgaben.length > 0) && (
+        <Card className="mb-5 border-amber-200 bg-amber-50/40 p-5">
+          <h2 className="mb-1 flex items-center gap-1.5 text-sm font-semibold text-amber-800">
+            <Plane size={14} /> Vertretung
+          </h2>
+          <p className="mb-3 text-xs text-amber-700/80">
+            Diese Kolleg:innen sind gerade abwesend — ihre offenen Follow-ups/Aufgaben bleiben bei ihnen zugeordnet, werden hier
+            nur zur Übernahme sichtbar gemacht.
+          </p>
+          <div className="flex flex-col gap-4">
+            {vertretungen
+              .filter((v) => v.followUps.length > 0 || v.aufgaben.length > 0)
+              .map((v) => (
+                <div key={v.abwesenheit.id}>
+                  <p className="mb-2 text-xs font-semibold text-amber-800">
+                    {v.abwesenheit.mitarbeiterName} · abwesend bis {fmtDate(v.abwesenheit.bis)}
+                  </p>
+                  <ul className="flex flex-col gap-2">
+                    {v.followUps.map((entry) => (
+                      <li key={`${entry.bereich}-${entry.id}`} className="rounded-lg bg-white px-3 py-2 text-sm">
+                        <button type="button" onClick={() => navigate(followUpDetailPfad(entry))} className="w-full text-left hover:underline">
+                          <p className="truncate text-slate-800">{entry.note || 'Follow-up'}</p>
+                          <p className="text-xs text-slate-400">
+                            {entry.name} · {entry.bereichLabel} · {entry.kind === 'overdue' ? 'überfällig seit' : 'fällig'} {fmtDate(entry.date)}
+                          </p>
+                        </button>
+                      </li>
+                    ))}
+                    {v.aufgaben.map((e) => (
+                      <EntryRow key={e.aufgabe.id} e={e} onOpen={() => setOpenEntry(e)} />
+                    ))}
+                  </ul>
+                </div>
+              ))}
+          </div>
+        </Card>
+      )}
+
       {followUps.length > 0 && (
         <Card className="mb-5 p-5">
           <h2 className="mb-1 flex items-center gap-1.5 text-sm font-semibold text-slate-700">

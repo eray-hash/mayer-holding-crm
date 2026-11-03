@@ -348,6 +348,17 @@ export type Notiz = {
   erledigt: boolean
 }
 
+// Vertretungs-Logik (Quirin Lutzenberger): "offener Pool" ohne feste Vertreter-Zuordnung — während
+// des Zeitraums von–bis werden die offenen Follow-ups/Aufgaben des Mitarbeiters für Geschäftsführung/
+// Admin zusätzlich sichtbar gemacht (siehe HeuteScreen.tsx), ohne das verantwortlich/zustaendig-Feld
+// umzubuchen (Entscheidung 2026-11-03).
+export type Abwesenheit = {
+  id: string
+  mitarbeiterName: string
+  von: string
+  bis: string
+}
+
 // Ein per KI aus der E-Mail-Historie (oder später aus Fragenkatalog-Formularen) extrahierter
 // Lead-Vorschlag — rein lesend aus public.vorgeschlagene_leads, siehe scripts/extract-leads.mjs.
 // Übernahme als echter Kunde/Mandant passiert im CRM selbst (Dedup-Check gegen lokale Kundendaten).

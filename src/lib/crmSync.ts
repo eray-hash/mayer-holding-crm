@@ -36,6 +36,7 @@ import type {
   ImportiertesDokument,
   MailVorlage,
   Notiz,
+  Abwesenheit,
 } from '../types'
 import type { Projekt } from '../types/project'
 
@@ -439,6 +440,14 @@ function rowToNotiz(row: any): Notiz {
   }
 }
 
+function abwesenheitToRow(a: Abwesenheit) {
+  return { id: a.id, mitarbeiter_name: a.mitarbeiterName, von: a.von, bis: a.bis }
+}
+
+function rowToAbwesenheit(row: any): Abwesenheit {
+  return { id: row.id, mitarbeiterName: row.mitarbeiter_name, von: row.von, bis: row.bis }
+}
+
 function logFehler(kontext: string, error: { message: string } | null) {
   if (error) console.error(`Supabase-Sync fehlgeschlagen (${kontext}):`, error.message)
 }
@@ -466,6 +475,7 @@ const SIMPLE_SYNCS: { table: string; key: keyof AppData; label: (item: any) => s
   },
   { table: 'mail_vorlagen', key: 'mailVorlagen', label: (m: MailVorlage) => `Mail-Vorlage ${m.name}`, toRow: mailVorlageToRow },
   { table: 'notizen', key: 'notizen', label: () => 'Notiz', toRow: notizToRow },
+  { table: 'abwesenheiten', key: 'abwesenheiten', label: (a: Abwesenheit) => `Abwesenheit ${a.mitarbeiterName}`, toRow: abwesenheitToRow },
 ]
 
 function syncSimpleCollection(client: NonNullable<typeof supabase>, prev: AppData, next: AppData, cfg: (typeof SIMPLE_SYNCS)[number]) {
@@ -555,6 +565,7 @@ export type HydratedData = {
   importierteDokumente: ImportiertesDokument[]
   mailVorlagen: MailVorlage[]
   notizen: Notiz[]
+  abwesenheiten: Abwesenheit[]
 }
 
 // Lädt den aktuellen, geteilten Stand beim Start (und kann für ein manuelles "Aktualisieren" erneut
@@ -578,6 +589,7 @@ export async function hydrateFromSupabase(): Promise<HydratedData | null> {
     importierteDokumenteRes,
     mailVorlagenRes,
     notizenRes,
+    abwesenheitenRes,
     mitarbeiterRes,
   ] = await Promise.all([
     supabase.from('kunden').select('*'),
@@ -595,6 +607,7 @@ export async function hydrateFromSupabase(): Promise<HydratedData | null> {
     supabase.from('importierte_dokumente').select('*'),
     supabase.from('mail_vorlagen').select('*'),
     supabase.from('notizen').select('*'),
+    supabase.from('abwesenheiten').select('*'),
     supabase.from('mitarbeiter').select('name').eq('aktiv', true).order('name'),
   ])
   for (const res of [
@@ -613,6 +626,7 @@ export async function hydrateFromSupabase(): Promise<HydratedData | null> {
     importierteDokumenteRes,
     mailVorlagenRes,
     notizenRes,
+    abwesenheitenRes,
   ]) {
     if (res.error) throw new Error(res.error.message)
   }
@@ -665,6 +679,7 @@ export async function hydrateFromSupabase(): Promise<HydratedData | null> {
     importierteDokumente: (importierteDokumenteRes.data ?? []).map(rowToImportDok),
     mailVorlagen: (mailVorlagenRes.data ?? []).map(rowToMailVorlage),
     notizen: (notizenRes.data ?? []).map(rowToNotiz),
+    abwesenheiten: (abwesenheitenRes.data ?? []).map(rowToAbwesenheit),
   }
 }
 
