@@ -67,6 +67,14 @@
 //   { action: "public_create_lead", firma, email, ... , aktivitaetText, signatur? }
 //                                                -> legt aus dem öffentlichen Feedbackbogen einen
 //                                                   neuen Kunden (Bereich "beratung") an
+//   { action: "firmenwissen_answer", frage, kontext }
+//                                                -> Firmen-Wissens-KI: beantwortet eine
+//                                                   bereichsübergreifende Frage ("Wo liegt das
+//                                                   Exposé Musterstraße 17?") auf Basis einer vom
+//                                                   Frontend mitgeschickten Zusammenfassung ALLER
+//                                                   Kunden/Objekte/Prozesse (siehe
+//                                                   src/lib/firmenwissenKontext.ts) — kein
+//                                                   Dokumenten-RAG, die Daten sind schon strukturiert
 //   { action: "public_get_objekt", objektId }    -> liest Stammdaten (bezeichnung/adresse/typ/
 //                                                   dokumente/eigentuemer) für das öffentliche
 //                                                   Eigentümer-Formular (PublicEigentuemerPortal.tsx)
@@ -436,6 +444,33 @@ Frage: ${frage}`,
   )
   // Verteidigt gegen gelegentliche Reste von Pseudo-XML/Tool-Syntax, die das Modell manchmal ans
   // Ende des Strings anhängt (z. B. "</antwort> </invoke>") statt sie sauber im tool_use zu lassen.
+  return { antwort: result.antwort.replace(/<\/?[a-zA-Z_][^>]*>/g, '').trim() }
+}
+
+// Firmen-Wissens-KI (Quirin Lutzenberger: "Eigene Firmen-KI, greift ausschließlich auf eure
+// freigegebenen Unternehmensdaten zu") — anders als answerAssistantQuestion oben (ein Kunde) bezieht
+// sich kontext hier auf eine Zusammenfassung ALLER Kunden/Objekte/Prozesse (siehe
+// firmenwissenKontext.ts), damit bereichsübergreifende Fragen wie "Welche Objekte haben seit 30
+// Tagen keinen Kundenkontakt?" beantwortbar sind.
+async function answerFirmenwissen(frage: string, kontext: string): Promise<{ antwort: string }> {
+  const result = await callClaudeTool<{ antwort: string }>(
+    `Du bist die interne Firmen-Wissens-KI der Andreas Mayer Holding. Beantworte die folgende Frage eines Mitarbeiters ausschließlich auf Basis der unten gegebenen Unternehmensdaten (eine Momentaufnahme). Antworte auf Deutsch, klar und konkret. Wenn mehrere Datensätze zur Frage passen, liste sie auf. Wenn sich die Frage aus den Daten nicht beantworten lässt, sage das ehrlich, statt zu spekulieren oder etwas zu erfinden.
+
+Unternehmensdaten:
+"""${kontext}"""
+
+Frage: ${frage}`,
+    {
+      name: 'firmenwissen_antwort',
+      description: 'Beantwortet eine bereichsübergreifende Frage zu den Unternehmensdaten.',
+      input_schema: {
+        type: 'object',
+        properties: { antwort: { type: 'string' } },
+        required: ['antwort'],
+      },
+    },
+    1536,
+  )
   return { antwort: result.antwort.replace(/<\/?[a-zA-Z_][^>]*>/g, '').trim() }
 }
 
@@ -904,6 +939,15 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ antwort }), { headers })
     }
 
+    if (body.action === 'firmenwissen_answer') {
+      const { frage, kontext } = body
+      if (!frage || typeof frage !== 'string' || !frage.trim()) {
+        return new Response(JSON.stringify({ error: 'frage ist ein Pflichtfeld' }), { status: 400, headers })
+      }
+      const { antwort } = await answerFirmenwissen(frage, kontext ?? '')
+      return new Response(JSON.stringify({ antwort }), { headers })
+    }
+
     if (body.action === 'pflege_classify') {
       const { text } = body
       if (!text || typeof text !== 'string' || !text.trim()) {
@@ -1183,7 +1227,7 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ listings }), { headers })
     }
 
-    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "public_get_objekt", "public_objekt_upload_url" oder "public_submit_objekt_formular"' }), { status: 400, headers })
+    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular" oder "firmenwissen_answer"' }), { status: 400, headers })
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }

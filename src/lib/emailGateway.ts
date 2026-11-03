@@ -104,6 +104,14 @@ export type PotenzialChance = {
   prioritaet: 'Hoch' | 'Mittel' | 'Niedrig'
 }
 
+// Firmen-Wissens-KI (bereichsübergreifende Fragen, siehe firmenwissenKontext.ts für den Aufbau des
+// mitgeschickten kontext) — anders als answerAssistantQuestion (ein Kunde) deckt kontext hier
+// potenziell alle Kunden/Objekte/Prozesse ab.
+export async function answerFirmenwissen(frage: string, kontext: string): Promise<string> {
+  const data = await call({ action: 'firmenwissen_answer', frage, kontext })
+  return data.antwort
+}
+
 export async function analysierePotenzial(kontext: string): Promise<PotenzialChance[]> {
   const data = await call({ action: 'potenzial_analyse', kontext })
   return data.chancen ?? []

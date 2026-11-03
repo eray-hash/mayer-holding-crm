@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Mic, Square, Sparkles, AlertTriangle, Send, X, Volume2, VolumeX, Bot, ImagePlus, Phone, Wrench, Check } from 'lucide-react'
+import { Mic, Square, Sparkles, AlertTriangle, Send, X, Volume2, VolumeX, Bot, ImagePlus, Phone, Wrench, Check, BookOpen } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { useAuth } from '../context/AuthContext'
 import { isSupabaseConfigured } from '../lib/supabaseClient'
@@ -11,7 +11,9 @@ import {
   answerAssistantQuestion,
   answerWithImage,
   classifyPflegeInput,
+  answerFirmenwissen,
 } from '../lib/emailGateway'
+import { buildFirmenwissenKontext } from '../lib/firmenwissenKontext'
 import { suggestKundeKandidaten, type KundeMatch } from '../lib/matchKunde'
 import { KUNDEN_BEREICHE, kundeBereichLabel } from '../data/kundenBereiche'
 import { getStatusMap } from '../data/statusNetworks'
@@ -69,6 +71,10 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
   const [ausstehendeFrage, setAusstehendeFrage] = useState<{ frageText: string; kandidaten: KundeMatch[] } | null>(null)
   const [pflegeModus, setPflegeModus] = useState(false)
   const [pflegeVorschlag, setPflegeVorschlag] = useState<PflegeVorschlag | null>(null)
+  // Firmen-Wissens-KI (Quirin Lutzenberger: "Eigene Firmen-KI") — bewusst für ALLE aktiven
+  // Mitarbeiter verfügbar, nicht nur GF/Admin wie der Pflege-Modus: rein lesend, keine
+  // Schreiboperation, daher kein erhöhtes Risiko.
+  const [firmenwissenModus, setFirmenwissenModus] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -249,6 +255,23 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
     }
   }
 
+  // Firmen-Wissens-KI: anders als die normale "frage"-Klassifizierung (ein erkannter Kunde) wird
+  // hier immer eine Zusammenfassung ALLER Kunden/Objekte/Prozesse mitgeschickt — rein lesend, daher
+  // ohne Bestätigungsschritt wie beim Pflege-Modus.
+  async function firmenwissenSenden(text: string, sprechen: boolean) {
+    addMessage('user', text)
+    setVerarbeiten(true)
+    try {
+      const kontext = buildFirmenwissenKontext(state)
+      const antwort = await answerFirmenwissen(text, kontext)
+      addMessage('assistant', antwort, sprechen)
+    } catch (err) {
+      addMessage('assistant', `Frage konnte nicht beantwortet werden: ${err instanceof Error ? err.message : 'Fehler'}`, sprechen)
+    } finally {
+      setVerarbeiten(false)
+    }
+  }
+
   function onPasteInput(e: React.ClipboardEvent<HTMLTextAreaElement>) {
     const item = Array.from(e.clipboardData.items).find((i) => i.type.startsWith('image/'))
     if (!item) return
@@ -290,6 +313,11 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
 
     if (pflegeModus) {
       await pflegeSenden(text, sprechen)
+      return
+    }
+
+    if (firmenwissenModus) {
+      await firmenwissenSenden(text, sprechen)
       return
     }
 
@@ -420,9 +448,24 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
             <span className="text-sm font-semibold text-slate-800">KI-Assistent</span>
           </div>
           <div className="flex items-center gap-1">
+            <button
+              onClick={() => {
+                setFirmenwissenModus((v) => !v)
+                setPflegeModus(false)
+              }}
+              className={`rounded-md p-1.5 ${
+                firmenwissenModus ? 'bg-sky-100 text-sky-700' : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600'
+              }`}
+              title={firmenwissenModus ? 'Firmen-Wissen ausschalten' : 'Firmen-Wissen einschalten (bereichsübergreifende Fragen)'}
+            >
+              <BookOpen size={15} />
+            </button>
             {pflegeErlaubt && (
               <button
-                onClick={() => setPflegeModus((v) => !v)}
+                onClick={() => {
+                  setPflegeModus((v) => !v)
+                  setFirmenwissenModus(false)
+                }}
                 className={`rounded-md p-1.5 ${
                   pflegeModus ? 'bg-amber-100 text-amber-700' : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600'
                 }`}
@@ -445,6 +488,12 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
             </button>
           </div>
         </div>
+
+        {firmenwissenModus && (
+          <div className="flex flex-shrink-0 items-center gap-1.5 bg-sky-50 px-4 py-1.5 text-xs font-medium text-sky-700">
+            <BookOpen size={12} /> Firmen-Wissen aktiv — Fragen über alle Kunden/Objekte/Prozesse hinweg.
+          </div>
+        )}
 
         {pflegeModus && (
           <div className="flex flex-shrink-0 items-center gap-1.5 bg-amber-50 px-4 py-1.5 text-xs font-medium text-amber-700">
@@ -571,7 +620,9 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
                   ? 'Frage zum Bild (optional) …'
                   : pflegeModus
                     ? 'z.B. „X ist kein Kunde" oder „verschiebe X zu Erben" …'
-                    : 'Nachricht eingeben, Mikro nutzen oder Bild einfügen …'
+                    : firmenwissenModus
+                      ? 'z.B. „Wo liegt das Exposé Musterstraße 17?" …'
+                      : 'Nachricht eingeben, Mikro nutzen oder Bild einfügen …'
               }
               title="Bilder per Strg/Cmd+V aus der Zwischenablage einfügen"
             />
