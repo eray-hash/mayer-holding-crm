@@ -101,6 +101,29 @@
 //                                                   bereits hochgeladenes Dokument (Pfad aus
 //                                                   public_objekt_upload_url) direkt in die
 //                                                   bestehende objekte-Zeile
+//   { action: "public_get_vorschlag", vorschlagId }
+//                                                -> liest einen Objekt-Vorschlag (Exposé) + die
+//                                                   öffentlich relevanten Objekt-Stammdaten für
+//                                                   PublicExpose.tsx — serverseitig, da objekte UND
+//                                                   objekt_vorschlaege RLS-seitig auf
+//                                                   ist_aktiver_mitarbeiter() beschränkt sind und der
+//                                                   externe Kunde, der diesen Link anklickt, kein
+//                                                   Mitarbeiter-Login hat (echter Fund beim
+//                                                   Bugfixing-Durchgang 2026-11-03: das Formular las
+//                                                   bis dahin direkt über den normalen, RLS-
+//                                                   gebundenen Client und zeigte einem echten
+//                                                   anonymen Kunden daher immer "Link ungültig" —
+//                                                   unbemerkt, weil es bisher nur eingeloggt getestet
+//                                                   wurde)
+//   { action: "public_entscheide_vorschlag", vorschlagId, entscheidung }
+//                                                -> Annahme/Ablehnung eines Exposés (Gegenstück zu
+//                                                   public_get_vorschlag, selber Grund für
+//                                                   Service-Role statt Frontend-Dispatch) —
+//                                                   entscheidung ist "akzeptiert" oder "abgelehnt";
+//                                                   bei Annahme wird das Objekt serverseitig dem
+//                                                   Kunden zugewiesen (zugewiesener_kunde) und eine
+//                                                   Aktivität angehängt, exakt wie zuvor der
+//                                                   ACCEPT_OBJEKT_VORSCHLAG-Reducer es lokal tat
 //   { action: "immoradar_top" }                  -> lädt die ~40 MB große listings.json des
 //                                                   separaten immobilien-radar-Projekts serverseitig,
 //                                                   filtert auf "interessant"/"sehr interessant" und
@@ -1259,12 +1282,90 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ ok: true }), { headers })
     }
 
+    if (body.action === 'public_get_vorschlag') {
+      const { vorschlagId } = body
+      if (!vorschlagId) {
+        return new Response(JSON.stringify({ error: 'vorschlagId ist ein Pflichtfeld' }), { status: 400, headers })
+      }
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const { data: vorschlagRow, error: vorschlagError } = await admin
+        .from('objekt_vorschlaege')
+        .select('id, objekt_id, kunde_name, steuer_begruendung, status')
+        .eq('id', vorschlagId)
+        .maybeSingle()
+      if (vorschlagError) return new Response(JSON.stringify({ error: vorschlagError.message }), { status: 500, headers })
+      if (!vorschlagRow) return new Response(JSON.stringify({ vorschlag: null, objekt: null }), { headers })
+      const { data: objektRow, error: objektError } = await admin
+        .from('objekte')
+        .select('bezeichnung, adresse, typ, gruppe, kaufpreis')
+        .eq('id', vorschlagRow.objekt_id)
+        .maybeSingle()
+      if (objektError) return new Response(JSON.stringify({ error: objektError.message }), { status: 500, headers })
+      return new Response(
+        JSON.stringify({
+          vorschlag: {
+            id: vorschlagRow.id,
+            kundeName: vorschlagRow.kunde_name,
+            steuerBegruendung: vorschlagRow.steuer_begruendung,
+            status: vorschlagRow.status,
+          },
+          objekt: objektRow,
+        }),
+        { headers },
+      )
+    }
+
+    if (body.action === 'public_entscheide_vorschlag') {
+      const { vorschlagId, entscheidung } = body
+      if (!vorschlagId || (entscheidung !== 'akzeptiert' && entscheidung !== 'abgelehnt')) {
+        return new Response(JSON.stringify({ error: 'vorschlagId und eine gültige entscheidung sind Pflichtfelder' }), { status: 400, headers })
+      }
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const heute = new Date().toISOString().slice(0, 10)
+      const { data: vorschlagRow, error: vorschlagError } = await admin
+        .from('objekt_vorschlaege')
+        .select('id, objekt_id, kunde_bereich, kunde_id, kunde_name, status')
+        .eq('id', vorschlagId)
+        .maybeSingle()
+      if (vorschlagError) return new Response(JSON.stringify({ error: vorschlagError.message }), { status: 500, headers })
+      if (!vorschlagRow) return new Response(JSON.stringify({ error: 'Vorschlag nicht gefunden' }), { status: 404, headers })
+      // Bereits entschieden -> idempotent den bestehenden Status zurückgeben statt einen Fehler zu
+      // werfen (z.B. wenn der Kunde den Link zweimal öffnet oder doppelt klickt).
+      if (vorschlagRow.status !== 'offen') {
+        return new Response(JSON.stringify({ ok: true, status: vorschlagRow.status }), { headers })
+      }
+      const { error: updateVorschlagError } = await admin
+        .from('objekt_vorschlaege')
+        .update({ status: entscheidung, beantwortet_am: heute })
+        .eq('id', vorschlagId)
+      if (updateVorschlagError) return new Response(JSON.stringify({ error: updateVorschlagError.message }), { status: 500, headers })
+
+      if (entscheidung === 'akzeptiert') {
+        const { data: objektRow } = await admin.from('objekte').select('activities').eq('id', vorschlagRow.objekt_id).maybeSingle()
+        const activity = {
+          id: `act_${crypto.randomUUID().replace(/-/g, '').slice(0, 10)}`,
+          date: heute,
+          text: `Exposé von ${vorschlagRow.kunde_name} angenommen — Objekt dem Kunden-Portfolio zugewiesen.`,
+          user: `${vorschlagRow.kunde_name} (Formular)`,
+        }
+        await admin
+          .from('objekte')
+          .update({
+            zugewiesener_kunde: { bereich: vorschlagRow.kunde_bereich, kundeId: vorschlagRow.kunde_id, kundeName: vorschlagRow.kunde_name },
+            activities: [activity, ...(objektRow?.activities ?? [])],
+          })
+          .eq('id', vorschlagRow.objekt_id)
+      }
+
+      return new Response(JSON.stringify({ ok: true, status: entscheidung }), { headers })
+    }
+
     if (body.action === 'immoradar_top') {
       const listings = await fetchImmoRadarTopListings()
       return new Response(JSON.stringify({ listings }), { headers })
     }
 
-    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "request_password_reset", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular" oder "firmenwissen_answer"' }), { status: 400, headers })
+    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "request_password_reset", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag" oder "firmenwissen_answer"' }), { status: 400, headers })
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }

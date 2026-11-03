@@ -270,6 +270,38 @@ export async function holePublicObjekt(objektId: string): Promise<PublicObjekt |
   return data.objekt ?? null
 }
 
+// Öffentliches Exposé-Formular (PublicExpose.tsx) — lief bis zum Bugfixing-Fund 2026-11-03 über den
+// normalen, RLS-gebundenen useApp()-Client (objekte/objekt_vorschlaege sind auf
+// ist_aktiver_mitarbeiter() beschränkt) und zeigte einem echten, nicht eingeloggten Kunden deshalb
+// immer "Link ungültig" — unbemerkt, weil es bisher nur eingeloggt getestet wurde. Jetzt wie die
+// übrigen öffentlichen Formulare serverseitig mit Service-Role-Key.
+export type PublicVorschlag = {
+  id: string
+  kundeName: string
+  steuerBegruendung: string
+  status: import('../types').ObjektVorschlagStatus
+}
+export type PublicExposeObjekt = {
+  bezeichnung: string
+  adresse: string
+  typ: import('../types').ObjektTyp
+  gruppe: import('../types').ObjektGruppe
+  kaufpreis: number
+}
+
+export async function holePublicVorschlag(vorschlagId: string): Promise<{ vorschlag: PublicVorschlag | null; objekt: PublicExposeObjekt | null }> {
+  const data = await call({ action: 'public_get_vorschlag', vorschlagId })
+  return { vorschlag: data.vorschlag ?? null, objekt: data.objekt ?? null }
+}
+
+export async function entscheidePublicVorschlag(
+  vorschlagId: string,
+  entscheidung: 'akzeptiert' | 'abgelehnt',
+): Promise<{ status: import('../types').ObjektVorschlagStatus }> {
+  const data = await call({ action: 'public_entscheide_vorschlag', vorschlagId, entscheidung })
+  return { status: data.status }
+}
+
 // Erzeugt einen Signed-Upload-Token statt den Datei-Inhalt entgegenzunehmen (Edge-Function-
 // Größenlimit) — der eigentliche Upload läuft danach direkt vom Browser zu Supabase Storage, siehe
 // objektDokumenteStorage.ts ladeAlsEigentuemerHoch().

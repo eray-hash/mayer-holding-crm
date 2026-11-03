@@ -299,8 +299,6 @@ type Action =
   | { type: 'SET_FINANZIERUNGEN_FOLLOWUP'; id: string; followUp: FollowUp }
   | { type: 'SET_FINANZIERUNGEN_PRIORITAET'; id: string; prioritaet: Prioritaet }
   | { type: 'ADD_OBJEKT_VORSCHLAG'; vorschlag: ObjektVorschlag }
-  | { type: 'ACCEPT_OBJEKT_VORSCHLAG'; id: string }
-  | { type: 'REJECT_OBJEKT_VORSCHLAG'; id: string }
   | { type: 'ADD_IMPORTIERTES_DOKUMENT'; dokument: ImportiertesDokument }
   | { type: 'ASSIGN_IMPORTIERTES_DOKUMENT'; id: string; bereich: KundeBereich; kundeId: string; kundeName: string }
   | { type: 'ADD_EINGEGANGENE_EMAILS'; emails: EingegangeneEmail[] }
@@ -779,37 +777,6 @@ function reducer(state: AppData, action: Action): AppData {
       }
     case 'ADD_OBJEKT_VORSCHLAG':
       return { ...state, objektVorschlaege: [action.vorschlag, ...state.objektVorschlaege] }
-    case 'ACCEPT_OBJEKT_VORSCHLAG': {
-      const vorschlag = state.objektVorschlaege.find((v) => v.id === action.id)
-      if (!vorschlag) return state
-      return {
-        ...state,
-        objektVorschlaege: state.objektVorschlaege.map((v) =>
-          v.id === action.id ? { ...v, status: 'akzeptiert', beantwortetAm: today() } : v,
-        ),
-        objekte: state.objekte.map((o) => {
-          if (o.id !== vorschlag.objektId) return o
-          const activity = {
-            id: uid('act'),
-            date: today(),
-            text: `Exposé von ${vorschlag.kundeName} angenommen — Objekt dem Kunden-Portfolio zugewiesen.`,
-            user: `${vorschlag.kundeName} (Formular)`,
-          }
-          return {
-            ...o,
-            zugewiesenerKunde: { bereich: vorschlag.kundeBereich, kundeId: vorschlag.kundeId, kundeName: vorschlag.kundeName },
-            activities: [activity, ...o.activities],
-          }
-        }),
-      }
-    }
-    case 'REJECT_OBJEKT_VORSCHLAG':
-      return {
-        ...state,
-        objektVorschlaege: state.objektVorschlaege.map((v) =>
-          v.id === action.id ? { ...v, status: 'abgelehnt', beantwortetAm: today() } : v,
-        ),
-      }
     case 'ADD_IMPORTIERTES_DOKUMENT':
       return { ...state, importierteDokumente: [action.dokument, ...state.importierteDokumente] }
     case 'ASSIGN_IMPORTIERTES_DOKUMENT': {

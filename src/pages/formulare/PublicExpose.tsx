@@ -1,18 +1,55 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { CheckCircle2, XCircle, Home } from 'lucide-react'
-import { useApp } from '../../context/AppContext'
+import { CheckCircle2, Loader2, XCircle, Home } from 'lucide-react'
 import { Card, PrimaryButton, SecondaryButton } from '../../components/ui'
 import { fmtEUR } from '../../lib/dates'
 import { gruppeLabel } from '../../data/constants'
+import { holePublicVorschlag, entscheidePublicVorschlag, type PublicVorschlag, type PublicExposeObjekt } from '../../lib/emailGateway'
 
 export function PublicExpose() {
   const { vorschlagId } = useParams()
-  const { state, dispatch } = useApp()
+  const [geladen, setGeladen] = useState(false)
+  const [vorschlag, setVorschlag] = useState<PublicVorschlag | null>(null)
+  const [objekt, setObjekt] = useState<PublicExposeObjekt | null>(null)
+  const [entscheidet, setEntscheidet] = useState(false)
   const [entschieden, setEntschieden] = useState<'akzeptiert' | 'abgelehnt' | null>(null)
+  const [fehler, setFehler] = useState('')
 
-  const vorschlag = state.objektVorschlaege.find((v) => v.id === vorschlagId)
-  const objekt = vorschlag ? state.objekte.find((o) => o.id === vorschlag.objektId) : undefined
+  useEffect(() => {
+    if (!vorschlagId) return
+    holePublicVorschlag(vorschlagId)
+      .then(({ vorschlag, objekt }) => {
+        setVorschlag(vorschlag)
+        setObjekt(objekt)
+      })
+      .catch(() => {
+        setVorschlag(null)
+        setObjekt(null)
+      })
+      .finally(() => setGeladen(true))
+  }, [vorschlagId])
+
+  async function entscheiden(wahl: 'akzeptiert' | 'abgelehnt') {
+    if (!vorschlagId) return
+    setEntscheidet(true)
+    setFehler('')
+    try {
+      const { status } = await entscheidePublicVorschlag(vorschlagId, wahl)
+      setEntschieden(status === 'offen' ? wahl : status)
+    } catch (err) {
+      setFehler(err instanceof Error ? err.message : 'Übermittlung fehlgeschlagen. Bitte versuchen Sie es erneut.')
+    } finally {
+      setEntscheidet(false)
+    }
+  }
+
+  if (!geladen) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
+        <Loader2 className="animate-spin text-slate-400" size={28} />
+      </div>
+    )
+  }
 
   if (!vorschlag || !objekt) {
     return (
@@ -25,10 +62,9 @@ export function PublicExpose() {
     )
   }
 
-  const bereitsEntschieden = vorschlag.status !== 'offen' || entschieden !== null
   const ergebnis = entschieden ?? (vorschlag.status === 'offen' ? null : vorschlag.status)
 
-  if (bereitsEntschieden && ergebnis) {
+  if (ergebnis) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
         <Card className="max-w-md p-8 text-center">
@@ -80,23 +116,13 @@ export function PublicExpose() {
             <p className="whitespace-pre-line rounded-lg bg-slate-50 p-3 text-sm leading-relaxed text-slate-600">{vorschlag.steuerBegruendung}</p>
           </div>
 
+          {fehler && <p className="px-5 pt-3 text-sm font-medium text-rose-600">{fehler}</p>}
+
           <div className="flex flex-col gap-2 border-t border-slate-100 p-5 sm:flex-row">
-            <PrimaryButton
-              className="flex-1 justify-center"
-              onClick={() => {
-                dispatch({ type: 'ACCEPT_OBJEKT_VORSCHLAG', id: vorschlag.id })
-                setEntschieden('akzeptiert')
-              }}
-            >
+            <PrimaryButton className="flex-1 justify-center" disabled={entscheidet} onClick={() => entscheiden('akzeptiert')}>
               Ja, ich bin einverstanden
             </PrimaryButton>
-            <SecondaryButton
-              className="flex-1 justify-center"
-              onClick={() => {
-                dispatch({ type: 'REJECT_OBJEKT_VORSCHLAG', id: vorschlag.id })
-                setEntschieden('abgelehnt')
-              }}
-            >
+            <SecondaryButton className="flex-1 justify-center" disabled={entscheidet} onClick={() => entscheiden('abgelehnt')}>
               Kein Interesse
             </SecondaryButton>
           </div>
