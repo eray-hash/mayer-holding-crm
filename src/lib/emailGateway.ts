@@ -140,6 +140,13 @@ export async function generateLoginLink(email: string): Promise<string> {
   return data.link
 }
 
+// Selbstbedienungs-Pendant zu generateLoginLink für die Login-Seite ("Passwort vergessen?") —
+// verschickt den Link selbst über das echte IONOS-SMTP statt über Supabases unzuverlässigen Mailer.
+// Antwortet immer gleich, unabhängig davon ob die E-Mail zu einem echten Mitarbeiter gehört.
+export async function requestPasswordReset(email: string): Promise<void> {
+  await call({ action: 'request_password_reset', email })
+}
+
 export type LeadKlassifizierungsErgebnis = { geprueft: number; vorgeschlagen: number; uebersprungen: number }
 
 // Klassifiziert nur neue, noch unbekannte E-Mail-Absender als Lead-Vorschlag (Nachfolger von

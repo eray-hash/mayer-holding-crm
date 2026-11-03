@@ -39,6 +39,16 @@
 //                                                   der Link wird direkt zurückgegeben und muss über
 //                                                   einen anderen Kanal (Chat, Signal, ...) zugestellt
 //                                                   werden
+//   { action: "request_password_reset", email }  -> Selbstbedienungs-Pendant zu generate_login_link
+//                                                   für die Login-Seite ("Passwort vergessen?"):
+//                                                   generiert denselben Recovery-Link, verschickt ihn
+//                                                   aber selbst über das echte IONOS-SMTP (sendMail,
+//                                                   nicht Supabases eigenen unzuverlässigen Mailer) —
+//                                                   nur wenn die E-Mail zu einem aktiven Mitarbeiter
+//                                                   gehört, sonst passiert nichts. Antwortet immer
+//                                                   gleich (kein Hinweis, ob die Adresse existiert),
+//                                                   damit sich darüber keine Mitarbeiter-Mailadressen
+//                                                   erraten lassen
 //   { action: "classify_new_leads" }             -> Nachfolger von scripts/extract-leads.mjs, aber
 //                                                   automatisch statt manuell: findet Absender in
 //                                                   eingegangene_emails, die weder einem bestehenden
@@ -992,6 +1002,33 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ link: data.properties?.action_link }), { headers })
     }
 
+    if (body.action === 'request_password_reset') {
+      const { email } = body
+      if (!email || typeof email !== 'string' || !email.trim()) {
+        return new Response(JSON.stringify({ error: 'email ist ein Pflichtfeld' }), { status: 400, headers })
+      }
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const normalisiert = email.trim().toLowerCase()
+      const { data: mitarbeiterRows } = await admin.from('mitarbeiter').select('email').eq('aktiv', true)
+      const treffer = (mitarbeiterRows ?? []).find((m: { email: string }) => m.email?.trim().toLowerCase() === normalisiert)
+      if (treffer) {
+        const { data, error: linkError } = await admin.auth.admin.generateLink({ type: 'recovery', email: treffer.email })
+        if (!linkError && data.properties?.action_link) {
+          try {
+            await sendMail(
+              treffer.email,
+              'Mayer Holding CRM — Passwort zurücksetzen',
+              `Hallo,\n\nüber den folgenden Link kannst du dein Passwort im Mayer Holding CRM neu setzen:\n\n${data.properties.action_link}\n\nDer Link ist 24 Stunden gültig. Wenn du das nicht angefordert hast, kannst du diese E-Mail ignorieren.`,
+            )
+          } catch (mailErr) {
+            console.error('Passwort-Reset-Mail fehlgeschlagen:', mailErr)
+          }
+        }
+      }
+      // Immer dieselbe Antwort, egal ob die E-Mail zu einem echten Mitarbeiter gehört oder nicht.
+      return new Response(JSON.stringify({ ok: true }), { headers })
+    }
+
     if (body.action === 'classify_new_leads') {
       const ergebnis = await classifyNewLeads()
       return new Response(JSON.stringify(ergebnis), { headers })
@@ -1227,7 +1264,7 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ listings }), { headers })
     }
 
-    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular" oder "firmenwissen_answer"' }), { status: 400, headers })
+    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "request_password_reset", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular" oder "firmenwissen_answer"' }), { status: 400, headers })
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }
