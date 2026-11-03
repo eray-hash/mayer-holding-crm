@@ -37,6 +37,18 @@ export async function loescheObjektDokument(pfad: string): Promise<void> {
   await supabase.storage.from(BUCKET).remove([pfad])
 }
 
+// Upload für das öffentliche Eigentümer-Portal (PublicEigentuemerPortal.tsx): der Eigentümer ist
+// nicht als Mitarbeiter eingeloggt und hätte ohne Weiteres keine Schreibrechte auf den privaten
+// Bucket. Nutzt stattdessen einen Signed-Upload-Token, den emailGateway.ts (holeObjektUploadUrl)
+// serverseitig mit dem Service-Role-Key erzeugt hat — der Token selbst erlaubt den Upload für genau
+// diesen einen Pfad, unabhängig von der sonst geltenden "nur Mitarbeiter"-RLS-Policy.
+export async function ladeAlsEigentuemerHoch(pfad: string, token: string, file: File): Promise<{ groesse: string }> {
+  if (!supabase) throw new Error('Supabase ist nicht konfiguriert.')
+  const { error } = await supabase.storage.from(BUCKET).uploadToSignedUrl(pfad, token, file, { contentType: file.type || undefined })
+  if (error) throw new Error(error.message)
+  return { groesse: formatiereGroesse(file.size) }
+}
+
 // Liest eine Datei als reinen Base64-String (ohne "data:...;base64,"-Präfix) für die
 // KI-Dokumentenklassifizierung — Claude bekommt Bilder/PDFs als Base64 übergeben, siehe
 // emailGateway.ts classifyObjektDokument.

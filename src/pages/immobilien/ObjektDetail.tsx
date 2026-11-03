@@ -175,6 +175,23 @@ export function ObjektDetail() {
               <div className="text-xs font-medium text-slate-400">Nächste Follow-up-Aufgabe</div>
               <div className={`text-sm ${overdue ? 'font-medium text-rose-600' : 'text-slate-700'}`}>{fmtDate(objekt.followUp.date)} — {objekt.followUp.note}</div>
             </div>
+
+            <div className="mt-4 border-t border-slate-100 pt-4">
+              <div className="mb-2 text-xs font-medium text-slate-400">Eigentümer</div>
+              {objekt.eigentuemer ? (
+                <dl className="space-y-1 text-sm">
+                  <Row label="Name" value={objekt.eigentuemer.name} />
+                  <Row label="Telefon" value={objekt.eigentuemer.telefon} />
+                  <Row label="E-Mail" value={objekt.eigentuemer.email} />
+                  {objekt.eigentuemer.ansprechpartner && <Row label="Ansprechpartner" value={objekt.eigentuemer.ansprechpartner} />}
+                </dl>
+              ) : (
+                <p className="mb-2 text-xs text-slate-400">Noch nicht vom Eigentümer bestätigt.</p>
+              )}
+              <div className="mt-2">
+                <FormularLinkButtons pfad={`/formular/eigentuemer/${objekt.id}`} />
+              </div>
+            </div>
           </Card>
 
           <Card className="p-5 lg:col-span-1">

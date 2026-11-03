@@ -130,6 +130,7 @@ function objektToRow(o: Objekt) {
     immo_radar_link: o.immoRadarLink ?? null,
     lukrativitaet: o.lukrativitaet ?? null,
     zugewiesener_kunde: o.zugewiesenerKunde ?? null,
+    eigentuemer: o.eigentuemer ?? null,
   }
 }
 
@@ -151,6 +152,7 @@ function rowToObjekt(row: any): Objekt {
     immoRadarLink: row.immo_radar_link ?? undefined,
     lukrativitaet: row.lukrativitaet ?? undefined,
     zugewiesenerKunde: row.zugewiesener_kunde ?? undefined,
+    eigentuemer: row.eigentuemer ?? undefined,
   }
 }
 

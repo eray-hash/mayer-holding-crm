@@ -67,6 +67,22 @@
 //   { action: "public_create_lead", firma, email, ... , aktivitaetText, signatur? }
 //                                                -> legt aus dem öffentlichen Feedbackbogen einen
 //                                                   neuen Kunden (Bereich "beratung") an
+//   { action: "public_get_objekt", objektId }    -> liest Stammdaten (bezeichnung/adresse/typ/
+//                                                   dokumente/eigentuemer) für das öffentliche
+//                                                   Eigentümer-Formular (PublicEigentuemerPortal.tsx)
+//                                                   — serverseitig mit Service-Role-Key, da der
+//                                                   Eigentümer nicht als Mitarbeiter eingeloggt ist
+//   { action: "public_objekt_upload_url", objektId, dateiname }
+//                                                -> erzeugt einen Signed-Upload-Token für den
+//                                                   privaten Storage-Bucket "objekt-dokumente" —
+//                                                   der eigentliche Datei-Upload läuft danach direkt
+//                                                   vom Browser des Eigentümers zu Supabase Storage,
+//                                                   nicht über dieses Gateway (Größenlimit!)
+//   { action: "public_submit_objekt_formular", objektId, aktivitaetText, eigentuemer?, dokument?, ordner? }
+//                                                -> schreibt Eigentümer-Stammdaten und/oder ein
+//                                                   bereits hochgeladenes Dokument (Pfad aus
+//                                                   public_objekt_upload_url) direkt in die
+//                                                   bestehende objekte-Zeile
 //   { action: "immoradar_top" }                  -> lädt die ~40 MB große listings.json des
 //                                                   separaten immobilien-radar-Projekts serverseitig,
 //                                                   filtert auf "interessant"/"sehr interessant" und
@@ -1100,12 +1116,74 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ ok: true, id }), { headers })
     }
 
+    if (body.action === 'public_get_objekt') {
+      const { objektId } = body
+      if (!objektId) {
+        return new Response(JSON.stringify({ error: 'objektId ist ein Pflichtfeld' }), { status: 400, headers })
+      }
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const { data, error: selectError } = await admin
+        .from('objekte')
+        .select('bezeichnung, adresse, typ, dokumente, eigentuemer')
+        .eq('id', objektId)
+        .maybeSingle()
+      if (selectError) return new Response(JSON.stringify({ error: selectError.message }), { status: 500, headers })
+      return new Response(JSON.stringify({ objekt: data }), { headers })
+    }
+
+    // Erzeugt einen Signed-Upload-Token statt den Datei-Inhalt selbst entgegenzunehmen — eine Edge
+    // Function hat ein deutlich kleineres Body-Größenlimit als ein direkter Storage-Upload, und
+    // Eigentümer laden oft mehrseitige Scans/Fotos hoch. Der eigentliche Upload läuft danach per
+    // supabase.storage.from(...).uploadToSignedUrl(...) direkt vom Browser zu Supabase Storage.
+    if (body.action === 'public_objekt_upload_url') {
+      const { objektId, dateiname } = body
+      if (!objektId || !dateiname) {
+        return new Response(JSON.stringify({ error: 'objektId und dateiname sind Pflichtfelder' }), { status: 400, headers })
+      }
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const pfad = `${objektId}/eigentuemer_${crypto.randomUUID()}_${String(dateiname).replace(/[^a-zA-Z0-9._-]/g, '_')}`
+      const { data, error: uploadUrlError } = await admin.storage.from('objekt-dokumente').createSignedUploadUrl(pfad)
+      if (uploadUrlError) return new Response(JSON.stringify({ error: uploadUrlError.message }), { status: 500, headers })
+      return new Response(JSON.stringify({ pfad: data.path, token: data.token }), { headers })
+    }
+
+    if (body.action === 'public_submit_objekt_formular') {
+      const { objektId, aktivitaetText, eigentuemer, dokument, ordner } = body
+      if (!objektId || !aktivitaetText) {
+        return new Response(JSON.stringify({ error: 'objektId und aktivitaetText sind Pflichtfelder' }), { status: 400, headers })
+      }
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const { data: bestehend, error: selectError } = await admin
+        .from('objekte')
+        .select('activities, dokumente')
+        .eq('id', objektId)
+        .maybeSingle()
+      if (selectError) return new Response(JSON.stringify({ error: selectError.message }), { status: 500, headers })
+      if (!bestehend) return new Response(JSON.stringify({ error: 'Objekt nicht gefunden' }), { status: 404, headers })
+
+      const heute = new Date().toISOString().slice(0, 10)
+      const activities: unknown[] = [
+        { id: crypto.randomUUID(), date: heute, text: aktivitaetText, user: 'Eigentümer (Formular)' },
+        ...((bestehend.activities as unknown[]) ?? []),
+      ]
+      const patch: Record<string, unknown> = { activities }
+      if (eigentuemer) patch.eigentuemer = eigentuemer
+      if (dokument && ordner) {
+        const dokumenteBisher = (bestehend.dokumente as Record<string, unknown[]>) ?? {}
+        patch.dokumente = { ...dokumenteBisher, [ordner]: [dokument, ...((dokumenteBisher[ordner] as unknown[]) ?? [])] }
+      }
+
+      const { error: updateError } = await admin.from('objekte').update(patch).eq('id', objektId)
+      if (updateError) return new Response(JSON.stringify({ error: updateError.message }), { status: 500, headers })
+      return new Response(JSON.stringify({ ok: true }), { headers })
+    }
+
     if (body.action === 'immoradar_top') {
       const listings = await fetchImmoRadarTopListings()
       return new Response(JSON.stringify({ listings }), { headers })
     }
 
-    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify" oder "classify_objekt_dokument"' }), { status: 400, headers })
+    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "public_get_objekt", "public_objekt_upload_url" oder "public_submit_objekt_formular"' }), { status: 400, headers })
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }

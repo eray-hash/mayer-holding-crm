@@ -250,6 +250,16 @@ export type Objekt = {
   immoRadarLink?: string
   lukrativitaet?: string
   zugewiesenerKunde?: { bereich: KundeBereich; kundeId: string; kundeName: string }
+  // Vom Eigentümer selbst über das öffentliche Formular (/formular/eigentuemer/:objektId)
+  // bestätigt/gepflegt — siehe PublicEigentuemerPortal.tsx.
+  eigentuemer?: ObjektEigentuemer
+}
+
+export type ObjektEigentuemer = {
+  name: string
+  telefon: string
+  email: string
+  ansprechpartner?: string // falls im Tagesgeschäft eine andere Person als der Eigentümer selbst zuständig ist
 }
 
 // Vorschlag/Exposé-Versand: ein Objekt wird einem Kunden (aus einem beliebigen Kunden-Bereich)

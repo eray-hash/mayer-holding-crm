@@ -239,3 +239,36 @@ export async function erstellePublicLead(params: {
 }): Promise<void> {
   await call({ action: 'public_create_lead', ...params })
 }
+
+// Öffentliches Eigentümer-Portal (PublicEigentuemerPortal.tsx) — Eigentümer ist beim Ausfüllen
+// nicht als Mitarbeiter eingeloggt, die objekte-RLS-Policy lässt sonst weder Lesen noch Schreiben zu.
+export type PublicObjekt = {
+  bezeichnung: string
+  adresse: string
+  typ: import('../types').ObjektTyp
+  dokumente: Partial<Record<import('../types').DokumentOrdnerName, import('../types').Dokument[]>>
+  eigentuemer?: import('../types').ObjektEigentuemer
+}
+
+export async function holePublicObjekt(objektId: string): Promise<PublicObjekt | null> {
+  const data = await call({ action: 'public_get_objekt', objektId })
+  return data.objekt ?? null
+}
+
+// Erzeugt einen Signed-Upload-Token statt den Datei-Inhalt entgegenzunehmen (Edge-Function-
+// Größenlimit) — der eigentliche Upload läuft danach direkt vom Browser zu Supabase Storage, siehe
+// objektDokumenteStorage.ts ladeAlsEigentuemerHoch().
+export async function holeObjektUploadUrl(objektId: string, dateiname: string): Promise<{ pfad: string; token: string }> {
+  const data = await call({ action: 'public_objekt_upload_url', objektId, dateiname })
+  return { pfad: data.pfad, token: data.token }
+}
+
+export async function sendePublicObjektFormular(params: {
+  objektId: string
+  aktivitaetText: string
+  eigentuemer?: import('../types').ObjektEigentuemer
+  dokument?: import('../types').Dokument
+  ordner?: import('../types').DokumentOrdnerName
+}): Promise<void> {
+  await call({ action: 'public_submit_objekt_formular', ...params })
+}
