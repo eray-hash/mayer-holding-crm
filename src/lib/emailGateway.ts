@@ -165,6 +165,7 @@ export type PublicKunde = {
   email: string
   selbstauskunft?: import('../types').Selbstauskunft
   ndaUnterschrieben?: boolean
+  unterlagenCheckliste?: Record<string, boolean>
 }
 
 export async function holePublicKunde(bereich: string, kundeId: string): Promise<PublicKunde | null> {
@@ -179,6 +180,7 @@ export async function sendePublicFormular(params: {
   aktivitaetUser?: string
   signatur?: { name: string; dataUrl: string; kontext: string }
   selbstauskunft?: import('../types').Selbstauskunft
+  unterlagenCheckliste?: Record<string, boolean>
   // Modul 8 (Behörden-Automatisierung): wenn gesetzt, schickt automatisch eine E-Mail an diese
   // Adresse und legt eine Wiedervorlage an — email/name kommen aus dem ?behoerde=.../&behoerdeName=
   // Query-Parameter des Formular-Links (vom Mitarbeiter beim Versenden festgelegt). pdfBase64 sollte

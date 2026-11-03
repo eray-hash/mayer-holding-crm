@@ -57,15 +57,16 @@
 //                                                   entsprechen, klassifiziert nur diese NEUEN
 //                                                   Absender per KI und legt relevante als Lead an
 //   { action: "public_get_kunde", bereich, kundeId }
-//                                                -> liest Stammdaten (nur firma/ansprechpartner/
-//                                                   email/selbstauskunft) für ein öffentliches
-//                                                   Formular (src/pages/formulare/Public*.tsx) —
-//                                                   läuft serverseitig mit Service-Role-Key, da der
-//                                                   Kunde beim Ausfüllen nicht als Mitarbeiter
-//                                                   eingeloggt ist und die kunden-RLS-Policy sonst
-//                                                   jeden Zugriff verweigern würde
+//                                                -> liest Stammdaten (firma/ansprechpartner/email/
+//                                                   selbstauskunft/unterlagenCheckliste) für ein
+//                                                   öffentliches Formular (src/pages/formulare/
+//                                                   Public*.tsx) — läuft serverseitig mit Service-
+//                                                   Role-Key, da der Kunde beim Ausfüllen nicht als
+//                                                   Mitarbeiter eingeloggt ist und die kunden-RLS-
+//                                                   Policy sonst jeden Zugriff verweigern würde
 //   { action: "public_submit_formular", bereich, kundeId, aktivitaetText, aktivitaetUser?,
-//     signatur?, selbstauskunft?, behoerde? }      -> schreibt die Antwort/Unterschrift eines
+//     signatur?, selbstauskunft?, unterlagenCheckliste?, behoerde? }
+//                                                -> schreibt die Antwort/Unterschrift eines
 //                                                   öffentlichen Formulars direkt in die
 //                                                   bestehende kunden-Zeile (aus demselben Grund
 //                                                   serverseitig statt über das Frontend).
@@ -1102,7 +1103,7 @@ Deno.serve(async (req: Request) => {
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
       const { data, error: selectError } = await admin
         .from('kunden')
-        .select('firma, ansprechpartner, email, selbstauskunft, signaturen')
+        .select('firma, ansprechpartner, email, selbstauskunft, signaturen, unterlagen_checkliste')
         .eq('id', kundeId)
         .eq('bereich', bereich)
         .maybeSingle()
@@ -1112,12 +1113,15 @@ Deno.serve(async (req: Request) => {
       // Signatur-Bilddaten aller bisherigen Formulare — die werden für kein öffentliches Formular
       // zur Anzeige gebraucht.
       const ndaUnterschrieben = ((data.signaturen as { kontext: string }[]) ?? []).some((s) => s.kontext === 'NDA – Geheimhaltungsvereinbarung')
-      const { signaturen: _signaturen, ...kundeOhneSignaturen } = data
-      return new Response(JSON.stringify({ kunde: { ...kundeOhneSignaturen, ndaUnterschrieben } }), { headers })
+      const { signaturen: _signaturen, unterlagen_checkliste, ...kundeOhneSignaturen } = data
+      return new Response(
+        JSON.stringify({ kunde: { ...kundeOhneSignaturen, ndaUnterschrieben, unterlagenCheckliste: unterlagen_checkliste ?? undefined } }),
+        { headers },
+      )
     }
 
     if (body.action === 'public_submit_formular') {
-      const { bereich, kundeId, aktivitaetText, aktivitaetUser, signatur, selbstauskunft, behoerde } = body
+      const { bereich, kundeId, aktivitaetText, aktivitaetUser, signatur, selbstauskunft, unterlagenCheckliste, behoerde } = body
       if (!bereich || !kundeId || !aktivitaetText) {
         return new Response(JSON.stringify({ error: 'bereich, kundeId und aktivitaetText sind Pflichtfelder' }), { status: 400, headers })
       }
@@ -1144,6 +1148,7 @@ Deno.serve(async (req: Request) => {
         ]
       }
       if (selbstauskunft) patch.selbstauskunft = selbstauskunft
+      if (unterlagenCheckliste) patch.unterlagen_checkliste = unterlagenCheckliste
 
       // Behörden-Automatisierung (Modul 8): wenn beim Versenden des Formular-Links eine
       // Behörden-Adresse hinterlegt wurde (siehe FormularLinkButtons-Aufrufe mit ?behoerde=...),

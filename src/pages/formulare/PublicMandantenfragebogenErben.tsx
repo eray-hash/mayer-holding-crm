@@ -1,19 +1,36 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { CheckCircle2 } from 'lucide-react'
-import { useApp } from '../../context/AppContext'
+import { CheckCircle2, Loader2 } from 'lucide-react'
 import { Card, Field, inputClass, PrimaryButton } from '../../components/ui'
 import { ERBEN_CHECKLISTE } from '../../data/seedErben'
-import { today, uid } from '../../lib/dates'
+import { holePublicKunde, sendePublicFormular, type PublicKunde } from '../../lib/emailGateway'
 
 export function PublicMandantenfragebogenErben() {
   const { mandantId } = useParams()
-  const { state, dispatch } = useApp()
+  const [mandant, setMandant] = useState<PublicKunde | null | undefined>(undefined)
   const [submitted, setSubmitted] = useState(false)
-
-  const mandant = state.erbenMandanten.find((k) => k.id === mandantId)
-  const [checkliste, setCheckliste] = useState<Record<string, boolean>>(mandant?.unterlagenCheckliste ?? {})
+  const [senden, setSenden] = useState(false)
+  const [checkliste, setCheckliste] = useState<Record<string, boolean>>({})
   const [anmerkungen, setAnmerkungen] = useState('')
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (!mandantId) return
+    holePublicKunde('erben', mandantId)
+      .then((k) => {
+        setMandant(k)
+        if (k?.unterlagenCheckliste) setCheckliste(k.unterlagenCheckliste)
+      })
+      .catch(() => setMandant(null))
+  }, [mandantId])
+
+  if (mandant === undefined) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
+        <Loader2 className="animate-spin text-slate-400" size={28} />
+      </div>
+    )
+  }
 
   if (!mandant) {
     return (
@@ -33,22 +50,26 @@ export function PublicMandantenfragebogenErben() {
     setCheckliste((c) => ({ ...c, [punkt]: !c[punkt] }))
   }
 
-  function submit() {
+  async function submit() {
+    setError('')
+    setSenden(true)
     const activityText = `Mandantenfragebogen digital ausgefüllt (${erledigtCount}/${alleItems.length} Punkte vorhanden).${
       anmerkungen ? ` Anmerkung: ${anmerkungen}` : ''
     }`
-
-    dispatch({
-      type: 'UPDATE_ERBEN_MANDANT',
-      id: mandant!.id,
-      patch: {
+    try {
+      await sendePublicFormular({
+        bereich: 'erben',
+        kundeId: mandantId!,
+        aktivitaetText: activityText,
+        aktivitaetUser: `${mandant!.ansprechpartner} (Formular)`,
         unterlagenCheckliste: checkliste,
-        letzteAktivitaet: today(),
-        activities: [{ id: uid('act'), date: today(), text: activityText, user: `${mandant!.ansprechpartner} (Formular)` }, ...mandant!.activities],
-      },
-    })
-
-    setSubmitted(true)
+      })
+      setSubmitted(true)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Übermittlung fehlgeschlagen. Bitte versuchen Sie es erneut.')
+    } finally {
+      setSenden(false)
+    }
   }
 
   if (submitted) {
@@ -107,8 +128,10 @@ export function PublicMandantenfragebogenErben() {
             </Field>
           </div>
 
-          <PrimaryButton onClick={submit} className="mt-2 w-full justify-center">
-            Angaben absenden
+          {error && <p className="mb-3 text-sm font-medium text-rose-600">{error}</p>}
+
+          <PrimaryButton onClick={submit} disabled={senden} className="mt-2 w-full justify-center">
+            {senden ? 'Wird übermittelt …' : 'Angaben absenden'}
           </PrimaryButton>
         </Card>
       </div>
