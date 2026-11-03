@@ -96,6 +96,15 @@ export type AppData = {
 
 const STORAGE_KEY = 'mayer-holding-crm-data-v1'
 
+// Eigener, von AppData getrennter Key: merkt sich pro Browser, ob die einmalige Lokal-zu-Supabase-
+// Migration (siehe migriereLokaleDatenFallsLeer) für dieses Gerät schon versucht wurde — unabhängig
+// davon, ob die jeweilige Supabase-Tabelle GERADE leer ist. Ohne dieses Flag greift die Migration bei
+// jedem Hydrate erneut, sobald eine Tabelle aus einem ganz legitimen Grund leer wird (z.B. nach einer
+// echten Löschung) — und ein Browser, der die alten (ggf. längst überholten) lokalen Daten noch im
+// Speicher hat, lädt sie dann einfach wieder hoch. Genau das ist am 2026-11-03 zweimal real passiert
+// (eine gelöschte Test-Notiz kam über eine andere, noch nicht neu geladene Browser-Session zurück).
+const MIGRATION_FLAG_KEY = 'mayer-holding-crm-migriert-v1'
+
 // Alle über Supabase geteilten Entitäten kommen jetzt, sobald Supabase konfiguriert ist, aus der
 // geteilten Datenbank (siehe lib/crmSync.ts) statt aus den lokalen Demo-Seed-Daten — sonst würde
 // beim ersten Laden kurz Fake-Daten aufblitzen, und ein versehentliches "Daten zurücksetzen" könnte
@@ -1021,7 +1030,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     hydrateFromSupabase()
       .then(async (data) => {
         if (cancelled || !data) return
-        const fertig = lokalerStandVorSync ? await migriereLokaleDatenFallsLeer(data, lokalerStandVorSync) : data
+        const bereitsMigriert = localStorage.getItem(MIGRATION_FLAG_KEY) === 'true'
+        const fertig = lokalerStandVorSync && !bereitsMigriert ? await migriereLokaleDatenFallsLeer(data, lokalerStandVorSync) : data
+        if (!bereitsMigriert) localStorage.setItem(MIGRATION_FLAG_KEY, 'true')
         if (cancelled) return
         dispatch({ type: 'HYDRATE_SUPABASE', data: fertig })
         setHydrated(true)

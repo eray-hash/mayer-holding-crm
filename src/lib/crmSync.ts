@@ -689,8 +689,15 @@ export async function hydrateFromSupabase(): Promise<HydratedData | null> {
 // nach diesem Update einfach die (anfangs leere) Supabase-Tabelle zum Zug, würden diese Daten
 // faktisch verschwinden (und beim nächsten localStorage-Schreiben sogar überschrieben). Darum: ist
 // eine Tabelle serverseitig leer, aber lokal vorhanden, wird der lokale Stand einmalig hochgeladen
-// und direkt mit angezeigt, statt verworfen zu werden. Sobald einmal migriert, ist die Tabelle
-// nicht mehr leer und dieser Pfad greift nie wieder.
+// und direkt mit angezeigt, statt verworfen zu werden.
+//
+// WICHTIG: "serverseitig leer" ist KEIN zuverlässiges "noch nie migriert"-Signal — eine Tabelle kann
+// später aus völlig legitimen Gründen wieder leer werden (z.B. nach einer echten Löschung), und ein
+// Browser mit noch länger offenem Tab/veraltetem localStorage würde dann versehentlich erneut
+// hochladen (real am 2026-11-03 passiert: eine gelöschte Test-Notiz kam über eine andere Browser-
+// Session zurück). Der eigentliche Schutz dagegen sitzt daher NICHT hier, sondern in
+// AppContext.tsx's Hydrate-Effekt (MIGRATION_FLAG_KEY) — diese Funktion hier wird pro Browser nur
+// noch einmal überhaupt aufgerufen, unabhängig vom Server-Zustand bei späteren Besuchen.
 //
 // fondsInvestoren/fondsDokumenteAllgemein sind bewusst NICHT dabei: die lokalen Demo-Seed-Daten
 // dort sind erfundene Platzhalter-Investoren (z.B. "Dr. Michael Ostermann") — ein unberührter

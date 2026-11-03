@@ -100,7 +100,9 @@ export function MitarbeiterVerwalten() {
       })
       if (insertError) throw new Error(insertError.message)
       await inviteMitarbeiter(email.trim())
-      setErfolg(`${name.trim()} wurde angelegt, Einladungs-Mail an ${email.trim()} verschickt.`)
+      setErfolg(
+        `${name.trim()} wurde angelegt, Einladungs-Mail an ${email.trim()} verschickt. Falls sie nicht ankommt (z.B. bei Hotmail-Adressen), unten „Login-Link" nutzen oder ${name.trim()} auf „Passwort vergessen?" beim Login verweisen.`,
+      )
       setName('')
       setEmail('')
       setRolle('mitarbeiter')
