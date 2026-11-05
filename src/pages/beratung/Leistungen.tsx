@@ -1,20 +1,9 @@
 import { useEffect, useState } from 'react'
 import { Loader2 } from 'lucide-react'
-import { supabase, isSupabaseConfigured } from '../../lib/supabaseClient'
+import { isSupabaseConfigured } from '../../lib/supabaseClient'
+import { holeLeistungen, type Leistung } from '../../lib/leistungen'
 import { Card } from '../../components/ui'
 import { fmtEUR } from '../../lib/dates'
-
-type LeistungRow = {
-  id: string
-  sortierung: number
-  bezeichnung: string
-  preis_stunde_von: number | null
-  preis_stunde_bis: number | null
-  preis_tag_von: number | null
-  preis_tag_bis: number | null
-  hinweis: string | null
-  stand: string
-}
 
 function spanne(von: number | null, bis: number | null): string {
   if (von == null && bis == null) return '—'
@@ -23,22 +12,17 @@ function spanne(von: number | null, bis: number | null): string {
 }
 
 export function Leistungen() {
-  const [rows, setRows] = useState<LeistungRow[] | null>(null)
+  const [rows, setRows] = useState<Leistung[] | null>(null)
   const [error, setError] = useState('')
 
   useEffect(() => {
-    if (!supabase) {
+    if (!isSupabaseConfigured) {
       setError('Keine Supabase-Verbindung konfiguriert.')
       return
     }
-    supabase
-      .from('leistungen_preisliste')
-      .select('*')
-      .order('sortierung', { ascending: true })
-      .then(({ data, error: err }) => {
-        if (err) setError(err.message)
-        else setRows(data as LeistungRow[])
-      })
+    holeLeistungen()
+      .then(setRows)
+      .catch((err) => setError(err instanceof Error ? err.message : 'Preisliste konnte nicht geladen werden.'))
   }, [])
 
   const stand = rows?.[0]?.stand

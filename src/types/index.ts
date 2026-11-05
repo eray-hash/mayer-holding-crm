@@ -52,6 +52,9 @@ export type Rechnung = {
   status: RechnungStatus
   zahlungsziel: string
   mahnstufe?: MahnstufeId
+  leistungBezeichnung?: string
+  leistungEinheit?: 'Stunde' | 'Tag'
+  leistungMenge?: number
 }
 
 export type MahnstufeId = 'erinnerung' | 'mahnung1' | 'mahnung2' | 'inkasso'

@@ -1,10 +1,11 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Plus } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { Card, PrimaryButton, Modal, Field, inputClass } from '../../components/ui'
 import { RechnungStatusBadge } from './KundenDetail'
 import { fmtDate, fmtEUR, today, uid, addDays } from '../../lib/dates'
+import { holeLeistungen, type Leistung } from '../../lib/leistungen'
 import type { Rechnung, RechnungStatus } from '../../types'
 
 export function Rechnungen() {
@@ -49,6 +50,7 @@ export function Rechnungen() {
             <tr className="border-b border-slate-100 bg-slate-50 text-left text-xs font-medium uppercase tracking-wide text-slate-400">
               <th className="px-4 py-3">Nr.</th>
               <th className="px-4 py-3">Kunde</th>
+              <th className="px-4 py-3">Leistung</th>
               <th className="px-4 py-3">Datum</th>
               <th className="px-4 py-3">Betrag (netto/brutto)</th>
               <th className="px-4 py-3">Status</th>
@@ -63,6 +65,11 @@ export function Rechnungen() {
                   <td className="px-4 py-3 font-medium text-slate-700">{r.nummer}</td>
                   <td className="px-4 py-3 cursor-pointer text-slate-600 hover:text-accent-700" onClick={() => kunde && navigate(`/beratung/kunden/${kunde.id}`)}>
                     {kunde?.firma ?? '–'}
+                  </td>
+                  <td className="px-4 py-3 text-slate-500">
+                    {r.leistungBezeichnung
+                      ? `${r.leistungBezeichnung}${r.leistungMenge ? ` (${r.leistungMenge} × ${r.leistungEinheit})` : ''}`
+                      : '–'}
                   </td>
                   <td className="px-4 py-3 text-slate-500">{fmtDate(r.datum)}</td>
                   <td className="px-4 py-3 text-slate-700">{fmtEUR(r.betragNetto)} / {fmtEUR(r.betragBrutto)}</td>
@@ -97,6 +104,47 @@ function NeueRechnungModal({ open, onClose, onCreate }: { open: boolean; onClose
   const [betragNetto, setBetragNetto] = useState(1000)
   const [status, setStatus] = useState<RechnungStatus>('Entwurf')
 
+  const [leistungen, setLeistungen] = useState<Leistung[]>([])
+  const [leistungId, setLeistungId] = useState('')
+  const [einheit, setEinheit] = useState<'Stunde' | 'Tag'>('Stunde')
+  const [menge, setMenge] = useState(1)
+  const [preisJeEinheit, setPreisJeEinheit] = useState(0)
+
+  useEffect(() => {
+    holeLeistungen()
+      .then(setLeistungen)
+      .catch(() => setLeistungen([]))
+  }, [])
+
+  const gewaehlteLeistung = leistungen.find((l) => l.id === leistungId)
+
+  function leistungWaehlen(id: string) {
+    setLeistungId(id)
+    const l = leistungen.find((x) => x.id === id)
+    if (!l) return
+    const nutzeStunde = l.preis_stunde_von != null
+    const nutzeEinheit = nutzeStunde ? 'Stunde' : 'Tag'
+    setEinheit(nutzeEinheit)
+    setMenge(1)
+    const preis = nutzeStunde ? l.preis_stunde_von! : (l.preis_tag_von ?? 0)
+    setPreisJeEinheit(preis)
+    setBetragNetto(Math.round(preis * 1 * 100) / 100)
+  }
+
+  function einheitWaehlen(e: 'Stunde' | 'Tag') {
+    setEinheit(e)
+    if (!gewaehlteLeistung) return
+    const preis = e === 'Stunde' ? (gewaehlteLeistung.preis_stunde_von ?? 0) : (gewaehlteLeistung.preis_tag_von ?? 0)
+    setPreisJeEinheit(preis)
+    setBetragNetto(Math.round(preis * menge * 100) / 100)
+  }
+
+  function mengeOderPreisAendern(neueMenge: number, neuerPreis: number) {
+    setMenge(neueMenge)
+    setPreisJeEinheit(neuerPreis)
+    setBetragNetto(Math.round(neueMenge * neuerPreis * 100) / 100)
+  }
+
   function submit() {
     const nr = `RE-2026-${Math.floor(1000 + Math.random() * 8999)}`
     onCreate({
@@ -108,6 +156,9 @@ function NeueRechnungModal({ open, onClose, onCreate }: { open: boolean; onClose
       betragBrutto: Math.round(betragNetto * 1.19),
       status,
       zahlungsziel: addDays(today(), 30),
+      ...(gewaehlteLeistung
+        ? { leistungBezeichnung: gewaehlteLeistung.bezeichnung, leistungEinheit: einheit, leistungMenge: menge }
+        : {}),
     })
     onClose()
   }
@@ -119,6 +170,57 @@ function NeueRechnungModal({ open, onClose, onCreate }: { open: boolean; onClose
           {state.kunden.map((k) => <option key={k.id} value={k.id}>{k.firma}</option>)}
         </select>
       </Field>
+
+      <Field label="Leistung (optional)">
+        <select className={inputClass} value={leistungId} onChange={(e) => leistungWaehlen(e.target.value)}>
+          <option value="">– Freie Eingabe –</option>
+          {leistungen.map((l) => <option key={l.id} value={l.id}>{l.bezeichnung}</option>)}
+        </select>
+      </Field>
+
+      {gewaehlteLeistung && (
+        <div className="mb-3 grid grid-cols-3 gap-2">
+          <Field label="Einheit">
+            <select
+              className={inputClass}
+              value={einheit}
+              onChange={(e) => einheitWaehlen(e.target.value as 'Stunde' | 'Tag')}
+              disabled={gewaehlteLeistung.preis_stunde_von == null || gewaehlteLeistung.preis_tag_von == null}
+            >
+              {gewaehlteLeistung.preis_stunde_von != null && <option value="Stunde">Stunde</option>}
+              {gewaehlteLeistung.preis_tag_von != null && <option value="Tag">Tag</option>}
+            </select>
+          </Field>
+          <Field label="Menge">
+            <input
+              type="number"
+              min={0}
+              className={inputClass}
+              value={menge}
+              onChange={(e) => mengeOderPreisAendern(Number(e.target.value), preisJeEinheit)}
+            />
+          </Field>
+          <Field label="Preis je Einheit (€)">
+            <input
+              type="number"
+              step="0.01"
+              className={inputClass}
+              value={preisJeEinheit}
+              onChange={(e) => mengeOderPreisAendern(menge, Number(e.target.value))}
+            />
+          </Field>
+        </div>
+      )}
+      {gewaehlteLeistung && (
+        <p className="-mt-2 mb-3 text-xs text-slate-400">
+          Preisspanne lt. Preisliste:{' '}
+          {einheit === 'Stunde'
+            ? `${fmtEUR(gewaehlteLeistung.preis_stunde_von ?? 0)} – ${fmtEUR(gewaehlteLeistung.preis_stunde_bis ?? 0)}`
+            : `${fmtEUR(gewaehlteLeistung.preis_tag_von ?? 0)} – ${fmtEUR(gewaehlteLeistung.preis_tag_bis ?? 0)}`}{' '}
+          je {einheit}
+        </p>
+      )}
+
       <Field label="Betrag netto (€)">
         <input type="number" className={inputClass} value={betragNetto} onChange={(e) => setBetragNetto(Number(e.target.value))} />
       </Field>
