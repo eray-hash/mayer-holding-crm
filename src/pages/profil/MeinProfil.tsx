@@ -3,7 +3,7 @@ import { AlertTriangle, Camera, CheckCircle2, Lock, Plane, Trash2, User } from '
 import { useApp } from '../../context/AppContext'
 import { useAuth } from '../../context/AuthContext'
 import { supabase, isSupabaseConfigured } from '../../lib/supabaseClient'
-import { Card, Field, inputClass, PrimaryButton } from '../../components/ui'
+import { Card, Field, inputClass, PrimaryButton, PasswortInput } from '../../components/ui'
 import { today, fmtDate, uid } from '../../lib/dates'
 import { CURRENT_USER } from '../../data/constants'
 import { updateMyProfilRemote } from '../../lib/profilSync'
@@ -122,16 +122,10 @@ function PasswortSetzen() {
       </p>
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="Neues Passwort">
-          <input type="password" className={inputClass} value={passwort} onChange={(e) => setPasswort(e.target.value)} autoComplete="new-password" />
+          <PasswortInput value={passwort} onChange={setPasswort} autoComplete="new-password" />
         </Field>
         <Field label="Passwort wiederholen">
-          <input
-            type="password"
-            className={inputClass}
-            value={passwortWiederholen}
-            onChange={(e) => setPasswortWiederholen(e.target.value)}
-            autoComplete="new-password"
-          />
+          <PasswortInput value={passwortWiederholen} onChange={setPasswortWiederholen} autoComplete="new-password" />
         </Field>
       </div>
       {fehler && <p className="mb-2 text-sm font-medium text-rose-600">{fehler}</p>}

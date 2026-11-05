@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { supabase } from '../../lib/supabaseClient'
 import { isEmailGatewayConfigured, requestPasswordReset, selbstRegistrieren } from '../../lib/emailGateway'
+import { PasswortInput } from '../../components/ui'
 
 const inputCls =
   'rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-accent-400 focus:ring-2 focus:ring-accent-100'
@@ -123,20 +124,18 @@ function RegistrierenForm({ onZurueck }: { onZurueck: () => void }) {
         autoComplete="username"
         className={inputCls}
       />
-      <input
-        type="password"
+      <PasswortInput
         placeholder="Neues Passwort (min. 8 Zeichen)"
         value={passwort}
-        onChange={(e) => setPasswort(e.target.value)}
+        onChange={setPasswort}
         required
         autoComplete="new-password"
         className={inputCls}
       />
-      <input
-        type="password"
+      <PasswortInput
         placeholder="Passwort wiederholen"
         value={passwortWiederholen}
-        onChange={(e) => setPasswortWiederholen(e.target.value)}
+        onChange={setPasswortWiederholen}
         required
         autoComplete="new-password"
         className={inputCls}
@@ -196,11 +195,10 @@ export function LoginScreen() {
                 autoComplete="username"
                 className={inputCls}
               />
-              <input
-                type="password"
+              <PasswortInput
                 placeholder="Passwort"
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                onChange={setPassword}
                 required
                 autoComplete="current-password"
                 className={inputCls}

@@ -1,5 +1,5 @@
-import { type ReactNode, useEffect } from 'react'
-import { X } from 'lucide-react'
+import { type ReactNode, useEffect, useState } from 'react'
+import { X, Eye, EyeOff } from 'lucide-react'
 import type { Prioritaet } from '../types'
 import { PRIORITAET_COLOR } from '../data/constants'
 
@@ -121,6 +121,46 @@ export function Field({ label, children }: { label: string; children: ReactNode 
 
 export const inputClass =
   'w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 outline-none focus:border-accent-400 focus:ring-2 focus:ring-accent-100'
+
+export function PasswortInput({
+  value,
+  onChange,
+  placeholder,
+  autoComplete,
+  required,
+  className = inputClass,
+}: {
+  value: string
+  onChange: (value: string) => void
+  placeholder?: string
+  autoComplete?: string
+  required?: boolean
+  className?: string
+}) {
+  const [sichtbar, setSichtbar] = useState(false)
+  return (
+    <div className="relative">
+      <input
+        type={sichtbar ? 'text' : 'password'}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        autoComplete={autoComplete}
+        required={required}
+        className={`${className} pr-9`}
+      />
+      <button
+        type="button"
+        onClick={() => setSichtbar((s) => !s)}
+        tabIndex={-1}
+        aria-label={sichtbar ? 'Passwort verbergen' : 'Passwort anzeigen'}
+        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+      >
+        {sichtbar ? <EyeOff size={16} /> : <Eye size={16} />}
+      </button>
+    </div>
+  )
+}
 
 export function EmptyState({ text }: { text: string }) {
   return <div className="rounded-lg border border-dashed border-slate-200 p-8 text-center text-sm text-slate-400">{text}</div>
