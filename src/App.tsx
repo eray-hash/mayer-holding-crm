@@ -13,6 +13,7 @@ import { KundenDetail } from './pages/beratung/KundenDetail'
 import { VorlagenPage } from './pages/beratung/VorlagenPage'
 import { Mahnwesen } from './pages/beratung/Mahnwesen'
 import { Rechnungen } from './pages/beratung/Rechnungen'
+import { Leistungen } from './pages/beratung/Leistungen'
 import { ObjektListe } from './pages/immobilien/ObjektListe'
 import { ObjektDetail } from './pages/immobilien/ObjektDetail'
 import { Finanzierungen } from './pages/immobilien/Finanzierungen'
@@ -74,6 +75,7 @@ function AdminRoutesContent() {
         <Route path="/beratung/vorlagen/:kind" element={<RequireBereich bereich="beratung"><VorlagenPage /></RequireBereich>} />
         <Route path="/beratung/mahnwesen" element={<RequireBereich bereich="beratung"><Mahnwesen /></RequireBereich>} />
         <Route path="/beratung/rechnungen" element={<RequireBereich bereich="beratung"><Rechnungen /></RequireBereich>} />
+        <Route path="/beratung/leistungen" element={<RequireBereich bereich="beratung"><Leistungen /></RequireBereich>} />
         <Route path="/beratung/projekte" element={<RequireBereich bereich="beratung"><ProjekteListe /></RequireBereich>} />
 
         <Route path="/immobilien" element={<RequireBereich bereich="immobilien"><ObjektListe /></RequireBereich>} />

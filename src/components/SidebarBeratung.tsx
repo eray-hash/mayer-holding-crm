@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { Users, FileText, AlertTriangle, Receipt, ChevronDown, ChevronLeft, ChevronRight, ScrollText, Sun, LayoutGrid, UserCog } from 'lucide-react'
+import { Users, FileText, AlertTriangle, Receipt, Euro, ChevronDown, ChevronLeft, ChevronRight, ScrollText, Sun, LayoutGrid, UserCog } from 'lucide-react'
 
 const VORLAGEN_LINKS = [
   { kind: 'vollmacht', label: 'Vollmacht' },
@@ -53,6 +53,7 @@ export function SidebarBeratung({ collapsed, onToggle }: { collapsed: boolean; o
 
         <SideLink to="/beratung/mahnwesen" icon={<AlertTriangle size={17} />} label="Mahnwesen" collapsed={collapsed} active={isActive('/beratung/mahnwesen')} />
         <SideLink to="/beratung/rechnungen" icon={<Receipt size={17} />} label="Rechnungen" collapsed={collapsed} active={isActive('/beratung/rechnungen')} />
+        <SideLink to="/beratung/leistungen" icon={<Euro size={17} />} label="Leistungen & Preise" collapsed={collapsed} active={isActive('/beratung/leistungen')} />
       </div>
 
       <div className="px-2">
