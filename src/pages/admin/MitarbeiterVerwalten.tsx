@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
-import { Mail, Plus, UserCheck, UserX, Pencil, Save, XCircle, ShieldCheck, Link2, Copy, Check } from 'lucide-react'
+import { Mail, Plus, UserCheck, UserX, Pencil, Save, XCircle, ShieldCheck, Link2, Copy, Check, AtSign } from 'lucide-react'
 import { supabase, isSupabaseConfigured } from '../../lib/supabaseClient'
-import { inviteMitarbeiter, generateLoginLink } from '../../lib/emailGateway'
+import { inviteMitarbeiter, generateLoginLink, updateMitarbeiterEmail } from '../../lib/emailGateway'
 import { ALLE_BEREICHE, bereichLabel } from '../../data/bereiche'
 import { Card, Field, inputClass, PrimaryButton, EmptyState } from '../../components/ui'
 import type { Bereich } from '../../types'
@@ -49,6 +49,11 @@ export function MitarbeiterVerwalten() {
   const [erzeugterLink, setErzeugterLink] = useState<{ id: string; link: string } | null>(null)
   const [linkFehler, setLinkFehler] = useState<{ id: string; text: string } | null>(null)
   const [linkKopiert, setLinkKopiert] = useState(false)
+
+  const [emailBearbeitenId, setEmailBearbeitenId] = useState<string | null>(null)
+  const [neueEmailEntwurf, setNeueEmailEntwurf] = useState('')
+  const [emailSpeichern, setEmailSpeichern] = useState(false)
+  const [emailFehler, setEmailFehler] = useState<{ id: string; text: string } | null>(null)
 
   async function laden() {
     if (!supabase) return
@@ -138,6 +143,27 @@ export function MitarbeiterVerwalten() {
       setLinkFehler({ id: m.id, text: err instanceof Error ? err.message : 'Link konnte nicht erzeugt werden.' })
     } finally {
       setLinkLaedtId(null)
+    }
+  }
+
+  function emailBearbeitenStarten(m: MitarbeiterRow) {
+    setEmailBearbeitenId(m.id)
+    setNeueEmailEntwurf(m.email)
+    setEmailFehler(null)
+  }
+
+  async function emailSpeichernKlick(id: string) {
+    if (!neueEmailEntwurf.trim()) return
+    setEmailSpeichern(true)
+    setEmailFehler(null)
+    try {
+      await updateMitarbeiterEmail(id, neueEmailEntwurf.trim())
+      setEmailBearbeitenId(null)
+      laden()
+    } catch (err) {
+      setEmailFehler({ id, text: err instanceof Error ? err.message : 'E-Mail konnte nicht geändert werden.' })
+    } finally {
+      setEmailSpeichern(false)
     }
   }
 
@@ -267,6 +293,13 @@ export function MitarbeiterVerwalten() {
                 </div>
                 <div className="flex flex-shrink-0 items-center gap-2">
                   <button
+                    onClick={() => (emailBearbeitenId === m.id ? setEmailBearbeitenId(null) : emailBearbeitenStarten(m))}
+                    className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                    title="Login-E-Mail ändern (z.B. vorübergehend auf eine private Adresse ausweichen)"
+                  >
+                    <AtSign size={13} /> E-Mail ändern
+                  </button>
+                  <button
                     onClick={() => linkErzeugen(m)}
                     disabled={linkLaedtId === m.id}
                     className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
@@ -292,6 +325,26 @@ export function MitarbeiterVerwalten() {
               </div>
 
               {linkFehler?.id === m.id && <p className="mt-2 text-xs font-medium text-rose-600">{linkFehler.text}</p>}
+
+              {emailBearbeitenId === m.id && (
+                <div className="mt-3 border-t border-slate-100 pt-3">
+                  <Field label="Neue Login-E-Mail">
+                    <input
+                      type="email"
+                      className={inputClass}
+                      value={neueEmailEntwurf}
+                      onChange={(e) => setNeueEmailEntwurf(e.target.value)}
+                    />
+                  </Field>
+                  <p className="-mt-2 mb-3 text-xs text-slate-400">
+                    Ändert sowohl den Login-Account als auch den CRM-Eintrag. Jederzeit wieder auf die alte Adresse zurückstellbar.
+                  </p>
+                  {emailFehler?.id === m.id && <p className="mb-3 text-sm font-medium text-rose-600">{emailFehler.text}</p>}
+                  <PrimaryButton onClick={() => emailSpeichernKlick(m.id)} disabled={emailSpeichern || !neueEmailEntwurf.trim()}>
+                    <Save size={14} /> {emailSpeichern ? 'Wird geändert …' : 'E-Mail ändern'}
+                  </PrimaryButton>
+                </div>
+              )}
 
               {erzeugterLink?.id === m.id && (
                 <div className="mt-3 flex items-center gap-2 rounded-lg border border-accent-200 bg-accent-50 p-2.5">

@@ -140,6 +140,13 @@ export async function generateLoginLink(email: string): Promise<string> {
   return data.link
 }
 
+// Ändert die Login-E-Mail eines Mitarbeiters synchron im Supabase-Auth-Account und in der
+// mitarbeiter-Tabelle — z.B. um vorübergehend auf eine private Adresse auszuweichen, wenn ein
+// amayer-holding.com-Postfach gerade nicht zustellt, und später wieder zurückzuschalten.
+export async function updateMitarbeiterEmail(mitarbeiterId: string, neueEmail: string): Promise<void> {
+  await call({ action: 'update_mitarbeiter_email', mitarbeiterId, neueEmail })
+}
+
 // Selbstbedienungs-Pendant zu generateLoginLink für die Login-Seite ("Passwort vergessen?") —
 // verschickt den Link selbst über das echte IONOS-SMTP statt über Supabases unzuverlässigen Mailer.
 // Antwortet immer gleich, unabhängig davon ob die E-Mail zu einem echten Mitarbeiter gehört.

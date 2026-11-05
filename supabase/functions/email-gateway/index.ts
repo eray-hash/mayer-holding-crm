@@ -32,6 +32,14 @@
 //                                                   Einladungs-Mail (Mitarbeiter setzt sein eigenes
 //                                                   Passwort selbst, landet nie bei uns) — braucht
 //                                                   den Service-Role-Key, läuft daher nur serverseitig
+//   { action: "update_mitarbeiter_email", mitarbeiterId, neueEmail }
+//                                                -> ändert die Login-E-Mail eines Mitarbeiters sowohl
+//                                                   im Supabase-Auth-Account als auch in der
+//                                                   mitarbeiter-Tabelle (beides muss synchron bleiben,
+//                                                   sonst findet der Login-Abgleich den Datensatz
+//                                                   nicht mehr) — z.B. um vorübergehend auf eine
+//                                                   private Adresse auszuweichen, falls ein
+//                                                   amayer-holding.com-Postfach gerade nicht zustellt
 //   { action: "generate_login_link", email }     -> erzeugt einen Login-/Passwort-setzen-Link ohne
 //                                                   selbst eine Mail zu verschicken (Workaround, da
 //                                                   Supabases eingebauter Mailversand ratelimitiert
@@ -1013,6 +1021,39 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ ok: true }), { headers })
     }
 
+    if (body.action === 'update_mitarbeiter_email') {
+      const { mitarbeiterId, neueEmail } = body
+      if (!mitarbeiterId || !neueEmail || typeof neueEmail !== 'string' || !neueEmail.trim()) {
+        return new Response(JSON.stringify({ error: 'mitarbeiterId und neueEmail sind Pflichtfelder' }), { status: 400, headers })
+      }
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const { data: mRow, error: mErr } = await admin.from('mitarbeiter').select('email').eq('id', mitarbeiterId).maybeSingle()
+      if (mErr || !mRow) {
+        return new Response(JSON.stringify({ error: 'Mitarbeiter nicht gefunden' }), { status: 404, headers })
+      }
+      const alteEmail = (mRow.email as string).trim().toLowerCase()
+      const { data: userList, error: listError } = await admin.auth.admin.listUsers({ page: 1, perPage: 1000 })
+      if (listError) {
+        return new Response(JSON.stringify({ error: listError.message }), { status: 400, headers })
+      }
+      const authUser = userList.users.find((u) => u.email?.trim().toLowerCase() === alteEmail)
+      if (!authUser) {
+        return new Response(JSON.stringify({ error: 'Kein Login-Account zu dieser E-Mail gefunden' }), { status: 404, headers })
+      }
+      const { error: updateAuthError } = await admin.auth.admin.updateUserById(authUser.id, {
+        email: neueEmail.trim(),
+        email_confirm: true,
+      })
+      if (updateAuthError) {
+        return new Response(JSON.stringify({ error: updateAuthError.message }), { status: 400, headers })
+      }
+      const { error: updateTableError } = await admin.from('mitarbeiter').update({ email: neueEmail.trim() }).eq('id', mitarbeiterId)
+      if (updateTableError) {
+        return new Response(JSON.stringify({ error: updateTableError.message }), { status: 400, headers })
+      }
+      return new Response(JSON.stringify({ ok: true }), { headers })
+    }
+
     if (body.action === 'generate_login_link') {
       const { email } = body
       if (!email || typeof email !== 'string' || !email.trim()) {
@@ -1370,7 +1411,7 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ listings }), { headers })
     }
 
-    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "request_password_reset", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag" oder "firmenwissen_answer"' }), { status: 400, headers })
+    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag" oder "firmenwissen_answer"' }), { status: 400, headers })
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }
