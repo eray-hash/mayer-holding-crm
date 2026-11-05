@@ -178,6 +178,12 @@ export async function requestPasswordReset(email: string): Promise<void> {
   await call({ action: 'request_password_reset', email })
 }
 
+// Setzt das allererste Passwort für eine hinterlegte Mitarbeiter-E-Mail, ganz ohne Mailversand —
+// nur möglich, solange für diesen Account noch nie ein Login stattgefunden hat (serverseitig geprüft).
+export async function selbstRegistrieren(email: string, passwort: string): Promise<void> {
+  await call({ action: 'self_register', email, passwort })
+}
+
 export type LeadKlassifizierungsErgebnis = { geprueft: number; vorgeschlagen: number; uebersprungen: number }
 
 // Klassifiziert nur neue, noch unbekannte E-Mail-Absender als Lead-Vorschlag (Nachfolger von

@@ -62,6 +62,14 @@
 //                                                   gleich (kein Hinweis, ob die Adresse existiert),
 //                                                   damit sich darüber keine Mitarbeiter-Mailadressen
 //                                                   erraten lassen
+//   { action: "self_register", email, passwort } -> setzt das allererste Passwort für eine aktive
+//                                                   Mitarbeiter-E-Mail, ganz ohne Mailversand — nur
+//                                                   erlaubt, wenn für diesen Account noch nie ein
+//                                                   erfolgreicher Login stattgefunden hat (sonst
+//                                                   könnte jeder mit einer erratbaren Firmen-E-Mail
+//                                                   fremde Accounts übernehmen). Für Mitarbeiter mit
+//                                                   bestehendem Passwort bleibt "Passwort vergessen"
+//                                                   bzw. der admin-geschützte Login-Link der richtige Weg
 //   { action: "classify_new_leads" }             -> Nachfolger von scripts/extract-leads.mjs, aber
 //                                                   automatisch statt manuell: findet Absender in
 //                                                   eingegangene_emails, die weder einem bestehenden
@@ -1135,6 +1143,62 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ ok: true }), { headers })
     }
 
+    if (body.action === 'self_register') {
+      const { email, passwort } = body
+      if (!email || typeof email !== 'string' || !email.trim() || !passwort || typeof passwort !== 'string' || passwort.length < 8) {
+        return new Response(
+          JSON.stringify({ error: 'E-Mail und ein Passwort mit mindestens 8 Zeichen sind Pflichtfelder' }),
+          { status: 400, headers },
+        )
+      }
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const normalisiert = email.trim().toLowerCase()
+      const { data: mitarbeiterRows } = await admin.from('mitarbeiter').select('email').eq('aktiv', true)
+      const treffer = (mitarbeiterRows ?? []).find((m: { email: string }) => m.email?.trim().toLowerCase() === normalisiert)
+      if (!treffer) {
+        return new Response(
+          JSON.stringify({ error: 'Diese E-Mail-Adresse ist nicht als aktiver Mitarbeiter hinterlegt.' }),
+          { status: 404, headers },
+        )
+      }
+      const { data: userList, error: listError } = await admin.auth.admin.listUsers({ page: 1, perPage: 1000 })
+      if (listError) {
+        return new Response(JSON.stringify({ error: listError.message }), { status: 400, headers })
+      }
+      const bestehenderUser = userList.users.find((u) => u.email?.trim().toLowerCase() === normalisiert)
+      // Sicherheitsgrenze: Registrieren setzt nur das ALLERERSTE Passwort. Wer schon mal eingeloggt
+      // war, hat bereits ein Passwort — sonst könnte jeder, der die (oft erratbare) Firmen-E-Mail
+      // eines Kollegen kennt, dessen Account einfach übernehmen, ohne je Zugriff auf dessen Postfach
+      // gehabt zu haben.
+      if (bestehenderUser?.last_sign_in_at) {
+        return new Response(
+          JSON.stringify({
+            error: 'Für diesen Account wurde bereits ein Passwort gesetzt. Bitte „Passwort vergessen" nutzen oder einen Admin um einen Login-Link bitten.',
+          }),
+          { status: 409, headers },
+        )
+      }
+      if (bestehenderUser) {
+        const { error: updateErr } = await admin.auth.admin.updateUserById(bestehenderUser.id, {
+          password: passwort,
+          email_confirm: true,
+        })
+        if (updateErr) {
+          return new Response(JSON.stringify({ error: updateErr.message }), { status: 400, headers })
+        }
+      } else {
+        const { error: createErr } = await admin.auth.admin.createUser({
+          email: treffer.email,
+          password: passwort,
+          email_confirm: true,
+        })
+        if (createErr) {
+          return new Response(JSON.stringify({ error: createErr.message }), { status: 400, headers })
+        }
+      }
+      return new Response(JSON.stringify({ ok: true }), { headers })
+    }
+
     if (body.action === 'classify_new_leads') {
       const ergebnis = await classifyNewLeads()
       return new Response(JSON.stringify(ergebnis), { headers })
@@ -1452,7 +1516,7 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ listings }), { headers })
     }
 
-    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag" oder "firmenwissen_answer"' }), { status: 400, headers })
+    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag" oder "firmenwissen_answer"' }), { status: 400, headers })
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }

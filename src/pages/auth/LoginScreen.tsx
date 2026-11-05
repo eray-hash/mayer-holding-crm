@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { supabase } from '../../lib/supabaseClient'
-import { isEmailGatewayConfigured, requestPasswordReset } from '../../lib/emailGateway'
+import { isEmailGatewayConfigured, requestPasswordReset, selbstRegistrieren } from '../../lib/emailGateway'
 
 const inputCls =
   'rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-accent-400 focus:ring-2 focus:ring-accent-100'
@@ -66,12 +66,103 @@ function PasswortVergessenForm({ onZurueck }: { onZurueck: () => void }) {
   )
 }
 
+function RegistrierenForm({ onZurueck }: { onZurueck: () => void }) {
+  const [email, setEmail] = useState('')
+  const [passwort, setPasswort] = useState('')
+  const [passwortWiederholen, setPasswortWiederholen] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [erledigt, setErledigt] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault()
+    setError(null)
+    if (passwort.length < 8) {
+      setError('Das Passwort muss mindestens 8 Zeichen lang sein.')
+      return
+    }
+    if (passwort !== passwortWiederholen) {
+      setError('Die Passwörter stimmen nicht überein.')
+      return
+    }
+    setLoading(true)
+    try {
+      await selbstRegistrieren(email, passwort)
+      setErledigt(true)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Registrierung fehlgeschlagen.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  if (erledigt) {
+    return (
+      <div className="flex flex-col gap-3">
+        <p className="text-sm text-slate-700">
+          Dein Zugang für <strong>{email}</strong> ist eingerichtet. Du kannst dich jetzt mit E-Mail und deinem neuen Passwort anmelden.
+        </p>
+        <button type="button" onClick={onZurueck} className="text-sm font-medium text-accent-600 hover:underline">
+          Zum Login
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+      <p className="text-sm text-slate-500">
+        Nur möglich, wenn deine E-Mail bereits als Mitarbeiter hinterlegt ist und du noch nie eingeloggt warst.
+      </p>
+      <input
+        type="email"
+        placeholder="E-Mail"
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+        required
+        autoComplete="username"
+        className={inputCls}
+      />
+      <input
+        type="password"
+        placeholder="Neues Passwort (min. 8 Zeichen)"
+        value={passwort}
+        onChange={(e) => setPasswort(e.target.value)}
+        required
+        autoComplete="new-password"
+        className={inputCls}
+      />
+      <input
+        type="password"
+        placeholder="Passwort wiederholen"
+        value={passwortWiederholen}
+        onChange={(e) => setPasswortWiederholen(e.target.value)}
+        required
+        autoComplete="new-password"
+        className={inputCls}
+      />
+      {error && <p className="text-sm text-rose-600">{error}</p>}
+      <button
+        type="submit"
+        disabled={loading}
+        className="mt-1 rounded-lg bg-accent-600 px-3 py-2 text-sm font-medium text-white hover:bg-accent-700 disabled:opacity-50"
+      >
+        {loading ? '…' : 'Zugang einrichten'}
+      </button>
+      <button type="button" onClick={onZurueck} className="text-sm font-medium text-slate-500 hover:underline">
+        Zurück zum Login
+      </button>
+    </form>
+  )
+}
+
 export function LoginScreen() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [vergessenModus, setVergessenModus] = useState(false)
+  const [registrierenModus, setRegistrierenModus] = useState(false)
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
@@ -91,6 +182,8 @@ export function LoginScreen() {
 
         {vergessenModus ? (
           <PasswortVergessenForm onZurueck={() => setVergessenModus(false)} />
+        ) : registrierenModus ? (
+          <RegistrierenForm onZurueck={() => setRegistrierenModus(false)} />
         ) : (
           <>
             <form onSubmit={handleSubmit} className="flex flex-col gap-3">
@@ -122,13 +215,22 @@ export function LoginScreen() {
               </button>
             </form>
             {isEmailGatewayConfigured && (
-              <button
-                type="button"
-                onClick={() => setVergessenModus(true)}
-                className="mt-3 text-sm font-medium text-accent-600 hover:underline"
-              >
-                Passwort vergessen?
-              </button>
+              <div className="mt-3 flex items-center justify-between">
+                <button
+                  type="button"
+                  onClick={() => setVergessenModus(true)}
+                  className="text-sm font-medium text-accent-600 hover:underline"
+                >
+                  Passwort vergessen?
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRegistrierenModus(true)}
+                  className="text-sm font-medium text-slate-500 hover:underline"
+                >
+                  Erster Login?
+                </button>
+              </div>
             )}
           </>
         )}
