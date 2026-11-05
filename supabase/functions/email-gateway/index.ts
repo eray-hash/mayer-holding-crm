@@ -31,7 +31,11 @@
 //   { action: "invite_mitarbeiter", email }      -> schickt per Supabase Auth Admin API eine
 //                                                   Einladungs-Mail (Mitarbeiter setzt sein eigenes
 //                                                   Passwort selbst, landet nie bei uns) — braucht
-//                                                   den Service-Role-Key, läuft daher nur serverseitig
+//                                                   den Service-Role-Key, läuft daher nur serverseitig.
+//                                                   NUR für eingeloggte Geschäftsführung/Admin
+//                                                   (Authorization-Header + pruefeAdminAufrufer), weil
+//                                                   das x-crm-secret allein im öffentlichen Frontend-
+//                                                   Bundle steckt und daher kein echter Zugriffsschutz ist
 //   { action: "update_mitarbeiter_email", mitarbeiterId, neueEmail }
 //                                                -> ändert die Login-E-Mail eines Mitarbeiters sowohl
 //                                                   im Supabase-Auth-Account als auch in der
@@ -39,14 +43,15 @@
 //                                                   sonst findet der Login-Abgleich den Datensatz
 //                                                   nicht mehr) — z.B. um vorübergehend auf eine
 //                                                   private Adresse auszuweichen, falls ein
-//                                                   amayer-holding.com-Postfach gerade nicht zustellt
+//                                                   amayer-holding.com-Postfach gerade nicht zustellt.
+//                                                   NUR für eingeloggte Geschäftsführung/Admin (s.o.)
 //   { action: "generate_login_link", email }     -> erzeugt einen Login-/Passwort-setzen-Link ohne
 //                                                   selbst eine Mail zu verschicken (Workaround, da
 //                                                   Supabases eingebauter Mailversand ratelimitiert
 //                                                   und bei manchen Empfängern unzuverlässig ist) —
 //                                                   der Link wird direkt zurückgegeben und muss über
 //                                                   einen anderen Kanal (Chat, Signal, ...) zugestellt
-//                                                   werden
+//                                                   werden. NUR für eingeloggte Geschäftsführung/Admin (s.o.)
 //   { action: "request_password_reset", email }  -> Selbstbedienungs-Pendant zu generate_login_link
 //                                                   für die Login-Seite ("Passwort vergessen?"):
 //                                                   generiert denselben Recovery-Link, verschickt ihn
@@ -171,7 +176,7 @@ function corsHeaders(origin: string | null) {
   const allow = origin && ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0]
   return {
     'Access-Control-Allow-Origin': allow,
-    'Access-Control-Allow-Headers': 'content-type, x-crm-secret',
+    'Access-Control-Allow-Headers': 'content-type, x-crm-secret, authorization',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
     'Content-Type': 'application/json',
   }
@@ -181,6 +186,30 @@ function env(name: string): string {
   const v = Deno.env.get(name)
   if (!v) throw new Error(`Fehlende Konfiguration: ${name} (Supabase Edge Function Secret nicht gesetzt)`)
   return v
+}
+
+// Das geteilte Secret (x-crm-secret) steckt zwangsläufig im öffentlich ausgelieferten
+// Frontend-Bundle (VITE_-Variable) und ist damit KEIN echter Zugriffsschutz — jeder, der die Seite
+// lädt, kann es auslesen. Für Aktionen, die Account-Zugriff gewähren (Login-Link erzeugen, Mitarbeiter
+// einladen, Login-E-Mail ändern), reicht das Secret allein daher nicht: zusätzlich muss der Aufrufer
+// per eigenem Supabase-Login nachweisen, dass er eine aktive Geschäftsführung/Admin-Person ist.
+async function pruefeAdminAufrufer(
+  req: Request,
+  admin: ReturnType<typeof createClient>,
+): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+  const authHeader = req.headers.get('authorization') ?? ''
+  const token = authHeader.replace(/^Bearer\s+/i, '').trim()
+  if (!token) return { ok: false, status: 401, error: 'Kein Login-Nachweis mitgeschickt.' }
+  const { data: userData, error: userError } = await admin.auth.getUser(token)
+  if (userError || !userData.user?.email) return { ok: false, status: 401, error: 'Login-Nachweis ungültig.' }
+  const { data: mRow } = await admin
+    .from('mitarbeiter')
+    .select('aktiv, rolle, ist_admin')
+    .eq('email', userData.user.email)
+    .maybeSingle()
+  const berechtigt = !!mRow?.aktiv && (mRow.rolle === 'geschaeftsfuehrung' || mRow.ist_admin)
+  if (!berechtigt) return { ok: false, status: 403, error: 'Nur Geschäftsführung/Admin darf das.' }
+  return { ok: true }
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
@@ -1014,6 +1043,10 @@ Deno.serve(async (req: Request) => {
         return new Response(JSON.stringify({ error: 'email ist ein Pflichtfeld' }), { status: 400, headers })
       }
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const berechtigung = await pruefeAdminAufrufer(req, admin)
+      if (!berechtigung.ok) {
+        return new Response(JSON.stringify({ error: berechtigung.error }), { status: berechtigung.status, headers })
+      }
       const { error: inviteError } = await admin.auth.admin.inviteUserByEmail(email.trim())
       if (inviteError) {
         return new Response(JSON.stringify({ error: inviteError.message }), { status: 400, headers })
@@ -1027,6 +1060,10 @@ Deno.serve(async (req: Request) => {
         return new Response(JSON.stringify({ error: 'mitarbeiterId und neueEmail sind Pflichtfelder' }), { status: 400, headers })
       }
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const berechtigung = await pruefeAdminAufrufer(req, admin)
+      if (!berechtigung.ok) {
+        return new Response(JSON.stringify({ error: berechtigung.error }), { status: berechtigung.status, headers })
+      }
       const { data: mRow, error: mErr } = await admin.from('mitarbeiter').select('email').eq('id', mitarbeiterId).maybeSingle()
       if (mErr || !mRow) {
         return new Response(JSON.stringify({ error: 'Mitarbeiter nicht gefunden' }), { status: 404, headers })
@@ -1060,6 +1097,10 @@ Deno.serve(async (req: Request) => {
         return new Response(JSON.stringify({ error: 'email ist ein Pflichtfeld' }), { status: 400, headers })
       }
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const berechtigung = await pruefeAdminAufrufer(req, admin)
+      if (!berechtigung.ok) {
+        return new Response(JSON.stringify({ error: berechtigung.error }), { status: berechtigung.status, headers })
+      }
       const { data, error: linkError } = await admin.auth.admin.generateLink({ type: 'recovery', email: email.trim() })
       if (linkError) {
         return new Response(JSON.stringify({ error: linkError.message }), { status: 400, headers })

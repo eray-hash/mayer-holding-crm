@@ -4,6 +4,8 @@
 // Namens bündelt diese eine Function inzwischen auch die KI-Gesprächszusammenfassung
 // (summarizeTranscript) — gleiche URL, gleiches Secret, kein zweites Deployment nötig.
 
+import { supabase } from './supabaseClient'
+
 const FUNCTION_URL = import.meta.env.VITE_EMAIL_GATEWAY_URL as string | undefined
 const SHARED_SECRET = import.meta.env.VITE_EMAIL_GATEWAY_SECRET as string | undefined
 
@@ -29,6 +31,28 @@ async function call(body: Record<string, unknown>): Promise<any> {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      ...(SHARED_SECRET ? { 'x-crm-secret': SHARED_SECRET } : {}),
+    },
+    body: JSON.stringify(body),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data?.error ?? `Fehler beim Abruf (${res.status})`)
+  return data
+}
+
+// Für Aktionen, die Account-Zugriff gewähren (Login-Link erzeugen, Mitarbeiter einladen, Login-E-Mail
+// ändern) — das x-crm-secret allein reicht da nicht als Schutz, weil es im öffentlichen Bundle steckt.
+// Schickt zusätzlich das eigene Supabase-Login mit, das die Edge Function serverseitig prüft.
+async function callAuthenticated(body: Record<string, unknown>): Promise<any> {
+  if (!FUNCTION_URL) throw new Error('E-Mail-Postfach ist noch nicht konfiguriert (VITE_EMAIL_GATEWAY_URL fehlt).')
+  const { data: sessionData } = (await supabase?.auth.getSession()) ?? { data: { session: null } }
+  const token = sessionData.session?.access_token
+  if (!token) throw new Error('Nicht eingeloggt.')
+  const res = await fetch(FUNCTION_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
       ...(SHARED_SECRET ? { 'x-crm-secret': SHARED_SECRET } : {}),
     },
     body: JSON.stringify(body),
@@ -128,7 +152,7 @@ export async function answerWithImage(frage: string, imageBase64: string, mediaT
 }
 
 export async function inviteMitarbeiter(email: string): Promise<void> {
-  await call({ action: 'invite_mitarbeiter', email })
+  await callAuthenticated({ action: 'invite_mitarbeiter', email })
 }
 
 // Workaround, da Supabases eingebauter Einladungs-/Reset-Mailversand bei manchen Empfängern (z.B.
@@ -136,7 +160,7 @@ export async function inviteMitarbeiter(email: string): Promise<void> {
 // Login-/Passwort-setzen-Link ohne selbst eine Mail zu verschicken. Muss über einen anderen Kanal
 // (Chat, Signal, ...) an den Mitarbeiter zugestellt werden.
 export async function generateLoginLink(email: string): Promise<string> {
-  const data = await call({ action: 'generate_login_link', email })
+  const data = await callAuthenticated({ action: 'generate_login_link', email })
   return data.link
 }
 
@@ -144,7 +168,7 @@ export async function generateLoginLink(email: string): Promise<string> {
 // mitarbeiter-Tabelle — z.B. um vorübergehend auf eine private Adresse auszuweichen, wenn ein
 // amayer-holding.com-Postfach gerade nicht zustellt, und später wieder zurückzuschalten.
 export async function updateMitarbeiterEmail(mitarbeiterId: string, neueEmail: string): Promise<void> {
-  await call({ action: 'update_mitarbeiter_email', mitarbeiterId, neueEmail })
+  await callAuthenticated({ action: 'update_mitarbeiter_email', mitarbeiterId, neueEmail })
 }
 
 // Selbstbedienungs-Pendant zu generateLoginLink für die Login-Seite ("Passwort vergessen?") —
