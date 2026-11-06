@@ -257,6 +257,9 @@ function rechnungToRow(r: Rechnung) {
     status: r.status,
     zahlungsziel: r.zahlungsziel,
     mahnstufe: r.mahnstufe ?? null,
+    leistung_bezeichnung: r.leistungBezeichnung ?? null,
+    leistung_einheit: r.leistungEinheit ?? null,
+    leistung_menge: r.leistungMenge ?? null,
   }
 }
 
@@ -271,6 +274,9 @@ function rowToRechnung(row: any): Rechnung {
     status: row.status,
     zahlungsziel: row.zahlungsziel,
     mahnstufe: row.mahnstufe ?? undefined,
+    leistungBezeichnung: row.leistung_bezeichnung ?? undefined,
+    leistungEinheit: row.leistung_einheit ?? undefined,
+    leistungMenge: row.leistung_menge != null ? Number(row.leistung_menge) : undefined,
   }
 }
 
