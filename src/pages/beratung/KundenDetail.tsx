@@ -15,6 +15,7 @@ import { SelbstauskunftSection } from '../../components/SelbstauskunftSection'
 import { NdaSection } from '../../components/NdaSection'
 import { DokumenteSection } from '../../components/DokumenteSection'
 import { KommunikationSection } from '../../components/KommunikationSection'
+import { LoeschenKundeButton } from '../../components/LoeschenKundeButton'
 import { SendEmailModal } from '../../components/SendEmailModal'
 import { FollowUpForm } from '../../components/FollowUpEditor'
 import type { Prioritaet } from '../../types'
@@ -73,13 +74,16 @@ export function KundenDetail() {
             <h1 className="text-xl font-semibold text-slate-800">{kunde.firma}</h1>
             <p className="text-sm text-slate-500">{kunde.ansprechpartner} · {kunde.email} · {kunde.telefon}</p>
           </div>
-          <select
-            value={kunde.prioritaet}
-            onChange={(e) => dispatch({ type: 'SET_KUNDE_PRIORITAET', id: kunde.id, prioritaet: e.target.value as Prioritaet })}
-            className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-medium"
-          >
-            {PRIORITAETEN.map((p) => <option key={p} value={p}>{p}</option>)}
-          </select>
+          <div className="flex items-center gap-2">
+            <select
+              value={kunde.prioritaet}
+              onChange={(e) => dispatch({ type: 'SET_KUNDE_PRIORITAET', id: kunde.id, prioritaet: e.target.value as Prioritaet })}
+              className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-medium"
+            >
+              {PRIORITAETEN.map((p) => <option key={p} value={p}>{p}</option>)}
+            </select>
+            <LoeschenKundeButton bereich="beratung" kundeId={kunde.id} kundeName={kunde.firma} listePfad="/beratung" />
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-6 border-t border-slate-100 pt-4">

@@ -12,6 +12,7 @@ import {
   answerWithImage,
   classifyPflegeInput,
   answerFirmenwissen,
+  type AssistentKlassifikation,
 } from '../lib/emailGateway'
 import { buildFirmenwissenKontext } from '../lib/firmenwissenKontext'
 import { collectFollowUpPriorities } from '../lib/followUpPriorities'
@@ -22,7 +23,7 @@ import { CallRecorder } from './CallRecorder'
 import { Modal, inputClass } from './ui'
 import { today, fmtDate, uid, addDays } from '../lib/dates'
 import { CURRENT_USER } from '../data/constants'
-import type { KundeBereich } from '../types'
+import type { KundeBereich, Kunde } from '../types'
 
 type ChatMessage = { id: string; role: 'user' | 'assistant'; text: string; imageDataUrl?: string }
 type PastedImage = { dataUrl: string; base64: string; mediaType: string }
@@ -71,6 +72,12 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
   // du?") — damit die Antwort darauf (oft nur ein Name) als Klärung der ursprünglichen Frage
   // behandelt wird statt als neue, kontextlose Äußerung.
   const [ausstehendeFrage, setAusstehendeFrage] = useState<{ frageText: string; kandidaten: KundeMatch[] } | null>(null)
+  // Fehlendes Feld bei "leg einen Lead an" (Bereich und/oder Firma noch unbekannt) — merkt sich den
+  // bisherigen Stand, bis die fehlende Angabe in der nächsten Nachricht nachgereicht wird.
+  const [ausstehendeAktion, setAusstehendeAktion] = useState<AssistentKlassifikation | null>(null)
+  // Löschen ist nicht ohne Weiteres rückgängig zu machen — deshalb immer erst mit "ja" bestätigen
+  // lassen, statt sofort zu löschen (gleiches Muster wie bei der Telegram-Variante).
+  const [ausstehendeLoeschung, setAusstehendeLoeschung] = useState<KundeMatch | null>(null)
   const [pflegeModus, setPflegeModus] = useState(false)
   const [pflegeVorschlag, setPflegeVorschlag] = useState<PflegeVorschlag | null>(null)
   // Firmen-Wissens-KI (Quirin Lutzenberger: "Eigene Firmen-KI") — bewusst für ALLE aktiven
@@ -163,6 +170,63 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
     } catch (err) {
       addMessage('assistant', `Antwort konnte nicht abgerufen werden: ${err instanceof Error ? err.message : 'Fehler'}`, sprechen)
     }
+  }
+
+  const AKTION_BEREICHE = ['beratung', 'erben', 'betriebsuebergabe', 'betriebsformen', 'akademie', 'finanzierungen'] as const
+
+  // Erstes "echtes" Tool des Assistenten: legt direkt einen neuen Kunden/Lead an, statt nur Notizen/
+  // Fragen zu bearbeiten. Bewusst als einzelnes, eng begrenztes Tool statt offener Schreibrechte —
+  // dieselbe Logik läuft serverseitig auch für Telegram (supabase/functions/telegram-gateway).
+  function fuehreAktionLeadAnlegenAus(klass: AssistentKlassifikation, sprechen: boolean) {
+    const bereich = klass.aktion_bereich as KundeBereich | undefined
+    const firma = klass.aktion_firma ?? klass.erkannter_name
+    if (!bereich || !AKTION_BEREICHE.includes(bereich as any)) {
+      setAusstehendeAktion(klass)
+      addMessage('assistant', `In welchem Bereich soll der Lead angelegt werden? (${AKTION_BEREICHE.join(', ')})`, sprechen)
+      return
+    }
+    if (!firma) {
+      setAusstehendeAktion({ ...klass, aktion_bereich: bereich })
+      addMessage('assistant', 'Wie soll der Lead/die Firma heißen?', sprechen)
+      return
+    }
+    const neuerKunde: Kunde = {
+      id: uid('k'),
+      firma,
+      ansprechpartner: firma,
+      email: '',
+      telefon: '',
+      prioritaet: 'Mittel',
+      status: 'lead',
+      followUp: { date: addDays(today(), 2), note: 'Erstkontakt aufnehmen', done: false },
+      verantwortlich: CURRENT_USER,
+      letzteAktivitaet: today(),
+      activities: [{ id: uid('act'), date: today(), text: 'Per KI-Assistent angelegt.', user: CURRENT_USER }],
+    }
+    switch (bereich) {
+      case 'beratung': dispatch({ type: 'ADD_KUNDE', kunde: neuerKunde }); break
+      case 'erben': dispatch({ type: 'ADD_ERBEN_MANDANT', kunde: neuerKunde }); break
+      case 'betriebsuebergabe': dispatch({ type: 'ADD_BETRIEBSUEBERGABE_MANDANT', kunde: neuerKunde }); break
+      case 'betriebsformen': dispatch({ type: 'ADD_BETRIEBSFORMEN_MANDANT', kunde: neuerKunde }); break
+      case 'akademie': dispatch({ type: 'ADD_AKADEMIE_TEILNEHMER', kunde: neuerKunde }); break
+      case 'finanzierungen': dispatch({ type: 'ADD_FINANZIERUNGEN_MANDANT', kunde: neuerKunde }); break
+    }
+    addMessage('assistant', `Erledigt — "${firma}" als neuer Lead bei ${bereich} angelegt, dir zugeordnet.`, sprechen)
+  }
+
+  // Löschen ist nicht ohne Weiteres rückgängig zu machen — deshalb nur für GF/Admin (dieselbe
+  // Berechtigung wie der bestehende Pflege-Modus) und immer erst mit Rückfrage.
+  function fuehreAktionLeadLoeschenAus(match: KundeMatch | null, sprechen: boolean) {
+    if (!pflegeErlaubt) {
+      addMessage('assistant', 'Kunden/Leads löschen darf nur Geschäftsführung/Admin.', sprechen)
+      return
+    }
+    if (!match) {
+      addMessage('assistant', 'Welchen Kunden/Lead genau soll ich löschen? Nenn mir bitte den Namen etwas genauer.', sprechen)
+      return
+    }
+    setAusstehendeLoeschung(match)
+    addMessage('assistant', `Soll ich "${match.kundeName}" bei ${match.bereich} wirklich unwiderruflich löschen? Antworte mit "ja" zum Bestätigen, sonst passiert nichts.`, sprechen)
   }
 
   function pflegeBestaetigen() {
@@ -347,6 +411,34 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
       return
     }
 
+    // Bestätigung für eine ausstehende Löschung ("ja" = löschen, alles andere = abbrechen) — immer
+    // zuerst prüfen, sonst würde die Antwort wie eine neue, kontextlose Nachricht behandelt.
+    if (ausstehendeLoeschung) {
+      const pending = ausstehendeLoeschung
+      setAusstehendeLoeschung(null)
+      addMessage('user', text)
+      if (/^ja\b/i.test(text.trim())) {
+        dispatch({ type: 'PFLEGE_LOESCHE_KUNDE', id: pending.kundeId, bereich: pending.bereich })
+        addMessage('assistant', `Gelöscht: ${pending.kundeName}`, sprechen)
+      } else {
+        addMessage('assistant', 'Abgebrochen, nichts gelöscht.', sprechen)
+      }
+      return
+    }
+
+    // Fehlendes Feld bei "leg einen Lead an" nachreichen (Bereich oder Firma).
+    if (ausstehendeAktion) {
+      const pending = ausstehendeAktion
+      setAusstehendeAktion(null)
+      addMessage('user', text)
+      const genannterBereich = AKTION_BEREICHE.find((b) => text.toLowerCase().includes(b))
+      const ergaenzt: AssistentKlassifikation = pending.aktion_bereich
+        ? { ...pending, aktion_firma: text.trim() }
+        : { ...pending, aktion_bereich: genannterBereich }
+      fuehreAktionLeadAnlegenAus(ergaenzt, sprechen)
+      return
+    }
+
     // Auflösung einer vorherigen Rückfrage ("mehrere passende Kunden gefunden, wen genau meinst
     // du?") — wenn die aktuelle Äußerung genau einen der damals genannten Kandidaten eindeutig
     // benennt, wird direkt die ursprüngliche Frage für diesen Kunden beantwortet, statt die Antwort
@@ -418,6 +510,10 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
         }
       } else if (klass.typ === 'uebersicht') {
         await beantworteUebersicht(text, sprechen)
+      } else if (klass.typ === 'aktion_lead_anlegen') {
+        fuehreAktionLeadAnlegenAus(klass, sprechen)
+      } else if (klass.typ === 'aktion_lead_loeschen') {
+        fuehreAktionLeadLoeschenAus(match, sprechen)
       } else if (klass.typ === 'aufnahme') {
         if (!match) {
           addMessage('assistant', 'Für welchen Kunden/Mandanten soll ich aufzeichnen? Nenn mir bitte den Namen.', sprechen)

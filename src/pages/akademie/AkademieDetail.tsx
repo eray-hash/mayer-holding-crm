@@ -15,6 +15,7 @@ import { SelbstauskunftSection } from '../../components/SelbstauskunftSection'
 import { NdaSection } from '../../components/NdaSection'
 import { DokumenteSection } from '../../components/DokumenteSection'
 import { KommunikationSection } from '../../components/KommunikationSection'
+import { LoeschenKundeButton } from '../../components/LoeschenKundeButton'
 import type { Prioritaet } from '../../types'
 
 export function AkademieDetail() {
@@ -50,13 +51,16 @@ export function AkademieDetail() {
             <h1 className="text-xl font-semibold text-slate-800">{teilnehmer.firma}</h1>
             <p className="text-sm text-slate-500">{teilnehmer.email} · {teilnehmer.telefon}</p>
           </div>
-          <select
-            value={teilnehmer.prioritaet}
-            onChange={(e) => dispatch({ type: 'SET_AKADEMIE_PRIORITAET', id: teilnehmer.id, prioritaet: e.target.value as Prioritaet })}
-            className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-medium"
-          >
-            {PRIORITAETEN.map((p) => <option key={p} value={p}>{p}</option>)}
-          </select>
+          <div className="flex items-center gap-2">
+            <select
+              value={teilnehmer.prioritaet}
+              onChange={(e) => dispatch({ type: 'SET_AKADEMIE_PRIORITAET', id: teilnehmer.id, prioritaet: e.target.value as Prioritaet })}
+              className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-medium"
+            >
+              {PRIORITAETEN.map((p) => <option key={p} value={p}>{p}</option>)}
+            </select>
+            <LoeschenKundeButton bereich="akademie" kundeId={teilnehmer.id} kundeName={teilnehmer.firma} listePfad="/akademie" />
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-6 border-t border-slate-100 pt-4">

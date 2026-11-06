@@ -15,6 +15,7 @@ import { SelbstauskunftSection } from '../../components/SelbstauskunftSection'
 import { NdaSection } from '../../components/NdaSection'
 import { DokumenteSection } from '../../components/DokumenteSection'
 import { KommunikationSection } from '../../components/KommunikationSection'
+import { LoeschenKundeButton } from '../../components/LoeschenKundeButton'
 import type { Prioritaet } from '../../types'
 
 export function FinanzierungenDetail() {
@@ -50,13 +51,16 @@ export function FinanzierungenDetail() {
             <h1 className="text-xl font-semibold text-slate-800">{mandant.firma}</h1>
             <p className="text-sm text-slate-500">{mandant.email} · {mandant.telefon}</p>
           </div>
-          <select
-            value={mandant.prioritaet}
-            onChange={(e) => dispatch({ type: 'SET_FINANZIERUNGEN_PRIORITAET', id: mandant.id, prioritaet: e.target.value as Prioritaet })}
-            className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-medium"
-          >
-            {PRIORITAETEN.map((p) => <option key={p} value={p}>{p}</option>)}
-          </select>
+          <div className="flex items-center gap-2">
+            <select
+              value={mandant.prioritaet}
+              onChange={(e) => dispatch({ type: 'SET_FINANZIERUNGEN_PRIORITAET', id: mandant.id, prioritaet: e.target.value as Prioritaet })}
+              className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-medium"
+            >
+              {PRIORITAETEN.map((p) => <option key={p} value={p}>{p}</option>)}
+            </select>
+            <LoeschenKundeButton bereich="finanzierungen" kundeId={mandant.id} kundeName={mandant.firma} listePfad="/finanzierungen" />
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-6 border-t border-slate-100 pt-4">
