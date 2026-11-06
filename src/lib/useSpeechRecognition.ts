@@ -77,5 +77,5 @@ export function useSpeechRecognition() {
     setRecording(false)
   }
 
-  return { supported, recording, transcript, interim, error, start, stop, setTranscript }
+  return { supported, recording, transcript, interim, error, start, stop, setTranscript, setInterim }
 }

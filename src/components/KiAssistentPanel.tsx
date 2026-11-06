@@ -43,7 +43,7 @@ type PflegeVorschlag = { beschreibung: string } & (
 export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: () => void }) {
   const { state, dispatch } = useApp()
   const { session, mitarbeiter } = useAuth()
-  const { supported, recording, transcript, interim, error: recError, start, stop, setTranscript } = useSpeechRecognition()
+  const { supported, recording, transcript, interim, error: recError, start, stop, setTranscript, setInterim } = useSpeechRecognition()
   // Im Demo-Modus (ohne Supabase) gibt es keine echten Mitarbeiter-Rollen — dort greift wie überall
   // sonst in der App state.rolle als Ersatz (siehe Layout.tsx resetData-Gate).
   const pflegeErlaubt = isSupabaseConfigured
@@ -291,6 +291,7 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
     const text = (interim ? `${transcript} ${interim}` : transcript).trim()
     if (!text && !pastedImage) return
     setTranscript('')
+    setInterim('')
     // Gesprochen rein -> gesprochen zurück, getippt rein -> nur Text zurück (siehe inputModus oben).
     const sprechen = inputModus === 'sprache' && ttsEnabled
 
