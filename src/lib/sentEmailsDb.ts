@@ -49,6 +49,18 @@ export async function fetchSentEmails(limit = 20): Promise<GesendeteEmail[]> {
   return (data ?? []).map(toMail)
 }
 
+// Postausgang-Verlauf für die Kommunikation-Ansicht einer Kundenakte.
+export async function fetchSentEmailsForKunde(kundeId: string): Promise<GesendeteEmail[]> {
+  if (!client) throw new Error('E-Mail-Datenbank ist noch nicht konfiguriert (VITE_SUPABASE_EMAIL_URL fehlt).')
+  const { data, error } = await client
+    .from('gesendete_emails')
+    .select('id, an, an_name, betreff, text, gesendet_am, kunde_bereich, kunde_id, kunde_name')
+    .eq('kunde_id', kundeId)
+    .order('gesendet_am', { ascending: false })
+  if (error) throw new Error(error.message)
+  return (data ?? []).map(toMail)
+}
+
 // Durchsucht Empfänger, Betreff und Text server-seitig, siehe searchStoredEmails in emailInboxDb.ts.
 export async function searchSentEmails(query: string, limit = 50): Promise<GesendeteEmail[]> {
   if (!client) throw new Error('E-Mail-Datenbank ist noch nicht konfiguriert (VITE_SUPABASE_EMAIL_URL fehlt).')

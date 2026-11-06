@@ -16,6 +16,7 @@ import { KaeuferprofilSection } from '../../components/KaeuferprofilSection'
 import { SelbstauskunftSection } from '../../components/SelbstauskunftSection'
 import { NdaSection } from '../../components/NdaSection'
 import { DokumenteSection } from '../../components/DokumenteSection'
+import { KommunikationSection } from '../../components/KommunikationSection'
 import type { Prioritaet } from '../../types'
 
 const TABS = [
@@ -27,6 +28,7 @@ const TABS = [
   { id: 'selbstauskunft', label: 'Selbstauskunft' },
   { id: 'nda', label: 'NDA' },
   { id: 'dokumente', label: 'Dokumente' },
+  { id: 'kommunikation', label: 'Kommunikation' },
 ]
 
 export function ErbenDetail() {
@@ -219,6 +221,8 @@ export function ErbenDetail() {
       {tab === 'nda' && <NdaSection bereich="erben" kundeId={mandant.id} />}
 
       {tab === 'dokumente' && <DokumenteSection bereich="erben" kundeId={mandant.id} />}
+
+      {tab === 'kommunikation' && <KommunikationSection kundeId={mandant.id} />}
 
       <Modal open={editFollowUp} onClose={() => setEditFollowUp(false)} title="Follow-up bearbeiten">
         <FollowUpForm

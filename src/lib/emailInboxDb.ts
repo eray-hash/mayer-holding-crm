@@ -89,6 +89,18 @@ export async function ignoreMail(messageId: string): Promise<void> {
   if (error) throw new Error(error.message)
 }
 
+// Posteingang-Verlauf für die Kommunikation-Ansicht einer Kundenakte.
+export async function fetchEmailsForKunde(kundeId: string): Promise<EingegangeneMail[]> {
+  if (!client) throw new Error('E-Mail-Datenbank ist noch nicht konfiguriert (VITE_SUPABASE_EMAIL_URL fehlt).')
+  const { data, error } = await client
+    .from('eingegangene_emails')
+    .select(SELECT_SPALTEN)
+    .eq('zugewiesener_kunde_id', kundeId)
+    .order('mail_datum', { ascending: false })
+  if (error) throw new Error(error.message)
+  return (data ?? []).map(toMail)
+}
+
 // Durchsucht Absender, Betreff und Textausschnitt server-seitig (nicht nur die bereits lokal
 // geladenen Mails) — damit auch ältere, noch nicht nachgeladene E-Mails über die Suche auffindbar sind.
 export async function searchStoredEmails(query: string, limit = 50): Promise<EingegangeneMail[]> {

@@ -14,6 +14,7 @@ import { KaeuferprofilSection } from '../../components/KaeuferprofilSection'
 import { SelbstauskunftSection } from '../../components/SelbstauskunftSection'
 import { NdaSection } from '../../components/NdaSection'
 import { DokumenteSection } from '../../components/DokumenteSection'
+import { KommunikationSection } from '../../components/KommunikationSection'
 import type { Prioritaet } from '../../types'
 
 export function BetriebsformenDetail() {
@@ -142,6 +143,11 @@ export function BetriebsformenDetail() {
         <Card className="p-5 lg:col-span-3">
           <h3 className="mb-3 text-sm font-semibold text-slate-700">Dokumente</h3>
           <DokumenteSection bereich="betriebsformen" kundeId={mandant.id} />
+        </Card>
+
+        <Card className="p-5 lg:col-span-3">
+          <h3 className="mb-3 text-sm font-semibold text-slate-700">Kommunikation</h3>
+          <KommunikationSection kundeId={mandant.id} />
         </Card>
       </div>
 

@@ -81,6 +81,46 @@ Ausschnitt: ${ausschnitt.slice(0, 300)}`,
   }
 }
 
+// Liest eine Telefonnummer aus dem E-Mail-Text (meist in der Signatur, typischerweise am Ende der
+// Mail) — dieselbe Haiku-Tool-Use-Technik wie klassifiziereRelevanz(). Nur für bereits bekannte
+// Kunden relevant: bei neuen Leads übernimmt classifyNewLeads() in email-gateway dieselbe Aufgabe.
+async function extrahiereTelefonnummer(text: string): Promise<string | null> {
+  const apiKey = Deno.env.get('ANTHROPIC_API_KEY')
+  if (!apiKey || !text.trim()) return null
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 128,
+        tools: [{
+          name: 'telefonnummer_extrahieren',
+          description: 'Extrahiert eine Telefonnummer (meist in der Signatur) aus einer E-Mail, falls vorhanden.',
+          input_schema: {
+            type: 'object',
+            properties: { telefonnummer: { type: 'string', description: 'Telefonnummer wie im Text geschrieben, oder leerer String falls keine gefunden wurde.' } },
+            required: ['telefonnummer'],
+          },
+        }],
+        tool_choice: { type: 'tool', name: 'telefonnummer_extrahieren' },
+        messages: [{
+          role: 'user',
+          content: `Suche in der folgenden E-Mail (meist in der Signatur am Ende) nach einer Telefonnummer der absendenden Person. Gib sie so zurück, wie sie geschrieben ist. Falls keine Telefonnummer enthalten ist, gib einen leeren String zurück.\n\n${text.slice(-2000)}`,
+        }],
+      }),
+    })
+    if (!res.ok) return null
+    const data = await res.json()
+    const toolUse = data.content?.find((c: { type: string }) => c.type === 'tool_use')
+    const nummer = (toolUse?.input?.telefonnummer ?? '').trim()
+    return nummer || null
+  } catch (err) {
+    console.error('Telefonnummer-Extraktion fehlgeschlagen', err)
+    return null
+  }
+}
+
 // Live-Gegenstück zu scripts/auto-assign-emails.mjs (dort nur als Einmal-Lauf für den historischen
 // Rückstand): ordnet eine neu eingehende Kunden-Mail automatisch zu, wenn genau ein Kunde/Mandant
 // (über alle Bereiche hinweg) exakt dieselbe E-Mail-Adresse hinterlegt hat — sonst (kein Treffer
@@ -92,12 +132,13 @@ async function versucheAutomatischeZuordnung(
   von: string,
   vonName: string,
   betreff: string,
+  text: string,
   anhaenge: { filename: string; size: number; contentType: string; url: string }[],
 ): Promise<{ kundeId: string; bereich: string; kundeName: string } | null> {
   try {
     const { data: treffer, error } = await supabase
       .from('kunden')
-      .select('id, bereich, firma, ansprechpartner, dokumente, activities')
+      .select('id, bereich, firma, ansprechpartner, telefon, dokumente, activities')
       .ilike('email', von.trim())
     if (error || !treffer || treffer.length !== 1) return null
 
@@ -112,19 +153,37 @@ async function versucheAutomatischeZuordnung(
       groesse: a.size < 1024 * 1024 ? `${Math.round(a.size / 1024)} KB` : `${(a.size / (1024 * 1024)).toFixed(1)} MB`,
       url: a.url,
     }))
-    const activity = {
-      id: crypto.randomUUID(),
-      date: heute,
-      text: hatAnhaenge
-        ? `E-Mail automatisch zugeordnet: „${betreff}" von ${vonName} (${anhaenge.length} Anhang/Anhänge in Dokumente abgelegt)`
-        : `E-Mail automatisch zugeordnet: „${betreff}" von ${vonName}`,
-      user: 'System (automatische E-Mail-Zuordnung)',
+    const neueActivities: Record<string, unknown>[] = [
+      {
+        id: crypto.randomUUID(),
+        date: heute,
+        text: hatAnhaenge
+          ? `E-Mail automatisch zugeordnet: „${betreff}" von ${vonName} (${anhaenge.length} Anhang/Anhänge in Dokumente abgelegt)`
+          : `E-Mail automatisch zugeordnet: „${betreff}" von ${vonName}`,
+        user: 'System (automatische E-Mail-Zuordnung)',
+      },
+    ]
+
+    // Stammdaten-Nachpflege: eine in der laufenden Korrespondenz erwähnte Telefonnummer wird direkt
+    // übernommen (Nutzer-Entscheidung 2026-11-06: Signatur-Angaben gelten als verlässlich genug, um
+    // ohne Rückfrage zu speichern), nicht nur beim allerersten Kontakt wie bei neuen Leads.
+    const neueTelefonnummer = await extrahiereTelefonnummer(text)
+    const telefonAktualisieren = !!neueTelefonnummer && neueTelefonnummer !== kunde.telefon
+    if (telefonAktualisieren) {
+      neueActivities.unshift({
+        id: crypto.randomUUID(),
+        date: heute,
+        text: `Telefonnummer automatisch aus E-Mail-Signatur übernommen: ${neueTelefonnummer}`,
+        user: 'System (automatische E-Mail-Zuordnung)',
+      })
     }
+
     const { error: updateError } = await supabase
       .from('kunden')
       .update({
+        ...(telefonAktualisieren ? { telefon: neueTelefonnummer } : {}),
         dokumente: [...neueDokumente, ...((kunde.dokumente as unknown[]) ?? [])],
-        activities: [activity, ...((kunde.activities as unknown[]) ?? [])],
+        activities: [...neueActivities, ...((kunde.activities as unknown[]) ?? [])],
       })
       .eq('id', kunde.id)
     if (updateError) {
@@ -242,7 +301,7 @@ Deno.serve(async (req: Request) => {
 
   const ausschnitt = text.slice(0, 500)
   const relevanz = await klassifiziereRelevanz(vonName, von, betreff, ausschnitt)
-  const zuordnung = relevanz === 'kunde' ? await versucheAutomatischeZuordnung(supabase, von, vonName, betreff, anhaenge) : null
+  const zuordnung = relevanz === 'kunde' ? await versucheAutomatischeZuordnung(supabase, von, vonName, betreff, text, anhaenge) : null
 
   const { error } = await supabase.from('eingegangene_emails').insert({
     message_id: messageId,

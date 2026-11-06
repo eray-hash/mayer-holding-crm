@@ -1,12 +1,15 @@
 // Edge Function "email-gateway" — Brücke zwischen dem CRM-Frontend und echten externen Diensten,
 // die einen Server-seitigen Schlüssel/Zugangsdaten brauchen. Aktionen über denselben Endpunkt:
 //   { action: "sync" }                          -> letzte E-Mails aus dem IONOS-Posteingang lesen
-//   { action: "send", to, subject, text, html, attachments? }
+//   { action: "send", to, subject, text, html, kundeBereich?, kundeId?, kundeName?, attachments? }
 //                                                -> E-Mail über dasselbe Postfach versenden.
 //                                                   attachments: [{ filename, contentBase64? oder
 //                                                   url?, contentType? }] — z.B. um ein signiertes
 //                                                   Dokument automatisiert an eine Behörde zu
-//                                                   schicken (siehe public_submit_formular-Folgen)
+//                                                   schicken (siehe public_submit_formular-Folgen).
+//                                                   Bei gesetzter kundeId prüft erkenneRechnungUndLegeAn
+//                                                   per KI, ob die Mail eine Rechnung ist, und legt sie
+//                                                   bei Treffer direkt in public.rechnungen ab
 //   { action: "summarize", transcript }          -> Gesprächstranskript per Claude strukturiert
 //                                                    zusammenfassen (Kernthemen/Vereinbarungen/
 //                                                    offene Punkte/Stimmung), für die
@@ -302,6 +305,57 @@ async function sendMail(to: string, subject: string, text: string, html?: string
         ? { filename: a.filename, content: a.contentBase64, encoding: 'base64', contentType: a.contentType }
         : { filename: a.filename, path: a.url, contentType: a.contentType },
     ),
+  })
+}
+
+type RechnungsErkennung = {
+  ist_rechnung: boolean
+  rechnungsnummer: string | null
+  betrag_netto: number | null
+  betrag_brutto: number | null
+  zahlungsziel: string | null
+}
+
+// Erkennt per KI, ob eine an einen Kunden gesendete Mail eine Rechnung ist, und legt sie direkt als
+// Rechnung im CRM ab (public.rechnungen) — bisher landeten per Mail gestellte Rechnungen nirgends im
+// CRM, nur die manuell über "Neue Rechnung" angelegten. Fehlt einer der beiden Beträge, wird er aus
+// dem jeweils anderen mit 19% USt. berechnet (gleiche Logik wie im "Neue Rechnung"-Formular).
+async function erkenneRechnungUndLegeAn(kundeId: string, betreff: string, text: string): Promise<void> {
+  const erkennung = await callClaudeTool<RechnungsErkennung>(
+    `Ist die folgende, soeben an einen Kunden versendete E-Mail eine Rechnung (kein Angebot, keine Mahnung, keine allgemeine Korrespondenz)? Falls ja, extrahiere Rechnungsnummer, Netto- und Bruttobetrag (als Zahl ohne Währungssymbol, Dezimaltrennzeichen Punkt) sowie Zahlungsziel (als Datum YYYY-MM-DD), jeweils falls im Text vorhanden, sonst null.\n\nBetreff: ${betreff}\n\n${text.slice(0, 3000)}`,
+    {
+      name: 'rechnung_erkennen',
+      description: 'Erkennt, ob eine E-Mail eine Rechnung ist, und extrahiert deren Eckdaten.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          ist_rechnung: { type: 'boolean' },
+          rechnungsnummer: { type: ['string', 'null'] },
+          betrag_netto: { type: ['number', 'null'] },
+          betrag_brutto: { type: ['number', 'null'] },
+          zahlungsziel: { type: ['string', 'null'] },
+        },
+        required: ['ist_rechnung', 'rechnungsnummer', 'betrag_netto', 'betrag_brutto', 'zahlungsziel'],
+      },
+    },
+    512,
+  )
+  if (!erkennung.ist_rechnung) return
+  const betragNetto = erkennung.betrag_netto ?? (erkennung.betrag_brutto ? erkennung.betrag_brutto / 1.19 : null)
+  const betragBrutto = erkennung.betrag_brutto ?? (erkennung.betrag_netto ? erkennung.betrag_netto * 1.19 : null)
+  if (betragNetto == null || betragBrutto == null) return // ohne jeden Betrag kein sinnvoller Rechnungs-Datensatz
+
+  const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+  const heute = new Date().toISOString().slice(0, 10)
+  await admin.from('rechnungen').insert({
+    id: crypto.randomUUID(),
+    nummer: erkennung.rechnungsnummer || `RE-${heute.slice(0, 4)}-${Math.floor(1000 + Math.random() * 8999)}`,
+    kunde_id: kundeId,
+    datum: heute,
+    betrag_netto: Math.round(betragNetto * 100) / 100,
+    betrag_brutto: Math.round(betragBrutto * 100) / 100,
+    status: 'Versendet',
+    zahlungsziel: erkennung.zahlungsziel || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
   })
 }
 
@@ -986,6 +1040,18 @@ Deno.serve(async (req: Request) => {
         })
       } catch (logErr) {
         console.error('Konnte gesendete Mail nicht protokollieren:', logErr)
+      }
+
+      // Erkennt automatisch, ob eine gesendete Mail an einen Kunden eine Rechnung ist, und legt sie
+      // direkt im CRM ab (Nutzer-Entscheidung 2026-11-06) — bisher wurden per Mail gestellte
+      // Rechnungen nirgends im CRM erfasst, nur die manuell über "Neue Rechnung" angelegten. Best
+      // effort: ein Fehler hier darf den bereits erfolgreich versendeten Mailversand nicht stören.
+      if (kundeId) {
+        try {
+          await erkenneRechnungUndLegeAn(kundeId, subject, text)
+        } catch (err) {
+          console.error('Rechnungs-Erkennung fehlgeschlagen:', err)
+        }
       }
 
       return new Response(JSON.stringify({ ok: true }), { headers })

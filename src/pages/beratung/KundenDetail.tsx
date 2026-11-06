@@ -14,6 +14,7 @@ import { KaeuferprofilSection } from '../../components/KaeuferprofilSection'
 import { SelbstauskunftSection } from '../../components/SelbstauskunftSection'
 import { NdaSection } from '../../components/NdaSection'
 import { DokumenteSection } from '../../components/DokumenteSection'
+import { KommunikationSection } from '../../components/KommunikationSection'
 import { SendEmailModal } from '../../components/SendEmailModal'
 import { FollowUpForm } from '../../components/FollowUpEditor'
 import type { Prioritaet } from '../../types'
@@ -27,6 +28,7 @@ const TABS = [
   { id: 'selbstauskunft', label: 'Selbstauskunft' },
   { id: 'nda', label: 'NDA' },
   { id: 'dokumente', label: 'Dokumente' },
+  { id: 'kommunikation', label: 'Kommunikation' },
   { id: 'konzepte', label: 'Konzeptvorstellungen' },
   { id: 'vertraege', label: 'Unterschriebene Beratungsverträge' },
 ]
@@ -224,6 +226,8 @@ export function KundenDetail() {
       {tab === 'nda' && <NdaSection bereich="beratung" kundeId={kunde.id} />}
 
       {tab === 'dokumente' && <DokumenteSection bereich="beratung" kundeId={kunde.id} />}
+
+      {tab === 'kommunikation' && <KommunikationSection kundeId={kunde.id} />}
 
       {tab === 'konzepte' && (
         <Card className="overflow-hidden">
