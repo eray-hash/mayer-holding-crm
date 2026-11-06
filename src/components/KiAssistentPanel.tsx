@@ -14,6 +14,7 @@ import {
   answerFirmenwissen,
 } from '../lib/emailGateway'
 import { buildFirmenwissenKontext } from '../lib/firmenwissenKontext'
+import { collectFollowUpPriorities } from '../lib/followUpPriorities'
 import { suggestKundeKandidaten, type KundeMatch } from '../lib/matchKunde'
 import { KUNDEN_BEREICHE, kundeBereichLabel } from '../data/kundenBereiche'
 import { getStatusMap } from '../data/statusNetworks'
@@ -49,6 +50,7 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
   const pflegeErlaubt = isSupabaseConfigured
     ? !!session && (mitarbeiter?.rolle === 'geschaeftsfuehrung' || !!mitarbeiter?.ist_admin)
     : state.rolle === 'geschaeftsfuehrung'
+  const followUps = collectFollowUpPriorities(state)
 
   const [messages, setMessages] = useState<ChatMessage[]>([
     { id: uid('msg'), role: 'assistant', text: 'Hallo! Sag oder tipp mir eine Notiz, eine Aufgabe oder stell mir eine Frage zu einem Kunden.' },
@@ -134,6 +136,29 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
     ].join('\n')
     try {
       const antwort = await answerAssistantQuestion(frageText, kontext)
+      addMessage('assistant', antwort, sprechen)
+    } catch (err) {
+      addMessage('assistant', `Antwort konnte nicht abgerufen werden: ${err instanceof Error ? err.message : 'Fehler'}`, sprechen)
+    }
+  }
+
+  // Allgemeine Frage ohne konkret erkannten Kunden (z.B. "was muss ich heute machen", "wie ist mein
+  // Stand") — beantwortet über denselben Firmenwissen-Kontext wie der explizite Firmenwissen-Modus,
+  // ergänzt um die eigenen fälligen Follow-ups, damit die Antwort sich wirklich auf "heute" bezieht.
+  async function beantworteUebersicht(text: string, sprechen: boolean) {
+    const heute = today()
+    const eigeneFaellige = followUps.filter((f) => f.verantwortlich === CURRENT_USER)
+    const faelligkeitenAbschnitt = [
+      `Heutiges Datum: ${heute}`,
+      '',
+      `Für ${CURRENT_USER} fällige/überfällige Follow-ups (unabhängig vom Bereich):`,
+      ...(eigeneFaellige.length > 0
+        ? eigeneFaellige.map((f) => `- ${f.name}, Bereich ${f.bereichLabel}: ${f.note} — fällig ${fmtDate(f.date)}`)
+        : ['(keine fälligen Follow-ups)']),
+    ].join('\n')
+    try {
+      const kontext = `${faelligkeitenAbschnitt}\n\n${buildFirmenwissenKontext(state)}`
+      const antwort = await answerFirmenwissen(text, kontext)
       addMessage('assistant', antwort, sprechen)
     } catch (err) {
       addMessage('assistant', `Antwort konnte nicht abgerufen werden: ${err instanceof Error ? err.message : 'Fehler'}`, sprechen)
@@ -385,10 +410,14 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
       if (klass.typ === 'frage') {
         const frageText = klass.frage ?? text
         if (!match) {
-          addMessage('assistant', 'Dazu habe ich keinen passenden Kunden gefunden — nenn mir bitte den Namen etwas genauer.', sprechen)
+          // Kein konkreter Kunde erkannt — trotzdem beantworten, auf Basis des gesamten
+          // Firmenwissens, statt stillschweigend abzubrechen (deckt bereichsübergreifende Fragen ab).
+          await beantworteUebersicht(frageText, sprechen)
         } else {
           await beantworteFrage(match, frageText, sprechen)
         }
+      } else if (klass.typ === 'uebersicht') {
+        await beantworteUebersicht(text, sprechen)
       } else if (klass.typ === 'aufnahme') {
         if (!match) {
           addMessage('assistant', 'Für welchen Kunden/Mandanten soll ich aufzeichnen? Nenn mir bitte den Namen.', sprechen)

@@ -123,6 +123,61 @@ async function telegramDateiHerunterladen(fileId: string): Promise<{ bytes: Uint
   return { bytes: new Uint8Array(await fileRes.arrayBuffer()), telegramPfad }
 }
 
+// ---------- Firmenwissen-Kontext (Server-Port von src/lib/firmenwissenKontext.ts) — damit über
+// Telegram wirklich JEDE Frage zu Kunden/Objekten/Prozessen beantwortbar ist, nicht nur zu einem per
+// Name erkannten einzelnen Kunden. Dieselbe Sicherheitslogik wie im Web: keine zusätzliche
+// Bereichs-Einschränkung, jeder aktive Mitarbeiter darf per RLS ohnehin alles lesen. ----------
+
+async function buildFirmenwissenKontextServer(supabase: ReturnType<typeof createClient>): Promise<string> {
+  const [{ data: kundenRows }, { data: objekteRows }] = await Promise.all([
+    supabase.from('kunden').select('bereich, firma, ansprechpartner, status, verantwortlich, letzte_aktivitaet, kaeuferprofil'),
+    supabase.from('objekte').select('bezeichnung, adresse, typ, status, verantwortlich, activities, dokumente, eigentuemer'),
+  ])
+
+  const abschnitte: string[] = []
+  abschnitte.push('=== KUNDEN / MANDANTEN (alle Bereiche) ===')
+  const nachBereich = new Map<string, any[]>()
+  for (const k of kundenRows ?? []) {
+    if (!nachBereich.has(k.bereich)) nachBereich.set(k.bereich, [])
+    nachBereich.get(k.bereich)!.push(k)
+  }
+  for (const [bereich, kunden] of nachBereich) {
+    abschnitte.push(`-- ${bereich} (${kunden.length}) --`)
+    for (const k of kunden) {
+      const teile = [
+        `${k.firma} (${k.ansprechpartner})`,
+        `Status: ${k.status}`,
+        `Verantwortlich: ${k.verantwortlich}`,
+        `Letzte Aktivität: ${k.letzte_aktivitaet}`,
+      ]
+      if (k.kaeuferprofil) {
+        const kp = k.kaeuferprofil
+        teile.push(`Suchprofil: ${(kp.objekttypen ?? []).join('/') || 'beliebig'}, Budget ${kp.budgetMin ?? '?'}–${kp.budgetMax ?? '?'} €, Lage „${kp.bevorzugteLage || 'offen'}"`)
+      }
+      abschnitte.push(`  - ${teile.join(' · ')}`)
+    }
+  }
+
+  abschnitte.push('\n=== IMMOBILIEN-OBJEKTE ===')
+  for (const o of objekteRows ?? []) {
+    const vorhandeneOrdner = Object.entries(o.dokumente ?? {})
+      .filter(([, liste]: [string, any]) => (liste?.length ?? 0) > 0)
+      .map(([name]) => name)
+    const teile = [
+      `${o.bezeichnung} (${o.adresse})`,
+      `Typ: ${o.typ}`,
+      `Status: ${o.status}`,
+      `Verantwortlich: ${o.verantwortlich}`,
+      `Letzte Aktivität: ${o.activities?.[0] ? o.activities[0].date : 'keine'}`,
+      `Vorhandene Unterlagen: ${vorhandeneOrdner.length > 0 ? vorhandeneOrdner.join(', ') : 'keine'}`,
+    ]
+    if (o.eigentuemer) teile.push(`Eigentümer: ${o.eigentuemer.name}${o.eigentuemer.ansprechpartner ? ` (Ansprechpartner: ${o.eigentuemer.ansprechpartner})` : ''}`)
+    abschnitte.push(`  - ${teile.join(' · ')}`)
+  }
+
+  return abschnitte.join('\n')
+}
+
 function formatGroesse(bytes: number): string {
   return bytes < 1024 * 1024 ? `${Math.round(bytes / 1024)} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
@@ -277,7 +332,16 @@ Deno.serve(async (req: Request) => {
   if (klass.typ === 'frage') {
     const frageText = klass.frage ?? text
     if (!match) {
-      await sendTelegramMessage(chatId, 'Dazu habe ich keinen passenden Kunden gefunden — nenn mir bitte den Namen etwas genauer.')
+      // Kein konkreter Kunde erkannt/gemeint — trotzdem beantworten, auf Basis des gesamten
+      // Firmenwissens (alle Kunden/Objekte), statt stillschweigend abzubrechen. Deckt z.B.
+      // bereichsübergreifende Fragen ab ("Welche Käufer suchen Objekte über 5 Mio?").
+      try {
+        const kontext = await buildFirmenwissenKontextServer(supabase)
+        const result = await callEmailGateway('firmenwissen_answer', { frage: frageText, kontext })
+        await sendTelegramMessage(chatId, result.antwort)
+      } catch {
+        await sendTelegramMessage(chatId, 'Antwort konnte nicht abgerufen werden.')
+      }
       return new Response('ok')
     }
     const { data: protokolleRows } = await supabase
@@ -308,6 +372,32 @@ Deno.serve(async (req: Request) => {
     ].join('\n')
     try {
       const result = await callEmailGateway('assistant_answer', { frage: frageText, kontext })
+      await sendTelegramMessage(chatId, result.antwort)
+    } catch {
+      await sendTelegramMessage(chatId, 'Antwort konnte nicht abgerufen werden.')
+    }
+    return new Response('ok')
+  }
+
+  if (klass.typ === 'uebersicht') {
+    const heute = new Date().toISOString().slice(0, 10)
+    const faelligeKunden = alleKunden
+      .filter((k) => k.follow_up && !(k.follow_up as any).done && (k.follow_up as any).date <= heute)
+      .sort((a, b) => ((a.follow_up as any).date as string).localeCompare((b.follow_up as any).date as string))
+    const faelligkeitenAbschnitt = [
+      `Heutiges Datum: ${heute}`,
+      '',
+      `Für ${mitarbeiter.name} fällige/überfällige Follow-ups (eigene Kunden/Mandanten, unabhängig vom Bereich):`,
+      ...(faelligeKunden.length > 0
+        ? faelligeKunden
+            .filter((k) => k.verantwortlich === mitarbeiter.name)
+            .map((k) => `- ${k.firma} (${k.ansprechpartner}), Bereich ${k.bereich}: ${(k.follow_up as any).note} — fällig ${(k.follow_up as any).date}`)
+        : ['(keine fälligen Follow-ups)']),
+    ].join('\n')
+    try {
+      const firmenwissen = await buildFirmenwissenKontextServer(supabase)
+      const kontext = `${faelligkeitenAbschnitt}\n\n${firmenwissen}`
+      const result = await callEmailGateway('firmenwissen_answer', { frage: text, kontext })
       await sendTelegramMessage(chatId, result.antwort)
     } catch {
       await sendTelegramMessage(chatId, 'Antwort konnte nicht abgerufen werden.')

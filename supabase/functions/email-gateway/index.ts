@@ -472,10 +472,11 @@ async function classifyAssistantInput(transcript: string, heute: string): Promis
   return callClaudeTool<AssistentKlassifikation>(
     `Du hilfst einem Mitarbeiter einer Unternehmensberatungs-/Immobilien-/Finanzierungsholding, ein kurzes gesprochenes oder getipptes Diktat einzuordnen. Heutiges Datum: ${heute}.
 
-Klassifiziere den folgenden Text als genau einen von vier Typen:
+Klassifiziere den folgenden Text als genau einen von fünf Typen:
 - "aufnahme": eine Bitte, ein gerade stattfindendes oder jetzt beginnendes Gespräch/Telefonat/Meeting mit einem Kunden aufzuzeichnen, z. B. "ich habe jetzt ein Gespräch mit X, nimm es auf" oder "zeichne das Meeting mit Y auf".
 - "aufgabe": eine konkrete Handlungsaufforderung an sich selbst, z. B. "Kunde X anrufen", "bei Y Unterlagen anfordern", "Z noch erledigen".
-- "frage": eine Frage zu einem bestehenden Kunden/Mandanten, z. B. "was wurde beim letzten Termin mit X besprochen", "wie ist der Stand bei Y".
+- "frage": eine Frage zu einem bestehenden, namentlich genannten Kunden/Mandanten, z. B. "was wurde beim letzten Termin mit X besprochen", "wie ist der Stand bei Y".
+- "uebersicht": eine allgemeine Frage nach dem eigenen Tagesgeschäft/Status OHNE Bezug auf einen bestimmten, namentlich genannten Kunden, z. B. "was muss ich heute machen", "was steht an", "wie ist mein Stand", "habe ich noch offene Aufgaben".
 - "notiz": alles andere, ein allgemeiner Gedanke oder eine Beobachtung ohne konkrete Handlung oder Frage.
 
 Extrahiere zusätzlich, falls vorhanden:
@@ -492,7 +493,7 @@ Text:
       input_schema: {
         type: 'object',
         properties: {
-          typ: { type: 'string', enum: ['notiz', 'aufgabe', 'frage', 'aufnahme'] },
+          typ: { type: 'string', enum: ['notiz', 'aufgabe', 'frage', 'aufnahme', 'uebersicht'] },
           erkannter_name: { type: 'string' },
           titel: { type: 'string' },
           faelligkeitsdatum: { type: 'string' },
