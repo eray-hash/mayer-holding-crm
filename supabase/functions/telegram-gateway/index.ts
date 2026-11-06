@@ -306,18 +306,26 @@ Deno.serve(async (req: Request) => {
   // Folgenachricht "Renate Mayer" landete dann fälschlich als sinnlose Notiz in ihrer Akte).
   let klass: { typ: string; erkannter_name?: string; titel?: string; faelligkeitsdatum?: string; frage?: string } | null = null
   let match: KundeRow | null = null
-  const pending = mitarbeiter.telegram_pending as { text: string; klass: typeof klass; kandidaten_ids: string[]; erstellt_am: string } | null
+  const pending = mitarbeiter.telegram_pending as
+    | { text: string; klass: any; kandidaten_ids: string[]; erstellt_am: string; aktion_feld?: 'bereich' | 'firma' }
+    | null
   if (pending && Date.now() - new Date(pending.erstellt_am).getTime() < 10 * 60 * 1000) {
-    const textWoerter = new Set(woerter(text))
-    const treffer = alleKunden.filter(
-      (k) => pending.kandidaten_ids.includes(k.id) && [...woerter(k.firma), ...woerter(k.ansprechpartner)].some((w) => textWoerter.has(w)),
-    )
-    if (treffer.length === 1) {
-      match = treffer[0]
-      klass = pending.klass
-      await supabase.from('mitarbeiter').update({ telegram_pending: null }).eq('id', mitarbeiter.id)
+    await supabase.from('mitarbeiter').update({ telegram_pending: null }).eq('id', mitarbeiter.id)
+    if (pending.aktion_feld === 'bereich') {
+      const BEREICHE = ['beratung', 'erben', 'betriebsuebergabe', 'betriebsformen', 'akademie', 'finanzierungen']
+      const genannt = BEREICHE.find((b) => text.toLowerCase().includes(b))
+      klass = genannt ? { ...pending.klass, aktion_bereich: genannt } : pending.klass
+    } else if (pending.aktion_feld === 'firma') {
+      klass = { ...pending.klass, aktion_firma: text.trim() }
     } else {
-      await supabase.from('mitarbeiter').update({ telegram_pending: null }).eq('id', mitarbeiter.id)
+      const textWoerter = new Set(woerter(text))
+      const treffer = alleKunden.filter(
+        (k) => pending.kandidaten_ids.includes(k.id) && [...woerter(k.firma), ...woerter(k.ansprechpartner)].some((w) => textWoerter.has(w)),
+      )
+      if (treffer.length === 1) {
+        match = treffer[0]
+        klass = pending.klass
+      }
     }
   }
 
@@ -427,6 +435,50 @@ Deno.serve(async (req: Request) => {
       await sendTelegramMessage(chatId, result.antwort)
     } catch {
       await sendTelegramMessage(chatId, 'Antwort konnte nicht abgerufen werden.')
+    }
+    return new Response('ok')
+  }
+
+  if (klass.typ === 'aktion_lead_anlegen') {
+    const BEREICHE = ['beratung', 'erben', 'betriebsuebergabe', 'betriebsformen', 'akademie', 'finanzierungen']
+    const bereich = (klass as any).aktion_bereich as string | undefined
+    const firma = ((klass as any).aktion_firma as string | undefined) ?? klass.erkannter_name
+    if (!bereich || !BEREICHE.includes(bereich)) {
+      await supabase
+        .from('mitarbeiter')
+        .update({ telegram_pending: { text, klass, kandidaten_ids: [], erstellt_am: new Date().toISOString(), aktion_feld: 'bereich' } })
+        .eq('id', mitarbeiter.id)
+      await sendTelegramMessage(chatId, `In welchem Bereich soll der Lead angelegt werden? (${BEREICHE.join(', ')})`)
+      return new Response('ok')
+    }
+    if (!firma) {
+      await supabase
+        .from('mitarbeiter')
+        .update({ telegram_pending: { text, klass: { ...klass, aktion_bereich: bereich }, kandidaten_ids: [], erstellt_am: new Date().toISOString(), aktion_feld: 'firma' } })
+        .eq('id', mitarbeiter.id)
+      await sendTelegramMessage(chatId, 'Wie soll der Lead/die Firma heißen?')
+      return new Response('ok')
+    }
+    const heute = new Date().toISOString().slice(0, 10)
+    const inZweiTagen = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    const { error: insertError } = await supabase.from('kunden').insert({
+      id: crypto.randomUUID(),
+      bereich,
+      firma,
+      ansprechpartner: firma,
+      email: '',
+      telefon: '',
+      prioritaet: 'Mittel',
+      status: 'lead',
+      follow_up: { date: inZweiTagen, note: 'Erstkontakt aufnehmen', done: false },
+      verantwortlich: mitarbeiter.name,
+      letzte_aktivitaet: heute,
+      activities: [{ id: crypto.randomUUID(), date: heute, text: `Per Telegram von ${mitarbeiter.name} angelegt.`, user: mitarbeiter.name }],
+    })
+    if (insertError) {
+      await sendTelegramMessage(chatId, `Anlegen fehlgeschlagen: ${insertError.message}`)
+    } else {
+      await sendTelegramMessage(chatId, `Erledigt — "${firma}" als neuer Lead bei ${bereich} angelegt, dir zugeordnet.`)
     }
     return new Response('ok')
   }

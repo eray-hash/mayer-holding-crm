@@ -472,11 +472,12 @@ async function classifyAssistantInput(transcript: string, heute: string): Promis
   return callClaudeTool<AssistentKlassifikation>(
     `Du hilfst einem Mitarbeiter einer Unternehmensberatungs-/Immobilien-/Finanzierungsholding, ein kurzes gesprochenes oder getipptes Diktat einzuordnen. Heutiges Datum: ${heute}.
 
-Klassifiziere den folgenden Text als genau einen von fünf Typen:
+Klassifiziere den folgenden Text als genau einen von sechs Typen:
 - "aufnahme": eine Bitte, ein gerade stattfindendes oder jetzt beginnendes Gespräch/Telefonat/Meeting mit einem Kunden aufzuzeichnen, z. B. "ich habe jetzt ein Gespräch mit X, nimm es auf" oder "zeichne das Meeting mit Y auf".
 - "aufgabe": eine konkrete Handlungsaufforderung an sich selbst, z. B. "Kunde X anrufen", "bei Y Unterlagen anfordern", "Z noch erledigen".
 - "frage": eine Frage zu einem bestehenden, namentlich genannten Kunden/Mandanten, z. B. "was wurde beim letzten Termin mit X besprochen", "wie ist der Stand bei Y".
 - "uebersicht": eine allgemeine Frage nach dem eigenen Tagesgeschäft/Status OHNE Bezug auf einen bestimmten, namentlich genannten Kunden, z. B. "was muss ich heute machen", "was steht an", "wie ist mein Stand", "habe ich noch offene Aufgaben".
+- "aktion_lead_anlegen": eine Bitte, einen NEUEN Lead/Kunden/Mandanten im CRM anzulegen, z. B. "leg einen Lead an bei Erben", "neuen Testkunden bei Beratung anlegen für Firma X".
 - "notiz": alles andere, ein allgemeiner Gedanke oder eine Beobachtung ohne konkrete Handlung oder Frage.
 
 Extrahiere zusätzlich, falls vorhanden:
@@ -484,20 +485,24 @@ Extrahiere zusätzlich, falls vorhanden:
 - titel: bei "aufgabe" oder "notiz" ein kurzer, prägnanter Titel (max. ca. 80 Zeichen) für die Aufgabe/Notiz.
 - faelligkeitsdatum: falls ein relatives oder konkretes Datum erwähnt wird (z. B. "nächste Woche", "morgen", "Freitag"), berechne daraus das konkrete Datum im Format YYYY-MM-DD ausgehend vom heutigen Datum. Sonst weglassen.
 - frage: bei "frage" die Frage selbst, neutral und vollständig formuliert.
+- aktion_bereich: bei "aktion_lead_anlegen", falls erkennbar, einer von: beratung, erben, betriebsuebergabe, betriebsformen, akademie, finanzierungen (sonst weglassen).
+- aktion_firma: bei "aktion_lead_anlegen", falls ein Firmen-/Kundenname genannt wird (sonst weglassen).
 
 Text:
 """${transcript}"""`,
     {
       name: 'ki_assistent_klassifikation',
-      description: 'Klassifiziert ein Diktat als Notiz, Aufgabe oder Frage und extrahiert relevante Felder.',
+      description: 'Klassifiziert ein Diktat als Notiz, Aufgabe, Frage, Übersicht oder Aktion und extrahiert relevante Felder.',
       input_schema: {
         type: 'object',
         properties: {
-          typ: { type: 'string', enum: ['notiz', 'aufgabe', 'frage', 'aufnahme', 'uebersicht'] },
+          typ: { type: 'string', enum: ['notiz', 'aufgabe', 'frage', 'aufnahme', 'uebersicht', 'aktion_lead_anlegen'] },
           erkannter_name: { type: 'string' },
           titel: { type: 'string' },
           faelligkeitsdatum: { type: 'string' },
           frage: { type: 'string' },
+          aktion_bereich: { type: 'string', enum: ['beratung', 'erben', 'betriebsuebergabe', 'betriebsformen', 'akademie', 'finanzierungen'] },
+          aktion_firma: { type: 'string' },
         },
         required: ['typ'],
       },
