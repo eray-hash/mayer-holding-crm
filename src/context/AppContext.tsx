@@ -21,6 +21,7 @@ import type {
   MailVorlage,
   Notiz,
   Abwesenheit,
+  ToDoEintrag,
   MitarbeiterProfil,
   KundeBereich,
   ActivityEntry,
@@ -95,6 +96,7 @@ export type AppData = {
   mailVorlagen: MailVorlage[]
   notizen: Notiz[]
   abwesenheiten: Abwesenheit[]
+  todos: ToDoEintrag[]
   profil: MitarbeiterProfil
   fragenkataloge: FragenkatalogFrage[]
 }
@@ -154,6 +156,7 @@ function leereGeteilteEntities(data: AppData): AppData {
     mailVorlagen: [],
     notizen: [],
     abwesenheiten: [],
+    todos: [],
   }
 }
 
@@ -190,6 +193,7 @@ function buildSeed(): AppData {
     mailVorlagen: seedMailVorlagen,
     notizen: [],
     abwesenheiten: [],
+    todos: [],
     profil: {
       name: CURRENT_USER,
       telefon: '',
@@ -236,6 +240,7 @@ function loadInitial(): AppData {
         if (!Array.isArray(parsed.mailVorlagen)) parsed.mailVorlagen = seedMailVorlagen
         if (!Array.isArray(parsed.notizen)) parsed.notizen = []
         if (!Array.isArray(parsed.abwesenheiten)) parsed.abwesenheiten = []
+        if (!Array.isArray(parsed.todos)) parsed.todos = []
         if (!parsed.profil) {
           parsed.profil = {
             name: CURRENT_USER,
@@ -334,6 +339,9 @@ type Action =
   | { type: 'DELETE_NOTIZ'; id: string }
   | { type: 'ADD_ABWESENHEIT'; abwesenheit: Abwesenheit }
   | { type: 'DELETE_ABWESENHEIT'; id: string }
+  | { type: 'ADD_TODO'; todo: ToDoEintrag }
+  | { type: 'UPDATE_TODO'; id: string; patch: Partial<ToDoEintrag> }
+  | { type: 'DELETE_TODO'; id: string }
   | { type: 'UPDATE_PROFIL'; patch: Partial<MitarbeiterProfil> }
 
 // Hängt eine Aktivität an den Kunden/Mandanten im richtigen Bereichs-Array — zentrale Stelle, da
@@ -1002,6 +1010,7 @@ function reducer(state: AppData, action: Action): AppData {
         mailVorlagen: action.data.mailVorlagen,
         notizen: action.data.notizen,
         abwesenheiten: action.data.abwesenheiten,
+        todos: action.data.todos,
       }
     case 'ADD_FRAGE':
       return { ...state, fragenkataloge: [...state.fragenkataloge, action.frage] }
@@ -1028,6 +1037,12 @@ function reducer(state: AppData, action: Action): AppData {
       return { ...state, abwesenheiten: [action.abwesenheit, ...state.abwesenheiten] }
     case 'DELETE_ABWESENHEIT':
       return { ...state, abwesenheiten: state.abwesenheiten.filter((a) => a.id !== action.id) }
+    case 'ADD_TODO':
+      return { ...state, todos: [action.todo, ...state.todos] }
+    case 'UPDATE_TODO':
+      return { ...state, todos: state.todos.map((t) => (t.id === action.id ? { ...t, ...action.patch } : t)) }
+    case 'DELETE_TODO':
+      return { ...state, todos: state.todos.filter((t) => t.id !== action.id) }
     case 'UPDATE_PROFIL':
       return { ...state, profil: { ...state.profil, ...action.patch } }
     default:

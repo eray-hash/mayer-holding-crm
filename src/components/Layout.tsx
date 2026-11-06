@@ -23,6 +23,7 @@ import {
   ChevronDown,
   Phone,
   Lock,
+  ListTodo,
 } from 'lucide-react'
 import type { Bereich } from '../types'
 import { useApp } from '../context/AppContext'
@@ -157,6 +158,13 @@ export function Layout({ children }: { children: ReactNode }) {
             title="Postfach (info@amayer-holding.com)"
           >
             <Inbox size={16} />
+          </button>
+          <button
+            onClick={() => navigate('/todo')}
+            className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
+            title="To-Do-Liste"
+          >
+            <ListTodo size={16} />
           </button>
           <button
             onClick={() => setDokumentImportOpen(true)}

@@ -35,6 +35,7 @@ import { FinanzierungenDetail } from './pages/finanzierungen/FinanzierungenDetai
 import { VorlagenPageFinanzierungen } from './pages/finanzierungen/VorlagenPageFinanzierungen'
 import { PrivatListe } from './pages/privat/PrivatListe'
 import { PrivatDetail } from './pages/privat/PrivatDetail'
+import { ToDoListe } from './pages/todo/ToDoListe'
 import { HeuteScreen } from './pages/heute/HeuteScreen'
 import { Postfach } from './pages/postfach/Postfach'
 import { Kampagnen } from './pages/kampagnen/Kampagnen'
@@ -77,6 +78,7 @@ function AdminRoutesContent() {
             Sichtbarkeit wird stattdessen über RLS in Supabase erzwungen (siehe crmSync.ts). */}
         <Route path="/privat" element={<PrivatListe />} />
         <Route path="/privat/kontakte/:id" element={<PrivatDetail />} />
+        <Route path="/todo" element={<ToDoListe />} />
 
         <Route path="/beratung" element={<RequireBereich bereich="beratung"><KundenListe /></RequireBereich>} />
         <Route path="/beratung/kunden/:id" element={<RequireBereich bereich="beratung"><KundenDetail /></RequireBereich>} />

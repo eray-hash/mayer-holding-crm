@@ -37,6 +37,7 @@ import type {
   MailVorlage,
   Notiz,
   Abwesenheit,
+  ToDoEintrag,
 } from '../types'
 import type { Projekt } from '../types/project'
 
@@ -459,6 +460,50 @@ function rowToAbwesenheit(row: any): Abwesenheit {
   return { id: row.id, mitarbeiterName: row.mitarbeiter_name, von: row.von, bis: row.bis }
 }
 
+function todoToRow(t: ToDoEintrag) {
+  return {
+    id: t.id,
+    start_datum: t.startDatum ?? null,
+    prio: t.prio ?? null,
+    unter_prio: t.unterPrio ?? null,
+    kunde_projekt: t.kundeProjekt ?? null,
+    aufgabe: t.aufgabe,
+    abteilung: t.abteilung ?? null,
+    aktueller_stand: t.aktuellerStand ?? null,
+    welche_fragen: t.welcheFragen ?? null,
+    naechste_schritte: t.naechsteSchritte ?? null,
+    zustaendig: t.zustaendig ?? null,
+    geplante_zeit: t.geplanteZeit ?? null,
+    ist_zeit: t.istZeit ?? null,
+    umsatz_wert: t.umsatzWert ?? null,
+    geplante_wiedervorlage: t.geplanteWiedervorlage ?? null,
+    erledigt_am: t.erledigtAm ?? null,
+    erstellt_am: t.erstelltAm,
+  }
+}
+
+function rowToTodo(row: any): ToDoEintrag {
+  return {
+    id: row.id,
+    startDatum: row.start_datum ?? undefined,
+    prio: row.prio ?? undefined,
+    unterPrio: row.unter_prio ?? undefined,
+    kundeProjekt: row.kunde_projekt ?? undefined,
+    aufgabe: row.aufgabe,
+    abteilung: row.abteilung ?? undefined,
+    aktuellerStand: row.aktueller_stand ?? undefined,
+    welcheFragen: row.welche_fragen ?? undefined,
+    naechsteSchritte: row.naechste_schritte ?? undefined,
+    zustaendig: row.zustaendig ?? undefined,
+    geplanteZeit: row.geplante_zeit ?? undefined,
+    istZeit: row.ist_zeit ?? undefined,
+    umsatzWert: row.umsatz_wert ?? undefined,
+    geplanteWiedervorlage: row.geplante_wiedervorlage ?? undefined,
+    erledigtAm: row.erledigt_am ?? undefined,
+    erstelltAm: row.erstellt_am,
+  }
+}
+
 function logFehler(kontext: string, error: { message: string } | null) {
   if (error) console.error(`Supabase-Sync fehlgeschlagen (${kontext}):`, error.message)
 }
@@ -487,6 +532,7 @@ const SIMPLE_SYNCS: { table: string; key: keyof AppData; label: (item: any) => s
   { table: 'mail_vorlagen', key: 'mailVorlagen', label: (m: MailVorlage) => `Mail-Vorlage ${m.name}`, toRow: mailVorlageToRow },
   { table: 'notizen', key: 'notizen', label: () => 'Notiz', toRow: notizToRow },
   { table: 'abwesenheiten', key: 'abwesenheiten', label: (a: Abwesenheit) => `Abwesenheit ${a.mitarbeiterName}`, toRow: abwesenheitToRow },
+  { table: 'todos', key: 'todos', label: (t: ToDoEintrag) => `Aufgabe ${t.aufgabe}`, toRow: todoToRow },
 ]
 
 function syncSimpleCollection(client: NonNullable<typeof supabase>, prev: AppData, next: AppData, cfg: (typeof SIMPLE_SYNCS)[number]) {
@@ -577,6 +623,7 @@ export type HydratedData = {
   mailVorlagen: MailVorlage[]
   notizen: Notiz[]
   abwesenheiten: Abwesenheit[]
+  todos: ToDoEintrag[]
 }
 
 // Lädt den aktuellen, geteilten Stand beim Start (und kann für ein manuelles "Aktualisieren" erneut
@@ -601,6 +648,7 @@ export async function hydrateFromSupabase(): Promise<HydratedData | null> {
     mailVorlagenRes,
     notizenRes,
     abwesenheitenRes,
+    todosRes,
     mitarbeiterRes,
   ] = await Promise.all([
     supabase.from('kunden').select('*'),
@@ -619,6 +667,7 @@ export async function hydrateFromSupabase(): Promise<HydratedData | null> {
     supabase.from('mail_vorlagen').select('*'),
     supabase.from('notizen').select('*'),
     supabase.from('abwesenheiten').select('*'),
+    supabase.from('todos').select('*'),
     supabase.from('mitarbeiter').select('name').eq('aktiv', true).order('name'),
   ])
   for (const res of [
@@ -638,6 +687,7 @@ export async function hydrateFromSupabase(): Promise<HydratedData | null> {
     mailVorlagenRes,
     notizenRes,
     abwesenheitenRes,
+    todosRes,
   ]) {
     if (res.error) throw new Error(res.error.message)
   }
@@ -694,6 +744,7 @@ export async function hydrateFromSupabase(): Promise<HydratedData | null> {
     mailVorlagen: (mailVorlagenRes.data ?? []).map(rowToMailVorlage),
     notizen: (notizenRes.data ?? []).map(rowToNotiz),
     abwesenheiten: (abwesenheitenRes.data ?? []).map(rowToAbwesenheit),
+    todos: (todosRes.data ?? []).map(rowToTodo),
   }
 }
 

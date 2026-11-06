@@ -355,6 +355,30 @@ export type Notiz = {
   erledigt: boolean
 }
 
+// 1:1 nachgebaut aus Erays privater "ToDo Liste"-Excel (Reiter "to Do" / "erledigte Aufgaben",
+// Stand 6.11.2026) — bewusst freie Textfelder statt strenger Formate (z.B. startDatum, geplanteZeit),
+// weil die echten Einträge selbst uneinheitlich sind ("18.08", "24.08 26", "180 std" statt Minuten).
+// Prio ist ebenfalls freier Text, nicht streng A/B/C (in der Vorlage kommt z.B. auch "E" vor).
+export type ToDoEintrag = {
+  id: string
+  startDatum?: string
+  prio?: string
+  unterPrio?: number
+  kundeProjekt?: string
+  aufgabe: string
+  abteilung?: string
+  aktuellerStand?: string
+  welcheFragen?: string
+  naechsteSchritte?: string
+  zustaendig?: string
+  geplanteZeit?: string
+  istZeit?: number
+  umsatzWert?: number
+  geplanteWiedervorlage?: string
+  erledigtAm?: string
+  erstelltAm: string
+}
+
 // Vertretungs-Logik (Quirin Lutzenberger): "offener Pool" ohne feste Vertreter-Zuordnung — während
 // des Zeitraums von–bis werden die offenen Follow-ups/Aufgaben des Mitarbeiters für Geschäftsführung/
 // Admin zusätzlich sichtbar gemacht (siehe HeuteScreen.tsx), ohne das verantwortlich/zustaendig-Feld
