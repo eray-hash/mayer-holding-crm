@@ -38,6 +38,7 @@ import type {
   Notiz,
   Abwesenheit,
   ToDoEintrag,
+  ToDoFreigabe,
 } from '../types'
 import type { Projekt } from '../types/project'
 
@@ -463,6 +464,8 @@ function rowToAbwesenheit(row: any): Abwesenheit {
 function todoToRow(t: ToDoEintrag) {
   return {
     id: t.id,
+    besitzer_email: t.besitzerEmail,
+    reihenfolge: t.reihenfolge ?? null,
     start_datum: t.startDatum ?? null,
     prio: t.prio ?? null,
     unter_prio: t.unterPrio ?? null,
@@ -485,6 +488,8 @@ function todoToRow(t: ToDoEintrag) {
 function rowToTodo(row: any): ToDoEintrag {
   return {
     id: row.id,
+    besitzerEmail: row.besitzer_email,
+    reihenfolge: row.reihenfolge ?? undefined,
     startDatum: row.start_datum ?? undefined,
     prio: row.prio ?? undefined,
     unterPrio: row.unter_prio ?? undefined,
@@ -500,6 +505,26 @@ function rowToTodo(row: any): ToDoEintrag {
     umsatzWert: row.umsatz_wert ?? undefined,
     geplanteWiedervorlage: row.geplante_wiedervorlage ?? undefined,
     erledigtAm: row.erledigt_am ?? undefined,
+    erstelltAm: row.erstellt_am,
+  }
+}
+
+function todoFreigabeToRow(f: ToDoFreigabe) {
+  return {
+    id: f.id,
+    besitzer_email: f.besitzerEmail,
+    empfaenger_email: f.empfaengerEmail,
+    recht: f.recht,
+    erstellt_am: f.erstelltAm,
+  }
+}
+
+function rowToTodoFreigabe(row: any): ToDoFreigabe {
+  return {
+    id: row.id,
+    besitzerEmail: row.besitzer_email,
+    empfaengerEmail: row.empfaenger_email,
+    recht: row.recht,
     erstelltAm: row.erstellt_am,
   }
 }
@@ -533,6 +558,7 @@ const SIMPLE_SYNCS: { table: string; key: keyof AppData; label: (item: any) => s
   { table: 'notizen', key: 'notizen', label: () => 'Notiz', toRow: notizToRow },
   { table: 'abwesenheiten', key: 'abwesenheiten', label: (a: Abwesenheit) => `Abwesenheit ${a.mitarbeiterName}`, toRow: abwesenheitToRow },
   { table: 'todos', key: 'todos', label: (t: ToDoEintrag) => `Aufgabe ${t.aufgabe}`, toRow: todoToRow },
+  { table: 'todo_freigaben', key: 'todoFreigaben', label: (f: ToDoFreigabe) => `To-Do-Freigabe an ${f.empfaengerEmail}`, toRow: todoFreigabeToRow },
 ]
 
 function syncSimpleCollection(client: NonNullable<typeof supabase>, prev: AppData, next: AppData, cfg: (typeof SIMPLE_SYNCS)[number]) {
@@ -624,6 +650,7 @@ export type HydratedData = {
   notizen: Notiz[]
   abwesenheiten: Abwesenheit[]
   todos: ToDoEintrag[]
+  todoFreigaben: ToDoFreigabe[]
 }
 
 // Lädt den aktuellen, geteilten Stand beim Start (und kann für ein manuelles "Aktualisieren" erneut
@@ -649,6 +676,7 @@ export async function hydrateFromSupabase(): Promise<HydratedData | null> {
     notizenRes,
     abwesenheitenRes,
     todosRes,
+    todoFreigabenRes,
     mitarbeiterRes,
   ] = await Promise.all([
     supabase.from('kunden').select('*'),
@@ -668,6 +696,7 @@ export async function hydrateFromSupabase(): Promise<HydratedData | null> {
     supabase.from('notizen').select('*'),
     supabase.from('abwesenheiten').select('*'),
     supabase.from('todos').select('*'),
+    supabase.from('todo_freigaben').select('*'),
     supabase.from('mitarbeiter').select('name').eq('aktiv', true).order('name'),
   ])
   for (const res of [
@@ -688,6 +717,7 @@ export async function hydrateFromSupabase(): Promise<HydratedData | null> {
     notizenRes,
     abwesenheitenRes,
     todosRes,
+    todoFreigabenRes,
   ]) {
     if (res.error) throw new Error(res.error.message)
   }
@@ -745,6 +775,7 @@ export async function hydrateFromSupabase(): Promise<HydratedData | null> {
     notizen: (notizenRes.data ?? []).map(rowToNotiz),
     abwesenheiten: (abwesenheitenRes.data ?? []).map(rowToAbwesenheit),
     todos: (todosRes.data ?? []).map(rowToTodo),
+    todoFreigaben: (todoFreigabenRes.data ?? []).map(rowToTodoFreigabe),
   }
 }
 

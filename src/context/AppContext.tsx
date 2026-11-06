@@ -22,6 +22,7 @@ import type {
   Notiz,
   Abwesenheit,
   ToDoEintrag,
+  ToDoFreigabe,
   MitarbeiterProfil,
   KundeBereich,
   ActivityEntry,
@@ -97,6 +98,7 @@ export type AppData = {
   notizen: Notiz[]
   abwesenheiten: Abwesenheit[]
   todos: ToDoEintrag[]
+  todoFreigaben: ToDoFreigabe[]
   profil: MitarbeiterProfil
   fragenkataloge: FragenkatalogFrage[]
 }
@@ -157,6 +159,7 @@ function leereGeteilteEntities(data: AppData): AppData {
     notizen: [],
     abwesenheiten: [],
     todos: [],
+    todoFreigaben: [],
   }
 }
 
@@ -194,6 +197,7 @@ function buildSeed(): AppData {
     notizen: [],
     abwesenheiten: [],
     todos: [],
+    todoFreigaben: [],
     profil: {
       name: CURRENT_USER,
       telefon: '',
@@ -241,6 +245,7 @@ function loadInitial(): AppData {
         if (!Array.isArray(parsed.notizen)) parsed.notizen = []
         if (!Array.isArray(parsed.abwesenheiten)) parsed.abwesenheiten = []
         if (!Array.isArray(parsed.todos)) parsed.todos = []
+        if (!Array.isArray(parsed.todoFreigaben)) parsed.todoFreigaben = []
         if (!parsed.profil) {
           parsed.profil = {
             name: CURRENT_USER,
@@ -342,6 +347,8 @@ type Action =
   | { type: 'ADD_TODO'; todo: ToDoEintrag }
   | { type: 'UPDATE_TODO'; id: string; patch: Partial<ToDoEintrag> }
   | { type: 'DELETE_TODO'; id: string }
+  | { type: 'SET_TODO_FREIGABE'; besitzerEmail: string; empfaengerEmail: string; recht: 'lesen' | 'schreiben' }
+  | { type: 'DELETE_TODO_FREIGABE'; id: string }
   | { type: 'UPDATE_PROFIL'; patch: Partial<MitarbeiterProfil> }
 
 // Hängt eine Aktivität an den Kunden/Mandanten im richtigen Bereichs-Array — zentrale Stelle, da
@@ -1011,6 +1018,7 @@ function reducer(state: AppData, action: Action): AppData {
         notizen: action.data.notizen,
         abwesenheiten: action.data.abwesenheiten,
         todos: action.data.todos,
+        todoFreigaben: action.data.todoFreigaben,
       }
     case 'ADD_FRAGE':
       return { ...state, fragenkataloge: [...state.fragenkataloge, action.frage] }
@@ -1043,6 +1051,27 @@ function reducer(state: AppData, action: Action): AppData {
       return { ...state, todos: state.todos.map((t) => (t.id === action.id ? { ...t, ...action.patch } : t)) }
     case 'DELETE_TODO':
       return { ...state, todos: state.todos.filter((t) => t.id !== action.id) }
+    case 'SET_TODO_FREIGABE': {
+      const bestehende = state.todoFreigaben.find(
+        (f) => f.besitzerEmail === action.besitzerEmail && f.empfaengerEmail === action.empfaengerEmail,
+      )
+      if (bestehende) {
+        return {
+          ...state,
+          todoFreigaben: state.todoFreigaben.map((f) => (f.id === bestehende.id ? { ...f, recht: action.recht } : f)),
+        }
+      }
+      const neu: ToDoFreigabe = {
+        id: uid('freigabe'),
+        besitzerEmail: action.besitzerEmail,
+        empfaengerEmail: action.empfaengerEmail,
+        recht: action.recht,
+        erstelltAm: today(),
+      }
+      return { ...state, todoFreigaben: [neu, ...state.todoFreigaben] }
+    }
+    case 'DELETE_TODO_FREIGABE':
+      return { ...state, todoFreigaben: state.todoFreigaben.filter((f) => f.id !== action.id) }
     case 'UPDATE_PROFIL':
       return { ...state, profil: { ...state.profil, ...action.patch } }
     default:

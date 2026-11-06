@@ -1,5 +1,5 @@
 import { Link, useLocation } from 'react-router-dom'
-import { Users, ChevronLeft, ChevronRight, Lock, Sun, UserCog } from 'lucide-react'
+import { Users, ChevronLeft, ChevronRight, Lock, Sun, UserCog, ListTodo } from 'lucide-react'
 
 export function SidebarPrivat({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
   const location = useLocation()
@@ -9,7 +9,14 @@ export function SidebarPrivat({ collapsed, onToggle }: { collapsed: boolean; onT
     <nav className="flex h-full flex-col justify-between py-4">
       <div className="space-y-1 px-2">
         <SideLink to="/heute" icon={<Sun size={17} />} label="Heute" collapsed={collapsed} active={isActive('/heute')} />
-        <SideLink to="/privat" icon={<Users size={17} />} label="Meine Kontakte" collapsed={collapsed} active={isActive('/privat')} />
+        <SideLink
+          to="/privat"
+          icon={<Users size={17} />}
+          label="Meine Kontakte"
+          collapsed={collapsed}
+          active={isActive('/privat') && !isActive('/privat/todo')}
+        />
+        <SideLink to="/privat/todo" icon={<ListTodo size={17} />} label="To-Do-Liste" collapsed={collapsed} active={isActive('/privat/todo')} />
       </div>
 
       <div className="px-2">

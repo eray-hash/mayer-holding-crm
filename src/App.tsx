@@ -78,7 +78,7 @@ function AdminRoutesContent() {
             Sichtbarkeit wird stattdessen über RLS in Supabase erzwungen (siehe crmSync.ts). */}
         <Route path="/privat" element={<PrivatListe />} />
         <Route path="/privat/kontakte/:id" element={<PrivatDetail />} />
-        <Route path="/todo" element={<ToDoListe />} />
+        <Route path="/privat/todo" element={<ToDoListe />} />
 
         <Route path="/beratung" element={<RequireBereich bereich="beratung"><KundenListe /></RequireBereich>} />
         <Route path="/beratung/kunden/:id" element={<RequireBereich bereich="beratung"><KundenDetail /></RequireBereich>} />

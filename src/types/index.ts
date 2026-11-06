@@ -361,6 +361,8 @@ export type Notiz = {
 // Prio ist ebenfalls freier Text, nicht streng A/B/C (in der Vorlage kommt z.B. auch "E" vor).
 export type ToDoEintrag = {
   id: string
+  besitzerEmail: string
+  reihenfolge?: number
   startDatum?: string
   prio?: string
   unterPrio?: number
@@ -376,6 +378,17 @@ export type ToDoEintrag = {
   umsatzWert?: number
   geplanteWiedervorlage?: string
   erledigtAm?: string
+  erstelltAm: string
+}
+
+// Freigabe der eigenen To-Do-Liste an einen Kollegen (Nutzer-Entscheidung 2026-11-06: jeder hat
+// seine eigene Liste, kann sie aber gezielt mit Lese- oder Schreibrecht teilen — Löschen bleibt
+// immer dem Besitzer vorbehalten, unabhängig vom Recht).
+export type ToDoFreigabe = {
+  id: string
+  besitzerEmail: string
+  empfaengerEmail: string
+  recht: 'lesen' | 'schreiben'
   erstelltAm: string
 }
 
