@@ -23,6 +23,7 @@ import {
   ChevronDown,
   Phone,
   Lock,
+  Search,
 } from 'lucide-react'
 import type { Bereich } from '../types'
 import { useApp } from '../context/AppContext'
@@ -30,10 +31,13 @@ import { useAuth } from '../context/AuthContext'
 import { isSupabaseConfigured } from '../lib/supabaseClient'
 import { collectPriorityEntries } from '../lib/todayPriorities'
 import { collectFollowUpPriorities, followUpDetailPfad } from '../lib/followUpPriorities'
+import { collectFehlendeStammdaten } from '../lib/stammdatenWarnungen'
+import { kundeDetailPfad } from '../data/kundenBereiche'
 import { isLeadsDbConfigured, fetchOffeneLeads } from '../lib/leadsDb'
 import { DokumentenImportModal } from './DokumentenImportModal'
 import { KiAssistentPanel } from './KiAssistentPanel'
 import { GespraechAufzeichnenGlobal } from './GespraechAufzeichnenGlobal'
+import { GlobaleSuche } from './GlobaleSuche'
 import { SidebarBeratung } from './SidebarBeratung'
 import { SidebarImmobilien } from './SidebarImmobilien'
 import { SidebarErben } from './SidebarErben'
@@ -68,6 +72,7 @@ export function Layout({ children }: { children: ReactNode }) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [dokumentImportOpen, setDokumentImportOpen] = useState(false)
   const [gespraechAufzeichnenOpen, setGespraechAufzeichnenOpen] = useState(false)
+  const [sucheOpen, setSucheOpen] = useState(false)
   const [kiAssistentOpen, setKiAssistentOpen] = useState(false)
   const [profilMenuOpen, setProfilMenuOpen] = useState(false)
   const [benachrichtigungenOpen, setBenachrichtigungenOpen] = useState(false)
@@ -85,6 +90,7 @@ export function Layout({ children }: { children: ReactNode }) {
       : BEREICHE
   const { prioritaeten } = collectPriorityEntries(state.projekte)
   const followUps = collectFollowUpPriorities(state)
+  const fehlendeStammdaten = collectFehlendeStammdaten(state)
 
   useEffect(() => {
     if (!isLeadsDbConfigured) return
@@ -93,12 +99,29 @@ export function Layout({ children }: { children: ReactNode }) {
       .catch(() => {})
   }, [])
 
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setSucheOpen(true)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
+
   const benachrichtigungen = [
     ...(neueLeadsCount > 0
       ? [{ key: 'neue-leads', titel: `${neueLeadsCount} neue Lead-Vorschläge`, subtitel: 'Aus der E-Mail-Analyse — im Postfach prüfen', onClick: () => navigate('/postfach') }]
       : []),
     ...followUps.map((f) => ({ key: `fu-${f.bereich}-${f.id}`, titel: f.note || 'Follow-up', subtitel: f.name, onClick: () => navigate(followUpDetailPfad(f)) })),
     ...prioritaeten.map((p) => ({ key: `pr-${p.aufgabe.id}`, titel: p.aufgabe.titel, subtitel: p.projektName, onClick: () => navigate('/heute') })),
+    ...fehlendeStammdaten.map((s) => ({
+      key: `sd-${s.bereich}-${s.kundeId}`,
+      titel: `Fehlende Stammdaten: ${s.kundeName}`,
+      subtitel: `${s.bereichLabel} — ${s.fehlendeFelder.join(', ')} fehlt`,
+      onClick: () => navigate(kundeDetailPfad(s.bereich, s.kundeId)),
+    })),
   ]
 
   function chooseBereich(b: Bereich) {
@@ -136,6 +159,13 @@ export function Layout({ children }: { children: ReactNode }) {
           </span>
         </div>
         <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => setSucheOpen(true)}
+            className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
+            title="Suche (Kunde, Mandant, Immobilie) — ⌘K"
+          >
+            <Search size={16} />
+          </button>
           <button
             onClick={() => setKiAssistentOpen((o) => !o)}
             className="flex items-center gap-1.5 rounded-lg border border-accent-200 bg-accent-50 px-2.5 py-1.5 text-xs font-medium text-accent-700 hover:bg-accent-100"
@@ -348,6 +378,7 @@ export function Layout({ children }: { children: ReactNode }) {
 
       <DokumentenImportModal open={dokumentImportOpen} onClose={() => setDokumentImportOpen(false)} />
       <GespraechAufzeichnenGlobal open={gespraechAufzeichnenOpen} onClose={() => setGespraechAufzeichnenOpen(false)} />
+      <GlobaleSuche open={sucheOpen} onClose={() => setSucheOpen(false)} />
       <KiAssistentPanel open={kiAssistentOpen} onToggle={() => setKiAssistentOpen((o) => !o)} />
     </div>
   )

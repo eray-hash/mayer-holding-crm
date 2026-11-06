@@ -303,6 +303,9 @@ export type Objekt = {
   // Vom Eigentümer selbst über das öffentliche Formular (/formular/eigentuemer/:objektId)
   // bestätigt/gepflegt — siehe PublicEigentuemerPortal.tsx.
   eigentuemer?: ObjektEigentuemer
+  // Automatisch per KI erstelltes 1-Seiten-Exposé (Whitelabel) direkt bei Objektanlage, siehe
+  // ObjektListe.tsx. undefined solange die Generierung noch läuft oder fehlgeschlagen ist.
+  exposeText?: string
 }
 
 export type ObjektEigentuemer = {

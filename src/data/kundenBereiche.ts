@@ -17,3 +17,17 @@ export const KUNDEN_BEREICHE: { id: KundeBereich; label: string; get: (state: Ap
 export function kundeBereichLabel(bereich: KundeBereich): string {
   return KUNDEN_BEREICHE.find((b) => b.id === bereich)?.label ?? bereich
 }
+
+// Zentrale Bereich+id → Detailseiten-URL-Zuordnung, von mehreren Stellen genutzt (globale Suche,
+// Stammdaten-Warnungen), damit die Routen-Struktur nur an einer Stelle gepflegt werden muss.
+export function kundeDetailPfad(bereich: KundeBereich, id: string): string {
+  switch (bereich) {
+    case 'beratung': return `/beratung/kunden/${id}`
+    case 'erben': return `/erben/mandanten/${id}`
+    case 'betriebsuebergabe': return `/betriebsuebergabe/mandanten/${id}`
+    case 'betriebsformen': return `/betriebsformen/mandanten/${id}`
+    case 'akademie': return `/akademie/teilnehmer/${id}`
+    case 'finanzierungen': return `/finanzierungen/mandanten/${id}`
+    case 'privat': return `/privat/kontakte/${id}`
+  }
+}

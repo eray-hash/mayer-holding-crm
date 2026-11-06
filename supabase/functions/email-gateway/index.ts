@@ -614,6 +614,31 @@ Frage: ${frage}`,
   return { antwort: result.antwort.replace(/<\/?[a-zA-Z_][^>]*>/g, '').trim() }
 }
 
+// Automatisches 1-Seiten-Exposé (Whitelabel) direkt bei Anlage einer neuen Immobilie — matcht die
+// in Erays privater ToDo-Liste notierte Anforderung ("ein 1 Seiten Expose soll es automatisch
+// erstellt als Whitelabel"). Nur die vier bei Objektanlage bekannten Stammdaten als Grundlage, kein
+// Erfinden von Details, die nicht gegeben sind.
+async function generiereExpose(bezeichnung: string, adresse: string, typ: string, kaufpreis: number): Promise<{ expose_text: string }> {
+  return callClaudeTool<{ expose_text: string }>(
+    `Erstelle einen professionellen, werblichen aber sachlichen Exposé-Text (ca. 150-250 Wörter, Fließtext auf Deutsch, Whitelabel ohne Firmennamen) für folgende Immobilie. Erfinde keine Ausstattungsmerkmale, Baujahr, Wohnfläche o.Ä., die nicht gegeben sind — bleibe bei den gegebenen Eckdaten und allgemein gehaltenen, aber ansprechenden Formulierungen.
+
+Bezeichnung: ${bezeichnung}
+Adresse: ${adresse}
+Objekttyp: ${typ}
+Kaufpreis: ${kaufpreis} €`,
+    {
+      name: 'expose_text',
+      description: 'Erstellt den Fließtext für ein Immobilien-Exposé.',
+      input_schema: {
+        type: 'object',
+        properties: { expose_text: { type: 'string' } },
+        required: ['expose_text'],
+      },
+    },
+    800,
+  )
+}
+
 type PotenzialChance = {
   bereich: string
   titel: string
@@ -1089,6 +1114,15 @@ Deno.serve(async (req: Request) => {
       }
       const { antwort } = await answerAssistantQuestion(frage, kontext ?? '')
       return new Response(JSON.stringify({ antwort }), { headers })
+    }
+
+    if (body.action === 'generiere_expose') {
+      const { bezeichnung, adresse, typ, kaufpreis } = body
+      if (!bezeichnung || typeof bezeichnung !== 'string') {
+        return new Response(JSON.stringify({ error: 'bezeichnung ist ein Pflichtfeld' }), { status: 400, headers })
+      }
+      const { expose_text } = await generiereExpose(bezeichnung, adresse ?? '', typ ?? '', Number(kaufpreis) || 0)
+      return new Response(JSON.stringify({ exposeText: expose_text }), { headers })
     }
 
     if (body.action === 'firmenwissen_answer') {

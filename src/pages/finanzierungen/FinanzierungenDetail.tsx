@@ -12,6 +12,7 @@ import { GespraechsprotokolleSection } from '../../components/Gespraechsprotokol
 import { PotenzialAnalyseSection } from '../../components/PotenzialAnalyseSection'
 import { KaeuferprofilSection } from '../../components/KaeuferprofilSection'
 import { UnternehmensbewertungSection } from '../../components/UnternehmensbewertungSection'
+import { StammdatenWarnungBanner } from '../../components/StammdatenWarnungBanner'
 import { SelbstauskunftSection } from '../../components/SelbstauskunftSection'
 import { NdaSection } from '../../components/NdaSection'
 import { DokumenteSection } from '../../components/DokumenteSection'
@@ -47,6 +48,7 @@ export function FinanzierungenDetail() {
       </button>
 
       <Card className="mb-5 p-5">
+        <StammdatenWarnungBanner kunde={mandant} />
         <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
           <div>
             <h1 className="text-xl font-semibold text-slate-800">{mandant.firma}</h1>

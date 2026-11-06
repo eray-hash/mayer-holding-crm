@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, Folder, FolderOpen, File, Upload, Plus, Radar, ExternalLink, Users, Sparkles, CheckCircle2, XCircle } from 'lucide-react'
 import { useApp, type AppData } from '../../context/AppContext'
@@ -12,7 +12,8 @@ import { DOKUMENT_ORDNER } from '../../types'
 import type { DokumentOrdnerName, Prioritaet, FinanzierungStatus, KundeBereich, Dokument } from '../../types'
 import { pruefeUnterlagenVollstaendigkeit } from '../../data/objektUnterlagenPflicht'
 import { ladeObjektDokumentHoch, erzeugeDownloadUrl, leseAlsBase64 } from '../../lib/objektDokumenteStorage'
-import { classifyObjektDokument } from '../../lib/emailGateway'
+import { classifyObjektDokument, generateExpose, isEmailGatewayConfigured } from '../../lib/emailGateway'
+import type { Objekt } from '../../types'
 
 const TABS = [
   { id: 'uebersicht', label: 'Übersicht' },
@@ -246,6 +247,8 @@ export function ObjektDetail() {
               {objekt.activities.length === 0 && <EmptyState text="Keine Aktivitäten." />}
             </ul>
           </Card>
+
+          <ExposeSection objekt={objekt} />
         </div>
       )}
 
@@ -623,6 +626,58 @@ export function finStatusColor(status: FinanzierungStatus): string {
     Ausgezahlt: 'bg-sky-100 text-sky-700',
   }
   return colors[status]
+}
+
+// Automatisch bei Objektanlage per KI erstelltes 1-Seiten-Exposé (siehe ObjektListe.tsx) — hier
+// einsehbar/editierbar und bei Bedarf neu generierbar (Punkt 12 der Bugfix-Liste).
+function ExposeSection({ objekt }: { objekt: Objekt }) {
+  const { dispatch } = useApp()
+  const [entwurf, setEntwurf] = useState(objekt.exposeText ?? '')
+  const [generiert, setGeneriert] = useState(false)
+
+  // Übernimmt den Text neu, sobald die automatische Generierung (siehe ObjektListe.tsx) im
+  // Hintergrund fertig wird und objekt.exposeText von außen gesetzt wird.
+  useEffect(() => {
+    setEntwurf(objekt.exposeText ?? '')
+  }, [objekt.exposeText])
+
+  async function neuGenerieren() {
+    setGeneriert(true)
+    try {
+      const text = await generateExpose(objekt.bezeichnung, objekt.adresse, objekt.typ, objekt.kaufpreis)
+      dispatch({ type: 'UPDATE_OBJEKT', id: objekt.id, patch: { exposeText: text } })
+      setEntwurf(text)
+    } finally {
+      setGeneriert(false)
+    }
+  }
+
+  function speichern() {
+    dispatch({ type: 'UPDATE_OBJEKT', id: objekt.id, patch: { exposeText: entwurf } })
+  }
+
+  return (
+    <Card className="p-5 lg:col-span-3">
+      <div className="mb-3 flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-slate-700">Exposé (automatisch erstellt, Whitelabel)</h3>
+        {isEmailGatewayConfigured && (
+          <SecondaryButton onClick={neuGenerieren} disabled={generiert}>
+            <Sparkles size={13} className={generiert ? 'animate-pulse' : ''} /> {generiert ? 'Erstellt …' : 'Neu generieren'}
+          </SecondaryButton>
+        )}
+      </div>
+      {objekt.exposeText === undefined && !generiert ? (
+        <p className="text-sm text-slate-400">Wird automatisch erstellt …</p>
+      ) : (
+        <textarea className={inputClass} rows={6} value={entwurf} onChange={(e) => setEntwurf(e.target.value)} />
+      )}
+      {entwurf !== (objekt.exposeText ?? '') && (
+        <div className="mt-2 flex justify-end">
+          <PrimaryButton onClick={speichern}>Speichern</PrimaryButton>
+        </div>
+      )}
+    </Card>
+  )
 }
 
 function Row({ label, value }: { label: string; value: string }) {

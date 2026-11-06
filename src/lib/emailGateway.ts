@@ -133,6 +133,11 @@ export type PotenzialChance = {
 // Firmen-Wissens-KI (bereichsübergreifende Fragen, siehe firmenwissenKontext.ts für den Aufbau des
 // mitgeschickten kontext) — anders als answerAssistantQuestion (ein Kunde) deckt kontext hier
 // potenziell alle Kunden/Objekte/Prozesse ab.
+export async function generateExpose(bezeichnung: string, adresse: string, typ: string, kaufpreis: number): Promise<string> {
+  const data = await call({ action: 'generiere_expose', bezeichnung, adresse, typ, kaufpreis })
+  return data.exposeText
+}
+
 export async function answerFirmenwissen(frage: string, kontext: string): Promise<string> {
   const data = await call({ action: 'firmenwissen_answer', frage, kontext })
   return data.antwort

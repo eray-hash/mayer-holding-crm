@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Plus, List, LayoutGrid, ArrowRight, Radar } from 'lucide-react'
 import { useApp, useAdvanceStatus } from '../../context/AppContext'
 import { IMMOBILIEN_STATUS } from '../../data/statusNetworks'
-import { holeImmoRadarTopListings, type ImmoRadarTreffer } from '../../lib/emailGateway'
+import { holeImmoRadarTopListings, generateExpose, isEmailGatewayConfigured, type ImmoRadarTreffer } from '../../lib/emailGateway'
 import {
   PRIORITAET_ORDER,
   MITARBEITER,
@@ -27,6 +27,17 @@ export function ObjektListe() {
   const [view, setView] = useState<'liste' | 'board'>('liste')
   const [addOpen, setAddOpen] = useState(false)
   const [immoRadarOpen, setImmoRadarOpen] = useState(false)
+
+  // Bei jedem neuen Objekt automatisch ein 1-Seiten-Exposé erstellen (Whitelabel) — Punkt 12 der
+  // Bugfix-Liste. Läuft bewusst asynchron nach dem Anlegen, damit das Anlegen selbst nicht auf die
+  // KI-Antwort warten muss; das Exposé füllt sich in der Objektakte nach, sobald es fertig ist.
+  function erstelleObjektMitExpose(o: Objekt) {
+    dispatch({ type: 'ADD_OBJEKT', objekt: o })
+    if (!isEmailGatewayConfigured) return
+    generateExpose(o.bezeichnung, o.adresse, o.typ, o.kaufpreis)
+      .then((exposeText) => dispatch({ type: 'UPDATE_OBJEKT', id: o.id, patch: { exposeText } }))
+      .catch((err) => console.error('Exposé-Generierung fehlgeschlagen', err))
+  }
 
   const gruppe = params.get('gruppe') ?? ''
   const [fStatus, setFStatus] = useState('')
@@ -164,13 +175,13 @@ export function ObjektListe() {
       )}
 
       {addOpen && (
-        <NeuesObjektModal open={addOpen} onClose={() => setAddOpen(false)} onCreate={(o) => dispatch({ type: 'ADD_OBJEKT', objekt: o })} />
+        <NeuesObjektModal open={addOpen} onClose={() => setAddOpen(false)} onCreate={erstelleObjektMitExpose} />
       )}
       {immoRadarOpen && (
         <ImmoRadarUebernehmenModal
           open={immoRadarOpen}
           onClose={() => setImmoRadarOpen(false)}
-          onCreate={(o) => dispatch({ type: 'ADD_OBJEKT', objekt: o })}
+          onCreate={erstelleObjektMitExpose}
         />
       )}
     </div>
