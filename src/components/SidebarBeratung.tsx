@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { Users, FileText, AlertTriangle, Receipt, Euro, ChevronDown, ChevronLeft, ChevronRight, ScrollText, Sun, LayoutGrid, UserCog, ListTodo } from 'lucide-react'
+import { Users, FileText, AlertTriangle, Receipt, Euro, ChevronDown, ChevronLeft, ChevronRight, ScrollText, Sun, LayoutGrid, UserCog, ListTodo, Wallet } from 'lucide-react'
 
 const VORLAGEN_LINKS = [
   { kind: 'vollmacht', label: 'Vollmacht' },
@@ -19,7 +19,7 @@ export function SidebarBeratung({ collapsed, onToggle }: { collapsed: boolean; o
       <div className="space-y-1 px-2">
         <SideLink to="/heute" icon={<Sun size={17} />} label="Heute" collapsed={collapsed} active={isActive('/heute')} />
         <SideLink to="/beratung/projekte" icon={<LayoutGrid size={17} />} label="Projekte" collapsed={collapsed} active={isActive('/beratung/projekte')} />
-        <SideLink to="/beratung" icon={<Users size={17} />} label="Kunden" collapsed={collapsed} active={isActive('/beratung') && !location.pathname.includes('mahnwesen') && !location.pathname.includes('rechnungen') && !location.pathname.includes('vorlagen') && !location.pathname.includes('projekte') && !location.pathname.includes('todo')} />
+        <SideLink to="/beratung" icon={<Users size={17} />} label="Kunden" collapsed={collapsed} active={isActive('/beratung') && !location.pathname.includes('mahnwesen') && !location.pathname.includes('rechnungen') && !location.pathname.includes('verbindlichkeiten') && !location.pathname.includes('vorlagen') && !location.pathname.includes('projekte') && !location.pathname.includes('todo')} />
         <SideLink to="/beratung/todo" icon={<ListTodo size={17} />} label="To-Do-Liste" collapsed={collapsed} active={isActive('/beratung/todo')} />
 
         <div>
@@ -54,6 +54,7 @@ export function SidebarBeratung({ collapsed, onToggle }: { collapsed: boolean; o
 
         <SideLink to="/beratung/mahnwesen" icon={<AlertTriangle size={17} />} label="Mahnwesen" collapsed={collapsed} active={isActive('/beratung/mahnwesen')} />
         <SideLink to="/beratung/rechnungen" icon={<Receipt size={17} />} label="Rechnungen" collapsed={collapsed} active={isActive('/beratung/rechnungen')} />
+        <SideLink to="/beratung/verbindlichkeiten" icon={<Wallet size={17} />} label="Verbindlichkeiten" collapsed={collapsed} active={isActive('/beratung/verbindlichkeiten')} />
         <SideLink to="/beratung/leistungen" icon={<Euro size={17} />} label="Leistungen & Preise" collapsed={collapsed} active={isActive('/beratung/leistungen')} />
       </div>
 

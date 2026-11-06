@@ -197,6 +197,74 @@ async function versucheAutomatischeZuordnung(
   }
 }
 
+// Erkennt eingehende Lieferanten-/Kostenrechnungen (Geld, das Mayer Holding selbst schuldet) und
+// legt sie als "Verbindlichkeit" an — unabhängig von klassifiziereRelevanz oben, die solche Mails
+// bewusst als "nicht_relevant" einstuft (und damit im Posteingang ausblendet/beim Aufräumen
+// gelöscht werden könnten, siehe scripts/cleanup-inbox.mjs). Ohne PDF-Text-Extraktion kann nur
+// erkannt/extrahiert werden, was im Mailtext selbst steht (Betreff/Anschreiben) — bei reinen
+// PDF-Anhängen ohne Angaben im Text bleiben Felder leer und müssen manuell nachgetragen werden
+// (2026-11-06, bekannte Grenze, kein stilles Falsch-Erkennen).
+async function erkenneEingehendeVerbindlichkeit(
+  vonName: string,
+  von: string,
+  betreff: string,
+  text: string,
+  anhaenge: { filename: string }[],
+): Promise<{ istRechnung: boolean; rechnungsnummer?: string; betragNetto?: number; betragBrutto?: number; zahlungsziel?: string } | null> {
+  const apiKey = Deno.env.get('ANTHROPIC_API_KEY')
+  if (!apiKey) return null
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 400,
+        tools: [{
+          name: 'erkenne_rechnung',
+          description: 'Erkennt, ob eine eingehende E-Mail eine Rechnung ist, die der Empfänger (Mayer Holding) selbst bezahlen muss, und extrahiert vorhandene Angaben.',
+          input_schema: {
+            type: 'object',
+            properties: {
+              ist_rechnung: { type: 'boolean', description: 'true nur, wenn dies eine Rechnung/Kostennote an Mayer Holding ist (Lieferant/Dienstleister verlangt Zahlung)' },
+              rechnungsnummer: { type: 'string', description: 'Falls im Text genannt, sonst weglassen' },
+              betrag_netto: { type: 'number', description: 'Nettobetrag in Euro, falls im Text genannt, sonst weglassen' },
+              betrag_brutto: { type: 'number', description: 'Bruttobetrag/Gesamtbetrag in Euro, falls im Text genannt, sonst weglassen' },
+              zahlungsziel: { type: 'string', description: 'Fälligkeitsdatum im Format YYYY-MM-DD, falls im Text genannt, sonst weglassen' },
+            },
+            required: ['ist_rechnung'],
+          },
+        }],
+        tool_choice: { type: 'tool', name: 'erkenne_rechnung' },
+        messages: [{
+          role: 'user',
+          content: `Prüfe, ob diese eingehende E-Mail an info@amayer-holding.com (Mayer Holding, Unternehmensberatung) eine Rechnung ist, die Mayer Holding selbst an einen Lieferanten/Dienstleister bezahlen muss — NICHT eine Rechnung, die Mayer Holding an einen eigenen Kunden stellt. Typische Beispiele: Hosting-/Software-Rechnungen, Bürobedarf, Energieversorger, Handwerker, Freelancer-Honorare. Extrahiere nur Angaben, die wirklich im Text stehen — nichts raten oder schätzen.
+
+Von: ${vonName} <${von}>
+Betreff: ${betreff}
+Anhänge: ${anhaenge.map((a) => a.filename).join(', ') || 'keine'}
+Text: ${text.slice(0, 1500)}`,
+        }],
+      }),
+    })
+    if (!res.ok) return null
+    const data = await res.json()
+    const toolUse = data.content?.find((c: { type: string }) => c.type === 'tool_use')
+    const input = toolUse?.input
+    if (!input?.ist_rechnung) return { istRechnung: false }
+    return {
+      istRechnung: true,
+      rechnungsnummer: input.rechnungsnummer || undefined,
+      betragNetto: typeof input.betrag_netto === 'number' ? input.betrag_netto : undefined,
+      betragBrutto: typeof input.betrag_brutto === 'number' ? input.betrag_brutto : undefined,
+      zahlungsziel: input.zahlungsziel || undefined,
+    }
+  } catch (err) {
+    console.error('Verbindlichkeits-Erkennung fehlgeschlagen', err)
+    return null
+  }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method !== 'POST') {
     return new Response('Method not allowed', { status: 405 })
@@ -302,6 +370,26 @@ Deno.serve(async (req: Request) => {
   const ausschnitt = text.slice(0, 500)
   const relevanz = await klassifiziereRelevanz(vonName, von, betreff, ausschnitt)
   const zuordnung = relevanz === 'kunde' ? await versucheAutomatischeZuordnung(supabase, von, vonName, betreff, text, anhaenge) : null
+
+  // Läuft bewusst unabhängig von relevanz oben — eine Lieferantenrechnung ist für den Posteingang
+  // "nicht_relevant", für die Buchhaltung aber hochrelevant.
+  const verbindlichkeit = await erkenneEingehendeVerbindlichkeit(vonName, von, betreff, text, anhaenge)
+  if (verbindlichkeit?.istRechnung) {
+    const { error: verbError } = await supabase.from('verbindlichkeiten').insert({
+      id: crypto.randomUUID(),
+      lieferant: vonName,
+      lieferant_email: von,
+      rechnungsnummer: verbindlichkeit.rechnungsnummer ?? null,
+      datum: new Date().toISOString().slice(0, 10),
+      betrag_netto: verbindlichkeit.betragNetto ?? null,
+      betrag_brutto: verbindlichkeit.betragBrutto ?? null,
+      zahlungsziel: verbindlichkeit.zahlungsziel ?? null,
+      status: 'offen',
+      quelle: 'email-automatisch',
+      quell_email_id: messageId,
+    })
+    if (verbError) console.error('Verbindlichkeit anlegen fehlgeschlagen', verbError)
+  }
 
   const { error } = await supabase.from('eingegangene_emails').insert({
     message_id: messageId,

@@ -11,6 +11,7 @@ import { FormularLinkButtons } from '../../components/FormularLink'
 import { GespraechsprotokolleSection } from '../../components/GespraechsprotokolleSection'
 import { PotenzialAnalyseSection } from '../../components/PotenzialAnalyseSection'
 import { KaeuferprofilSection } from '../../components/KaeuferprofilSection'
+import { UnternehmensbewertungSection } from '../../components/UnternehmensbewertungSection'
 import { SelbstauskunftSection } from '../../components/SelbstauskunftSection'
 import { NdaSection } from '../../components/NdaSection'
 import { DokumenteSection } from '../../components/DokumenteSection'
@@ -26,6 +27,7 @@ const TABS = [
   { id: 'protokolle', label: 'Gesprächsprotokolle' },
   { id: 'potenzial', label: 'Potenzial-Analyse' },
   { id: 'kaeuferprofil', label: 'Käuferprofil' },
+  { id: 'bewertung', label: 'Unternehmensbewertung' },
   { id: 'selbstauskunft', label: 'Selbstauskunft' },
   { id: 'nda', label: 'NDA' },
   { id: 'dokumente', label: 'Dokumente' },
@@ -224,6 +226,7 @@ export function KundenDetail() {
       {tab === 'potenzial' && <PotenzialAnalyseSection bereich="beratung" kundeId={kunde.id} kundeName={kunde.ansprechpartner} />}
 
       {tab === 'kaeuferprofil' && <KaeuferprofilSection bereich="beratung" kundeId={kunde.id} kundeName={kunde.ansprechpartner} />}
+      {tab === 'bewertung' && <UnternehmensbewertungSection bereich="beratung" kundeId={kunde.id} />}
 
       {tab === 'selbstauskunft' && <SelbstauskunftSection bereich="beratung" kundeId={kunde.id} kundeName={kunde.ansprechpartner} />}
 

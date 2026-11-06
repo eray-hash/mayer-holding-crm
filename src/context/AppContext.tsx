@@ -23,10 +23,12 @@ import type {
   Abwesenheit,
   ToDoEintrag,
   ToDoFreigabe,
+  Verbindlichkeit,
   MitarbeiterProfil,
   KundeBereich,
   ActivityEntry,
   Kaeuferprofil,
+  Unternehmensbewertung,
   FragenkatalogFrage,
   Selbstauskunft,
 } from '../types'
@@ -99,6 +101,7 @@ export type AppData = {
   abwesenheiten: Abwesenheit[]
   todos: ToDoEintrag[]
   todoFreigaben: ToDoFreigabe[]
+  verbindlichkeiten: Verbindlichkeit[]
   profil: MitarbeiterProfil
   fragenkataloge: FragenkatalogFrage[]
 }
@@ -160,6 +163,7 @@ function leereGeteilteEntities(data: AppData): AppData {
     abwesenheiten: [],
     todos: [],
     todoFreigaben: [],
+    verbindlichkeiten: [],
   }
 }
 
@@ -198,6 +202,7 @@ function buildSeed(): AppData {
     abwesenheiten: [],
     todos: [],
     todoFreigaben: [],
+    verbindlichkeiten: [],
     profil: {
       name: CURRENT_USER,
       telefon: '',
@@ -246,6 +251,7 @@ function loadInitial(): AppData {
         if (!Array.isArray(parsed.abwesenheiten)) parsed.abwesenheiten = []
         if (!Array.isArray(parsed.todos)) parsed.todos = []
         if (!Array.isArray(parsed.todoFreigaben)) parsed.todoFreigaben = []
+        if (!Array.isArray(parsed.verbindlichkeiten)) parsed.verbindlichkeiten = []
         if (!parsed.profil) {
           parsed.profil = {
             name: CURRENT_USER,
@@ -331,6 +337,7 @@ type Action =
   | { type: 'ADD_VOICE_TASK'; bereich: KundeBereich; kundeId: string; text: string; followUp?: FollowUp }
   | { type: 'ADD_POTENZIAL_NOTIZ'; bereich: KundeBereich; kundeId: string; titel: string; begruendung: string; followUp?: FollowUp }
   | { type: 'SET_KAEUFERPROFIL'; bereich: KundeBereich; kundeId: string; profil: Kaeuferprofil }
+  | { type: 'SET_UNTERNEHMENSBEWERTUNG'; bereich: KundeBereich; kundeId: string; bewertung: Unternehmensbewertung }
   | { type: 'ADD_FRAGE'; frage: FragenkatalogFrage }
   | { type: 'UPDATE_FRAGE'; id: string; patch: Partial<FragenkatalogFrage> }
   | { type: 'DELETE_FRAGE'; id: string }
@@ -349,6 +356,9 @@ type Action =
   | { type: 'DELETE_TODO'; id: string }
   | { type: 'SET_TODO_FREIGABE'; besitzerEmail: string; empfaengerEmail: string; recht: 'lesen' | 'schreiben' }
   | { type: 'DELETE_TODO_FREIGABE'; id: string }
+  | { type: 'ADD_VERBINDLICHKEIT'; verbindlichkeit: Verbindlichkeit }
+  | { type: 'UPDATE_VERBINDLICHKEIT'; id: string; patch: Partial<Verbindlichkeit> }
+  | { type: 'DELETE_VERBINDLICHKEIT'; id: string }
   | { type: 'UPDATE_PROFIL'; patch: Partial<MitarbeiterProfil> }
 
 // Hängt eine Aktivität an den Kunden/Mandanten im richtigen Bereichs-Array — zentrale Stelle, da
@@ -953,6 +963,15 @@ function reducer(state: AppData, action: Action): AppData {
       }
       return appendKundeActivity(state, action.bereich, action.kundeId, activity, { kaeuferprofil: action.profil })
     }
+    case 'SET_UNTERNEHMENSBEWERTUNG': {
+      const activity: ActivityEntry = {
+        id: uid('act'),
+        date: today(),
+        text: 'Unternehmensbewertung erfasst/aktualisiert',
+        user: CURRENT_USER,
+      }
+      return appendKundeActivity(state, action.bereich, action.kundeId, activity, { unternehmensbewertung: action.bewertung })
+    }
     case 'PFLEGE_VERSCHIEBE_KUNDE': {
       const quelle = getKundenListe(state, action.vonBereich)
       const kunde = quelle.find((k) => k.id === action.id)
@@ -1019,6 +1038,7 @@ function reducer(state: AppData, action: Action): AppData {
         abwesenheiten: action.data.abwesenheiten,
         todos: action.data.todos,
         todoFreigaben: action.data.todoFreigaben,
+        verbindlichkeiten: action.data.verbindlichkeiten,
       }
     case 'ADD_FRAGE':
       return { ...state, fragenkataloge: [...state.fragenkataloge, action.frage] }
@@ -1072,6 +1092,15 @@ function reducer(state: AppData, action: Action): AppData {
     }
     case 'DELETE_TODO_FREIGABE':
       return { ...state, todoFreigaben: state.todoFreigaben.filter((f) => f.id !== action.id) }
+    case 'ADD_VERBINDLICHKEIT':
+      return { ...state, verbindlichkeiten: [action.verbindlichkeit, ...state.verbindlichkeiten] }
+    case 'UPDATE_VERBINDLICHKEIT':
+      return {
+        ...state,
+        verbindlichkeiten: state.verbindlichkeiten.map((v) => (v.id === action.id ? { ...v, ...action.patch } : v)),
+      }
+    case 'DELETE_VERBINDLICHKEIT':
+      return { ...state, verbindlichkeiten: state.verbindlichkeiten.filter((v) => v.id !== action.id) }
     case 'UPDATE_PROFIL':
       return { ...state, profil: { ...state.profil, ...action.patch } }
     default:

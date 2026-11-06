@@ -39,6 +39,7 @@ import type {
   Abwesenheit,
   ToDoEintrag,
   ToDoFreigabe,
+  Verbindlichkeit,
 } from '../types'
 import type { Projekt } from '../types/project'
 
@@ -91,6 +92,7 @@ function kundeToRow(bereich: KundeBereich, k: Kunde) {
     unterlagen_checkliste: k.unterlagenCheckliste ?? null,
     signaturen: k.signaturen ?? null,
     kaeuferprofil: k.kaeuferprofil ?? null,
+    unternehmensbewertung: k.unternehmensbewertung ?? null,
     selbstauskunft: k.selbstauskunft ?? null,
     dokumente: k.dokumente ?? null,
   }
@@ -113,6 +115,7 @@ function rowToKunde(row: any): Kunde {
     unterlagenCheckliste: row.unterlagen_checkliste ?? undefined,
     signaturen: row.signaturen ?? undefined,
     kaeuferprofil: row.kaeuferprofil ?? undefined,
+    unternehmensbewertung: row.unternehmensbewertung ?? undefined,
     selbstauskunft: row.selbstauskunft ?? undefined,
     dokumente: row.dokumente ?? undefined,
   }
@@ -531,6 +534,40 @@ function rowToTodoFreigabe(row: any): ToDoFreigabe {
   }
 }
 
+function verbindlichkeitToRow(v: Verbindlichkeit) {
+  return {
+    id: v.id,
+    lieferant: v.lieferant,
+    lieferant_email: v.lieferantEmail ?? null,
+    rechnungsnummer: v.rechnungsnummer ?? null,
+    datum: v.datum,
+    betrag_netto: v.betragNetto ?? null,
+    betrag_brutto: v.betragBrutto ?? null,
+    zahlungsziel: v.zahlungsziel ?? null,
+    status: v.status,
+    notiz: v.notiz ?? null,
+    quelle: v.quelle,
+    quell_email_id: v.quellEmailId ?? null,
+  }
+}
+
+function rowToVerbindlichkeit(row: any): Verbindlichkeit {
+  return {
+    id: row.id,
+    lieferant: row.lieferant,
+    lieferantEmail: row.lieferant_email ?? undefined,
+    rechnungsnummer: row.rechnungsnummer ?? undefined,
+    datum: row.datum,
+    betragNetto: row.betrag_netto ?? undefined,
+    betragBrutto: row.betrag_brutto ?? undefined,
+    zahlungsziel: row.zahlungsziel ?? undefined,
+    status: row.status,
+    notiz: row.notiz ?? undefined,
+    quelle: row.quelle,
+    quellEmailId: row.quell_email_id ?? undefined,
+  }
+}
+
 function logFehler(kontext: string, error: { message: string } | null) {
   if (error) console.error(`Supabase-Sync fehlgeschlagen (${kontext}):`, error.message)
 }
@@ -561,6 +598,7 @@ const SIMPLE_SYNCS: { table: string; key: keyof AppData; label: (item: any) => s
   { table: 'abwesenheiten', key: 'abwesenheiten', label: (a: Abwesenheit) => `Abwesenheit ${a.mitarbeiterName}`, toRow: abwesenheitToRow },
   { table: 'todos', key: 'todos', label: (t: ToDoEintrag) => `Aufgabe ${t.aufgabe}`, toRow: todoToRow },
   { table: 'todo_freigaben', key: 'todoFreigaben', label: (f: ToDoFreigabe) => `To-Do-Freigabe an ${f.empfaengerEmail}`, toRow: todoFreigabeToRow },
+  { table: 'verbindlichkeiten', key: 'verbindlichkeiten', label: (v: Verbindlichkeit) => `Verbindlichkeit ${v.lieferant}`, toRow: verbindlichkeitToRow },
 ]
 
 function syncSimpleCollection(client: NonNullable<typeof supabase>, prev: AppData, next: AppData, cfg: (typeof SIMPLE_SYNCS)[number]) {
@@ -653,6 +691,7 @@ export type HydratedData = {
   abwesenheiten: Abwesenheit[]
   todos: ToDoEintrag[]
   todoFreigaben: ToDoFreigabe[]
+  verbindlichkeiten: Verbindlichkeit[]
 }
 
 // Lädt den aktuellen, geteilten Stand beim Start (und kann für ein manuelles "Aktualisieren" erneut
@@ -679,6 +718,7 @@ export async function hydrateFromSupabase(): Promise<HydratedData | null> {
     abwesenheitenRes,
     todosRes,
     todoFreigabenRes,
+    verbindlichkeitenRes,
     mitarbeiterRes,
   ] = await Promise.all([
     supabase.from('kunden').select('*'),
@@ -699,6 +739,7 @@ export async function hydrateFromSupabase(): Promise<HydratedData | null> {
     supabase.from('abwesenheiten').select('*'),
     supabase.from('todos').select('*'),
     supabase.from('todo_freigaben').select('*'),
+    supabase.from('verbindlichkeiten').select('*'),
     supabase.from('mitarbeiter').select('name').eq('aktiv', true).order('name'),
   ])
   for (const res of [
@@ -720,6 +761,7 @@ export async function hydrateFromSupabase(): Promise<HydratedData | null> {
     abwesenheitenRes,
     todosRes,
     todoFreigabenRes,
+    verbindlichkeitenRes,
   ]) {
     if (res.error) throw new Error(res.error.message)
   }
@@ -778,6 +820,7 @@ export async function hydrateFromSupabase(): Promise<HydratedData | null> {
     abwesenheiten: (abwesenheitenRes.data ?? []).map(rowToAbwesenheit),
     todos: (todosRes.data ?? []).map(rowToTodo),
     todoFreigaben: (todoFreigabenRes.data ?? []).map(rowToTodoFreigabe),
+    verbindlichkeiten: (verbindlichkeitenRes.data ?? []).map(rowToVerbindlichkeit),
   }
 }
 

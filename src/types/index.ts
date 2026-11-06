@@ -59,6 +59,29 @@ export type Rechnung = {
 
 export type MahnstufeId = 'erinnerung' | 'mahnung1' | 'mahnung2' | 'inkasso'
 
+// Gegenstück zu Rechnung: Geld, das Mayer Holding selbst schuldet (Lieferanten-/Kostenrechnungen),
+// nicht an einen Kunden gebunden — Rechnung modelliert ausschließlich Geld, das Kunden Mayer
+// Holding schulden. Wird sowohl automatisch aus eingehenden E-Mails erkannt (quelle
+// 'email-automatisch', siehe inbound-email) als auch manuell angelegt. Die KI kann nicht in
+// PDF-Anhänge hineinsehen — erkannte Felder bleiben leer, wenn sie nicht im Mailtext selbst stehen,
+// und müssen dann von Hand nachgetragen werden (2026-11-06).
+export type VerbindlichkeitStatus = 'offen' | 'bezahlt' | 'ueberfaellig'
+
+export type Verbindlichkeit = {
+  id: string
+  lieferant: string
+  lieferantEmail?: string
+  rechnungsnummer?: string
+  datum: string
+  betragNetto?: number
+  betragBrutto?: number
+  zahlungsziel?: string
+  status: VerbindlichkeitStatus
+  notiz?: string
+  quelle: 'email-automatisch' | 'manuell'
+  quellEmailId?: string
+}
+
 export type Protokoll = {
   id: string
   bereich: KundeBereich
@@ -111,6 +134,25 @@ export type Kaeuferprofil = {
   erstelltAm: string
 }
 
+// Echte Unternehmensbewertung (Kaufpreis-Schätzung) statt nur einer KI-Einschätzung — kombiniert
+// die drei in der Praxis üblichen Verfahren und zeigt eine Spanne statt eines einzelnen falsch
+// präzisen Werts, da eine Bewertung immer eine Schätzung mit Ermessensspielraum bleibt:
+// 1. Multiplikatorverfahren: EBIT × Branchenmultiplikator
+// 2. Ertragswertverfahren: nachhaltiger Jahresüberschuss / Kapitalisierungszins
+// 3. Substanzwertverfahren: Nettovermögen als Wertuntergrenze
+// Alle Eingaben frei editierbar, die Berechnung läuft live im UI (siehe UnternehmensbewertungSection).
+export type Unternehmensbewertung = {
+  jahresumsatz?: number
+  ebit?: number
+  ebitda?: number
+  substanzwert?: number
+  nachhaltigerJahresueberschuss?: number
+  branchenmultiplikator: number
+  kapitalisierungszinsProzent: number
+  notizen: string
+  erstelltAm: string
+}
+
 // Fragenkatalog (Selbstauskunft): pro Bereich frei im CRM konfigurierbare Fragen, die einem
 // bestehenden Kunden/Mandanten als ausfüllbarer Link geschickt werden (siehe
 // /formular/selbstauskunft/:bereich/:kundeId). Eine komplett neue öffentliche Lead-Gen-Website pro
@@ -159,6 +201,7 @@ export type Kunde = {
   kaeuferprofil?: Kaeuferprofil
   selbstauskunft?: Selbstauskunft
   dokumente?: Dokument[]
+  unternehmensbewertung?: Unternehmensbewertung
 }
 
 export type Vorlage = {
