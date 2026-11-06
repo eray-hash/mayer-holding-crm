@@ -43,6 +43,7 @@ import { seedBetriebsformenMandanten, seedVorlagenBetriebsformen } from '../data
 import { seedAkademieTeilnehmer, seedVorlagenAkademie } from '../data/seedAkademie'
 import { seedFinanzierungenMandanten, seedVorlagenFinanzierungen } from '../data/seedFinanzierungen'
 import { seedMailVorlagen } from '../data/mailVorlagen'
+import { seedPrivatKunden } from '../data/seedPrivat'
 import {
   getNextMainStep,
   BERATUNG_STATUS,
@@ -53,6 +54,7 @@ import {
   BETRIEBSFORMEN_STATUS,
   AKADEMIE_STATUS,
   FINANZIERUNGEN_STATUS,
+  PRIVAT_STATUS,
 } from '../data/statusNetworks'
 import { uid, today, addDays } from '../lib/dates'
 import { CURRENT_USER } from '../data/constants'
@@ -86,6 +88,7 @@ export type AppData = {
   vorlagenAkademie: Vorlage[]
   finanzierungenMandanten: Kunde[]
   vorlagenFinanzierungen: Vorlage[]
+  privatKunden: Kunde[]
   objektVorschlaege: ObjektVorschlag[]
   importierteDokumente: ImportiertesDokument[]
   eingegangeneEmails: EingegangeneEmail[]
@@ -129,6 +132,7 @@ function leereGeteilteEntities(data: AppData): AppData {
     betriebsformenMandanten: [],
     akademieTeilnehmer: [],
     finanzierungenMandanten: [],
+    privatKunden: [],
     objekte: [],
     protokolle: [],
     objektVorschlaege: [],
@@ -179,6 +183,7 @@ function buildSeed(): AppData {
     vorlagenAkademie: seedVorlagenAkademie,
     finanzierungenMandanten: seedFinanzierungenMandanten,
     vorlagenFinanzierungen: seedVorlagenFinanzierungen,
+    privatKunden: seedPrivatKunden,
     objektVorschlaege: [],
     importierteDokumente: [],
     eingegangeneEmails: [],
@@ -224,6 +229,7 @@ function loadInitial(): AppData {
         if (!Array.isArray(parsed.vorlagenAkademie)) parsed.vorlagenAkademie = seedVorlagenAkademie
         if (!Array.isArray(parsed.finanzierungenMandanten)) parsed.finanzierungenMandanten = seedFinanzierungenMandanten
         if (!Array.isArray(parsed.vorlagenFinanzierungen)) parsed.vorlagenFinanzierungen = seedVorlagenFinanzierungen
+        if (!Array.isArray(parsed.privatKunden)) parsed.privatKunden = seedPrivatKunden
         if (!Array.isArray(parsed.objektVorschlaege)) parsed.objektVorschlaege = []
         if (!Array.isArray(parsed.importierteDokumente)) parsed.importierteDokumente = []
         if (!Array.isArray(parsed.eingegangeneEmails)) parsed.eingegangeneEmails = []
@@ -298,6 +304,11 @@ type Action =
   | { type: 'SET_FINANZIERUNGEN_STATUS'; id: string; status: string; followUp?: FollowUp }
   | { type: 'SET_FINANZIERUNGEN_FOLLOWUP'; id: string; followUp: FollowUp }
   | { type: 'SET_FINANZIERUNGEN_PRIORITAET'; id: string; prioritaet: Prioritaet }
+  | { type: 'ADD_PRIVAT_KONTAKT'; kunde: Kunde }
+  | { type: 'UPDATE_PRIVAT_KONTAKT'; id: string; patch: Partial<Kunde> }
+  | { type: 'SET_PRIVAT_STATUS'; id: string; status: string; followUp?: FollowUp }
+  | { type: 'SET_PRIVAT_FOLLOWUP'; id: string; followUp: FollowUp }
+  | { type: 'SET_PRIVAT_PRIORITAET'; id: string; prioritaet: Prioritaet }
   | { type: 'ADD_OBJEKT_VORSCHLAG'; vorschlag: ObjektVorschlag }
   | { type: 'ADD_IMPORTIERTES_DOKUMENT'; dokument: ImportiertesDokument }
   | { type: 'ASSIGN_IMPORTIERTES_DOKUMENT'; id: string; bereich: KundeBereich; kundeId: string; kundeName: string }
@@ -355,6 +366,8 @@ function appendKundeActivity(
       return { ...state, akademieTeilnehmer: patch(state.akademieTeilnehmer) }
     case 'finanzierungen':
       return { ...state, finanzierungenMandanten: patch(state.finanzierungenMandanten) }
+    case 'privat':
+      return { ...state, privatKunden: patch(state.privatKunden) }
     default:
       return state
   }
@@ -377,6 +390,8 @@ function setKundenListe(state: AppData, bereich: KundeBereich, liste: Kunde[]): 
       return { ...state, akademieTeilnehmer: liste }
     case 'finanzierungen':
       return { ...state, finanzierungenMandanten: liste }
+    case 'privat':
+      return { ...state, privatKunden: liste }
     default:
       return state
   }
@@ -775,6 +790,46 @@ function reducer(state: AppData, action: Action): AppData {
         ...state,
         finanzierungenMandanten: state.finanzierungenMandanten.map((k) => (k.id === action.id ? { ...k, prioritaet: action.prioritaet } : k)),
       }
+    case 'ADD_PRIVAT_KONTAKT':
+      return { ...state, privatKunden: [action.kunde, ...state.privatKunden] }
+    case 'UPDATE_PRIVAT_KONTAKT':
+      return {
+        ...state,
+        privatKunden: state.privatKunden.map((k) => (k.id === action.id ? { ...k, ...action.patch } : k)),
+      }
+    case 'SET_PRIVAT_STATUS': {
+      return {
+        ...state,
+        privatKunden: state.privatKunden.map((k) => {
+          if (k.id !== action.id) return k
+          const oldLabel = PRIVAT_STATUS[k.status]?.label ?? k.status
+          const newLabel = PRIVAT_STATUS[action.status]?.label ?? action.status
+          const activity = {
+            id: uid('act'),
+            date: today(),
+            text: `Status: ${oldLabel} → ${newLabel} am ${today()} durch ${CURRENT_USER}`,
+            user: CURRENT_USER,
+          }
+          return {
+            ...k,
+            status: action.status,
+            followUp: action.followUp ?? k.followUp,
+            letzteAktivitaet: today(),
+            activities: [activity, ...k.activities],
+          }
+        }),
+      }
+    }
+    case 'SET_PRIVAT_FOLLOWUP':
+      return {
+        ...state,
+        privatKunden: state.privatKunden.map((k) => (k.id === action.id ? { ...k, followUp: action.followUp } : k)),
+      }
+    case 'SET_PRIVAT_PRIORITAET':
+      return {
+        ...state,
+        privatKunden: state.privatKunden.map((k) => (k.id === action.id ? { ...k, prioritaet: action.prioritaet } : k)),
+      }
     case 'ADD_OBJEKT_VORSCHLAG':
       return { ...state, objektVorschlaege: [action.vorschlag, ...state.objektVorschlaege] }
     case 'ADD_IMPORTIERTES_DOKUMENT':
@@ -925,6 +980,7 @@ function reducer(state: AppData, action: Action): AppData {
         betriebsformenMandanten: action.data.kunden.betriebsformen,
         akademieTeilnehmer: action.data.kunden.akademie,
         finanzierungenMandanten: action.data.kunden.finanzierungen,
+        privatKunden: action.data.kunden.privat,
         objekte: action.data.objekte,
         protokolle: action.data.protokolle,
         objektVorschlaege: action.data.objektVorschlaege,
@@ -1148,6 +1204,15 @@ export function useAdvanceStatus() {
     },
     setFinanzierungenStatus(id: string, status: string, followUp?: FollowUp) {
       dispatch({ type: 'SET_FINANZIERUNGEN_STATUS', id, status, followUp })
+    },
+    advancePrivatKontakt(id: string, followUp?: FollowUp) {
+      const kontakt = state.privatKunden.find((k) => k.id === id)
+      if (!kontakt) return
+      const next = getNextMainStep('privat', kontakt.status)
+      if (next) dispatch({ type: 'SET_PRIVAT_STATUS', id, status: next, followUp })
+    },
+    setPrivatStatus(id: string, status: string, followUp?: FollowUp) {
+      dispatch({ type: 'SET_PRIVAT_STATUS', id, status, followUp })
     },
   }
 }

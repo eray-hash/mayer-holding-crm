@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Inbox, Send, RefreshCw, UserPlus, Check, X, AlertTriangle, Plus, Reply, ListPlus, Search, Sparkles, Megaphone, Paperclip } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
+import { useAuth } from '../../context/AuthContext'
 import { isEmailInboxDbConfigured, fetchStoredEmails, searchStoredEmails, assignMail, ignoreMail } from '../../lib/emailInboxDb'
 import { isSentEmailsDbConfigured, fetchSentEmails, searchSentEmails } from '../../lib/sentEmailsDb'
 import { isLeadsDbConfigured, fetchOffeneLeads, setLeadStatus } from '../../lib/leadsDb'
@@ -39,7 +40,12 @@ function neuerKunde(lead: VorgeschlagenerLead) {
   }
 }
 
-function addKundeZuBereich(dispatch: ReturnType<typeof useApp>['dispatch'], bereich: KundeBereich, lead: VorgeschlagenerLead) {
+function addKundeZuBereich(
+  dispatch: ReturnType<typeof useApp>['dispatch'],
+  bereich: KundeBereich,
+  lead: VorgeschlagenerLead,
+  eigeneEmail?: string,
+) {
   const kunde = neuerKunde(lead)
   switch (bereich) {
     case 'beratung':
@@ -54,12 +60,15 @@ function addKundeZuBereich(dispatch: ReturnType<typeof useApp>['dispatch'], bere
       return dispatch({ type: 'ADD_AKADEMIE_TEILNEHMER', kunde })
     case 'finanzierungen':
       return dispatch({ type: 'ADD_FINANZIERUNGEN_MANDANT', kunde })
+    case 'privat':
+      return dispatch({ type: 'ADD_PRIVAT_KONTAKT', kunde: { ...kunde, verantwortlichEmail: eigeneEmail } })
   }
 }
 
 export function Postfach() {
   const navigate = useNavigate()
   const { state, dispatch } = useApp()
+  const { session } = useAuth()
   const [ordner, setOrdner] = useState<Ordner>('posteingang')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -159,7 +168,7 @@ export function Postfach() {
   }
 
   async function leadUebernehmen(lead: VorgeschlagenerLead, bereich: KundeBereich) {
-    addKundeZuBereich(dispatch, bereich, lead)
+    addKundeZuBereich(dispatch, bereich, lead, session?.user.email)
     await setLeadStatus(lead.id, 'uebernommen').catch(() => {})
     setLeads((ls) => ls.filter((l) => l.id !== lead.id))
     setSelectedId(null)

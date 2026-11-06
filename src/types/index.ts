@@ -1,6 +1,6 @@
 // Zentrale Typdefinitionen für das Mayer Holding CRM
 
-export type Bereich = 'beratung' | 'immobilien' | 'erben' | 'betriebsuebergabe' | 'betriebsformen' | 'akademie' | 'finanzierungen'
+export type Bereich = 'beratung' | 'immobilien' | 'erben' | 'betriebsuebergabe' | 'betriebsformen' | 'akademie' | 'finanzierungen' | 'privat'
 
 // Bereiche, die eine Kunden-/Mandanten-Liste vom Typ Kunde[] führen (alle außer Immobilien,
 // das stattdessen Objekte führt) — Basis für die bereichsübergreifende Objekt-Kunde-Zuweisung.
@@ -149,6 +149,9 @@ export type Kunde = {
   status: string // StatusNode id (Beratungsnetz)
   followUp: FollowUp
   verantwortlich: string
+  // Nur für bereich 'privat' gesetzt: E-Mail des Mitarbeiters, dem dieser Kontakt gehört — Grundlage
+  // der Datenbank-Berechtigung (RLS), die private Kontakte/Protokolle auf den Besitzer beschränkt.
+  verantwortlichEmail?: string
   letzteAktivitaet: string
   activities: ActivityEntry[]
   unterlagenCheckliste?: Record<string, boolean>

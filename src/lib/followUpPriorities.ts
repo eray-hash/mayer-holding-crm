@@ -72,6 +72,8 @@ export function followUpDetailPfad(entry: FollowUpEntry): string {
       return `/akademie/teilnehmer/${entry.id}`
     case 'finanzierungen':
       return `/finanzierungen/mandanten/${entry.id}`
+    case 'privat':
+      return `/privat/kontakte/${entry.id}`
   }
 }
 

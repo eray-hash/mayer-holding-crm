@@ -12,7 +12,15 @@ function fmtDauer(sekunden: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`
 }
 
-export function CallRecorder({ onSave, onCancel }: { onSave: (data: CallRecorderSave) => void; onCancel: () => void }) {
+export function CallRecorder({
+  onSave,
+  onCancel,
+  saveLabel = 'Als Gesprächsprotokoll speichern',
+}: {
+  onSave: (data: CallRecorderSave) => void
+  onCancel: () => void
+  saveLabel?: string
+}) {
   const { supported, recording, transcript, interim, error, dauerSekunden, start, stop, setTranscript } = useSpeechRecognition()
 
   const [summarizing, setSummarizing] = useState(false)
@@ -136,7 +144,7 @@ export function CallRecorder({ onSave, onCancel }: { onSave: (data: CallRecorder
       <div className="mt-4 flex justify-end gap-2">
         <SecondaryButton onClick={onCancel}>Abbrechen</SecondaryButton>
         <PrimaryButton onClick={() => onSave({ transcript: transcript.trim(), summary: summary ?? undefined, dauerSekunden: dauerSekunden || undefined })} disabled={!transcript.trim()}>
-          Als Gesprächsprotokoll speichern
+          {saveLabel}
         </PrimaryButton>
       </div>
     </div>

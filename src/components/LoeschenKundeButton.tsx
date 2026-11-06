@@ -25,9 +25,14 @@ export function LoeschenKundeButton({
   const navigate = useNavigate()
   const [bestaetigen, setBestaetigen] = useState(false)
 
-  const erlaubt = isSupabaseConfigured && session
-    ? mitarbeiter?.rolle === 'geschaeftsfuehrung' || !!mitarbeiter?.ist_admin
-    : state.rolle === 'geschaeftsfuehrung'
+  // Privat ist pro Mitarbeiter isoliert (RLS) — dort darf der Besitzer seine eigenen Kontakte selbst
+  // löschen, nicht nur Geschäftsführung/Admin wie in den gemeinsam genutzten Bereichen.
+  const erlaubt =
+    bereich === 'privat'
+      ? true
+      : isSupabaseConfigured && session
+        ? mitarbeiter?.rolle === 'geschaeftsfuehrung' || !!mitarbeiter?.ist_admin
+        : state.rolle === 'geschaeftsfuehrung'
   if (!erlaubt) return null
 
   function loeschen() {

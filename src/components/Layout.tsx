@@ -22,6 +22,7 @@ import {
   UserCog,
   ChevronDown,
   Phone,
+  Lock,
 } from 'lucide-react'
 import type { Bereich } from '../types'
 import { useApp } from '../context/AppContext'
@@ -40,6 +41,7 @@ import { SidebarBetriebsuebergabe } from './SidebarBetriebsuebergabe'
 import { SidebarBetriebsformen } from './SidebarBetriebsformen'
 import { SidebarAkademie } from './SidebarAkademie'
 import { SidebarFinanzierungen } from './SidebarFinanzierungen'
+import { SidebarPrivat } from './SidebarPrivat'
 
 const BEREICHE: {
   id: Bereich
@@ -56,6 +58,7 @@ const BEREICHE: {
   { id: 'betriebsformen', label: 'Betriebsformen', beschreibung: 'Rechtsformberatung & Umwandlungen', icon: Scale, pfad: '/betriebsformen', Sidebar: SidebarBetriebsformen },
   { id: 'akademie', label: 'Akademie', beschreibung: 'Kurse, Seminare & Teilnehmer', icon: GraduationCap, pfad: '/akademie', Sidebar: SidebarAkademie },
   { id: 'finanzierungen', label: 'Finanzierungen', beschreibung: 'Vermögensanlage "Ulmer Cash" & Beteiligungen', icon: PiggyBank, pfad: '/finanzierungen', Sidebar: SidebarFinanzierungen },
+  { id: 'privat', label: 'Privat', beschreibung: 'Eigene Kontakte & Notizen — nur für dich sichtbar', icon: Lock, pfad: '/privat', Sidebar: SidebarPrivat },
 ]
 
 export function Layout({ children }: { children: ReactNode }) {
@@ -74,9 +77,11 @@ export function Layout({ children }: { children: ReactNode }) {
   const aktuellerBereich = BEREICHE.find((b) => b.id === state.bereich) ?? BEREICHE[0]
   // Rollenbasierte Bereichs-Einschränkung (Beschluss 2026-11-02): Geschäftsführung und Admins sehen
   // immer alles, ein eingeschränkter Mitarbeiter nur die ihm zugewiesenen Bereiche.
+  // Privat ist keine von der GF zuteilbare Berechtigung (siehe ALLE_BEREICHE), sondern für jeden
+  // Mitarbeiter immer verfügbar — deshalb hier unabhängig von der Rollen-Einschränkung durchgelassen.
   const sichtbareBereiche =
     isSupabaseConfigured && session && mitarbeiter && mitarbeiter.rolle !== 'geschaeftsfuehrung' && !mitarbeiter.ist_admin
-      ? BEREICHE.filter((b) => mitarbeiter.bereiche.includes(b.id))
+      ? BEREICHE.filter((b) => b.id === 'privat' || mitarbeiter.bereiche.includes(b.id))
       : BEREICHE
   const { prioritaeten } = collectPriorityEntries(state.projekte)
   const followUps = collectFollowUpPriorities(state)

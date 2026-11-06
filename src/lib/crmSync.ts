@@ -49,6 +49,7 @@ const KUNDE_KEYS: { bereich: KundeBereich; key: keyof AppData }[] = [
   { bereich: 'betriebsformen', key: 'betriebsformenMandanten' },
   { bereich: 'akademie', key: 'akademieTeilnehmer' },
   { bereich: 'finanzierungen', key: 'finanzierungenMandanten' },
+  { bereich: 'privat', key: 'privatKunden' },
 ]
 
 // Vorlagen: eine Tabelle über alle sieben Bereiche hinweg (bereich ist nur eine Spalte), analog zu
@@ -82,6 +83,7 @@ function kundeToRow(bereich: KundeBereich, k: Kunde) {
     status: k.status,
     follow_up: k.followUp,
     verantwortlich: k.verantwortlich,
+    verantwortlich_email: k.verantwortlichEmail ?? null,
     letzte_aktivitaet: k.letzteAktivitaet,
     activities: k.activities,
     unterlagen_checkliste: k.unterlagenCheckliste ?? null,
@@ -103,6 +105,7 @@ function rowToKunde(row: any): Kunde {
     status: row.status,
     followUp: row.follow_up,
     verantwortlich: row.verantwortlich,
+    verantwortlichEmail: row.verantwortlich_email ?? undefined,
     letzteAktivitaet: row.letzte_aktivitaet,
     activities: row.activities ?? [],
     unterlagenCheckliste: row.unterlagen_checkliste ?? undefined,
@@ -646,11 +649,13 @@ export async function hydrateFromSupabase(): Promise<HydratedData | null> {
     betriebsformen: [],
     akademie: [],
     finanzierungen: [],
+    privat: [],
   }
   for (const row of kundenRes.data ?? []) {
     kunden[row.bereich as KundeBereich].push(rowToKunde(row))
   }
 
+  // 'privat' hat (noch) keine eigene Vorlagen-Seite/-Tabelle — bleibt hier absichtlich immer leer.
   const vorlagen: Record<Bereich, Vorlage[]> = {
     beratung: [],
     immobilien: [],
@@ -659,6 +664,7 @@ export async function hydrateFromSupabase(): Promise<HydratedData | null> {
     betriebsformen: [],
     akademie: [],
     finanzierungen: [],
+    privat: [],
   }
   for (const row of vorlagenRes.data ?? []) {
     vorlagen[row.bereich as Bereich].push(rowToVorlage(row))

@@ -33,6 +33,8 @@ import { VorlagenPageAkademie } from './pages/akademie/VorlagenPageAkademie'
 import { FinanzierungenListe } from './pages/finanzierungen/FinanzierungenListe'
 import { FinanzierungenDetail } from './pages/finanzierungen/FinanzierungenDetail'
 import { VorlagenPageFinanzierungen } from './pages/finanzierungen/VorlagenPageFinanzierungen'
+import { PrivatListe } from './pages/privat/PrivatListe'
+import { PrivatDetail } from './pages/privat/PrivatDetail'
 import { HeuteScreen } from './pages/heute/HeuteScreen'
 import { Postfach } from './pages/postfach/Postfach'
 import { Kampagnen } from './pages/kampagnen/Kampagnen'
@@ -69,6 +71,12 @@ function AdminRoutesContent() {
         <Route path="/kampagnen" element={<Kampagnen />} />
         <Route path="/profil" element={<MeinProfil />} />
         <Route path="/mitarbeiter" element={<RequireAdmin><MitarbeiterVerwalten /></RequireAdmin>} />
+
+        {/* Privat: bewusst NICHT per RequireBereich beschränkt — jeder Mitarbeiter hat seinen
+            eigenen, persönlichen Bereich, das ist keine von der GF zuteilbare Berechtigung.
+            Sichtbarkeit wird stattdessen über RLS in Supabase erzwungen (siehe crmSync.ts). */}
+        <Route path="/privat" element={<PrivatListe />} />
+        <Route path="/privat/kontakte/:id" element={<PrivatDetail />} />
 
         <Route path="/beratung" element={<RequireBereich bereich="beratung"><KundenListe /></RequireBereich>} />
         <Route path="/beratung/kunden/:id" element={<RequireBereich bereich="beratung"><KundenDetail /></RequireBereich>} />

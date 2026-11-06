@@ -11,6 +11,7 @@ export const KUNDEN_BEREICHE: { id: KundeBereich; label: string; get: (state: Ap
   { id: 'betriebsformen', label: 'Betriebsformen', get: (s) => s.betriebsformenMandanten },
   { id: 'akademie', label: 'Akademie', get: (s) => s.akademieTeilnehmer },
   { id: 'finanzierungen', label: 'Finanzierungen', get: (s) => s.finanzierungenMandanten },
+  { id: 'privat', label: 'Privat', get: (s) => s.privatKunden },
 ]
 
 export function kundeBereichLabel(bereich: KundeBereich): string {

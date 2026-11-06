@@ -770,6 +770,63 @@ export const FINANZIERUNGEN_HAUPTPFAD = [
   'abgeschlossen',
 ]
 
+// ==========================================================================
+// STATUSNETZ — PRIVAT (eigene Kontakte/Termine, pro Mitarbeiter isoliert)
+// ==========================================================================
+
+export const PRIVAT_STATUS: Record<string, StatusNode> = {
+  neu: {
+    id: 'neu',
+    label: 'Neu',
+    color: 'bg-slate-100 text-slate-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['in_kontakt', 'wiedervorlage', 'abgebrochen'],
+  },
+  in_kontakt: {
+    id: 'in_kontakt',
+    label: 'In Kontakt',
+    color: 'bg-sky-100 text-sky-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['termin_vereinbart', 'wiedervorlage', 'abgebrochen'],
+  },
+  termin_vereinbart: {
+    id: 'termin_vereinbart',
+    label: 'Termin vereinbart',
+    color: 'bg-indigo-100 text-indigo-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['erledigt', 'wiedervorlage', 'abgebrochen'],
+  },
+  erledigt: {
+    id: 'erledigt',
+    label: 'Erledigt',
+    color: 'bg-emerald-100 text-emerald-700',
+    isTerminal: true,
+    isMainPath: true,
+    next: [],
+  },
+  wiedervorlage: {
+    id: 'wiedervorlage',
+    label: 'Wiedervorlage / On Hold',
+    color: 'bg-orange-100 text-orange-700',
+    isTerminal: false,
+    isMainPath: false,
+    next: ['neu', 'in_kontakt', 'termin_vereinbart', 'abgebrochen'],
+  },
+  abgebrochen: {
+    id: 'abgebrochen',
+    label: 'Abgebrochen / Nicht weiter verfolgt',
+    color: 'bg-rose-100 text-rose-700',
+    isTerminal: true,
+    isMainPath: false,
+    next: [],
+  },
+}
+
+export const PRIVAT_HAUPTPFAD = ['neu', 'in_kontakt', 'termin_vereinbart', 'erledigt']
+
 type StatusBereich =
   | 'beratung'
   | 'immobilien'
@@ -778,6 +835,7 @@ type StatusBereich =
   | 'betriebsformen'
   | 'akademie'
   | 'finanzierungen'
+  | 'privat'
 
 export function getStatusMap(bereich: StatusBereich): Record<string, StatusNode> {
   if (bereich === 'beratung') return BERATUNG_STATUS
@@ -786,6 +844,7 @@ export function getStatusMap(bereich: StatusBereich): Record<string, StatusNode>
   if (bereich === 'betriebsuebergabe') return BETRIEBSUEBERGABE_STATUS
   if (bereich === 'betriebsformen') return BETRIEBSFORMEN_STATUS
   if (bereich === 'akademie') return AKADEMIE_STATUS
+  if (bereich === 'privat') return PRIVAT_STATUS
   return FINANZIERUNGEN_STATUS
 }
 
@@ -796,6 +855,7 @@ export function getHauptpfad(bereich: StatusBereich): string[] {
   if (bereich === 'betriebsuebergabe') return BETRIEBSUEBERGABE_HAUPTPFAD
   if (bereich === 'betriebsformen') return BETRIEBSFORMEN_HAUPTPFAD
   if (bereich === 'akademie') return AKADEMIE_HAUPTPFAD
+  if (bereich === 'privat') return PRIVAT_HAUPTPFAD
   return FINANZIERUNGEN_HAUPTPFAD
 }
 

@@ -63,6 +63,8 @@ function dispatchFollowUp(dispatch: ReturnType<typeof useApp>['dispatch'], berei
       return dispatch({ type: 'SET_AKADEMIE_FOLLOWUP', id, followUp })
     case 'finanzierungen':
       return dispatch({ type: 'SET_FINANZIERUNGEN_FOLLOWUP', id, followUp })
+    case 'privat':
+      return dispatch({ type: 'SET_PRIVAT_FOLLOWUP', id, followUp })
   }
 }
 
