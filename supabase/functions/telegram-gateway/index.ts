@@ -221,7 +221,7 @@ Deno.serve(async (req: Request) => {
   // --- Mitarbeiter anhand des verknüpften Chats finden ---
   const { data: mitarbeiter } = await supabase
     .from('mitarbeiter')
-    .select('id, name, aktiv, telegram_last_kunde_id, telegram_last_kunde_bereich, telegram_pending')
+    .select('id, name, aktiv, rolle, ist_admin, telegram_last_kunde_id, telegram_last_kunde_bereich, telegram_pending')
     .eq('telegram_chat_id', chatId)
     .maybeSingle()
   if (!mitarbeiter || !mitarbeiter.aktiv) {
@@ -307,10 +307,28 @@ Deno.serve(async (req: Request) => {
   let klass: { typ: string; erkannter_name?: string; titel?: string; faelligkeitsdatum?: string; frage?: string } | null = null
   let match: KundeRow | null = null
   const pending = mitarbeiter.telegram_pending as
-    | { text: string; klass: any; kandidaten_ids: string[]; erstellt_am: string; aktion_feld?: 'bereich' | 'firma' }
+    | {
+        text: string
+        klass: any
+        kandidaten_ids: string[]
+        erstellt_am: string
+        aktion_feld?: 'bereich' | 'firma' | 'loeschen_bestaetigen'
+        loeschen_id?: string
+        loeschen_name?: string
+      }
     | null
   if (pending && Date.now() - new Date(pending.erstellt_am).getTime() < 10 * 60 * 1000) {
     await supabase.from('mitarbeiter').update({ telegram_pending: null }).eq('id', mitarbeiter.id)
+    if (pending.aktion_feld === 'loeschen_bestaetigen') {
+      const bestaetigt = /^ja\b/i.test(text.trim())
+      if (bestaetigt && pending.loeschen_id) {
+        const { error: deleteError } = await supabase.from('kunden').delete().eq('id', pending.loeschen_id)
+        await sendTelegramMessage(chatId, deleteError ? `Löschen fehlgeschlagen: ${deleteError.message}` : `Gelöscht: ${pending.loeschen_name}`)
+      } else {
+        await sendTelegramMessage(chatId, 'Abgebrochen, nichts gelöscht.')
+      }
+      return new Response('ok')
+    }
     if (pending.aktion_feld === 'bereich') {
       const BEREICHE = ['beratung', 'erben', 'betriebsuebergabe', 'betriebsformen', 'akademie', 'finanzierungen']
       const genannt = BEREICHE.find((b) => text.toLowerCase().includes(b))
@@ -480,6 +498,25 @@ Deno.serve(async (req: Request) => {
     } else {
       await sendTelegramMessage(chatId, `Erledigt — "${firma}" als neuer Lead bei ${bereich} angelegt, dir zugeordnet.`)
     }
+    return new Response('ok')
+  }
+
+  if (klass.typ === 'aktion_lead_loeschen') {
+    const berechtigt = mitarbeiter.rolle === 'geschaeftsfuehrung' || !!mitarbeiter.ist_admin
+    if (!berechtigt) {
+      await sendTelegramMessage(chatId, 'Kunden/Leads löschen darf nur Geschäftsführung/Admin.')
+      return new Response('ok')
+    }
+    if (!match) {
+      await sendTelegramMessage(chatId, 'Welchen Kunden/Lead genau soll ich löschen? Nenn mir bitte den Namen etwas genauer.')
+      return new Response('ok')
+    }
+    const name = `${match.firma} (${match.ansprechpartner}) bei ${match.bereich}`
+    await supabase
+      .from('mitarbeiter')
+      .update({ telegram_pending: { aktion_feld: 'loeschen_bestaetigen', loeschen_id: match.id, loeschen_name: name, erstellt_am: new Date().toISOString(), kandidaten_ids: [], klass: null, text: '' } })
+      .eq('id', mitarbeiter.id)
+    await sendTelegramMessage(chatId, `Soll ich "${name}" wirklich unwiderruflich löschen? Antworte mit "ja" zum Bestätigen, sonst passiert nichts.`)
     return new Response('ok')
   }
 

@@ -478,6 +478,7 @@ Klassifiziere den folgenden Text als genau einen von sechs Typen:
 - "frage": eine Frage zu einem bestehenden, namentlich genannten Kunden/Mandanten, z. B. "was wurde beim letzten Termin mit X besprochen", "wie ist der Stand bei Y".
 - "uebersicht": eine allgemeine Frage nach dem eigenen Tagesgeschäft/Status OHNE Bezug auf einen bestimmten, namentlich genannten Kunden, z. B. "was muss ich heute machen", "was steht an", "wie ist mein Stand", "habe ich noch offene Aufgaben".
 - "aktion_lead_anlegen": eine Bitte, einen NEUEN Lead/Kunden/Mandanten im CRM anzulegen, z. B. "leg einen Lead an bei Erben", "neuen Testkunden bei Beratung anlegen für Firma X".
+- "aktion_lead_loeschen": eine Bitte, einen BESTEHENDEN Lead/Kunden/Mandanten wieder zu LÖSCHEN/entfernen, z. B. "lösch den Lead Testfirma wieder", "entferne den Kunden X".
 - "notiz": alles andere, ein allgemeiner Gedanke oder eine Beobachtung ohne konkrete Handlung oder Frage.
 
 Extrahiere zusätzlich, falls vorhanden:
@@ -496,7 +497,7 @@ Text:
       input_schema: {
         type: 'object',
         properties: {
-          typ: { type: 'string', enum: ['notiz', 'aufgabe', 'frage', 'aufnahme', 'uebersicht', 'aktion_lead_anlegen'] },
+          typ: { type: 'string', enum: ['notiz', 'aufgabe', 'frage', 'aufnahme', 'uebersicht', 'aktion_lead_anlegen', 'aktion_lead_loeschen'] },
           erkannter_name: { type: 'string' },
           titel: { type: 'string' },
           faelligkeitsdatum: { type: 'string' },
