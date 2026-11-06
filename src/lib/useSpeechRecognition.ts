@@ -24,7 +24,9 @@ export function useSpeechRecognition() {
   const [transcript, setTranscript] = useState('')
   const [interim, setInterim] = useState('')
   const [error, setError] = useState('')
+  const [dauerSekunden, setDauerSekunden] = useState(0)
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
+  const startZeitpunktRef = useRef<number | null>(null)
 
   useEffect(() => {
     return () => {
@@ -32,8 +34,20 @@ export function useSpeechRecognition() {
     }
   }, [])
 
+  // Live-Zeittracking fürs "Gespräch aufzeichnen" — läuft nur während recording, friert beim
+  // Stoppen auf dem letzten Stand ein, damit die Gesamtdauer danach noch ausgelesen werden kann.
+  useEffect(() => {
+    if (!recording) return
+    const interval = setInterval(() => {
+      if (startZeitpunktRef.current) setDauerSekunden(Math.round((Date.now() - startZeitpunktRef.current) / 1000))
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [recording])
+
   function start() {
     setError('')
+    setDauerSekunden(0)
+    startZeitpunktRef.current = Date.now()
     const SpeechRecognitionCtor = getSpeechRecognitionCtor()
     if (!SpeechRecognitionCtor) {
       setError('Dein Browser unterstützt keine Live-Transkription (am besten Google Chrome verwenden). Du kannst den Text unten auch manuell eintippen.')
@@ -77,5 +91,5 @@ export function useSpeechRecognition() {
     setRecording(false)
   }
 
-  return { supported, recording, transcript, interim, error, start, stop, setTranscript, setInterim }
+  return { supported, recording, transcript, interim, error, dauerSekunden, start, stop, setTranscript, setInterim }
 }

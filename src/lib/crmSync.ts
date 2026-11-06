@@ -171,6 +171,7 @@ function protokollToRow(p: Protokoll) {
     offene_punkte: p.offenePunkte ?? null,
     stimmung: p.stimmung ?? null,
     ki_zusammenfassung: p.kiZusammenfassung ?? null,
+    dauer_sekunden: p.dauerSekunden ?? null,
   }
 }
 
@@ -188,6 +189,7 @@ function rowToProtokoll(row: any): Protokoll {
     offenePunkte: row.offene_punkte ?? undefined,
     stimmung: row.stimmung ?? undefined,
     kiZusammenfassung: row.ki_zusammenfassung ?? undefined,
+    dauerSekunden: row.dauer_sekunden ?? undefined,
   }
 }
 

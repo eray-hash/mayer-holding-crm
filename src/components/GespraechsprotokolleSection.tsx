@@ -45,7 +45,7 @@ export function GespraechsprotokolleSection({ bereich, kundeId, kundeName }: { b
       <Modal open={callRecorderOpen} onClose={() => setCallRecorderOpen(false)} title="Telefonat aufzeichnen" width="max-w-2xl">
         <CallRecorder
           onCancel={() => setCallRecorderOpen(false)}
-          onSave={({ transcript, summary }) => {
+          onSave={({ transcript, summary, dauerSekunden }) => {
             dispatch({
               type: 'ADD_PROTOKOLL',
               protokoll: {
@@ -61,6 +61,7 @@ export function GespraechsprotokolleSection({ bereich, kundeId, kundeName }: { b
                 offenePunkte: summary?.offene_punkte,
                 stimmung: summary?.stimmung,
                 kiZusammenfassung: summary?.zusammenfassung,
+                dauerSekunden,
               },
             })
             setCallRecorderOpen(false)
@@ -81,6 +82,9 @@ export function ProtokollCard({ p }: { p: Protokoll }) {
       </div>
       <div className="mb-2 flex items-center gap-2 text-xs text-slate-400">
         Teilnehmer: {p.teilnehmer}
+        {typeof p.dauerSekunden === 'number' && p.dauerSekunden > 0 && (
+          <span>· Dauer: {Math.floor(p.dauerSekunden / 60)}:{(p.dauerSekunden % 60).toString().padStart(2, '0')}</span>
+        )}
         {p.stimmung && <StatusBadge label={`Stimmung: ${p.stimmung}`} color="bg-accent-50 text-accent-700" />}
       </div>
 

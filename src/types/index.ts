@@ -74,6 +74,7 @@ export type Protokoll = {
   offenePunkte?: string[]
   stimmung?: string
   kiZusammenfassung?: string
+  dauerSekunden?: number
 }
 
 export type Konzept = {

@@ -4,10 +4,16 @@ import { inputClass, Field, PrimaryButton, SecondaryButton } from './ui'
 import { isEmailGatewayConfigured, summarizeTranscript, type Gespraechszusammenfassung } from '../lib/emailGateway'
 import { useSpeechRecognition } from '../lib/useSpeechRecognition'
 
-export type CallRecorderSave = { transcript: string; summary?: Gespraechszusammenfassung }
+export type CallRecorderSave = { transcript: string; summary?: Gespraechszusammenfassung; dauerSekunden?: number }
+
+function fmtDauer(sekunden: number): string {
+  const m = Math.floor(sekunden / 60)
+  const s = sekunden % 60
+  return `${m}:${s.toString().padStart(2, '0')}`
+}
 
 export function CallRecorder({ onSave, onCancel }: { onSave: (data: CallRecorderSave) => void; onCancel: () => void }) {
-  const { supported, recording, transcript, interim, error, start, stop, setTranscript } = useSpeechRecognition()
+  const { supported, recording, transcript, interim, error, dauerSekunden, start, stop, setTranscript } = useSpeechRecognition()
 
   const [summarizing, setSummarizing] = useState(false)
   const [summaryError, setSummaryError] = useState('')
@@ -45,8 +51,11 @@ export function CallRecorder({ onSave, onCancel }: { onSave: (data: CallRecorder
         )}
         {recording && (
           <span className="flex items-center gap-1.5 text-xs font-medium text-rose-600">
-            <span className="h-2 w-2 animate-pulse rounded-full bg-rose-500" /> läuft … spricht ins Mikrofon
+            <span className="h-2 w-2 animate-pulse rounded-full bg-rose-500" /> läuft … spricht ins Mikrofon · {fmtDauer(dauerSekunden)}
           </span>
+        )}
+        {!recording && dauerSekunden > 0 && (
+          <span className="text-xs font-medium text-slate-500">Dauer: {fmtDauer(dauerSekunden)}</span>
         )}
         {!supported && !recording && (
           <span className="text-xs text-slate-400">Live-Transkription evtl. nicht verfügbar — Text unten manuell eintippen geht immer.</span>
@@ -126,7 +135,7 @@ export function CallRecorder({ onSave, onCancel }: { onSave: (data: CallRecorder
 
       <div className="mt-4 flex justify-end gap-2">
         <SecondaryButton onClick={onCancel}>Abbrechen</SecondaryButton>
-        <PrimaryButton onClick={() => onSave({ transcript: transcript.trim(), summary: summary ?? undefined })} disabled={!transcript.trim()}>
+        <PrimaryButton onClick={() => onSave({ transcript: transcript.trim(), summary: summary ?? undefined, dauerSekunden: dauerSekunden || undefined })} disabled={!transcript.trim()}>
           Als Gesprächsprotokoll speichern
         </PrimaryButton>
       </div>

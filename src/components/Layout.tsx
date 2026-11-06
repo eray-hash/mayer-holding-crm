@@ -21,6 +21,7 @@ import {
   Bell,
   UserCog,
   ChevronDown,
+  Phone,
 } from 'lucide-react'
 import type { Bereich } from '../types'
 import { useApp } from '../context/AppContext'
@@ -31,6 +32,7 @@ import { collectFollowUpPriorities, followUpDetailPfad } from '../lib/followUpPr
 import { isLeadsDbConfigured, fetchOffeneLeads } from '../lib/leadsDb'
 import { DokumentenImportModal } from './DokumentenImportModal'
 import { KiAssistentPanel } from './KiAssistentPanel'
+import { GespraechAufzeichnenGlobal } from './GespraechAufzeichnenGlobal'
 import { SidebarBeratung } from './SidebarBeratung'
 import { SidebarImmobilien } from './SidebarImmobilien'
 import { SidebarErben } from './SidebarErben'
@@ -62,6 +64,7 @@ export function Layout({ children }: { children: ReactNode }) {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [dokumentImportOpen, setDokumentImportOpen] = useState(false)
+  const [gespraechAufzeichnenOpen, setGespraechAufzeichnenOpen] = useState(false)
   const [kiAssistentOpen, setKiAssistentOpen] = useState(false)
   const [profilMenuOpen, setProfilMenuOpen] = useState(false)
   const [benachrichtigungenOpen, setBenachrichtigungenOpen] = useState(false)
@@ -135,6 +138,13 @@ export function Layout({ children }: { children: ReactNode }) {
           >
             <Sparkles size={14} />
             <span className="hidden sm:inline">KI-Assistent</span>
+          </button>
+          <button
+            onClick={() => setGespraechAufzeichnenOpen(true)}
+            className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
+            title="Gespräch aufzeichnen (Kunde per Telefonnummer oder Name finden)"
+          >
+            <Phone size={16} />
           </button>
           <button
             onClick={() => navigate('/postfach')}
@@ -332,6 +342,7 @@ export function Layout({ children }: { children: ReactNode }) {
       )}
 
       <DokumentenImportModal open={dokumentImportOpen} onClose={() => setDokumentImportOpen(false)} />
+      <GespraechAufzeichnenGlobal open={gespraechAufzeichnenOpen} onClose={() => setGespraechAufzeichnenOpen(false)} />
       <KiAssistentPanel open={kiAssistentOpen} onToggle={() => setKiAssistentOpen((o) => !o)} />
     </div>
   )

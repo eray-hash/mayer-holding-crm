@@ -69,6 +69,28 @@ export function suggestKunde(state: AppData, text: string): KundeMatch | null {
   return suggestKundeKandidaten(state, text)[0] ?? null
 }
 
+// Sucht einen Kunden/Mandanten über alle Bereiche hinweg anhand der Telefonnummer — fürs
+// "Gespräch aufzeichnen" ohne vorher in eine bestimmte Akte zu gehen (Nummer eintippen, System
+// erkennt den Kunden). Vergleicht nur Ziffern (Formatierung wie Leerzeichen/Klammern/Ländervorwahl
+// wird ignoriert) und verlangt mindestens 6 übereinstimmende Endziffern, damit kurze/leere Nummern
+// nicht zufällig alles matchen.
+export function suggestKundeByTelefon(state: AppData, nummer: string): KundeMatch[] {
+  const ziffern = nummer.replace(/\D/g, '')
+  if (ziffern.length < 6) return []
+  const suffix = ziffern.slice(-8) // auf die letzten 8 Ziffern vergleichen, robust gegen Landesvorwahl-Schreibweisen (+49 vs. 0)
+  const treffer: KundeMatch[] = []
+  for (const b of KUNDEN_BEREICHE) {
+    for (const k of b.get(state)) {
+      const kundenZiffern = (k.telefon ?? '').replace(/\D/g, '')
+      if (kundenZiffern.length < 6) continue
+      if (kundenZiffern.slice(-8) === suffix || kundenZiffern.endsWith(suffix.slice(-6)) || suffix.endsWith(kundenZiffern.slice(-6))) {
+        treffer.push({ bereich: b.id, kundeId: k.id, kundeName: `${k.firma} (${k.ansprechpartner})`, score: 100 })
+      }
+    }
+  }
+  return treffer
+}
+
 // Exakter Treffer per E-Mail-Adresse (für den Posteingang zuverlässiger als reines Text-Matching).
 export function matchKundeByEmail(state: AppData, email: string): KundeMatch | null {
   const normalized = email.trim().toLowerCase()
