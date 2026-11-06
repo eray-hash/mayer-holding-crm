@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { AlertTriangle, Camera, CheckCircle2, Lock, Plane, Trash2, User } from 'lucide-react'
+import { AlertTriangle, Camera, CheckCircle2, Lock, Plane, Send, Trash2, User } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { useAuth } from '../../context/AuthContext'
 import { supabase, isSupabaseConfigured } from '../../lib/supabaseClient'
@@ -137,6 +137,106 @@ function PasswortSetzen() {
   )
 }
 
+const TELEGRAM_BOT_USERNAME = import.meta.env.VITE_TELEGRAM_BOT_USERNAME as string | undefined
+
+// Verknüpfung mit dem Telegram-Bot (zusätzlicher Kanal für den KI-Assistenten, siehe
+// supabase/functions/telegram-gateway) — Mitarbeiter erzeugen sich hier einen Einmal-Code, schicken
+// ihn per Telegram-Deep-Link an den Bot ("/start <code>"), der Webhook verknüpft dann chat_id <->
+// mitarbeiter.id. Status (verbunden/nicht) wird direkt aus der eigenen mitarbeiter-Zeile gelesen.
+function TelegramVerbinden() {
+  const { session } = useAuth()
+  const [chatId, setChatId] = useState<number | null>(null)
+  const [laedt, setLaedt] = useState(true)
+  const [code, setCode] = useState<string | null>(null)
+  const [erzeugen, setErzeugen] = useState(false)
+  const [fehler, setFehler] = useState('')
+
+  async function laden() {
+    if (!supabase || !session?.user?.email) return
+    const { data } = await supabase.from('mitarbeiter').select('telegram_chat_id').eq('email', session.user.email).maybeSingle()
+    setChatId(data?.telegram_chat_id ?? null)
+    setLaedt(false)
+  }
+
+  useEffect(() => {
+    laden()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.user?.email])
+
+  async function linkErzeugen() {
+    if (!supabase) return
+    setErzeugen(true)
+    setFehler('')
+    try {
+      const { data, error } = await supabase.rpc('generate_my_telegram_link_code')
+      if (error) throw new Error(error.message)
+      setCode(data as string)
+    } catch (err) {
+      setFehler(err instanceof Error ? err.message : 'Link konnte nicht erzeugt werden.')
+    } finally {
+      setErzeugen(false)
+    }
+  }
+
+  async function trennen() {
+    if (!supabase) return
+    await supabase.rpc('clear_my_telegram_link')
+    setChatId(null)
+    setCode(null)
+    laden()
+  }
+
+  if (laedt) return null
+
+  return (
+    <Card className="mb-5 p-5">
+      <h3 className="mb-1 flex items-center gap-1.5 text-sm font-semibold text-slate-700">
+        <Send size={14} /> Telegram-Assistent
+      </h3>
+      <p className="mb-3 text-xs text-slate-400">
+        Verknüpfe dein Telegram, um dem CRM-Assistenten direkt per Telegram zu schreiben — Notizen, Aufgaben, Fragen zu
+        Kunden, genau wie im KI-Chat hier.
+      </p>
+      {chatId ? (
+        <div className="flex items-center justify-between">
+          <p className="flex items-center gap-1.5 text-sm font-medium text-emerald-600">
+            <CheckCircle2 size={15} /> Verbunden
+          </p>
+          <button onClick={trennen} className="text-sm font-medium text-rose-600 hover:underline">
+            Verbindung trennen
+          </button>
+        </div>
+      ) : code ? (
+        <div>
+          {TELEGRAM_BOT_USERNAME ? (
+            <a
+              href={`https://t.me/${TELEGRAM_BOT_USERNAME}?start=${code}`}
+              target="_blank"
+              rel="noreferrer"
+              className="mb-2 inline-flex items-center gap-1.5 rounded-lg bg-accent-600 px-3 py-2 text-sm font-medium text-white hover:bg-accent-700"
+            >
+              <Send size={14} /> In Telegram öffnen & verbinden
+            </a>
+          ) : (
+            <p className="mb-2 text-sm text-slate-600">
+              Schick dem Bot in Telegram: <code className="rounded bg-slate-100 px-1.5 py-0.5">/start {code}</code>
+            </p>
+          )}
+          <p className="text-xs text-slate-400">Klick danach hier auf "Status aktualisieren", sobald du in Telegram verbunden bist.</p>
+          <button onClick={laden} className="mt-2 text-sm font-medium text-accent-600 hover:underline">
+            Status aktualisieren
+          </button>
+        </div>
+      ) : (
+        <PrimaryButton onClick={linkErzeugen} disabled={erzeugen}>
+          {erzeugen ? 'Erzeugt …' : 'Mit Telegram verbinden'}
+        </PrimaryButton>
+      )}
+      {fehler && <p className="mt-2 text-sm font-medium text-rose-600">{fehler}</p>}
+    </Card>
+  )
+}
+
 export function MeinProfil() {
   const { state, dispatch } = useApp()
   const { session } = useAuth()
@@ -204,7 +304,10 @@ export function MeinProfil() {
       <AbwesenheitVerwalten />
 
       {isSupabaseConfigured && session ? (
-        <PasswortSetzen />
+        <>
+          <TelegramVerbinden />
+          <PasswortSetzen />
+        </>
       ) : (
         <div className="mb-5 flex items-start gap-2 rounded-lg bg-amber-50 p-3 text-xs text-amber-700">
           <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" />
