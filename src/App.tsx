@@ -35,7 +35,7 @@ import { FinanzierungenDetail } from './pages/finanzierungen/FinanzierungenDetai
 import { VorlagenPageFinanzierungen } from './pages/finanzierungen/VorlagenPageFinanzierungen'
 import { PrivatListe } from './pages/privat/PrivatListe'
 import { PrivatDetail } from './pages/privat/PrivatDetail'
-import { ToDoListe } from './pages/todo/ToDoListe'
+import { ToDoListe, BereichToDoListe } from './pages/todo/ToDoListe'
 import { HeuteScreen } from './pages/heute/HeuteScreen'
 import { Postfach } from './pages/postfach/Postfach'
 import { Kampagnen } from './pages/kampagnen/Kampagnen'
@@ -87,6 +87,7 @@ function AdminRoutesContent() {
         <Route path="/beratung/rechnungen" element={<RequireBereich bereich="beratung"><Rechnungen /></RequireBereich>} />
         <Route path="/beratung/leistungen" element={<RequireBereich bereich="beratung"><Leistungen /></RequireBereich>} />
         <Route path="/beratung/projekte" element={<RequireBereich bereich="beratung"><ProjekteListe /></RequireBereich>} />
+        <Route path="/beratung/todo" element={<RequireBereich bereich="beratung"><BereichToDoListe bereich="beratung" label="Unternehmensberatung" /></RequireBereich>} />
 
         <Route path="/immobilien" element={<RequireBereich bereich="immobilien"><ObjektListe /></RequireBereich>} />
         <Route path="/immobilien/objekte/:id" element={<RequireBereich bereich="immobilien"><ObjektDetail /></RequireBereich>} />
@@ -98,26 +99,31 @@ function AdminRoutesContent() {
         <Route path="/erben/mandanten/:id" element={<RequireBereich bereich="erben"><ErbenDetail /></RequireBereich>} />
         <Route path="/erben/vorlagen/:kind" element={<RequireBereich bereich="erben"><VorlagenPageErben /></RequireBereich>} />
         <Route path="/erben/projekte" element={<RequireBereich bereich="erben"><ProjekteListe /></RequireBereich>} />
+        <Route path="/erben/todo" element={<RequireBereich bereich="erben"><BereichToDoListe bereich="erben" label="Erben" /></RequireBereich>} />
 
         <Route path="/betriebsuebergabe" element={<RequireBereich bereich="betriebsuebergabe"><BetriebsuebergabeListe /></RequireBereich>} />
         <Route path="/betriebsuebergabe/mandanten/:id" element={<RequireBereich bereich="betriebsuebergabe"><BetriebsuebergabeDetail /></RequireBereich>} />
         <Route path="/betriebsuebergabe/vorlagen/:kind" element={<RequireBereich bereich="betriebsuebergabe"><VorlagenPageBetriebsuebergabe /></RequireBereich>} />
         <Route path="/betriebsuebergabe/projekte" element={<RequireBereich bereich="betriebsuebergabe"><ProjekteListe /></RequireBereich>} />
+        <Route path="/betriebsuebergabe/todo" element={<RequireBereich bereich="betriebsuebergabe"><BereichToDoListe bereich="betriebsuebergabe" label="Betriebsübergabe" /></RequireBereich>} />
 
         <Route path="/betriebsformen" element={<RequireBereich bereich="betriebsformen"><BetriebsformenListe /></RequireBereich>} />
         <Route path="/betriebsformen/mandanten/:id" element={<RequireBereich bereich="betriebsformen"><BetriebsformenDetail /></RequireBereich>} />
         <Route path="/betriebsformen/vorlagen/:kind" element={<RequireBereich bereich="betriebsformen"><VorlagenPageBetriebsformen /></RequireBereich>} />
         <Route path="/betriebsformen/projekte" element={<RequireBereich bereich="betriebsformen"><ProjekteListe /></RequireBereich>} />
+        <Route path="/betriebsformen/todo" element={<RequireBereich bereich="betriebsformen"><BereichToDoListe bereich="betriebsformen" label="Betriebsformen" /></RequireBereich>} />
 
         <Route path="/akademie" element={<RequireBereich bereich="akademie"><AkademieListe /></RequireBereich>} />
         <Route path="/akademie/teilnehmer/:id" element={<RequireBereich bereich="akademie"><AkademieDetail /></RequireBereich>} />
         <Route path="/akademie/vorlagen/:kind" element={<RequireBereich bereich="akademie"><VorlagenPageAkademie /></RequireBereich>} />
         <Route path="/akademie/projekte" element={<RequireBereich bereich="akademie"><ProjekteListe /></RequireBereich>} />
+        <Route path="/akademie/todo" element={<RequireBereich bereich="akademie"><BereichToDoListe bereich="akademie" label="Akademie" /></RequireBereich>} />
 
         <Route path="/finanzierungen" element={<RequireBereich bereich="finanzierungen"><FinanzierungenListe /></RequireBereich>} />
         <Route path="/finanzierungen/mandanten/:id" element={<RequireBereich bereich="finanzierungen"><FinanzierungenDetail /></RequireBereich>} />
         <Route path="/finanzierungen/vorlagen/:kind" element={<RequireBereich bereich="finanzierungen"><VorlagenPageFinanzierungen /></RequireBereich>} />
         <Route path="/finanzierungen/projekte" element={<RequireBereich bereich="finanzierungen"><ProjekteListe /></RequireBereich>} />
+        <Route path="/finanzierungen/todo" element={<RequireBereich bereich="finanzierungen"><BereichToDoListe bereich="finanzierungen" label="Finanzierungen" /></RequireBereich>} />
 
         <Route path="*" element={<RootRedirect />} />
       </Routes>

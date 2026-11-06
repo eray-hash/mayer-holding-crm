@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { Users, FileText, ChevronDown, ChevronLeft, ChevronRight, Scale, Sun, LayoutGrid, UserCog } from 'lucide-react'
+import { Users, FileText, ChevronDown, ChevronLeft, ChevronRight, Scale, Sun, LayoutGrid, UserCog, ListTodo } from 'lucide-react'
 
 const VORLAGEN_LINKS = [
   { kind: 'vollmacht', label: 'Vollmacht' },
@@ -30,8 +30,9 @@ export function SidebarBetriebsformen({ collapsed, onToggle }: { collapsed: bool
           icon={<Users size={17} />}
           label="Mandanten"
           collapsed={collapsed}
-          active={isActive('/betriebsformen') && !location.pathname.includes('vorlagen') && !location.pathname.includes('projekte')}
+          active={isActive('/betriebsformen') && !location.pathname.includes('vorlagen') && !location.pathname.includes('projekte') && !location.pathname.includes('todo')}
         />
+        <SideLink to="/betriebsformen/todo" icon={<ListTodo size={17} />} label="To-Do-Liste" collapsed={collapsed} active={isActive('/betriebsformen/todo')} />
 
         <div>
           <button

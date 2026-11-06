@@ -1,19 +1,24 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { read, utils } from 'xlsx'
-import { Plus, Check, RotateCcw, Trash2, Share2, Upload, Download, ChevronDown } from 'lucide-react'
+import { Plus, Check, RotateCcw, Trash2, Share2, Upload, Download, ChevronDown, ArrowRightLeft } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { useAuth } from '../../context/AuthContext'
 import { supabase, isSupabaseConfigured } from '../../lib/supabaseClient'
 import { Modal, Field, inputClass, PrimaryButton, SecondaryButton, EmptyState } from '../../components/ui'
 import { uid, today } from '../../lib/dates'
 import { CURRENT_USER } from '../../data/constants'
-import type { ToDoEintrag } from '../../types'
+import { KUNDEN_BEREICHE } from '../../data/kundenBereiche'
+import type { ToDoEintrag, KundeBereich } from '../../types'
 
-// Pro Mitarbeiter eine eigene, isolierte Liste (RLS: besitzer_email) statt einer einzigen
-// geteilten — mit optionaler Freigabe (lesen/schreiben) an einzelne Kollegen und einem
-// Listen-Umschalter oben (Nutzer-Entscheidung 2026-11-06). Standard-Sortierung ist die
-// ursprüngliche Reihenfolge (reihenfolge-Spalte), nicht automatisch nach Prio — genau wie in der
-// Excel-Vorlage, wo die Zeilenreihenfolge selbst die eigentliche Struktur trägt.
+// Zwei Arten von Listen teilen sich dieselbe Tabelle/Komponente:
+// - Privat: eigene, isolierte Liste pro Mitarbeiter (RLS: besitzer_email), optional mit Lese-/
+//   Schreibrecht an Kollegen freigebbar, mit Listen-Umschalter oben.
+// - Bereich (z.B. Beratung, Erben, ...): geteilte Liste, für alle aktiven Mitarbeiter sichtbar und
+//   bearbeitbar wie der Rest des jeweiligen Bereichs.
+// Aufgaben lassen sich in beide Richtungen zwischen der eigenen privaten Liste und einer
+// Bereichs-Liste verschieben ("Bereich zuweisen" / "In private Liste verschieben") — Nutzer-
+// Entscheidung 2026-11-06. Standard-Sortierung ist die ursprüngliche Reihenfolge (reihenfolge-
+// Spalte), nicht automatisch nach Prio — genau wie in der Excel-Vorlage.
 type ExcelSpalten = [string, string, string, string, string, string, string, string, string, string, string, string, string, string, string, string]
 
 function zuExcelZeile(rows: unknown[][]): ExcelSpalten[] {
@@ -22,10 +27,7 @@ function zuExcelZeile(rows: unknown[][]): ExcelSpalten[] {
 
 function textWert(v: unknown): string | undefined {
   if (v === null || v === undefined) return undefined
-  if (typeof v === 'number') {
-    if (Number.isInteger(v)) return String(v)
-    return String(v)
-  }
+  if (typeof v === 'number') return String(v)
   const s = String(v).trim()
   return s || undefined
 }
@@ -36,7 +38,7 @@ function zahlWert(v: unknown): number | undefined {
   return Number.isNaN(n) ? undefined : n
 }
 
-function parseExcelDatei(workbookBuffer: ArrayBuffer, sheetName: string): Omit<ToDoEintrag, 'id' | 'besitzerEmail' | 'reihenfolge' | 'erstelltAm'>[] {
+function parseExcelDatei(workbookBuffer: ArrayBuffer, sheetName: string): Omit<ToDoEintrag, 'id' | 'besitzerEmail' | 'bereich' | 'reihenfolge' | 'erstelltAm'>[] {
   const wb = read(workbookBuffer, { type: 'array', cellDates: true })
   const sheet = wb.Sheets[sheetName] ?? wb.Sheets[wb.SheetNames[0]]
   if (!sheet) return []
@@ -87,8 +89,17 @@ function exportiereCsv(liste: ToDoEintrag[], dateiname: string) {
 
 type Mitarbeiterkurz = { name: string; email: string }
 type Recht = 'eigentuemer' | 'lesen' | 'schreiben'
+type Scope = { kind: 'privat' } | { kind: 'bereich'; bereich: KundeBereich; label: string }
 
 export function ToDoListe() {
+  return <ToDoListeKern scope={{ kind: 'privat' }} />
+}
+
+export function BereichToDoListe({ bereich, label }: { bereich: KundeBereich; label: string }) {
+  return <ToDoListeKern scope={{ kind: 'bereich', bereich, label }} />
+}
+
+function ToDoListeKern({ scope }: { scope: Scope }) {
   const { state, dispatch } = useApp()
   const { session, mitarbeiter } = useAuth()
   const eigeneEmail = (isSupabaseConfigured && session?.user.email) || 'lokal'
@@ -119,19 +130,23 @@ export function ToDoListe() {
     return map
   }, [alleMitarbeiter, eigeneEmail, eigenerName])
 
-  // Eigene Liste + alle Listen, die mir freigegeben wurden.
+  // Nur relevant im Privat-Scope: eigene Liste + alle Listen, die mir freigegeben wurden.
   const verfuegbareListen = useMemo(() => {
+    if (scope.kind !== 'privat') return []
     const fremde = state.todoFreigaben
       .filter((f) => f.empfaengerEmail === eigeneEmail)
       .map((f) => ({ besitzerEmail: f.besitzerEmail, recht: f.recht as Recht }))
     return [{ besitzerEmail: eigeneEmail, recht: 'eigentuemer' as Recht }, ...fremde]
-  }, [state.todoFreigaben, eigeneEmail])
+  }, [scope, state.todoFreigaben, eigeneEmail])
 
-  const meinRecht: Recht = verfuegbareListen.find((l) => l.besitzerEmail === aktiveListe)?.recht ?? 'lesen'
+  const meinRecht: Recht = scope.kind === 'bereich' ? 'eigentuemer' : verfuegbareListen.find((l) => l.besitzerEmail === aktiveListe)?.recht ?? 'lesen'
   const darfSchreiben = meinRecht === 'eigentuemer' || meinRecht === 'schreiben'
-  const darfLoeschen = meinRecht === 'eigentuemer'
+  const darfLoeschen = scope.kind === 'bereich' ? true : meinRecht === 'eigentuemer'
 
-  const listenEintraege = useMemo(() => state.todos.filter((t) => t.besitzerEmail === aktiveListe), [state.todos, aktiveListe])
+  const listenEintraege = useMemo(
+    () => (scope.kind === 'bereich' ? state.todos.filter((t) => t.bereich === scope.bereich) : state.todos.filter((t) => !t.bereich && t.besitzerEmail === aktiveListe)),
+    [state.todos, scope, aktiveListe],
+  )
   const offen = useMemo(() => listenEintraege.filter((t) => !t.erledigtAm), [listenEintraege])
   const erledigt = useMemo(() => listenEintraege.filter((t) => t.erledigtAm), [listenEintraege])
 
@@ -162,27 +177,54 @@ export function ToDoListe() {
   function loeschen(t: ToDoEintrag) {
     if (confirm(`"${t.aufgabe}" wirklich löschen?`)) dispatch({ type: 'DELETE_TODO', id: t.id })
   }
+  function naechsteReihenfolgeFuer(ziel: ToDoEintrag[]) {
+    return 1 + Math.max(0, ...ziel.map((t) => t.reihenfolge ?? 0))
+  }
+  function bereichZuweisen(t: ToDoEintrag, bereich: KundeBereich) {
+    const ziel = state.todos.filter((x) => x.bereich === bereich)
+    dispatch({ type: 'UPDATE_TODO', id: t.id, patch: { bereich, reihenfolge: naechsteReihenfolgeFuer(ziel) } })
+  }
+  function inPrivateListeVerschieben(t: ToDoEintrag) {
+    const ziel = state.todos.filter((x) => !x.bereich && x.besitzerEmail === eigeneEmail)
+    dispatch({ type: 'UPDATE_TODO', id: t.id, patch: { bereich: undefined, besitzerEmail: eigeneEmail, reihenfolge: naechsteReihenfolgeFuer(ziel) } })
+  }
 
   function importDatei(datei: File) {
     datei.arrayBuffer().then((buffer) => {
       const importiert = parseExcelDatei(buffer, 'to Do')
       let n = naechsteReihenfolge()
       for (const eintrag of importiert) {
-        dispatch({ type: 'ADD_TODO', todo: { ...eintrag, id: uid('todo'), besitzerEmail: eigeneEmail, reihenfolge: n++, erstelltAm: today() } })
+        dispatch({
+          type: 'ADD_TODO',
+          todo: {
+            ...eintrag,
+            id: uid('todo'),
+            besitzerEmail: eigeneEmail,
+            bereich: scope.kind === 'bereich' ? scope.bereich : undefined,
+            reihenfolge: n++,
+            erstelltAm: today(),
+          },
+        })
       }
       alert(`${importiert.length} Aufgaben importiert.`)
     })
   }
 
+  const titel = scope.kind === 'bereich' ? `To-Do-Liste — ${scope.label}` : 'To-Do-Liste'
+  const dateiname = scope.kind === 'bereich' ? `todo-liste-${scope.bereich}.csv` : `todo-liste-${aktiveListe}.csv`
+
   return (
     <div>
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold text-slate-800">To-Do-Liste</h1>
-          <p className="text-sm text-slate-500">{offen.length} offen · {erledigt.length} erledigt</p>
+          <h1 className="text-xl font-semibold text-slate-800">{titel}</h1>
+          <p className="text-sm text-slate-500">
+            {offen.length} offen · {erledigt.length} erledigt
+            {scope.kind === 'bereich' && ' · für alle Mitarbeiter sichtbar'}
+          </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {verfuegbareListen.length > 1 && (
+          {scope.kind === 'privat' && verfuegbareListen.length > 1 && (
             <div className="relative">
               <select
                 value={aktiveListe}
@@ -202,7 +244,7 @@ export function ToDoListe() {
             <option value="reihenfolge">Reihenfolge (wie Excel)</option>
             <option value="prio">Nach Priorität</option>
           </select>
-          {aktiveListe === eigeneEmail && isSupabaseConfigured && (
+          {scope.kind === 'privat' && aktiveListe === eigeneEmail && isSupabaseConfigured && (
             <SecondaryButton onClick={() => setFreigabenOpen(true)}>
               <Share2 size={14} /> Freigeben
             </SecondaryButton>
@@ -215,7 +257,7 @@ export function ToDoListe() {
               </SecondaryButton>
             </>
           )}
-          <SecondaryButton onClick={() => exportiereCsv(sichtbar, `todo-liste-${aktiveListe}.csv`)}>
+          <SecondaryButton onClick={() => exportiereCsv(sichtbar, dateiname)}>
             <Download size={14} /> Export
           </SecondaryButton>
           {darfSchreiben && (
@@ -241,8 +283,8 @@ export function ToDoListe() {
         </button>
       </div>
 
-      {/* overflow-x-auto + sticky erste Spalten, damit Start/Prio/Unter/Kunde beim Scrollen nach
-          rechts sichtbar bleiben (genau das war die Beschwerde: "dann sind die Prios weg"). */}
+      {/* overflow-x-auto + sticky erste Spalten, damit Start/Prio/Unter beim Scrollen nach rechts
+          sichtbar bleiben (Beschwerde: "dann sind die Prios weg"). */}
       <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
         <table className="w-full text-sm">
           <thead>
@@ -268,22 +310,13 @@ export function ToDoListe() {
           <tbody>
             {sichtbar.map((t) => (
               <tr key={t.id} className="group border-b border-slate-50 last:border-0 hover:bg-slate-50/60">
-                <td
-                  onClick={() => setEditEintrag(t)}
-                  className="sticky left-0 z-10 cursor-pointer whitespace-nowrap bg-white px-3 py-3 text-slate-500 group-hover:bg-slate-50"
-                >
+                <td onClick={() => setEditEintrag(t)} className="sticky left-0 z-10 cursor-pointer whitespace-nowrap bg-white px-3 py-3 text-slate-500 group-hover:bg-slate-50">
                   {t.startDatum ?? ''}
                 </td>
-                <td
-                  onClick={() => setEditEintrag(t)}
-                  className="sticky left-[90px] z-10 cursor-pointer bg-white px-3 py-3 font-medium text-slate-700 group-hover:bg-slate-50"
-                >
+                <td onClick={() => setEditEintrag(t)} className="sticky left-[90px] z-10 cursor-pointer bg-white px-3 py-3 font-medium text-slate-700 group-hover:bg-slate-50">
                   {t.prio ?? ''}
                 </td>
-                <td
-                  onClick={() => setEditEintrag(t)}
-                  className="sticky left-[146px] z-10 cursor-pointer border-r border-slate-100 bg-white px-3 py-3 text-slate-500 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.08)] group-hover:bg-slate-50"
-                >
+                <td onClick={() => setEditEintrag(t)} className="sticky left-[146px] z-10 cursor-pointer border-r border-slate-100 bg-white px-3 py-3 text-slate-500 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.08)] group-hover:bg-slate-50">
                   {t.unterPrio ?? ''}
                 </td>
                 <td onClick={() => setEditEintrag(t)} className="cursor-pointer px-3 py-3 text-slate-600">{t.kundeProjekt ?? ''}</td>
@@ -300,6 +333,14 @@ export function ToDoListe() {
                 {ansicht === 'erledigt' && <td className="px-3 py-3 whitespace-nowrap text-slate-400">{t.erledigtAm}</td>}
                 <td className="px-3 py-3 text-right">
                   <div className="flex items-center justify-end gap-1.5">
+                    {darfSchreiben && scope.kind === 'privat' && (
+                      <BereichZuweisenDropdown onWaehlen={(b) => bereichZuweisen(t, b)} />
+                    )}
+                    {darfSchreiben && scope.kind === 'bereich' && (
+                      <button onClick={() => inPrivateListeVerschieben(t)} title="In meine private Liste verschieben" className="rounded-md bg-slate-100 p-1.5 text-slate-600 hover:bg-slate-200">
+                        <ArrowRightLeft size={14} />
+                      </button>
+                    )}
                     {darfSchreiben && (ansicht === 'offen' ? (
                       <button onClick={() => erledigen(t)} title="Als erledigt markieren" className="rounded-md bg-emerald-50 p-1.5 text-emerald-600 hover:bg-emerald-100">
                         <Check size={14} />
@@ -334,7 +375,17 @@ export function ToDoListe() {
           titel="Neue Aufgabe"
           onClose={() => setAddOpen(false)}
           onSubmit={(eintrag) => {
-            dispatch({ type: 'ADD_TODO', todo: { ...eintrag, id: uid('todo'), besitzerEmail: aktiveListe, reihenfolge: naechsteReihenfolge(), erstelltAm: today() } })
+            dispatch({
+              type: 'ADD_TODO',
+              todo: {
+                ...eintrag,
+                id: uid('todo'),
+                besitzerEmail: scope.kind === 'bereich' ? eigeneEmail : aktiveListe,
+                bereich: scope.kind === 'bereich' ? scope.bereich : undefined,
+                reihenfolge: naechsteReihenfolge(),
+                erstelltAm: today(),
+              },
+            })
             setAddOpen(false)
           }}
         />
@@ -357,6 +408,36 @@ export function ToDoListe() {
           alleMitarbeiter={alleMitarbeiter.filter((m) => m.email !== eigeneEmail)}
           onClose={() => setFreigabenOpen(false)}
         />
+      )}
+    </div>
+  )
+}
+
+function BereichZuweisenDropdown({ onWaehlen }: { onWaehlen: (bereich: KundeBereich) => void }) {
+  const [offen, setOffen] = useState(false)
+  return (
+    <div className="relative">
+      <button onClick={() => setOffen((o) => !o)} title="Bereich zuweisen" className="rounded-md bg-accent-50 p-1.5 text-accent-700 hover:bg-accent-100">
+        <ArrowRightLeft size={14} />
+      </button>
+      {offen && (
+        <>
+          <button className="fixed inset-0 z-40 cursor-default" onClick={() => setOffen(false)} aria-label="Schließen" />
+          <div className="absolute right-0 z-50 mt-1 w-48 rounded-lg border border-slate-200 bg-white p-1 shadow-lg">
+            {KUNDEN_BEREICHE.filter((b) => b.id !== 'privat').map((b) => (
+              <button
+                key={b.id}
+                onClick={() => {
+                  onWaehlen(b.id)
+                  setOffen(false)
+                }}
+                className="block w-full rounded-md px-2.5 py-1.5 text-left text-sm text-slate-600 hover:bg-slate-50"
+              >
+                {b.label}
+              </button>
+            ))}
+          </div>
+        </>
       )}
     </div>
   )
@@ -405,7 +486,7 @@ function FreigabenModal({ besitzerEmail, alleMitarbeiter, onClose }: { besitzerE
   )
 }
 
-type ToDoFormWert = Omit<ToDoEintrag, 'id' | 'besitzerEmail' | 'reihenfolge' | 'erstelltAm'>
+type ToDoFormWert = Omit<ToDoEintrag, 'id' | 'besitzerEmail' | 'bereich' | 'reihenfolge' | 'erstelltAm'>
 
 function ToDoModal({
   titel,

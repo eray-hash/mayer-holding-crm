@@ -465,6 +465,7 @@ function todoToRow(t: ToDoEintrag) {
   return {
     id: t.id,
     besitzer_email: t.besitzerEmail,
+    bereich: t.bereich ?? null,
     reihenfolge: t.reihenfolge ?? null,
     start_datum: t.startDatum ?? null,
     prio: t.prio ?? null,
@@ -489,6 +490,7 @@ function rowToTodo(row: any): ToDoEintrag {
   return {
     id: row.id,
     besitzerEmail: row.besitzer_email,
+    bereich: row.bereich ?? undefined,
     reihenfolge: row.reihenfolge ?? undefined,
     startDatum: row.start_datum ?? undefined,
     prio: row.prio ?? undefined,

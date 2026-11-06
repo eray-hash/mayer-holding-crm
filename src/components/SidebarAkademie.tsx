@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { Users, FileText, ChevronDown, ChevronLeft, ChevronRight, GraduationCap, Sun, LayoutGrid, UserCog } from 'lucide-react'
+import { Users, FileText, ChevronDown, ChevronLeft, ChevronRight, GraduationCap, Sun, LayoutGrid, UserCog, ListTodo } from 'lucide-react'
 
 const VORLAGEN_LINKS = [
   { kind: 'vollmacht', label: 'Vollmacht' },
@@ -30,8 +30,9 @@ export function SidebarAkademie({ collapsed, onToggle }: { collapsed: boolean; o
           icon={<Users size={17} />}
           label="Teilnehmer"
           collapsed={collapsed}
-          active={isActive('/akademie') && !location.pathname.includes('vorlagen') && !location.pathname.includes('projekte')}
+          active={isActive('/akademie') && !location.pathname.includes('vorlagen') && !location.pathname.includes('projekte') && !location.pathname.includes('todo')}
         />
+        <SideLink to="/akademie/todo" icon={<ListTodo size={17} />} label="To-Do-Liste" collapsed={collapsed} active={isActive('/akademie/todo')} />
 
         <div>
           <button
