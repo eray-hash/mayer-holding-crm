@@ -221,7 +221,7 @@ Deno.serve(async (req: Request) => {
   // --- Mitarbeiter anhand des verknüpften Chats finden ---
   const { data: mitarbeiter } = await supabase
     .from('mitarbeiter')
-    .select('id, name, aktiv, telegram_last_kunde_id, telegram_last_kunde_bereich')
+    .select('id, name, aktiv, telegram_last_kunde_id, telegram_last_kunde_bereich, telegram_pending')
     .eq('telegram_chat_id', chatId)
     .maybeSingle()
   if (!mitarbeiter || !mitarbeiter.aktiv) {
@@ -295,39 +295,67 @@ Deno.serve(async (req: Request) => {
     return new Response('ok')
   }
 
-  // --- Normale Text-Nachricht: klassifizieren, Kunde zuordnen, entsprechend handeln ---
-  let klass: { typ: string; erkannter_name?: string; titel?: string; faelligkeitsdatum?: string; frage?: string }
-  try {
-    const result = await callEmailGateway('assistant_classify', { transcript: text, heute: new Date().toISOString().slice(0, 10) })
-    klass = result.klassifikation
-  } catch {
-    await sendTelegramMessage(chatId, 'Da ist leider etwas schiefgelaufen. Versuch es nochmal.')
-    return new Response('ok')
-  }
-
   const { data: kundenRows } = await supabase
     .from('kunden')
     .select('id, bereich, firma, ansprechpartner, email, telefon, status, follow_up, activities, dokumente')
   const alleKunden = (kundenRows ?? []) as KundeRow[]
-  const kandidatenNachId = new Map<string, KundeMatch>()
-  for (const k of [...(klass.erkannter_name ? matchKandidaten(alleKunden, klass.erkannter_name) : []), ...matchKandidaten(alleKunden, text)]) {
-    const vorhanden = kandidatenNachId.get(k.kunde.id)
-    if (!vorhanden || k.score > vorhanden.score) kandidatenNachId.set(k.kunde.id, k)
-  }
-  const alleKandidaten = [...kandidatenNachId.values()]
-  const topScore = alleKandidaten.length > 0 ? Math.max(...alleKandidaten.map((k) => k.score)) : 0
-  const kandidaten = alleKandidaten.filter((k) => k.score === topScore)
 
-  if (kandidaten.length > 1) {
-    await sendTelegramMessage(chatId, `Dazu habe ich mehrere passende Kunden/Mandanten gefunden: ${kandidaten.map((k) => `${k.kunde.firma} (${k.kunde.ansprechpartner})`).join(', ')}. Wen genau meinst du?`)
-    return new Response('ok')
+  // --- Offene Rückfrage auflösen (z.B. vorige Nachricht: "mehrere Kunden gefunden, wen meinst du?")
+  // — ohne das landet eine kurze Antwort wie nur der Vorname als neue, kontextlose Nachricht und wird
+  // falsch interpretiert (siehe echter Fehlgriff beim Testen: "Renate" löste nichts auf, die
+  // Folgenachricht "Renate Mayer" landete dann fälschlich als sinnlose Notiz in ihrer Akte).
+  let klass: { typ: string; erkannter_name?: string; titel?: string; faelligkeitsdatum?: string; frage?: string } | null = null
+  let match: KundeRow | null = null
+  const pending = mitarbeiter.telegram_pending as { text: string; klass: typeof klass; kandidaten_ids: string[]; erstellt_am: string } | null
+  if (pending && Date.now() - new Date(pending.erstellt_am).getTime() < 10 * 60 * 1000) {
+    const textWoerter = new Set(woerter(text))
+    const treffer = alleKunden.filter(
+      (k) => pending.kandidaten_ids.includes(k.id) && [...woerter(k.firma), ...woerter(k.ansprechpartner)].some((w) => textWoerter.has(w)),
+    )
+    if (treffer.length === 1) {
+      match = treffer[0]
+      klass = pending.klass
+      await supabase.from('mitarbeiter').update({ telegram_pending: null }).eq('id', mitarbeiter.id)
+    } else {
+      await supabase.from('mitarbeiter').update({ telegram_pending: null }).eq('id', mitarbeiter.id)
+    }
   }
 
-  let match = kandidaten[0]?.kunde ?? null
-  if (!match && mitarbeiter.telegram_last_kunde_id) {
-    match = alleKunden.find((k) => k.id === mitarbeiter.telegram_last_kunde_id) ?? null
+  // --- Normale Klassifizierung + Kunden-Zuordnung, falls keine Rückfrage aufgelöst wurde ---
+  if (!klass) {
+    try {
+      const result = await callEmailGateway('assistant_classify', { transcript: text, heute: new Date().toISOString().slice(0, 10) })
+      klass = result.klassifikation
+    } catch {
+      await sendTelegramMessage(chatId, 'Da ist leider etwas schiefgelaufen. Versuch es nochmal.')
+      return new Response('ok')
+    }
+
+    const kandidatenNachId = new Map<string, KundeMatch>()
+    for (const k of [...(klass.erkannter_name ? matchKandidaten(alleKunden, klass.erkannter_name) : []), ...matchKandidaten(alleKunden, text)]) {
+      const vorhanden = kandidatenNachId.get(k.kunde.id)
+      if (!vorhanden || k.score > vorhanden.score) kandidatenNachId.set(k.kunde.id, k)
+    }
+    const alleKandidaten = [...kandidatenNachId.values()]
+    const topScore = alleKandidaten.length > 0 ? Math.max(...alleKandidaten.map((k) => k.score)) : 0
+    const kandidaten = alleKandidaten.filter((k) => k.score === topScore)
+
+    if (kandidaten.length > 1) {
+      await supabase
+        .from('mitarbeiter')
+        .update({ telegram_pending: { text, klass, kandidaten_ids: kandidaten.map((k) => k.kunde.id), erstellt_am: new Date().toISOString() } })
+        .eq('id', mitarbeiter.id)
+      await sendTelegramMessage(chatId, `Dazu habe ich mehrere passende Kunden/Mandanten gefunden: ${kandidaten.map((k) => `${k.kunde.firma} (${k.kunde.ansprechpartner})`).join(', ')}. Wen genau meinst du?`)
+      return new Response('ok')
+    }
+
+    match = kandidaten[0]?.kunde ?? null
+    if (!match && mitarbeiter.telegram_last_kunde_id) {
+      match = alleKunden.find((k) => k.id === mitarbeiter.telegram_last_kunde_id) ?? null
+    }
   }
   if (match) await supabase.from('mitarbeiter').update({ telegram_last_kunde_id: match.id, telegram_last_kunde_bereich: match.bereich }).eq('id', mitarbeiter.id)
+  if (!klass) return new Response('ok') // kann hier nicht mehr eintreten, beruhigt nur die Typprüfung
 
   if (klass.typ === 'frage') {
     const frageText = klass.frage ?? text
@@ -381,17 +409,15 @@ Deno.serve(async (req: Request) => {
 
   if (klass.typ === 'uebersicht') {
     const heute = new Date().toISOString().slice(0, 10)
-    const faelligeKunden = alleKunden
-      .filter((k) => k.follow_up && !(k.follow_up as any).done && (k.follow_up as any).date <= heute)
+    const eigeneFaelligeKunden = alleKunden
+      .filter((k) => k.verantwortlich === mitarbeiter.name && k.follow_up && !(k.follow_up as any).done && (k.follow_up as any).date <= heute)
       .sort((a, b) => ((a.follow_up as any).date as string).localeCompare((b.follow_up as any).date as string))
     const faelligkeitenAbschnitt = [
       `Heutiges Datum: ${heute}`,
       '',
       `Für ${mitarbeiter.name} fällige/überfällige Follow-ups (eigene Kunden/Mandanten, unabhängig vom Bereich):`,
-      ...(faelligeKunden.length > 0
-        ? faelligeKunden
-            .filter((k) => k.verantwortlich === mitarbeiter.name)
-            .map((k) => `- ${k.firma} (${k.ansprechpartner}), Bereich ${k.bereich}: ${(k.follow_up as any).note} — fällig ${(k.follow_up as any).date}`)
+      ...(eigeneFaelligeKunden.length > 0
+        ? eigeneFaelligeKunden.map((k) => `- ${k.firma} (${k.ansprechpartner}), Bereich ${k.bereich}: ${(k.follow_up as any).note} — fällig ${(k.follow_up as any).date}`)
         : ['(keine fälligen Follow-ups)']),
     ].join('\n')
     try {
