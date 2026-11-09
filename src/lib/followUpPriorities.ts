@@ -25,7 +25,7 @@ export function collectFollowUpPriorities(state: AppData): FollowUpEntry[] {
 
   for (const b of KUNDEN_BEREICHE) {
     for (const k of b.get(state)) {
-      if (k.followUp.done || k.followUp.date > heute) continue
+      if (!k.followUp?.date || k.followUp.done || k.followUp.date > heute) continue
       out.push({
         bereich: b.id,
         id: k.id,
@@ -40,7 +40,7 @@ export function collectFollowUpPriorities(state: AppData): FollowUpEntry[] {
   }
 
   for (const o of state.objekte) {
-    if (o.followUp.done || o.followUp.date > heute) continue
+    if (!o.followUp?.date || o.followUp.done || o.followUp.date > heute) continue
     out.push({
       bereich: 'immobilien',
       id: o.id,
