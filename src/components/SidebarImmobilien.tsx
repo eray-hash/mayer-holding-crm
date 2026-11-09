@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { Building2, Landmark, FileText, ChevronDown, ChevronLeft, ChevronRight, ScrollText, Sun, LayoutGrid, UserCog } from 'lucide-react'
+import { Building2, Landmark, FileText, ChevronDown, ChevronLeft, ChevronRight, ScrollText, Sun, LayoutGrid, UserCog, ListTodo } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { OBJEKT_GRUPPEN } from '../data/constants'
 
@@ -80,6 +80,7 @@ export function SidebarImmobilien({ collapsed, onToggle }: { collapsed: boolean;
           collapsed={collapsed}
           active={isActive('/immobilien/finanzierungen')}
         />
+        <SideLink to="/immobilien/todo" icon={<ListTodo size={17} />} label="To-Do-Liste" collapsed={collapsed} active={isActive('/immobilien/todo')} />
 
         <div>
           <button

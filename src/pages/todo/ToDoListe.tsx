@@ -7,8 +7,8 @@ import { supabase, isSupabaseConfigured } from '../../lib/supabaseClient'
 import { Modal, Field, inputClass, PrimaryButton, SecondaryButton, EmptyState } from '../../components/ui'
 import { uid, today } from '../../lib/dates'
 import { CURRENT_USER } from '../../data/constants'
-import { KUNDEN_BEREICHE } from '../../data/kundenBereiche'
-import type { ToDoEintrag, KundeBereich } from '../../types'
+import { ALLE_BEREICHE } from '../../data/bereiche'
+import type { ToDoEintrag, Bereich } from '../../types'
 
 // Zwei Arten von Listen teilen sich dieselbe Tabelle/Komponente:
 // - Privat: eigene, isolierte Liste pro Mitarbeiter (RLS: besitzer_email), optional mit Lese-/
@@ -89,13 +89,13 @@ function exportiereCsv(liste: ToDoEintrag[], dateiname: string) {
 
 type Mitarbeiterkurz = { name: string; email: string }
 type Recht = 'eigentuemer' | 'lesen' | 'schreiben'
-type Scope = { kind: 'privat' } | { kind: 'bereich'; bereich: KundeBereich; label: string }
+type Scope = { kind: 'privat' } | { kind: 'bereich'; bereich: Bereich; label: string }
 
 export function ToDoListe() {
   return <ToDoListeKern scope={{ kind: 'privat' }} />
 }
 
-export function BereichToDoListe({ bereich, label }: { bereich: KundeBereich; label: string }) {
+export function BereichToDoListe({ bereich, label }: { bereich: Bereich; label: string }) {
   return <ToDoListeKern scope={{ kind: 'bereich', bereich, label }} />
 }
 
@@ -180,7 +180,7 @@ function ToDoListeKern({ scope }: { scope: Scope }) {
   function naechsteReihenfolgeFuer(ziel: ToDoEintrag[]) {
     return 1 + Math.max(0, ...ziel.map((t) => t.reihenfolge ?? 0))
   }
-  function bereichZuweisen(t: ToDoEintrag, bereich: KundeBereich) {
+  function bereichZuweisen(t: ToDoEintrag, bereich: Bereich) {
     const ziel = state.todos.filter((x) => x.bereich === bereich)
     dispatch({ type: 'UPDATE_TODO', id: t.id, patch: { bereich, reihenfolge: naechsteReihenfolgeFuer(ziel) } })
   }
@@ -413,7 +413,7 @@ function ToDoListeKern({ scope }: { scope: Scope }) {
   )
 }
 
-function BereichZuweisenDropdown({ onWaehlen }: { onWaehlen: (bereich: KundeBereich) => void }) {
+function BereichZuweisenDropdown({ onWaehlen }: { onWaehlen: (bereich: Bereich) => void }) {
   const [offen, setOffen] = useState(false)
   return (
     <div className="relative">
@@ -424,7 +424,7 @@ function BereichZuweisenDropdown({ onWaehlen }: { onWaehlen: (bereich: KundeBere
         <>
           <button className="fixed inset-0 z-40 cursor-default" onClick={() => setOffen(false)} aria-label="Schließen" />
           <div className="absolute right-0 z-50 mt-1 w-48 rounded-lg border border-slate-200 bg-white p-1 shadow-lg">
-            {KUNDEN_BEREICHE.filter((b) => b.id !== 'privat').map((b) => (
+            {ALLE_BEREICHE.map((b) => (
               <button
                 key={b.id}
                 onClick={() => {

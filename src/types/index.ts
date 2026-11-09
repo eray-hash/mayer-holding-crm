@@ -412,7 +412,7 @@ export type ToDoEintrag = {
   // Rest des Bereichs) statt privater Aufgabe des Besitzers. besitzerEmail bleibt auch dann als
   // "zuletzt privater Besitzer/Ersteller" erhalten, wird aber nicht mehr zur Zugriffsprüfung
   // herangezogen — Aufgaben lassen sich in beide Richtungen verschieben (2026-11-06).
-  bereich?: KundeBereich
+  bereich?: Bereich
   reihenfolge?: number
   startDatum?: string
   prio?: string

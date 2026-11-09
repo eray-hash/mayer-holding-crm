@@ -96,6 +96,7 @@ function AdminRoutesContent() {
         <Route path="/immobilien/finanzierungen" element={<RequireBereich bereich="immobilien"><Finanzierungen /></RequireBereich>} />
         <Route path="/immobilien/vorlagen/:kind" element={<RequireBereich bereich="immobilien"><VorlagenPageImmobilien /></RequireBereich>} />
         <Route path="/immobilien/projekte" element={<RequireBereich bereich="immobilien"><ProjekteListe /></RequireBereich>} />
+        <Route path="/immobilien/todo" element={<RequireBereich bereich="immobilien"><BereichToDoListe bereich="immobilien" label="Immobilien" /></RequireBereich>} />
 
         <Route path="/erben" element={<RequireBereich bereich="erben"><ErbenListe /></RequireBereich>} />
         <Route path="/erben/mandanten/:id" element={<RequireBereich bereich="erben"><ErbenDetail /></RequireBereich>} />
