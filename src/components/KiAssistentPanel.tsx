@@ -556,7 +556,7 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
     return (
       <button
         onClick={onToggle}
-        className="fixed bottom-5 right-5 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-accent-600 text-white shadow-lg hover:bg-accent-700"
+        className="fixed bottom-5 right-5 z-40 hidden h-14 w-14 items-center justify-center rounded-full bg-accent-600 text-white shadow-lg hover:bg-accent-700 sm:flex"
         title="KI-Assistent öffnen"
       >
         <Bot size={24} />

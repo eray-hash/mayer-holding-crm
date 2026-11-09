@@ -283,9 +283,69 @@ function ToDoListeKern({ scope }: { scope: Scope }) {
         </button>
       </div>
 
+      {/* Unter sm: Karten statt der 15-spaltigen Excel-Tabelle — auf Handy-Breite ist die
+          Tabelle selbst mit sticky Spalten kaum benutzbar (zu viel horizontales Scrollen für
+          Felder wie "Nächste Schritte"). Zeigt die wichtigsten Felder, Rest per Tap im Modal. */}
+      <div className="space-y-2 sm:hidden">
+        {sichtbar.map((t) => (
+          <div key={t.id} className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+            <button onClick={() => setEditEintrag(t)} className="block w-full text-left">
+              <div className="flex items-start justify-between gap-2">
+                <p className="font-medium text-slate-800">{t.aufgabe}</p>
+                {t.prio && (
+                  <span className="flex-shrink-0 rounded-full bg-accent-50 px-2 py-0.5 text-xs font-semibold text-accent-700">
+                    {t.prio}
+                    {t.unterPrio ?? ''}
+                  </span>
+                )}
+              </div>
+              {(t.kundeProjekt || t.zustaendig) && (
+                <p className="mt-0.5 text-xs text-slate-500">{[t.kundeProjekt, t.zustaendig].filter(Boolean).join(' · ')}</p>
+              )}
+              {(t.startDatum || t.geplanteWiedervorlage || (ansicht === 'erledigt' && t.erledigtAm)) && (
+                <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-400">
+                  {t.startDatum && <span>Start: {t.startDatum}</span>}
+                  {t.geplanteWiedervorlage && <span>Wiedervorlage: {t.geplanteWiedervorlage}</span>}
+                  {ansicht === 'erledigt' && t.erledigtAm && <span>Erledigt: {t.erledigtAm}</span>}
+                </div>
+              )}
+            </button>
+            <div className="mt-2 flex items-center justify-end gap-1.5 border-t border-slate-100 pt-2">
+              {darfSchreiben && scope.kind === 'privat' && <BereichZuweisenDropdown onWaehlen={(b) => bereichZuweisen(t, b)} />}
+              {darfSchreiben && scope.kind === 'bereich' && (
+                <button onClick={() => inPrivateListeVerschieben(t)} title="In meine private Liste verschieben" className="rounded-md bg-slate-100 p-1.5 text-slate-600 hover:bg-slate-200">
+                  <ArrowRightLeft size={14} />
+                </button>
+              )}
+              {darfSchreiben &&
+                (ansicht === 'offen' ? (
+                  <button onClick={() => erledigen(t)} title="Als erledigt markieren" className="rounded-md bg-emerald-50 p-1.5 text-emerald-600 hover:bg-emerald-100">
+                    <Check size={14} />
+                  </button>
+                ) : (
+                  <button onClick={() => wiederOeffnen(t)} title="Wieder öffnen" className="rounded-md bg-amber-50 p-1.5 text-amber-600 hover:bg-amber-100">
+                    <RotateCcw size={14} />
+                  </button>
+                ))}
+              {darfLoeschen && (
+                <button onClick={() => loeschen(t)} title="Löschen" className="rounded-md bg-rose-50 p-1.5 text-rose-600 hover:bg-rose-100">
+                  <Trash2 size={14} />
+                </button>
+              )}
+            </div>
+          </div>
+        ))}
+        {sichtbar.length === 0 && (
+          <div className="rounded-xl border border-slate-200 bg-white px-4 py-10">
+            <EmptyState text={ansicht === 'offen' ? 'Keine offenen Aufgaben.' : 'Noch keine Aufgabe erledigt.'} />
+          </div>
+        )}
+      </div>
+
       {/* overflow-x-auto + sticky erste Spalten, damit Start/Prio/Unter beim Scrollen nach rechts
-          sichtbar bleiben (Beschwerde: "dann sind die Prios weg"). */}
-      <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
+          sichtbar bleiben (Beschwerde: "dann sind die Prios weg"). Ab sm sichtbar — darunter
+          übernimmt die Karten-Ansicht oben. */}
+      <div className="hidden overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm sm:block">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-slate-100 bg-slate-50 text-left text-xs font-medium uppercase tracking-wide text-slate-400">

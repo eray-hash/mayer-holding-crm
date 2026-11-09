@@ -143,22 +143,22 @@ export function Layout({ children }: { children: ReactNode }) {
   return (
     <div className="flex h-screen flex-col bg-slate-50">
       {/* Topbar */}
-      <header className="flex h-14 flex-shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4">
-        <div className="flex items-center gap-3">
+      <header className="flex h-14 flex-shrink-0 items-center justify-between border-b border-slate-200 bg-white px-2 sm:px-4">
+        <div className="flex min-w-0 items-center gap-2 sm:gap-3">
           <button
             onClick={() => setDrawerOpen(true)}
-            className="rounded-md p-2 text-slate-500 hover:bg-slate-100"
+            className="flex-shrink-0 rounded-md p-2 text-slate-500 hover:bg-slate-100"
             aria-label="Bereichsmenü öffnen"
           >
             <Menu size={20} />
           </button>
-          <span className="text-sm font-semibold tracking-tight text-slate-800">Mayer Holding CRM</span>
-          <span className="ml-2 hidden items-center gap-1 rounded-full bg-accent-50 px-2.5 py-1 text-xs font-medium text-accent-700 sm:inline-flex">
-            <aktuellerBereich.icon size={12} />
-            {aktuellerBereich.label}
+          <span className="hidden whitespace-nowrap text-sm font-semibold tracking-tight text-slate-800 sm:inline">Mayer Holding CRM</span>
+          <span className="inline-flex min-w-0 items-center gap-1 rounded-full bg-accent-50 px-2.5 py-1 text-xs font-medium text-accent-700 sm:ml-2">
+            <aktuellerBereich.icon size={12} className="flex-shrink-0" />
+            <span className="truncate">{aktuellerBereich.label}</span>
           </span>
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="flex flex-shrink-0 items-center gap-0.5 sm:gap-1.5">
           <button
             onClick={() => setSucheOpen(true)}
             className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
