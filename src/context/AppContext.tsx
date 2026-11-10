@@ -277,6 +277,11 @@ type Action =
   | { type: 'RESET' }
   | { type: 'ADD_KUNDE'; kunde: Kunde }
   | { type: 'UPDATE_KUNDE'; id: string; patch: Partial<Kunde> }
+  // Generisch über KUNDEN_BEREICHE (get/set) — ein Ort statt 7 bereichsspezifischer ADD_/UPDATE_X_MANDANT-
+  // Varianten für bereichsübergreifenden Code (z.B. DokumenteSection.tsx, PruefHinweisBadge.tsx).
+  | { type: 'UPDATE_KUNDE_IN_BEREICH'; bereich: KundeBereich; id: string; patch: Partial<Kunde> }
+  | { type: 'ADD_KUNDE_IN_BEREICH'; bereich: KundeBereich; kunde: Kunde }
+  | { type: 'MOVE_KUNDE_BEREICH'; von: KundeBereich; nach: KundeBereich; id: string; patch?: Partial<Kunde> }
   | { type: 'SET_KUNDE_STATUS'; id: string; status: string; followUp?: FollowUp }
   | { type: 'SET_KUNDE_FOLLOWUP'; id: string; followUp: FollowUp }
   | { type: 'SET_KUNDE_PRIORITAET'; id: string; prioritaet: Prioritaet }
@@ -441,6 +446,26 @@ function reducer(state: AppData, action: Action): AppData {
         ...state,
         kunden: state.kunden.map((k) => (k.id === action.id ? { ...k, ...action.patch } : k)),
       }
+    case 'UPDATE_KUNDE_IN_BEREICH': {
+      const def = KUNDEN_BEREICHE.find((b) => b.id === action.bereich)!
+      return def.set(
+        state,
+        def.get(state).map((k) => (k.id === action.id ? { ...k, ...action.patch } : k)),
+      )
+    }
+    case 'ADD_KUNDE_IN_BEREICH': {
+      const def = KUNDEN_BEREICHE.find((b) => b.id === action.bereich)!
+      return def.set(state, [action.kunde, ...def.get(state)])
+    }
+    case 'MOVE_KUNDE_BEREICH': {
+      const quelle = KUNDEN_BEREICHE.find((b) => b.id === action.von)!
+      const ziel = KUNDEN_BEREICHE.find((b) => b.id === action.nach)!
+      const kunde = quelle.get(state).find((k) => k.id === action.id)
+      if (!kunde) return state
+      const neuerKunde = { ...kunde, ...action.patch }
+      const ohneQuelle = quelle.set(state, quelle.get(state).filter((k) => k.id !== action.id))
+      return ziel.set(ohneQuelle, [neuerKunde, ...ziel.get(ohneQuelle)])
+    }
     case 'SET_KUNDE_STATUS': {
       return {
         ...state,

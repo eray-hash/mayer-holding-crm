@@ -3,15 +3,37 @@ import type { Kunde, KundeBereich } from '../types'
 
 // Zentrale Zuordnung: welcher Bereich führt welche Kunden-/Mandanten-Liste im AppState.
 // Basis für die bereichsübergreifende Objekt-Kunde-Zuweisung (ein Objekt kann jedem Kunden aus
-// jedem dieser Bereiche vorgeschlagen werden, nicht nur Beratung).
-export const KUNDEN_BEREICHE: { id: KundeBereich; label: string; get: (state: AppData) => Kunde[] }[] = [
-  { id: 'beratung', label: 'Unternehmensberatung', get: (s) => s.kunden },
-  { id: 'erben', label: 'Erben', get: (s) => s.erbenMandanten },
-  { id: 'betriebsuebergabe', label: 'Betriebsübergabe', get: (s) => s.betriebsuebergabeMandanten },
-  { id: 'betriebsformen', label: 'Betriebsformen', get: (s) => s.betriebsformenMandanten },
-  { id: 'akademie', label: 'Akademie', get: (s) => s.akademieTeilnehmer },
-  { id: 'finanzierungen', label: 'Finanzierungen', get: (s) => s.finanzierungenMandanten },
-  { id: 'privat', label: 'Privat', get: (s) => s.privatKunden },
+// jedem dieser Bereiche vorgeschlagen werden, nicht nur Beratung) sowie für generische,
+// bereichsübergreifende Kunden-Aktionen (siehe UPDATE_KUNDE_IN_BEREICH/ADD_KUNDE_IN_BEREICH/
+// MOVE_KUNDE_BEREICH in AppContext.tsx) — `set` ist das symmetrische Pendant zu `get`.
+export const KUNDEN_BEREICHE: {
+  id: KundeBereich
+  label: string
+  get: (state: AppData) => Kunde[]
+  set: (state: AppData, liste: Kunde[]) => AppData
+}[] = [
+  { id: 'beratung', label: 'Unternehmensberatung', get: (s) => s.kunden, set: (s, liste) => ({ ...s, kunden: liste }) },
+  { id: 'erben', label: 'Erben', get: (s) => s.erbenMandanten, set: (s, liste) => ({ ...s, erbenMandanten: liste }) },
+  {
+    id: 'betriebsuebergabe',
+    label: 'Betriebsübergabe',
+    get: (s) => s.betriebsuebergabeMandanten,
+    set: (s, liste) => ({ ...s, betriebsuebergabeMandanten: liste }),
+  },
+  {
+    id: 'betriebsformen',
+    label: 'Betriebsformen',
+    get: (s) => s.betriebsformenMandanten,
+    set: (s, liste) => ({ ...s, betriebsformenMandanten: liste }),
+  },
+  { id: 'akademie', label: 'Akademie', get: (s) => s.akademieTeilnehmer, set: (s, liste) => ({ ...s, akademieTeilnehmer: liste }) },
+  {
+    id: 'finanzierungen',
+    label: 'Finanzierungen',
+    get: (s) => s.finanzierungenMandanten,
+    set: (s, liste) => ({ ...s, finanzierungenMandanten: liste }),
+  },
+  { id: 'privat', label: 'Privat', get: (s) => s.privatKunden, set: (s, liste) => ({ ...s, privatKunden: liste }) },
 ]
 
 export function kundeBereichLabel(bereich: KundeBereich): string {

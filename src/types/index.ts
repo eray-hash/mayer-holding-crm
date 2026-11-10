@@ -181,12 +181,25 @@ export type Selbstauskunft = {
   eingereichtAm: string
 }
 
+// Hinweis "sollte nochmal geprüft werden" — allgemein gehalten, nicht nur für eine konkrete
+// Fehleinordnung, siehe PruefHinweisBadge.tsx. vorschlagBereich ist optional, da nicht jeder
+// Prüfhinweis zwingend einen alternativen Bereich vorschlägt.
+export type PruefHinweis = {
+  text: string
+  vorschlagBereich?: KundeBereich
+}
+
 export type Kunde = {
   id: string
   firma: string
   ansprechpartner: string
   email: string
   telefon: string
+  // Siehe PruefHinweisBadge.tsx: rotes "!" in Liste/Akte, löst sich per Verschieben/Verknüpfen/Behalten auf.
+  pruefHinweis?: PruefHinweis
+  // Gesetzt, wenn dieser Kunde bewusst parallel in einem zweiten Bereich geführt wird (PruefHinweis
+  // "in beiden Bereichen führen") — z.B. damit neue Dokumente in beiden Akten landen.
+  verknuepfteKunden?: { id: string; bereich: KundeBereich }[]
   prioritaet: Prioritaet
   status: string // StatusNode id (Beratungsnetz)
   followUp: FollowUp

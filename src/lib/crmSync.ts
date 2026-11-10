@@ -95,6 +95,8 @@ function kundeToRow(bereich: KundeBereich, k: Kunde) {
     unternehmensbewertung: k.unternehmensbewertung ?? null,
     selbstauskunft: k.selbstauskunft ?? null,
     dokumente: k.dokumente ?? null,
+    pruef_hinweis: k.pruefHinweis ?? null,
+    verknuepfte_kunden: k.verknuepfteKunden ?? null,
   }
 }
 
@@ -118,6 +120,8 @@ function rowToKunde(row: any): Kunde {
     unternehmensbewertung: row.unternehmensbewertung ?? undefined,
     selbstauskunft: row.selbstauskunft ?? undefined,
     dokumente: row.dokumente ?? undefined,
+    pruefHinweis: row.pruef_hinweis ?? undefined,
+    verknuepfteKunden: row.verknuepfte_kunden ?? undefined,
   }
 }
 

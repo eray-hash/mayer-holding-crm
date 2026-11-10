@@ -40,7 +40,20 @@ export function DokumenteSection({ bereich, kundeId }: { bereich: KundeBereich; 
     try {
       const { pfad, groesse } = await ladeKundenDokumentHoch(kundeId, file)
       const neuesDokument: Dokument = { id: uid('dok'), name: file.name, typ: file.type || 'Datei', datum: today(), groesse, url: pfad }
-      dispatch({ type: 'UPDATE_KUNDE', id: kundeId, patch: { dokumente: [...dokumente, neuesDokument] } })
+      dispatch({ type: 'UPDATE_KUNDE_IN_BEREICH', bereich, id: kundeId, patch: { dokumente: [...dokumente, neuesDokument] } })
+      // Verknüpfte Kunden (siehe PruefHinweisBadge.tsx "In beiden Bereichen führen") bekommen neue
+      // Dokumente automatisch mit — das ist der eigentliche Zweck der Verknüpfung.
+      for (const link of kunde?.verknuepfteKunden ?? []) {
+        const zielDef = KUNDEN_BEREICHE.find((b) => b.id === link.bereich)!
+        const zielKunde = zielDef.get(state).find((k) => k.id === link.id)
+        if (!zielKunde) continue
+        dispatch({
+          type: 'UPDATE_KUNDE_IN_BEREICH',
+          bereich: link.bereich,
+          id: link.id,
+          patch: { dokumente: [...(zielKunde.dokumente ?? []), neuesDokument] },
+        })
+      }
     } catch (err) {
       setFehler(err instanceof Error ? err.message : 'Hochladen fehlgeschlagen.')
     } finally {

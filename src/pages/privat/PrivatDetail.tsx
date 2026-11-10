@@ -12,6 +12,7 @@ import { PotenzialAnalyseSection } from '../../components/PotenzialAnalyseSectio
 import { KaeuferprofilSection } from '../../components/KaeuferprofilSection'
 import { UnternehmensbewertungSection } from '../../components/UnternehmensbewertungSection'
 import { StammdatenWarnungBanner } from '../../components/StammdatenWarnungBanner'
+import { KundeHinweise } from '../../components/PruefHinweisBadge'
 import { SelbstauskunftSection } from '../../components/SelbstauskunftSection'
 import { NdaSection } from '../../components/NdaSection'
 import { DokumenteSection } from '../../components/DokumenteSection'
@@ -52,6 +53,7 @@ export function PrivatDetail() {
           <div>
             <h1 className="text-xl font-semibold text-slate-800">{kontakt.firma}</h1>
             <p className="text-sm text-slate-500">{kontakt.email} · {kontakt.telefon}</p>
+            <KundeHinweise bereich="privat" kunde={kontakt} />
           </div>
           <div className="flex items-center gap-2">
             <select

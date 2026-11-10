@@ -14,8 +14,10 @@ try {
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
 const BUCKET = 'kunden-dokumente'
 const KUNDE_ID = 'k_1yf6tp9wt6u'
+// Komprimierte Fassungen (Graustufen, 150dpi) statt der Original-Scans — die lagen bei 52-81MB und
+// scheiterten am Supabase-Free-Plan-Limit von 50MB (projektweit, nicht pro Bucket änderbar).
 const ROOT =
-  '/private/tmp/claude-501/-Users-erayyesil-Documents-Fundament-IT-UG-mayer-holding-crm/e5a0c7e3-2682-46f8-a7bc-cd1c8689a1a8/scratchpad/quirin-finanzierung/A/A/Alsaado, Jouma, Immergrün Glacis Galerie'
+  '/private/tmp/claude-501/-Users-erayyesil-Documents-Fundament-IT-UG-mayer-holding-crm/e5a0c7e3-2682-46f8-a7bc-cd1c8689a1a8/scratchpad/komprimiert'
 
 const DATEIEN = [
   'Bank/BWA/BWA_SuSa_2023_01.pdf',
