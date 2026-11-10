@@ -1,10 +1,22 @@
 import { useState } from 'react'
-import { Send, AlertTriangle, CheckCircle2 } from 'lucide-react'
-import { isEmailGatewayConfigured, sendEmail } from '../lib/emailGateway'
+import { Send, AlertTriangle, CheckCircle2, Paperclip, FileText, X } from 'lucide-react'
+import { isEmailGatewayConfigured, sendEmail, type MailAnhang } from '../lib/emailGateway'
 import { applyMailVorlage } from '../lib/mailVorlagen'
 import { useApp } from '../context/AppContext'
+import { KUNDEN_BEREICHE } from '../data/kundenBereiche'
 import { Modal, Field, inputClass, PrimaryButton, SecondaryButton } from './ui'
-import type { KundeBereich } from '../types'
+import { leseAlsBase64 } from '../lib/objektDokumenteStorage'
+import { erzeugeKundenDownloadUrl } from '../lib/kundenDokumenteStorage'
+import { uid } from '../lib/dates'
+import type { Dokument, KundeBereich } from '../types'
+
+type Anhang = MailAnhang & { id: string; groesseLabel: string }
+
+function formatiereGroesse(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
 
 export type SendEmailKundeKontext = {
   bereich: KundeBereich
@@ -39,6 +51,11 @@ export function SendEmailModal({
   const [sending, setSending] = useState(false)
   const [error, setError] = useState('')
   const [sent, setSent] = useState(false)
+  const [anhaenge, setAnhaenge] = useState<Anhang[]>([])
+  const [aktenAuswahlOffen, setAktenAuswahlOffen] = useState(false)
+
+  const vollerKunde = kunde ? KUNDEN_BEREICHE.find((b) => b.id === kunde.bereich)?.get(state).find((k) => k.id === kunde.id) : undefined
+  const aktenDokumente = vollerKunde?.dokumente ?? []
 
   function reset() {
     setToInput(to ?? '')
@@ -47,6 +64,26 @@ export function SendEmailModal({
     setVorlageId('')
     setError('')
     setSent(false)
+    setAnhaenge([])
+    setAktenAuswahlOffen(false)
+  }
+
+  async function dateiHochladen(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    const contentBase64 = await leseAlsBase64(file)
+    setAnhaenge((a) => [...a, { id: uid('anh'), filename: file.name, contentBase64, contentType: file.type || undefined, groesseLabel: formatiereGroesse(file.size) }])
+  }
+
+  async function dokumentAusAkteHinzufuegen(d: Dokument) {
+    setAktenAuswahlOffen(false)
+    const url = d.url && !d.url.startsWith('http') ? await erzeugeKundenDownloadUrl(d.url) : d.url
+    setAnhaenge((a) => [...a, { id: uid('anh'), filename: d.name, url, contentType: d.typ, groesseLabel: d.groesse }])
+  }
+
+  function anhangEntfernen(id: string) {
+    setAnhaenge((a) => a.filter((x) => x.id !== id))
   }
 
   function handleClose() {
@@ -90,12 +127,19 @@ export function SendEmailModal({
             .map((line) => `<p>${line || '&nbsp;'}</p>`)
             .join('')}</div><div>${signaturHtml}</div>`
         : undefined
-      await sendEmail(toInput.trim(), subject.trim(), finalText, finalHtml, {
-        toName: kunde?.name ?? toInput.trim(),
-        kundeBereich: kunde?.bereich,
-        kundeId: kunde?.id,
-        kundeName: kunde?.name,
-      })
+      await sendEmail(
+        toInput.trim(),
+        subject.trim(),
+        finalText,
+        finalHtml,
+        {
+          toName: kunde?.name ?? toInput.trim(),
+          kundeBereich: kunde?.bereich,
+          kundeId: kunde?.id,
+          kundeName: kunde?.name,
+        },
+        anhaenge.map(({ filename, contentBase64, url, contentType }) => ({ filename, contentBase64, url, contentType })),
+      )
       onSent({ to: toInput.trim(), subject: subject.trim(), text: text.trim() })
       setSent(true)
     } catch (err) {
@@ -146,6 +190,57 @@ export function SendEmailModal({
           </Field>
           <Field label="Nachricht">
             <textarea className={inputClass} rows={8} value={text} onChange={(e) => setText(e.target.value)} />
+          </Field>
+
+          <Field label="Anhänge (optional)">
+            <div className="space-y-2">
+              {anhaenge.length > 0 && (
+                <ul className="space-y-1">
+                  {anhaenge.map((a) => (
+                    <li key={a.id} className="flex items-center gap-2 rounded-md bg-slate-50 px-2.5 py-1.5 text-sm">
+                      <FileText size={14} className="flex-shrink-0 text-slate-400" />
+                      <span className="flex-1 truncate text-slate-700">{a.filename}</span>
+                      <span className="flex-shrink-0 text-xs text-slate-400">{a.groesseLabel}</span>
+                      <button onClick={() => anhangEntfernen(a.id)} className="flex-shrink-0 text-slate-400 hover:text-rose-600">
+                        <X size={14} />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              <div className="flex gap-2">
+                <label className="flex cursor-pointer items-center gap-1.5 rounded-md border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50">
+                  <Paperclip size={13} /> Datei hochladen
+                  <input type="file" className="hidden" onChange={dateiHochladen} />
+                </label>
+                {aktenDokumente.length > 0 && (
+                  <button
+                    onClick={() => setAktenAuswahlOffen((o) => !o)}
+                    className="flex items-center gap-1.5 rounded-md border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                  >
+                    <FileText size={13} /> Aus Akte wählen
+                  </button>
+                )}
+              </div>
+
+              {aktenAuswahlOffen && (
+                <ul className="max-h-40 space-y-0.5 overflow-y-auto rounded-md border border-slate-200 p-1">
+                  {aktenDokumente.map((d) => (
+                    <li key={d.id}>
+                      <button
+                        onClick={() => dokumentAusAkteHinzufuegen(d)}
+                        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-slate-600 hover:bg-slate-50"
+                      >
+                        <FileText size={13} className="flex-shrink-0 text-slate-400" />
+                        <span className="flex-1 truncate">{d.name}</span>
+                        <span className="flex-shrink-0 text-slate-400">{d.groesse}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           </Field>
 
           {error && (
