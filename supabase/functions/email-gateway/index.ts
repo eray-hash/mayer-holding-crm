@@ -758,7 +758,7 @@ CRM-Daten zum Kunden:
 
 Gib maximal drei konkrete, plausible Chancen zurück, sortiert nach Priorität (höchste zuerst). Schlage keine Chance im selben Bereich vor, in dem der Kunde ohnehin schon aktiv betreut wird, außer es gibt eine klar erkennbare zusätzliche Leistung. Jede Chance braucht: den passenden Bereich (exakt eine der sieben Bereichs-IDs oben, z. B. "erben"), einen kurzen prägnanten Titel, eine nachvollziehbare Begründung basierend auf den CRM-Daten (zwei bis drei Sätze, auf Deutsch, in einfacher und klarer Sprache ohne Anglizismen oder Fachjargon), einen konkreten nächsten Schritt, und eine Priorität (Hoch/Mittel/Niedrig). Wenn aus den Daten keine plausible Chance erkennbar ist, gib eine leere Liste zurück statt zu spekulieren.
 
-Nachvollziehbarkeit: Jeder Eintrag der CRM-Daten trägt eine Kennung in eckigen Klammern (z. B. [S1], [A3], [D2], [P1], [R1]). Nenne zu jeder Chance unter quellen genau die Kennungen, auf die sich deine Begründung tatsächlich stützt — keine, die du nicht verwendet hast. Von Dokumenten kennst du nur den Dateinamen, nicht den Inhalt: stütze dich nicht auf vermuteten Inhalt. Benenne unter annahmen in ein bis zwei Sätzen ehrlich, was du nur vermutest oder aus einem Dateinamen bzw. einer kurzen Notiz geschlossen hast und was vor einem Gespräch mit dem Kunden geprüft werden sollte.`,
+Nachvollziehbarkeit: Jeder Eintrag der CRM-Daten trägt eine Kennung in eckigen Klammern (z. B. [S1], [A3], [D2], [P1], [R1]). Nenne zu jeder Chance unter quellen genau die Kennungen, auf die sich deine Begründung tatsächlich stützt — keine, die du nicht verwendet hast. Von Dokumenten kennst du nur den Dateinamen, nicht den Inhalt: stütze dich nicht auf vermuteten Inhalt. Einträge mit der Kennung [W…] stammen aus einer öffentlichen Internet-Recherche über den Kunden (weitere Firmen, Funktionen, Beteiligungen) und tragen eine Angabe zur Sicherheit; nutze sie ausdrücklich für deine Vorschläge, behandle "unsicher" gekennzeichnete Funde aber als zu prüfende Vermutung. Benenne unter annahmen in ein bis zwei Sätzen ehrlich, was du nur vermutest oder aus einem Dateinamen bzw. einer kurzen Notiz geschlossen hast und was vor einem Gespräch mit dem Kunden geprüft werden sollte.`,
     {
       name: 'potenzial_analyse',
       description: 'Schlägt Cross-Sell-/Upsell-Chancen für einen Kunden in den Leistungsbereichen der Holding vor.',
@@ -787,6 +787,67 @@ Nachvollziehbarkeit: Jeder Eintrag der CRM-Daten trägt eine Kennung in eckigen 
     },
     2048,
   )
+}
+
+// Auftrag "Was wissen wir noch NICHT über diesen Kunden?" — sucht öffentlich nach weiteren Firmen,
+// Funktionen und Beteiligungen der handelnden Person(en) und nach der Firmengruppe. Wird sowohl von
+// der Unternehmensbewertung (als sechster Recherche-Agent) als auch von der Potenzial-Analyse genutzt.
+// Nutzerwunsch vom 12.11.2026: Eine Analyse soll mehr herausfinden, als schon in der Akte steht —
+// "hat er evtl. sogar mehr Firmen, als wir momentan wissen".
+function umfeldAuftrag(k: { person: string; firma: string; email?: string; webseite?: string; bekannt: string }): string {
+  return `Du recherchierst für eine Beratungsholding öffentlich zugängliche Geschäftsinformationen über einen Kunden. Ziel: herausfinden, was über das hinausgeht, was schon in der Kundenakte steht.
+
+Kunde laut Akte:
+- Person: ${k.person || '(nicht angegeben)'}
+- Firma/Bezeichnung in der Akte: ${k.firma || '(nicht angegeben)'}
+- E-Mail: ${k.email || '(nicht angegeben)'}
+- Webseite: ${k.webseite || '(nicht angegeben)'}
+
+Bereits bekannt laut Akte (Auszug aus Notizen und Dateinamen):
+${k.bekannt || '(nichts weiter)'}
+
+Finde vor allem heraus:
+1. An welchen WEITEREN Firmen ist die Person als Geschäftsführer, Inhaber, Gesellschafter, Prokurist, Vorstand oder Aufsichtsrat beteiligt — aktuell und früher?
+2. Welche Firmen gehören zur selben Gruppe (Mutter-, Tochter-, Schwester- und Beteiligungsgesellschaften, Holding)?
+3. Zu jeder gefundenen Firma: Rechtsform, Sitz, Registergericht und Registernummer, Unternehmensgegenstand/Branche, Gründungsjahr, veröffentlichte Größenangaben (Bilanzsumme, Mitarbeiter), Status (aktiv, in Liquidation, gelöscht, Insolvenz).
+4. Auffälliges: Insolvenz- oder Löschungsbekanntmachungen, Wechsel in Geschäftsführung oder Gesellschafterkreis, Sitzverlegungen.
+
+Suche gezielt in öffentlichen Handelsregister-Auskünften und Firmenverzeichnissen (z. B. northdata.de, unternehmensregister.de, handelsregister.de, bundesanzeiger.de, firmenwissen.de, implisense.com, companyhouse.de), im Impressum der Firmenwebseiten und in der Wirtschaftspresse. Suche sowohl nach dem Namen der Person als auch nach jeder Firma, die dabei auftaucht.
+
+Namensgleichheit: Viele Namen gibt es mehrfach. Prüfe bei jedem Fund anhand von Ort, Branche, bekannten Firmen und Mitgeschäftsführern, ob es wirklich dieselbe Person ist, und gib an, wie sicher die Zuordnung ist (gesichert / wahrscheinlich / unsicher). Lieber einen unsicheren Fund als unsicher kennzeichnen als ihn weglassen oder als sicher ausgeben.
+
+Grenzen: nur öffentliche Geschäftsdaten. Keine privaten Daten (Wohnanschrift, Familie, Gesundheit, Vermögen außerhalb veröffentlichter Firmendaten). Erfinde nichts; was du nicht gefunden hast, gibt es in deiner Antwort nicht. Jede Angabe braucht die Quelle (URL).`
+}
+
+type UmfeldFund = { text: string; quelle_url?: string; sicherheit?: 'gesichert' | 'wahrscheinlich' | 'unsicher'; bereits_bekannt?: boolean }
+
+// Eigenständige Umfeld-Recherche für die Potenzial-Analyse: liefert die Funde strukturiert, damit die
+// Oberfläche sie einzeln mit Quelle zeigen und als Beleg verwenden kann.
+async function rechercheKundenUmfeld(k: { person: string; firma: string; email?: string; webseite?: string; bekannt: string }): Promise<{ funde: UmfeldFund[]; rohtext: string }> {
+  // Innerhalb der garantierten Restlaufzeit dieses Workers bleiben (siehe WORKER_LEBENSDAUER_MS).
+  const rest = WORKER_LEBENSDAUER_MS - (Date.now() - WORKER_GEBOOTET)
+  const text = await callClaudeResearch(
+    `${umfeldAuftrag(k)}
+
+Antworte auf Deutsch. Gib GANZ AM ENDE einen einzelnen Codeblock mit reinem JSON zurück (danach nichts mehr) — eine Liste deiner Funde, jeder Fund ein eigenständiger, vollständiger Satz:
+\`\`\`json
+[{"text": "…", "quelle_url": "https://…", "sicherheit": "gesichert", "bereits_bekannt": false}]
+\`\`\`
+"bereits_bekannt" ist true, wenn der Fund schon aus der Akte hervorgeht, sonst false. Findest du nichts Belastbares, gib eine leere Liste zurück.`,
+    { model: 'claude-haiku-4-5-20251001', maxSearches: 8, maxTokens: 4096, timeoutMs: Math.max(20_000, Math.min(70_000, rest - 8_000)) },
+  )
+  const m = text.match(/```json\s*([\s\S]*?)```/)
+  let funde: UmfeldFund[] = []
+  if (m) {
+    try {
+      const roh = JSON.parse(m[1])
+      // deno-lint-ignore no-explicit-any
+      if (Array.isArray(roh)) funde = roh.filter((f: any) => typeof f?.text === 'string' && f.text.trim()).slice(0, 25)
+    } catch {
+      funde = []
+    }
+  }
+  return { funde, rohtext: text.replace(/```json[\s\S]*?```/, '').trim() }
 }
 
 // Unternehmensbewertung-Recherche: Firmenidentifikation → 5 parallele Recherche-Agents → Prüf-Agent
@@ -825,7 +886,7 @@ type RechercheZustand = {
   stichtag: string
   gestartetAm: string
   aktualisiertAm?: string
-  eingabe?: { firma: string; webseite: string; vorhandeneZahlen: Record<string, unknown> }
+  eingabe?: { firma: string; webseite: string; vorhandeneZahlen: Record<string, unknown>; ansprechpartner?: string; email?: string; akteWissen?: string }
   zwischen?: { identifikation?: string; recherche?: string; pruefung?: string }
   bericht?: string
   abgeleiteteZahlen?: Record<string, number | null>
@@ -915,9 +976,13 @@ async function fuehreRechercheSchrittAus(bereich: string, kundeId: string, umlei
           prompt: `Recherchiere den aktuellen Basiszins (Rendite langfristiger Bundesanleihen bzw. Zinsstrukturkurve der Deutschen Bundesbank), die übliche Marktrisikoprämie und übliche Zuschläge für kleine Unternehmen im deutschen Mittelstand, jeweils mit Quelle und Stand (Stichtag ${input.stichtag}). Antworte auf Deutsch.`,
         },
       ]
+      agentAuftraege.push({
+        key: 'Inhaber & Firmenverflechtungen (über die Akte hinaus)',
+        prompt: `Firmenidentität:\n${identifikation}\n\n${umfeldAuftrag({ person: z.eingabe.ansprechpartner ?? '', firma: input.firma, email: z.eingabe.email, webseite: input.webseite, bekannt: z.eingabe.akteWissen ?? '' })}\n\nAntworte auf Deutsch als Stichpunkte. Kennzeichne jeden Fund mit [NEU] oder [BEKANNT laut Akte] und mit der Sicherheit der Zuordnung.`,
+      })
       const agentErgebnisse = await Promise.all(
         agentAuftraege.map((a) =>
-          callClaudeResearch(a.prompt, { model: 'claude-haiku-4-5-20251001', maxSearches: 4, maxTokens: 4096, timeoutMs })
+          callClaudeResearch(a.prompt, { model: 'claude-haiku-4-5-20251001', maxSearches: a.key.startsWith('Inhaber') ? 8 : 4, maxTokens: 4096, timeoutMs })
             .then((text) => `### ${a.key}\n${text}`)
             .catch((err) => `### ${a.key}\nRecherche fehlgeschlagen: ${err instanceof Error ? err.message : String(err)}`),
         ),
@@ -967,7 +1032,7 @@ Erstelle daraus eine praxisnahe Kaufpreis-Schätzung:
 7. Liste Widersprüche/offene Fragen, die nur mit internen Unterlagen (BWA, Planung, Verträge) zu klären sind, sowie die Quellenliste.
 8. Schließe mit dem Hinweis: Ergebnis beruht auf öffentlichen Daten bzw. den übergebenen Angaben und ersetzt kein Gutachten eines Wirtschaftsprüfers oder Steuerberaters.
 
-Antworte auf Deutsch, klar und ohne Fachjargon, als Bericht mit den Abschnitten Kurzfazit, Firmensteckbrief, Bewertungsrechnung, Sensitivität, Widersprüche/offene Fragen, Quellenliste, Hinweis. WICHTIG: Fasse dich prägnant — insgesamt maximal ca. 700 Wörter Fließtext über alle Abschnitte zusammen, auch wenn die Datenlage unsicher ist oder viele Widersprüche vorliegen (dann die Unsicherheiten knapp stichpunktartig benennen statt sie einzeln auszubreiten). Der abschließende JSON-Block (siehe unten) MUSS in jedem Fall noch Platz haben und vollständig ausgegeben werden — das hat Vorrang vor Ausführlichkeit im Fließtext.
+Antworte auf Deutsch, klar und ohne Fachjargon, als Bericht mit den Abschnitten Kurzfazit, Firmensteckbrief, Inhaber und Firmenverflechtungen, Bewertungsrechnung, Sensitivität, Widersprüche/offene Fragen, Quellenliste, Hinweis. Im Abschnitt "Inhaber und Firmenverflechtungen" steht, was die Recherche über die Kundenakte hinaus ergeben hat: weitere Firmen, Funktionen und Beteiligungen der handelnden Personen sowie Gruppenzugehörigkeiten — je Fund mit Quelle, mit der Sicherheit der Zuordnung zur Person und mit dem Vermerk NEU oder BEKANNT laut Akte; nenne ausdrücklich, wenn nichts Neues gefunden wurde, und was das Gefundene für die Bewertung bedeutet (z. B. Betriebsaufspaltung, Abhängigkeiten, Haftungsverbund). WICHTIG: Fasse dich prägnant — insgesamt maximal ca. 950 Wörter Fließtext über alle Abschnitte zusammen, auch wenn die Datenlage unsicher ist oder viele Widersprüche vorliegen (dann die Unsicherheiten knapp stichpunktartig benennen statt sie einzeln auszubreiten). Der abschließende JSON-Block (siehe unten) MUSS in jedem Fall noch Platz haben und vollständig ausgegeben werden — das hat Vorrang vor Ausführlichkeit im Fließtext.
 
 Gib GANZ AM ENDE zusätzlich einen einzelnen Codeblock mit reinem JSON zurück (danach nichts mehr), exakt in diesem Format, mit den von dir verwendeten Werten (null wenn ein Wert nicht ermittelbar war):
 \`\`\`json
@@ -1695,6 +1760,21 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ klassifikation }), { headers })
     }
 
+    if (body.action === 'kunden_umfeld_recherche') {
+      const { person, firma, email, webseite, bekannt } = body
+      if (!person && !firma) {
+        return new Response(JSON.stringify({ error: 'person oder firma ist ein Pflichtfeld' }), { status: 400, headers })
+      }
+      const ergebnis = await rechercheKundenUmfeld({
+        person: String(person ?? ''),
+        firma: String(firma ?? ''),
+        email: typeof email === 'string' ? email : undefined,
+        webseite: typeof webseite === 'string' ? webseite : undefined,
+        bekannt: typeof bekannt === 'string' ? bekannt.slice(0, 6000) : '',
+      })
+      return new Response(JSON.stringify(ergebnis), { headers })
+    }
+
     if (body.action === 'potenzial_analyse') {
       const { kontext } = body
       if (!kontext || typeof kontext !== 'string' || !kontext.trim()) {
@@ -2212,7 +2292,14 @@ Deno.serve(async (req: Request) => {
             stichtag,
             gestartetAm,
             aktualisiertAm: gestartetAm,
-            eingabe: { firma, webseite, vorhandeneZahlen: vorhandeneZahlen ?? {} },
+            eingabe: {
+              firma,
+              webseite,
+              vorhandeneZahlen: vorhandeneZahlen ?? {},
+              ansprechpartner: typeof body.ansprechpartner === 'string' ? body.ansprechpartner : '',
+              email: typeof body.email === 'string' ? body.email : '',
+              akteWissen: typeof body.akteWissen === 'string' ? body.akteWissen.slice(0, 6000) : '',
+            },
             zwischen: {},
           },
         })
@@ -2236,7 +2323,7 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ ok: true }), { headers })
     }
 
-    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "bewertung_recherche_start", "bewertung_recherche_schritt" oder "firmenwissen_answer"' }), { status: 400, headers })
+    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "bewertung_recherche_start", "bewertung_recherche_schritt", "kunden_umfeld_recherche" oder "firmenwissen_answer"' }), { status: 400, headers })
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }

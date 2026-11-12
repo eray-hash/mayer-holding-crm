@@ -6,6 +6,7 @@ import { Card, Field, inputClass, Modal, PrimaryButton, SecondaryButton } from '
 import { fmtEUR, today } from '../lib/dates'
 import { supabase } from '../lib/supabaseClient'
 import { starteBewertungRecherche, setzeBewertungRechercheFort } from '../lib/emailGateway'
+import { akteWissen } from '../lib/akteWissen'
 import type { KundeBereich, Unternehmensbewertung } from '../types'
 
 function leererEntwurf(): Unternehmensbewertung {
@@ -115,6 +116,9 @@ export function UnternehmensbewertungSection({ bereich, kundeId }: { bereich: Ku
         anlass,
         stichtag,
         vorhandeneZahlen,
+        ansprechpartner: kunde!.ansprechpartner,
+        email: kunde!.email,
+        akteWissen: akteWissen(kunde!),
       })
       dispatch({
         type: 'KUNDE_VOM_SERVER',
@@ -318,7 +322,7 @@ export function UnternehmensbewertungSection({ bereich, kundeId }: { bereich: Ku
 
       <Modal open={kostenModal} onClose={() => setKostenModal(false)} title="KI-Recherche starten">
         <p className="mb-4 text-sm text-slate-600">
-          Dies startet eine mehrstufige KI-Recherche (Firmenidentifikation, 5 Recherche-Agents, Prüfung,
+          Dies startet eine mehrstufige KI-Recherche (Firmenidentifikation, 6 Recherche-Agents inkl. weiterer Firmen und Beteiligungen des Inhabers, Prüfung,
           Bewertung) mit echter Websuche. Geschätzte Kosten: <strong>ca. 0,50–1,50 € pro Durchlauf</strong> (echtes
           Anthropic-API-Guthaben). Dauer: mehrere Minuten. Fortfahren?
         </p>

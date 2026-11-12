@@ -380,8 +380,20 @@ export async function starteBewertungRecherche(params: {
   anlass: string
   stichtag: string
   vorhandeneZahlen?: Record<string, unknown>
+  ansprechpartner?: string
+  email?: string
+  akteWissen?: string
 }): Promise<void> {
   await call({ action: 'bewertung_recherche_start', ...params })
+}
+
+export type UmfeldFund = { text: string; quelle_url?: string; sicherheit?: 'gesichert' | 'wahrscheinlich' | 'unsicher'; bereits_bekannt?: boolean }
+
+// Öffentliche Internet-Recherche über einen Kunden: weitere Firmen, Funktionen und Beteiligungen der
+// Person, Firmengruppe. Liefert Einzelfunde mit Quelle und Angabe, wie sicher die Zuordnung ist.
+export async function rechercheKundenUmfeld(params: { person: string; firma: string; email?: string; webseite?: string; bekannt: string }): Promise<{ funde: UmfeldFund[]; rohtext: string }> {
+  const data = await call({ action: 'kunden_umfeld_recherche', ...params })
+  return { funde: data.funde ?? [], rohtext: data.rohtext ?? '' }
 }
 
 // Setzt eine hängen gebliebene Recherche beim nächsten offenen Schritt fort (bereits fertige

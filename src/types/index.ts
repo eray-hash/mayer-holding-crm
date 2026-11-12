@@ -264,8 +264,13 @@ export type Kunde = {
 // vorgeschlagene Chance auf ihre Grundlage zurückverweisen kann.
 export type PotenzialQuelle = {
   id: string
-  art: 'Stammdaten' | 'Aktivität' | 'Dokument' | 'Gesprächsprotokoll' | 'Rechnung'
+  art: 'Stammdaten' | 'Aktivität' | 'Dokument' | 'Gesprächsprotokoll' | 'Rechnung' | 'Internet-Recherche'
   text: string
+  // Nur bei Internet-Recherche: Fundstelle, Sicherheit der Zuordnung zur Person, und ob der Fund
+  // schon aus der Akte hervorging.
+  url?: string
+  sicherheit?: 'gesichert' | 'wahrscheinlich' | 'unsicher'
+  bereitsBekannt?: boolean
 }
 
 // Gespeichertes Ergebnis der letzten Potenzial-Analyse eines Kunden. Vorher lebte es nur im
@@ -284,6 +289,9 @@ export type PotenzialAnalyse = {
     uebernommen?: 'followup' | 'vermerkt'
   }[]
   quellen: PotenzialQuelle[]
+  // Wie die Internet-Recherche ausging: 'ok' (auch bei null Funden), 'fehlgeschlagen', oder fehlend
+  // bei Analysen von vor dem 12.11.2026, als noch gar nicht im Internet gesucht wurde.
+  webRecherche?: 'ok' | 'fehlgeschlagen'
 }
 
 export type Vorlage = {

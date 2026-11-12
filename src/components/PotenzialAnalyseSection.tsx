@@ -1,10 +1,11 @@
 import { useState } from 'react'
-import { Sparkles, Plus, Loader2, FileText, MessageSquare, Receipt, StickyNote, User } from 'lucide-react'
+import { Sparkles, Plus, Loader2, FileText, MessageSquare, Receipt, StickyNote, User, Globe } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { KUNDEN_BEREICHE } from '../data/kundenBereiche'
 import { getStatusMap } from '../data/statusNetworks'
 import { CURRENT_USER } from '../data/constants'
-import { analysierePotenzial } from '../lib/emailGateway'
+import { analysierePotenzial, rechercheKundenUmfeld } from '../lib/emailGateway'
+import { akteWissen } from '../lib/akteWissen'
 import { Card, PrimaryButton, PriorityBadge, EmptyState } from './ui'
 import { fmtDate, fmtDateTime, fmtEURCent, addDays, today } from '../lib/dates'
 import type { KundeBereich, PotenzialAnalyse, PotenzialQuelle } from '../types'
@@ -30,7 +31,10 @@ const QUELLEN_ICON = {
   Dokument: FileText,
   Gesprächsprotokoll: MessageSquare,
   Rechnung: Receipt,
+  'Internet-Recherche': Globe,
 } as const
+
+const SICHERHEIT_LABEL = { gesichert: 'gesichert', wahrscheinlich: 'wahrscheinlich dieselbe Person', unsicher: 'unsicher, Namensgleichheit möglich' } as const
 
 // KI-gestützte Cross-Sell-/Upsell-Potenzialanalyse für einen Kunden/Mandanten — nutzt allgemeines
 // KI-Fachwissen zu den Leistungsbereichen der Holding (siehe email-gateway "potenzial_analyse"),
@@ -43,6 +47,7 @@ const QUELLEN_ICON = {
 export function PotenzialAnalyseSection({ bereich, kundeId, kundeName }: { bereich: KundeBereich; kundeId: string; kundeName: string }) {
   const { state, dispatch } = useApp()
   const [loading, setLoading] = useState(false)
+  const [phase, setPhase] = useState('')
   const [error, setError] = useState('')
   const [grundlageOffen, setGrundlageOffen] = useState(false)
 
@@ -80,7 +85,33 @@ export function PotenzialAnalyseSection({ bereich, kundeId, kundeName }: { berei
     setError('')
     try {
       if (!kunde) throw new Error('Kunde/Mandant nicht gefunden.')
-      const quellen = sammleQuellen()
+      // Erst nach außen schauen: weitere Firmen, Funktionen und Beteiligungen des Kunden, die noch
+      // nicht in der Akte stehen. Scheitert die Suche, läuft die Analyse trotzdem — mit Vermerk.
+      setPhase('Suche im Internet nach weiteren Firmen und Beteiligungen …')
+      let webRecherche: PotenzialAnalyse['webRecherche'] = 'ok'
+      let webQuellen: PotenzialQuelle[] = []
+      try {
+        const { funde } = await rechercheKundenUmfeld({
+          person: kunde.ansprechpartner,
+          firma: kunde.firma,
+          email: kunde.email,
+          webseite: kunde.unternehmensbewertung?.webseite,
+          bekannt: akteWissen(kunde),
+        })
+        webQuellen = funde.map((f, i): PotenzialQuelle => ({
+          id: `W${i + 1}`,
+          art: 'Internet-Recherche',
+          text: f.text,
+          // Nur echte Web-Adressen als Link zulassen — die Angabe stammt aus einer KI-Antwort.
+          url: /^https?:\/\//i.test(f.quelle_url ?? '') ? f.quelle_url : undefined,
+          sicherheit: f.sicherheit,
+          bereitsBekannt: !!f.bereits_bekannt,
+        }))
+      } catch {
+        webRecherche = 'fehlgeschlagen'
+      }
+      setPhase('Werte Akte und Funde aus …')
+      const quellen = [...sammleQuellen(), ...webQuellen]
       const abschnitt = (titel: string, art: PotenzialQuelle['art'], hinweis = '') => {
         const eintraege = quellen.filter((q) => q.art === art)
         return [`${titel}${hinweis}:`, ...(eintraege.length > 0 ? eintraege.map((q) => `[${q.id}] ${q.text}`) : ['(keine)']), '']
@@ -91,6 +122,9 @@ export function PotenzialAnalyseSection({ bereich, kundeId, kundeName }: { berei
         ...abschnitt('Dokumente in der Akte', 'Dokument', ' — es liegt jeweils nur der Dateiname vor, nicht der Inhalt'),
         ...abschnitt('Gesprächsprotokolle', 'Gesprächsprotokoll'),
         ...abschnitt('Rechnungen der Holding an den Kunden', 'Rechnung'),
+        webRecherche === 'ok' ? 'Öffentliche Internet-Recherche über den Kunden (weitere Firmen, Funktionen, Beteiligungen):' : 'Internet-Recherche: nicht verfügbar.',
+        ...webQuellen.map((q) => `[${q.id}] ${q.text} (Sicherheit der Zuordnung: ${q.sicherheit ?? 'unbekannt'}; ${q.bereitsBekannt ? 'schon aus der Akte bekannt' : 'NEU, stand bisher nicht in der Akte'})`),
+        ...(webRecherche === 'ok' && webQuellen.length === 0 ? ['(nichts Belastbares gefunden)'] : []),
       ].join('\n')
       const chancen = await analysierePotenzial(kontext)
       const bekannt = new Set(quellen.map((q) => q.id))
@@ -100,11 +134,13 @@ export function PotenzialAnalyseSection({ bereich, kundeId, kundeName }: { berei
         // Kennungen, die es nicht gibt, fliegen raus — eine erfundene Quelle wäre schlimmer als keine.
         chancen: chancen.map((c) => ({ ...c, quellen: (c.quellen ?? []).map((q) => q.replace(/[[\]\s]/g, '')).filter((q) => bekannt.has(q)) })),
         quellen,
+        webRecherche,
       })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Analyse fehlgeschlagen.')
     } finally {
       setLoading(false)
+      setPhase('')
     }
   }
 
@@ -130,6 +166,9 @@ export function PotenzialAnalyseSection({ bereich, kundeId, kundeName }: { berei
   }
 
   const quelleNachId = new Map((analyse?.quellen ?? []).map((q) => [q.id, q]))
+  const webFunde = (analyse?.quellen ?? []).filter((q) => q.art === 'Internet-Recherche')
+  const neueFunde = webFunde.filter((q) => !q.bereitsBekannt)
+  const bekannteFunde = webFunde.filter((q) => q.bereitsBekannt)
   const zahl = (art: PotenzialQuelle['art'], einzahl: string, mehrzahl: string) => {
     const n = (analyse?.quellen ?? []).filter((q) => q.art === art).length
     return `${n} ${n === 1 ? einzahl : mehrzahl}`
@@ -146,6 +185,8 @@ export function PotenzialAnalyseSection({ bereich, kundeId, kundeName }: { berei
           {loading ? 'Analysiere …' : analyse ? 'Erneut analysieren' : 'Potenzial analysieren'}
         </PrimaryButton>
       </div>
+
+      {loading && phase && <p className="mb-3 text-xs text-slate-500">{phase} Das dauert etwa eine Minute.</p>}
 
       {error && <p className="mb-3 rounded-lg bg-rose-50 p-3 text-sm text-rose-600">{error}</p>}
 
@@ -166,9 +207,15 @@ export function PotenzialAnalyseSection({ bereich, kundeId, kundeName }: { berei
             </button>
           </div>
           <p className="mt-2 text-xs text-slate-500">
-            Der KI lagen ausschließlich diese Angaben aus der Akte vor: Stammdaten, {zahl('Aktivität', 'Aktivität', 'Aktivitäten')}, {zahl('Dokument', 'Dokument', 'Dokumente')},{' '}
-            {zahl('Gesprächsprotokoll', 'Gesprächsprotokoll', 'Gesprächsprotokolle')} und {zahl('Rechnung', 'Rechnung', 'Rechnungen')}. Von Dokumenten kennt sie nur den Dateinamen, nicht den Inhalt. Dazu kommt
-            ihr allgemeines Fachwissen; externe Datenbanken oder das Internet wurden nicht abgefragt. Die Vorschläge sind Einschätzungen und keine geprüften Fakten.
+            Aus der Akte lagen der KI vor: Stammdaten, {zahl('Aktivität', 'Aktivität', 'Aktivitäten')}, {zahl('Dokument', 'Dokument', 'Dokumente')},{' '}
+            {zahl('Gesprächsprotokoll', 'Gesprächsprotokoll', 'Gesprächsprotokolle')} und {zahl('Rechnung', 'Rechnung', 'Rechnungen')}. Von Dokumenten kennt sie nur den
+            Dateinamen, nicht den Inhalt.{' '}
+            {analyse.webRecherche === 'ok'
+              ? `Zusätzlich wurde öffentlich im Internet nach weiteren Firmen, Funktionen und Beteiligungen gesucht (${zahl('Internet-Recherche', 'Fund', 'Funde')}).`
+              : analyse.webRecherche === 'fehlgeschlagen'
+                ? 'Die Internet-Recherche ist bei diesem Lauf fehlgeschlagen — das Ergebnis beruht nur auf der Akte.'
+                : 'Bei dieser älteren Analyse wurde noch nicht im Internet gesucht.'}{' '}
+            Die Vorschläge sind Einschätzungen und keine geprüften Fakten.
           </p>
           {grundlageOffen && (
             <ul className="mt-3 space-y-1.5 border-t border-slate-100 pt-3">
@@ -177,6 +224,41 @@ export function PotenzialAnalyseSection({ bereich, kundeId, kundeName }: { berei
               ))}
             </ul>
           )}
+        </Card>
+      )}
+
+      {analyse && analyse.webRecherche === 'ok' && (
+        <Card className="mb-3 p-4">
+          <p className="mb-1 text-sm font-medium text-slate-700">Über die Akte hinaus gefunden</p>
+          {neueFunde.length === 0 ? (
+            <p className="text-xs text-slate-500">
+              Die Internet-Recherche hat nichts ergeben, was nicht schon in der Akte steht
+              {bekannteFunde.length > 0 ? ` (${bekannteFunde.length} Funde bestätigen Bekanntes)` : ''}. Das heißt nicht, dass es nichts gibt — nur, dass öffentlich nichts Belastbares zu finden war.
+            </p>
+          ) : (
+            <ul className="mt-2 space-y-2.5">
+              {neueFunde.map((q) => (
+                <li key={q.id} className="flex gap-2 text-sm text-slate-700">
+                  <Globe size={14} className="mt-0.5 flex-shrink-0 text-accent-600" />
+                  <div className="min-w-0">
+                    <p className="break-words">{q.text}</p>
+                    <p className="mt-0.5 text-xs text-slate-400">
+                      Zuordnung: {q.sicherheit ? SICHERHEIT_LABEL[q.sicherheit] : 'nicht angegeben'}
+                      {q.url && (
+                        <>
+                          {' · '}
+                          <a href={q.url} target="_blank" rel="noopener noreferrer" className="text-accent-600 hover:underline">
+                            Quelle öffnen
+                          </a>
+                        </>
+                      )}
+                    </p>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="mt-3 text-xs text-slate-400">Vor einem Kundengespräch gegenprüfen: Bei häufigen Namen kann ein Fund eine andere Person betreffen.</p>
         </Card>
       )}
 
@@ -244,6 +326,15 @@ function QuellenZeile({ quelle }: { quelle: PotenzialQuelle }) {
       <Icon size={13} className="mt-0.5 flex-shrink-0 text-slate-400" />
       <span className="min-w-0 break-words">
         <span className="font-medium text-slate-500">{quelle.art}:</span> {quelle.text}
+        {quelle.sicherheit && <span className="text-slate-400"> · Zuordnung {SICHERHEIT_LABEL[quelle.sicherheit]}</span>}
+        {quelle.url && (
+          <>
+            {' · '}
+            <a href={quelle.url} target="_blank" rel="noopener noreferrer" className="text-accent-600 hover:underline">
+              Quelle
+            </a>
+          </>
+        )}
       </span>
     </li>
   )
