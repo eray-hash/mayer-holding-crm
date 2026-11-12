@@ -53,6 +53,7 @@ const KUNDE_KEYS: { bereich: KundeBereich; key: keyof AppData }[] = [
   { bereich: 'akademie', key: 'akademieTeilnehmer' },
   { bereich: 'finanzierungen', key: 'finanzierungenMandanten' },
   { bereich: 'privat', key: 'privatKunden' },
+  { bereich: 'immobilienkunden', key: 'immobilienKunden' },
 ]
 
 // Vorlagen: eine Tabelle über alle sieben Bereiche hinweg (bereich ist nur eine Spalte), analog zu
@@ -782,15 +783,18 @@ export async function hydrateFromSupabase(): Promise<HydratedData | null> {
     akademie: [],
     finanzierungen: [],
     privat: [],
+    immobilienkunden: [],
   }
   for (const row of kundenRes.data ?? []) {
     kunden[row.bereich as KundeBereich].push(rowToKunde(row))
   }
 
-  // 'privat' hat (noch) keine eigene Vorlagen-Seite/-Tabelle — bleibt hier absichtlich immer leer.
+  // 'privat' und 'immobilienkunden' haben (noch) keine eigene Vorlagen-Seite/-Tabelle — bleiben hier
+  // absichtlich immer leer.
   const vorlagen: Record<Bereich, Vorlage[]> = {
     beratung: [],
     immobilien: [],
+    immobilienkunden: [],
     erben: [],
     betriebsuebergabe: [],
     betriebsformen: [],

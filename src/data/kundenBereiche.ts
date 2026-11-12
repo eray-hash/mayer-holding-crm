@@ -34,6 +34,12 @@ export const KUNDEN_BEREICHE: {
     set: (s, liste) => ({ ...s, finanzierungenMandanten: liste }),
   },
   { id: 'privat', label: 'Privat', get: (s) => s.privatKunden, set: (s, liste) => ({ ...s, privatKunden: liste }) },
+  {
+    id: 'immobilienkunden',
+    label: 'Immobilien',
+    get: (s) => s.immobilienKunden,
+    set: (s, liste) => ({ ...s, immobilienKunden: liste }),
+  },
 ]
 
 export function kundeBereichLabel(bereich: KundeBereich): string {
@@ -51,5 +57,6 @@ export function kundeDetailPfad(bereich: KundeBereich, id: string): string {
     case 'akademie': return `/akademie/teilnehmer/${id}`
     case 'finanzierungen': return `/finanzierungen/mandanten/${id}`
     case 'privat': return `/privat/kontakte/${id}`
+    case 'immobilienkunden': return `/immobilien/kunden/${id}`
   }
 }

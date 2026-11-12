@@ -161,6 +161,12 @@
 //                                                   einen Dateinamen vor und liest ggf. ein Datum
 //                                                   aus — die eigentliche Zuordnung bestätigt der
 //                                                   Mitarbeiter im Frontend
+//   { action: "classify_kunden_dokument", datei_base64, media_type, dateiname }
+//                                                -> wie classify_objekt_dokument, aber für per
+//                                                   Telegram geschickte Kunden-Unterlagen: erkennt
+//                                                   Person/Firma + Unterlagenart aus dem Inhalt,
+//                                                   damit telegram-gateway auch ohne Bildunterschrift
+//                                                   den richtigen Kunden finden kann
 //   { action: "pflege_classify", text }          -> Pflege-Modus (KI-Assistent, nur GF/Admin):
 //                                                   klassifiziert eine Massenkorrektur-Anweisung
 //                                                   ("X ist kein Kunde", "verschiebe X zu Erben",
@@ -981,6 +987,50 @@ Falls im Dokument selbst ein Datum erkennbar ist (z.B. Ausstellungsdatum, Sticht
   )
 }
 
+type KundenDokumentKlassifikation = {
+  erkannter_name?: string
+  erkannte_firma?: string
+  kategorie: string
+}
+
+// KI-Dokumentenverarbeitung für per Telegram geschickte Kunden-Unterlagen (siehe telegram-gateway):
+// erkennt anhand des tatsächlichen Inhalts (nicht nur Bildunterschrift/Dateiname), zu welcher Person
+// oder Firma eine Datei gehört, damit sie auch OHNE explizite Bildunterschrift automatisch der
+// richtigen Kundenakte zugeordnet werden kann (vorher zwingend nötig, siehe Projektnotiz). Die
+// eigentliche Zuordnung/ein etwaiges Neuanlegen passiert weiterhin im telegram-gateway, nie blind.
+async function classifyKundenDokument(mediaBase64: string, mediaType: string, dateiname: string): Promise<KundenDokumentKlassifikation> {
+  const istPdf = mediaType === 'application/pdf'
+  const block: ClaudeContentBlock = istPdf
+    ? { type: 'document', source: { type: 'base64', media_type: mediaType, data: mediaBase64 } }
+    : { type: 'image', source: { type: 'base64', media_type: mediaType, data: mediaBase64 } }
+  return callClaudeTool<KundenDokumentKlassifikation>(
+    [
+      {
+        type: 'text',
+        text: `Ein Mitarbeiter hat über Telegram eine Datei geschickt (ursprünglicher Dateiname: "${dateiname}"), die einer Kunden-/Mandantenakte in einem CRM zugeordnet werden soll. Erkenne anhand des TATSÄCHLICHEN INHALTS der Datei (nicht nur des Dateinamens):
+- den Namen der Person, zu der die Unterlage gehört (z.B. Kontoinhaber, Unterzeichner, im Ausweis genannte Person), exakt so wie er im Dokument steht — falls nicht erkennbar, weglassen.
+- die Firma/den Betrieb, falls im Dokument genannt (z.B. im Briefkopf, Handelsregisterauszug, Mietvertrag) — falls nicht erkennbar, weglassen.
+- eine kurze Kategorie der Unterlage (z.B. "BWA", "Kontoauszug", "Personalausweis", "Mietvertrag", "Lohnabrechnung", "Steuerbescheid", "Handelsregisterauszug", "Gesellschaftervertrag", "Selbstauskunft", "Schufa-Auskunft", "Sonstiges").`,
+      },
+      block,
+    ],
+    {
+      name: 'kunden_dokument_klassifikation',
+      description: 'Erkennt Person/Firma und Unterlagenart für eine per Telegram geschickte Kunden-Datei.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          erkannter_name: { type: 'string' },
+          erkannte_firma: { type: 'string' },
+          kategorie: { type: 'string' },
+        },
+        required: ['kategorie'],
+      },
+    },
+    512,
+  )
+}
+
 // Nachfolger von scripts/extract-leads.mjs — macht dasselbe, aber automatisch und nur für Absender,
 // die wirklich neu sind (noch kein Kunde, noch kein Lead-Vorschlag), statt bei jedem Lauf alle
 // jemals eingegangenen E-Mails erneut zu klassifizieren.
@@ -1537,6 +1587,15 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ klassifikation }), { headers })
     }
 
+    if (body.action === 'classify_kunden_dokument') {
+      const { datei_base64, media_type, dateiname } = body
+      if (!datei_base64 || typeof datei_base64 !== 'string') {
+        return new Response(JSON.stringify({ error: 'datei_base64 ist ein Pflichtfeld' }), { status: 400, headers })
+      }
+      const klassifikation = await classifyKundenDokument(datei_base64, media_type || 'application/pdf', dateiname || '')
+      return new Response(JSON.stringify({ klassifikation }), { headers })
+    }
+
     // Die folgenden drei Aktionen sind für die öffentlichen, unauthentifizierten Formulare unter
     // /formular/* gedacht (src/pages/formulare/Public*.tsx). Diese Seiten laufen ohne Mitarbeiter-
     // Login, die kunden-Tabelle in Supabase lässt per RLS aber nur Lese-/Schreibzugriff für
@@ -1846,7 +1905,7 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ ok: true }), { headers })
     }
 
-    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "bewertung_recherche_start" oder "firmenwissen_answer"' }), { status: 400, headers })
+    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "bewertung_recherche_start" oder "firmenwissen_answer"' }), { status: 400, headers })
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }

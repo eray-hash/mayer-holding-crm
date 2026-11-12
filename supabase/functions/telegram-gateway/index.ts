@@ -113,6 +113,17 @@ function sicheresPfadsegment(s: string): string {
   return s.replace(/[^a-zA-Z0-9._-]/g, '_')
 }
 
+// btoa auf das gesamte Array gespreizt würde bei großen Scans (mehrere MB) den Call-Stack sprengen —
+// deshalb in 32-KB-Blöcken.
+function bytesZuBase64(bytes: Uint8Array): string {
+  let binaer = ''
+  const blockgroesse = 0x8000
+  for (let i = 0; i < bytes.length; i += blockgroesse) {
+    binaer += String.fromCharCode(...bytes.subarray(i, i + blockgroesse))
+  }
+  return btoa(binaer)
+}
+
 async function telegramDateiHerunterladen(fileId: string): Promise<{ bytes: Uint8Array; telegramPfad: string } | null> {
   const metaRes = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/getFile?file_id=${fileId}`)
   const meta = await metaRes.json()
@@ -235,7 +246,13 @@ Deno.serve(async (req: Request) => {
     return new Response('ok')
   }
 
-  // --- Fotos/Dokumente: herunterladen, ablegen, per Bildunterschrift dem richtigen Kunden zuordnen ---
+  // --- Fotos/Dokumente: herunterladen, per KI-Inhaltsanalyse (nicht mehr zwingend per
+  // Bildunterschrift) dem richtigen Kunden zuordnen. Vorher musste jede Datei eine Bildunterschrift
+  // mit dem Kundennamen tragen, sonst passierte gar nichts — in der Praxis (z.B. Hasan schickt
+  // schnell mehrere Scans ohne Unterschrift) blieb die Funktion dadurch faktisch ungenutzt. Die KI
+  // liest jetzt den Inhalt selbst (Name/Firma im Dokument), die Bildunterschrift zählt weiterhin
+  // zusätzlich mit, falls vorhanden. Gibt es keinen passenden Kunden, wird einer vorgeschlagen statt
+  // die Datei kommentarlos zu verwerfen — die Datei wird in jedem Fall sofort gesichert.
   const photo = message.photo?.at(-1) // höchste Auflösung ist der letzte Eintrag
   const document = message.document
   if (photo || document) {
@@ -246,30 +263,32 @@ Deno.serve(async (req: Request) => {
       return new Response('ok')
     }
     const caption: string = message.caption?.trim() ?? ''
-    if (!caption) {
-      await sendTelegramMessage(chatId, 'Für welchen Kunden/Mandanten ist das? Schick die Datei nochmal mit dem Kundennamen als Bildunterschrift.')
-      return new Response('ok')
+    const dateiname = document?.file_name ?? `foto_${Date.now()}.jpg`
+    const contentType = document?.mime_type ?? 'image/jpeg'
+
+    let klassifikation: { erkannter_name?: string; erkannte_firma?: string; kategorie: string } | null = null
+    try {
+      const base64 = bytesZuBase64(datei.bytes)
+      const result = await callEmailGateway('classify_kunden_dokument', { datei_base64: base64, media_type: contentType, dateiname })
+      klassifikation = result.klassifikation
+    } catch (err) {
+      console.error('classify_kunden_dokument fehlgeschlagen:', err)
     }
+
     const { data: kundenRows } = await supabase
       .from('kunden')
       .select('id, bereich, firma, ansprechpartner, email, telefon, status, follow_up, activities, dokumente')
-    const kandidaten = matchKandidaten((kundenRows ?? []) as KundeRow[], caption)
-    if (kandidaten.length !== 1) {
-      await sendTelegramMessage(
-        chatId,
-        kandidaten.length === 0
-          ? 'Dazu habe ich keinen passenden Kunden gefunden — nenn den Namen in der Bildunterschrift bitte genauer.'
-          : `Dazu habe ich mehrere passende Kunden gefunden: ${kandidaten.map((k) => `${k.kunde.firma} (${k.kunde.ansprechpartner})`).join(', ')}. Bitte genauer benennen.`,
-      )
-      return new Response('ok')
-    }
-    const kunde = kandidaten[0].kunde
-    const dateiname = document?.file_name ?? `foto_${Date.now()}.jpg`
-    const contentType = document?.mime_type ?? 'image/jpeg'
-    const pfad = `telegram/${kunde.id}/${Date.now()}_${sicheresPfadsegment(dateiname)}`
-    const { error: uploadError } = await supabase.storage
-      .from('email-anhaenge')
-      .upload(pfad, datei.bytes, { contentType, upsert: true })
+    const alleKundenFuerDatei = (kundenRows ?? []) as KundeRow[]
+    const suchtext = [caption, klassifikation?.erkannter_name, klassifikation?.erkannte_firma].filter(Boolean).join(' ')
+    const kandidaten = suchtext ? matchKandidaten(alleKundenFuerDatei, suchtext) : []
+    const erkanntText = klassifikation
+      ? ` (erkannt: ${[klassifikation.erkannte_firma, klassifikation.erkannter_name, klassifikation.kategorie].filter(Boolean).join(', ')})`
+      : ''
+
+    // Datei immer sofort sichern — unabhängig vom Treffer, sonst ist sie bei der nächsten Nachricht
+    // (z.B. Antwort auf die Rückfrage) verloren.
+    const pfad = `telegram/${Date.now()}_${sicheresPfadsegment(dateiname)}`
+    const { error: uploadError } = await supabase.storage.from('email-anhaenge').upload(pfad, datei.bytes, { contentType, upsert: true })
     if (uploadError) {
       await sendTelegramMessage(chatId, 'Die Datei konnte nicht gespeichert werden.')
       return new Response('ok')
@@ -277,16 +296,52 @@ Deno.serve(async (req: Request) => {
     const { data: urlData } = supabase.storage.from('email-anhaenge').getPublicUrl(pfad)
     const heute = new Date().toISOString().slice(0, 10)
     const neuesDokument = { id: crypto.randomUUID(), name: dateiname, typ: contentType, datum: heute, groesse: formatGroesse(datei.bytes.length), url: urlData.publicUrl }
-    const neueActivity = { id: crypto.randomUUID(), date: heute, text: `Datei per Telegram von ${mitarbeiter.name} abgelegt: „${dateiname}"`, user: mitarbeiter.name }
+
+    if (kandidaten.length === 1) {
+      const kunde = kandidaten[0].kunde
+      const neueActivity = {
+        id: crypto.randomUUID(),
+        date: heute,
+        text: `Datei per Telegram von ${mitarbeiter.name} automatisch abgelegt: „${dateiname}"${klassifikation ? ` — ${klassifikation.kategorie}` : ''}`,
+        user: mitarbeiter.name,
+      }
+      await supabase
+        .from('kunden')
+        .update({ dokumente: [neuesDokument, ...(kunde.dokumente ?? [])], activities: [neueActivity, ...(kunde.activities ?? [])] })
+        .eq('id', kunde.id)
+      await supabase.from('mitarbeiter').update({ telegram_last_kunde_id: kunde.id, telegram_last_kunde_bereich: kunde.bereich }).eq('id', mitarbeiter.id)
+      await sendTelegramMessage(chatId, `Automatisch abgelegt bei ${kunde.firma} (${kunde.ansprechpartner}): „${dateiname}"${erkanntText}`)
+      return new Response('ok')
+    }
+
+    if (kandidaten.length > 1) {
+      await sendTelegramMessage(
+        chatId,
+        `Dazu habe ich mehrere passende Kunden gefunden: ${kandidaten.map((k) => `${k.kunde.firma} (${k.kunde.ansprechpartner})`).join(', ')}. Die Datei ist gespeichert${erkanntText} — schick sie bitte nochmal mit dem genauen Kundennamen als Bildunterschrift, dann lege ich sie richtig ab.`,
+      )
+      return new Response('ok')
+    }
+
+    // Kein Treffer: neuen Kunden vorschlagen statt die Datei kommentarlos zu verwerfen.
     await supabase
-      .from('kunden')
+      .from('mitarbeiter')
       .update({
-        dokumente: [neuesDokument, ...(kunde.dokumente ?? [])],
-        activities: [neueActivity, ...(kunde.activities ?? [])],
+        telegram_pending: {
+          text: '',
+          klass: null,
+          kandidaten_ids: [],
+          erstellt_am: new Date().toISOString(),
+          aktion_feld: 'neuer_kunde_bestaetigen',
+          neuer_kunde_dokument: neuesDokument,
+          neuer_kunde_name: klassifikation?.erkannter_name ?? '',
+          neuer_kunde_firma: klassifikation?.erkannte_firma ?? caption ?? '',
+        },
       })
-      .eq('id', kunde.id)
-    await supabase.from('mitarbeiter').update({ telegram_last_kunde_id: kunde.id, telegram_last_kunde_bereich: kunde.bereich }).eq('id', mitarbeiter.id)
-    await sendTelegramMessage(chatId, `Abgelegt bei ${kunde.firma} (${kunde.ansprechpartner}): „${dateiname}"`)
+      .eq('id', mitarbeiter.id)
+    await sendTelegramMessage(
+      chatId,
+      `Dazu habe ich keinen passenden Kunden/Mandanten gefunden.${erkanntText || ' Im Dokument war nichts Eindeutiges erkennbar.'} Die Datei ist gespeichert. Soll ich dafür einen neuen Kunden anlegen? Antworte mit dem Bereich (z.B. "finanzierungen", "erben", "beratung", "betriebsuebergabe", "betriebsformen" oder "akademie") oder "nein".`,
+    )
     return new Response('ok')
   }
 
@@ -312,9 +367,12 @@ Deno.serve(async (req: Request) => {
         klass: any
         kandidaten_ids: string[]
         erstellt_am: string
-        aktion_feld?: 'bereich' | 'firma' | 'loeschen_bestaetigen'
+        aktion_feld?: 'bereich' | 'firma' | 'loeschen_bestaetigen' | 'neuer_kunde_bestaetigen'
         loeschen_id?: string
         loeschen_name?: string
+        neuer_kunde_dokument?: { id: string; name: string; typ: string; datum: string; groesse: string; url: string }
+        neuer_kunde_name?: string
+        neuer_kunde_firma?: string
       }
     | null
   if (pending && Date.now() - new Date(pending.erstellt_am).getTime() < 10 * 60 * 1000) {
@@ -327,6 +385,43 @@ Deno.serve(async (req: Request) => {
       } else {
         await sendTelegramMessage(chatId, 'Abgebrochen, nichts gelöscht.')
       }
+      return new Response('ok')
+    }
+    if (pending.aktion_feld === 'neuer_kunde_bestaetigen') {
+      const BEREICHE_NEUANLAGE = ['beratung', 'erben', 'betriebsuebergabe', 'betriebsformen', 'akademie', 'finanzierungen']
+      const genannterBereich = BEREICHE_NEUANLAGE.find((b) => text.toLowerCase().includes(b))
+      if (!genannterBereich) {
+        await sendTelegramMessage(chatId, 'Ok, nichts angelegt. Die Datei bleibt gespeichert, du kannst sie manuell im CRM zuordnen.')
+        return new Response('ok')
+      }
+      const heute = new Date().toISOString().slice(0, 10)
+      const firma = pending.neuer_kunde_firma || pending.neuer_kunde_name || 'Unbekannt (Telegram)'
+      const neueId = `k_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`
+      const DEFAULT_STATUS: Record<string, string> = {
+        beratung: 'lead', erben: 'erstkontakt', betriebsuebergabe: 'erstkontakt',
+        betriebsformen: 'erstkontakt', akademie: 'interessent', finanzierungen: 'interessent',
+      }
+      const { error: insertError } = await supabase.from('kunden').insert({
+        id: neueId,
+        bereich: genannterBereich,
+        firma,
+        ansprechpartner: pending.neuer_kunde_name || '',
+        email: '',
+        telefon: null,
+        prioritaet: 'Mittel',
+        status: DEFAULT_STATUS[genannterBereich],
+        follow_up: { date: heute, note: 'Von Telegram automatisch angelegt — Erstkontakt vereinbaren', done: false },
+        verantwortlich: mitarbeiter.name,
+        letzte_aktivitaet: heute,
+        activities: [{ id: crypto.randomUUID(), date: heute, text: `Per Telegram von ${mitarbeiter.name} angelegt (Datei automatisch erkannt, kein passender Kunde gefunden).`, user: mitarbeiter.name }],
+        dokumente: pending.neuer_kunde_dokument ? [pending.neuer_kunde_dokument] : [],
+      })
+      if (insertError) {
+        await sendTelegramMessage(chatId, `Anlegen fehlgeschlagen: ${insertError.message}`)
+        return new Response('ok')
+      }
+      await supabase.from('mitarbeiter').update({ telegram_last_kunde_id: neueId, telegram_last_kunde_bereich: genannterBereich }).eq('id', mitarbeiter.id)
+      await sendTelegramMessage(chatId, `Neu angelegt: ${firma} (Bereich ${genannterBereich}) — Datei ist dort abgelegt.`)
       return new Response('ok')
     }
     if (pending.aktion_feld === 'bereich') {

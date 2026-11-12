@@ -827,9 +827,77 @@ export const PRIVAT_STATUS: Record<string, StatusNode> = {
 
 export const PRIVAT_HAUPTPFAD = ['neu', 'in_kontakt', 'termin_vereinbart', 'erledigt']
 
+// ==========================================================================
+// STATUSNETZ — IMMOBILIEN-KUNDEN (Interessenten/Eigentümer-Kontakte, getrennt vom Objekt-Status
+// oben, der weiterhin unter dem Bereichs-Key "immobilien" läuft — siehe KundeBereich-Kommentar in
+// types/index.ts)
+// ==========================================================================
+
+export const IMMOBILIEN_KUNDEN_STATUS: Record<string, StatusNode> = {
+  interessent: {
+    id: 'interessent',
+    label: 'Interessent / Erstkontakt',
+    color: 'bg-slate-100 text-slate-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['besichtigung', 'wiedervorlage', 'verloren'],
+  },
+  besichtigung: {
+    id: 'besichtigung',
+    label: 'Besichtigung vereinbart',
+    color: 'bg-sky-100 text-sky-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['angebot', 'wiedervorlage', 'verloren'],
+  },
+  angebot: {
+    id: 'angebot',
+    label: 'Angebot abgegeben',
+    color: 'bg-indigo-100 text-indigo-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['verhandlung', 'wiedervorlage', 'verloren'],
+  },
+  verhandlung: {
+    id: 'verhandlung',
+    label: 'In Verhandlung',
+    color: 'bg-violet-100 text-violet-700',
+    isTerminal: false,
+    isMainPath: true,
+    next: ['abgeschlossen', 'wiedervorlage', 'verloren'],
+  },
+  abgeschlossen: {
+    id: 'abgeschlossen',
+    label: 'Abgeschlossen',
+    color: 'bg-emerald-100 text-emerald-700',
+    isTerminal: true,
+    isMainPath: true,
+    next: [],
+  },
+  wiedervorlage: {
+    id: 'wiedervorlage',
+    label: 'Wiedervorlage / On Hold',
+    color: 'bg-orange-100 text-orange-700',
+    isTerminal: false,
+    isMainPath: false,
+    next: ['interessent', 'besichtigung', 'angebot', 'verhandlung', 'verloren'],
+  },
+  verloren: {
+    id: 'verloren',
+    label: 'Verloren / Kein Interesse',
+    color: 'bg-rose-100 text-rose-700',
+    isTerminal: true,
+    isMainPath: false,
+    next: [],
+  },
+}
+
+export const IMMOBILIEN_KUNDEN_HAUPTPFAD = ['interessent', 'besichtigung', 'angebot', 'verhandlung', 'abgeschlossen']
+
 type StatusBereich =
   | 'beratung'
   | 'immobilien'
+  | 'immobilienkunden'
   | 'erben'
   | 'betriebsuebergabe'
   | 'betriebsformen'
@@ -840,6 +908,7 @@ type StatusBereich =
 export function getStatusMap(bereich: StatusBereich): Record<string, StatusNode> {
   if (bereich === 'beratung') return BERATUNG_STATUS
   if (bereich === 'immobilien') return IMMOBILIEN_STATUS
+  if (bereich === 'immobilienkunden') return IMMOBILIEN_KUNDEN_STATUS
   if (bereich === 'erben') return ERBEN_STATUS
   if (bereich === 'betriebsuebergabe') return BETRIEBSUEBERGABE_STATUS
   if (bereich === 'betriebsformen') return BETRIEBSFORMEN_STATUS
@@ -851,6 +920,7 @@ export function getStatusMap(bereich: StatusBereich): Record<string, StatusNode>
 export function getHauptpfad(bereich: StatusBereich): string[] {
   if (bereich === 'beratung') return BERATUNG_HAUPTPFAD
   if (bereich === 'immobilien') return IMMOBILIEN_HAUPTPFAD
+  if (bereich === 'immobilienkunden') return IMMOBILIEN_KUNDEN_HAUPTPFAD
   if (bereich === 'erben') return ERBEN_HAUPTPFAD
   if (bereich === 'betriebsuebergabe') return BETRIEBSUEBERGABE_HAUPTPFAD
   if (bereich === 'betriebsformen') return BETRIEBSFORMEN_HAUPTPFAD

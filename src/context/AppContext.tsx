@@ -93,6 +93,7 @@ export type AppData = {
   finanzierungenMandanten: Kunde[]
   vorlagenFinanzierungen: Vorlage[]
   privatKunden: Kunde[]
+  immobilienKunden: Kunde[]
   objektVorschlaege: ObjektVorschlag[]
   importierteDokumente: ImportiertesDokument[]
   eingegangeneEmails: EingegangeneEmail[]
@@ -140,6 +141,7 @@ function leereGeteilteEntities(data: AppData): AppData {
     akademieTeilnehmer: [],
     finanzierungenMandanten: [],
     privatKunden: [],
+    immobilienKunden: [],
     objekte: [],
     protokolle: [],
     objektVorschlaege: [],
@@ -194,6 +196,7 @@ function buildSeed(): AppData {
     finanzierungenMandanten: seedFinanzierungenMandanten,
     vorlagenFinanzierungen: seedVorlagenFinanzierungen,
     privatKunden: seedPrivatKunden,
+    immobilienKunden: [],
     objektVorschlaege: [],
     importierteDokumente: [],
     eingegangeneEmails: [],
@@ -243,6 +246,7 @@ function loadInitial(): AppData {
         if (!Array.isArray(parsed.finanzierungenMandanten)) parsed.finanzierungenMandanten = seedFinanzierungenMandanten
         if (!Array.isArray(parsed.vorlagenFinanzierungen)) parsed.vorlagenFinanzierungen = seedVorlagenFinanzierungen
         if (!Array.isArray(parsed.privatKunden)) parsed.privatKunden = seedPrivatKunden
+        if (!Array.isArray(parsed.immobilienKunden)) parsed.immobilienKunden = []
         if (!Array.isArray(parsed.objektVorschlaege)) parsed.objektVorschlaege = []
         if (!Array.isArray(parsed.importierteDokumente)) parsed.importierteDokumente = []
         if (!Array.isArray(parsed.eingegangeneEmails)) parsed.eingegangeneEmails = []
@@ -1040,6 +1044,7 @@ function reducer(state: AppData, action: Action): AppData {
         akademieTeilnehmer: action.data.kunden.akademie,
         finanzierungenMandanten: action.data.kunden.finanzierungen,
         privatKunden: action.data.kunden.privat,
+        immobilienKunden: action.data.kunden.immobilienkunden,
         objekte: action.data.objekte,
         protokolle: action.data.protokolle,
         objektVorschlaege: action.data.objektVorschlaege,

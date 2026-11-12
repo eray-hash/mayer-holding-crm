@@ -1,9 +1,21 @@
 // Zentrale Typdefinitionen für das Mayer Holding CRM
 
-export type Bereich = 'beratung' | 'immobilien' | 'erben' | 'betriebsuebergabe' | 'betriebsformen' | 'akademie' | 'finanzierungen' | 'privat'
+export type Bereich =
+  | 'beratung'
+  | 'immobilien'
+  | 'immobilienkunden'
+  | 'erben'
+  | 'betriebsuebergabe'
+  | 'betriebsformen'
+  | 'akademie'
+  | 'finanzierungen'
+  | 'privat'
 
-// Bereiche, die eine Kunden-/Mandanten-Liste vom Typ Kunde[] führen (alle außer Immobilien,
-// das stattdessen Objekte führt) — Basis für die bereichsübergreifende Objekt-Kunde-Zuweisung.
+// Bereiche, die eine Kunden-/Mandanten-Liste vom Typ Kunde[] führen. "immobilien" selbst führt
+// stattdessen Objekte — die zugehörige Kunden-/Interessentenliste läuft separat unter
+// "immobilienkunden" (eigener Status-Pfad, da "immobilien" als Bereichs-Key bereits für den
+// Objekt-Status (Akquise/Vermarktung/...) vergeben ist, siehe statusNetworks.ts) — Basis für die
+// bereichsübergreifende Objekt-Kunde-Zuweisung.
 export type KundeBereich = Exclude<Bereich, 'immobilien'>
 
 export type Prioritaet = 'Hoch' | 'Mittel' | 'Niedrig'

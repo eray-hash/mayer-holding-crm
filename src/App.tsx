@@ -17,6 +17,8 @@ import { Verbindlichkeiten } from './pages/beratung/Verbindlichkeiten'
 import { Leistungen } from './pages/beratung/Leistungen'
 import { ObjektListe } from './pages/immobilien/ObjektListe'
 import { ObjektDetail } from './pages/immobilien/ObjektDetail'
+import { ImmobilienKundenListe } from './pages/immobilien/ImmobilienKundenListe'
+import { ImmobilienKundenDetail } from './pages/immobilien/ImmobilienKundenDetail'
 import { Finanzierungen } from './pages/immobilien/Finanzierungen'
 import { VorlagenPageImmobilien } from './pages/immobilien/VorlagenPageImmobilien'
 import { ErbenListe } from './pages/erben/ErbenListe'
@@ -93,6 +95,8 @@ function AdminRoutesContent() {
 
         <Route path="/immobilien" element={<RequireBereich bereich="immobilien"><ObjektListe /></RequireBereich>} />
         <Route path="/immobilien/objekte/:id" element={<RequireBereich bereich="immobilien"><ObjektDetail /></RequireBereich>} />
+        <Route path="/immobilien/kunden" element={<RequireBereich bereich="immobilien"><ImmobilienKundenListe /></RequireBereich>} />
+        <Route path="/immobilien/kunden/:id" element={<RequireBereich bereich="immobilien"><ImmobilienKundenDetail /></RequireBereich>} />
         <Route path="/immobilien/finanzierungen" element={<RequireBereich bereich="immobilien"><Finanzierungen /></RequireBereich>} />
         <Route path="/immobilien/vorlagen/:kind" element={<RequireBereich bereich="immobilien"><VorlagenPageImmobilien /></RequireBereich>} />
         <Route path="/immobilien/projekte" element={<RequireBereich bereich="immobilien"><ProjekteListe /></RequireBereich>} />
