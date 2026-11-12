@@ -1094,6 +1094,8 @@ const STEUER_SCHRITTE = [
 // Namensregel statt einer KI-Auswahl — die Oberfläche zeigt, was gelesen und was übersprungen wurde.
 const FINANZ_DATEI = /bwa|jahresabschluss|abschluss|bilanz|guv|gewinn|verlust|e[uü]r|einnahmen|summen|saldenliste|susa|kontennachweis|anlage(n|spiegel|verzeichnis)|steuer|bescheid|lohn|gehalt|betriebswirtschaft|struktur|finanz|kennzahl|planung|budget|liquidit/i
 
+const KONTEXT_DATEI = /protokoll|notiz|gespr[aä]e?ch|to-?do|memo|vermerk|aufnahme/i
+
 type SteuerVorschlag = {
   titel: string
   art: 'Steuerersparnis' | 'Steuerverlagerung'
@@ -1172,12 +1174,16 @@ async function fuehreSteuerSchrittAus(bereich: string, kundeId: string, umleitun
 
     if (schritt.nr === 1) {
       const gelesen: NonNullable<SteuerZustand['gelesen']> = []
-      const kandidaten = dokumente.filter((d) => FINANZ_DATEI.test(d.name))
-      for (const d of dokumente.filter((d) => !FINANZ_DATEI.test(d.name))) {
-        gelesen.push({ name: d.name, ergebnis: 'übersprungen', hinweis: 'dem Namen nach keine Finanz- oder Strukturunterlage' })
+      // Finanzunterlagen zuerst, dann Gesprächsprotokolle und Notizen (dort stehen oft Pläne, Fristen
+      // und Zahlen aus dem Gespräch); zusammen höchstens sechs Dateien.
+      const finanz = dokumente.filter((d) => FINANZ_DATEI.test(d.name))
+      const kontext = dokumente.filter((d) => !FINANZ_DATEI.test(d.name) && KONTEXT_DATEI.test(d.name))
+      const kandidaten = [...finanz, ...kontext]
+      for (const d of dokumente.filter((d) => !kandidaten.includes(d))) {
+        gelesen.push({ name: d.name, ergebnis: 'übersprungen', hinweis: 'dem Namen nach weder Finanzunterlage noch Gesprächsnotiz' })
       }
-      const zuLesen = kandidaten.slice(0, 5)
-      for (const d of kandidaten.slice(5)) gelesen.push({ name: d.name, ergebnis: 'übersprungen', hinweis: 'mehr als fünf Finanzunterlagen — nur die fünf neuesten wurden gelesen' })
+      const zuLesen = kandidaten.slice(0, 6)
+      for (const d of kandidaten.slice(6)) gelesen.push({ name: d.name, ergebnis: 'übersprungen', hinweis: 'mehr als sechs passende Unterlagen — nur die ersten sechs wurden gelesen' })
 
       const auszuege = await Promise.all(
         zuLesen.map(async (d) => {
