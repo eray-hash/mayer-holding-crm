@@ -14,6 +14,7 @@
 //      /start <code> an den Bot schicken) — siehe self_register-ähnliches Muster in email-gateway.
 
 import { createClient } from 'npm:@supabase/supabase-js@2'
+import { PDFDocument } from 'npm:pdf-lib@1.17.1'
 
 const BOT_TOKEN = Deno.env.get('TELEGRAM_BOT_TOKEN')!
 const WEBHOOK_SECRET = Deno.env.get('TELEGRAM_WEBHOOK_SECRET')
@@ -132,6 +133,271 @@ async function telegramDateiHerunterladen(fileId: string): Promise<{ bytes: Uint
   const fileRes = await fetch(`https://api.telegram.org/file/bot${BOT_TOKEN}/${telegramPfad}`)
   if (!fileRes.ok) return null
   return { bytes: new Uint8Array(await fileRes.arrayBuffer()), telegramPfad }
+}
+
+// ---------- Sammel-Scan aufteilen (ein ganzer Aktenordner auf einmal gescannt und geschickt) ----------
+
+async function pdfSeitenzahl(bytes: Uint8Array): Promise<number | null> {
+  try {
+    const doc = await PDFDocument.load(bytes)
+    return doc.getPageCount()
+  } catch {
+    return null // z.B. beschädigt/verschlüsselt — dann läuft die Datei einfach als Einzeldokument weiter.
+  }
+}
+
+// Schneidet die Seiten [startSeite, endSeite] (1-basiert, beide inklusive) als eigenständige PDF aus.
+async function pdfSeitenAusschneiden(bytes: Uint8Array, startSeite: number, endSeite: number): Promise<Uint8Array> {
+  const quelle = await PDFDocument.load(bytes)
+  const ziel = await PDFDocument.create()
+  const indices = Array.from({ length: endSeite - startSeite + 1 }, (_, i) => startSeite - 1 + i)
+  const kopiert = await ziel.copyPages(quelle, indices)
+  for (const seite of kopiert) ziel.addPage(seite)
+  return ziel.save()
+}
+
+// Grobe, aber praxistaugliche Duplikat-Erkennung: kein Abgleich des tatsächlichen Dateiinhalts
+// (dafür müsste jedes bereits abgelegte Dokument erneut gelesen werden), sondern ein Abgleich der
+// vorhandenen Dateinamen gegen Kategorie + erkanntes Datum des neuen Teildokuments — reicht für den
+// praktischen Fall ("gleiche Unterlage versehentlich zweimal eingescannt") meist aus.
+function findeVermutetesDuplikat(
+  vorhandeneDokumente: { id: string; name: string }[],
+  kategorie: string,
+  erkanntesDatum: string | undefined,
+): { id: string; name: string } | null {
+  const kategorieWort = kategorie.toLowerCase().replace(/[^a-zäöüß]/g, '')
+  if (!kategorieWort) return null
+  const datumsTeile = (erkanntesDatum ?? '').split('-').filter(Boolean) // [YYYY, MM, DD?]
+  for (const d of vorhandeneDokumente) {
+    const nameNorm = d.name.toLowerCase()
+    if (!nameNorm.includes(kategorieWort)) continue
+    if (datumsTeile.length === 0) return d // Kategorie passt, kein Datum zum Gegenprüfen vorhanden
+    const passtZumDatum = datumsTeile.every((teil) => nameNorm.includes(teil))
+    if (passtZumDatum) return d
+  }
+  return null
+}
+
+type TelegramDokument = { id: string; name: string; typ: string; datum: string; groesse: string; url: string }
+
+// Spiegelt die Antwortstruktur der email-gateway-Action "split_scan_dokument" (eigene Edge Function,
+// kein geteilter Import möglich).
+type ScanAufteilung = {
+  erkannter_name?: string
+  erkannte_firma?: string
+  dokumente: {
+    start_seite: number
+    end_seite: number
+    kategorie: string
+    erkannter_name?: string
+    erkanntes_datum?: string
+    vorgeschlagener_dateiname: string
+  }[]
+}
+
+// Verarbeitet einen mehrseitigen PDF-Sammel-Scan vollständig: KI-Analyse (Aufteilung in
+// Einzeldokumente), Kunden-Zuordnung, tatsächliches Zerschneiden der PDF, Duplikat-Prüfung gegen die
+// bereits vorhandenen Dokumente des Kunden und — falls nötig — Start einer Rückfrage-Warteschlange
+// (ein Duplikat nach dem anderen, siehe aktion_feld "duplikat_entscheidung" weiter unten). Dokumente
+// ohne Duplikat-Verdacht werden sofort automatisch abgelegt.
+async function handleMehrseitigerScan(
+  supabase: ReturnType<typeof createClient>,
+  mitarbeiter: { id: string; name: string },
+  chatId: number,
+  bytes: Uint8Array,
+  dateiname: string,
+  seitenzahl: number,
+  caption: string,
+): Promise<void> {
+  let aufteilung: ScanAufteilung | null = null
+  try {
+    const base64 = bytesZuBase64(bytes)
+    const result = await callEmailGateway('split_scan_dokument', { datei_base64: base64, dateiname, seitenzahl })
+    aufteilung = result.aufteilung
+  } catch (err) {
+    console.error('split_scan_dokument fehlgeschlagen:', err)
+  }
+  if (!aufteilung || !aufteilung.dokumente || aufteilung.dokumente.length === 0) {
+    await sendTelegramMessage(chatId, 'Der Sammel-Scan konnte nicht automatisch analysiert werden — bitte nochmal schicken oder einzeln aufteilen.')
+    return
+  }
+
+  // Erst ALLE Teildokumente zerschneiden und sichern — unabhängig davon, ob schon ein passender
+  // Kunde existiert. Vorher wurde bei fehlendem/mehrdeutigem Treffer gar nichts gespeichert (echter
+  // Fund beim Testen: ein ganz neuer Kunde, der noch nicht im CRM existiert, bekam nur "keinen
+  // passenden Kunden gefunden" zu hören und die Scans waren verloren — genau der Fall, für den die
+  // Funktion eigentlich gedacht ist).
+  const heute = new Date().toISOString().slice(0, 10)
+  const alleTeildokumente: { dokument: TelegramDokument; kategorie: string; erkanntesDatum?: string }[] = []
+  for (const teil of aufteilung.dokumente) {
+    let teilBytes: Uint8Array
+    try {
+      teilBytes = await pdfSeitenAusschneiden(bytes, teil.start_seite, teil.end_seite)
+    } catch (err) {
+      console.error('Seiten-Ausschnitt fehlgeschlagen:', err)
+      continue
+    }
+    const teilDateiname = teil.vorgeschlagener_dateiname || `${teil.kategorie}_${teil.start_seite}-${teil.end_seite}.pdf`
+    const pfad = `telegram/${Date.now()}_${sicheresPfadsegment(teilDateiname)}`
+    const { error: uploadError } = await supabase.storage.from('email-anhaenge').upload(pfad, teilBytes, { contentType: 'application/pdf', upsert: true })
+    if (uploadError) {
+      console.error('Upload Teildokument fehlgeschlagen:', uploadError.message)
+      continue
+    }
+    const { data: urlData } = supabase.storage.from('email-anhaenge').getPublicUrl(pfad)
+    alleTeildokumente.push({
+      dokument: {
+        id: crypto.randomUUID(),
+        name: teilDateiname,
+        typ: 'application/pdf',
+        datum: heute,
+        groesse: formatGroesse(teilBytes.length),
+        url: urlData.publicUrl,
+      },
+      kategorie: teil.kategorie,
+      erkanntesDatum: teil.erkanntes_datum,
+    })
+  }
+  if (alleTeildokumente.length === 0) {
+    await sendTelegramMessage(chatId, 'Die erkannten Dokumente konnten nicht gespeichert werden — bitte nochmal schicken.')
+    return
+  }
+
+  const { data: kundenRows } = await supabase
+    .from('kunden')
+    .select('id, bereich, firma, ansprechpartner, email, telefon, status, follow_up, activities, dokumente')
+  const alleKunden = (kundenRows ?? []) as KundeRow[]
+  const suchtext = [caption, aufteilung.erkannter_name, aufteilung.erkannte_firma].filter(Boolean).join(' ')
+  const kandidaten = suchtext ? matchKandidaten(alleKunden, suchtext) : []
+
+  if (kandidaten.length > 1) {
+    // Mehrdeutig: anders als beim normalen Text-Chat (siehe Rückfrage-Auflösung weiter unten) gab es
+    // hier bisher KEINEN Rückfrage-Zustand — die nächste Antwort ("Lipps", "nein rückgängig machen",
+    // ...) landete dadurch im allgemeinen Text-Assistenten und wurde dort, mangels eigenem Treffer,
+    // fälschlich dem zuletzt bearbeiteten (völlig anderen) Kunden als Notiz zugeordnet. Echter Fund
+    // beim Testen. Jetzt wird die Mehrdeutigkeit wie beim Text-Chat per Rückfrage-Zustand aufgelöst.
+    await supabase
+      .from('mitarbeiter')
+      .update({
+        telegram_pending: {
+          text: '',
+          klass: null,
+          kandidaten_ids: kandidaten.map((k) => k.kunde.id),
+          erstellt_am: new Date().toISOString(),
+          aktion_feld: 'scan_mehrdeutig',
+          neuer_kunde_scan_dokumente: alleTeildokumente.map((t) => t.dokument),
+          scan_teildokumente_meta: alleTeildokumente.map((t) => ({ id: t.dokument.id, kategorie: t.kategorie, erkanntesDatum: t.erkanntesDatum })),
+        },
+      })
+      .eq('id', mitarbeiter.id)
+    await sendTelegramMessage(
+      chatId,
+      `Der Scan enthält ${alleTeildokumente.length} erkannte Dokument(e) und ist gespeichert, aber ich habe mehrere passende Kunden gefunden: ${kandidaten.map((k) => `${k.kunde.firma} (${k.kunde.ansprechpartner})`).join(', ')}. Welchen genau meinst du?`,
+    )
+    return
+  }
+
+  if (kandidaten.length === 0) {
+    // Kein Treffer: neuen Kunden für den GESAMTEN Scan vorschlagen (nicht nur eine einzelne Datei
+    // wie im Einzeldokument-Ablauf) — der Standardfall beim Erstanlegen eines Aktenordners.
+    await supabase
+      .from('mitarbeiter')
+      .update({
+        telegram_pending: {
+          text: '',
+          klass: null,
+          kandidaten_ids: [],
+          erstellt_am: new Date().toISOString(),
+          aktion_feld: 'neuer_kunde_scan_bestaetigen',
+          neuer_kunde_name: aufteilung.erkannter_name ?? '',
+          neuer_kunde_firma: aufteilung.erkannte_firma ?? caption ?? '',
+          neuer_kunde_scan_dokumente: alleTeildokumente.map((t) => t.dokument),
+        },
+      })
+      .eq('id', mitarbeiter.id)
+    await sendTelegramMessage(
+      chatId,
+      `Der Scan enthält ${alleTeildokumente.length} erkannte Dokument(e) (${[...new Set(aufteilung.dokumente.map((d) => d.kategorie))].join(', ')}), aber ich habe keinen passenden Kunden gefunden. Alle Dokumente sind gespeichert. Soll ich dafür einen neuen Kunden anlegen? Antworte mit dem Bereich (z.B. "finanzierungen", "erben", "beratung", "betriebsuebergabe", "betriebsformen" oder "akademie") oder "nein".`,
+    )
+    return
+  }
+
+  await legeTeildokumenteBeiKundeAb(supabase, mitarbeiter, chatId, kandidaten[0].kunde, alleTeildokumente)
+}
+
+// Gemeinsame Ablage-Logik für einen bereits eindeutig feststehenden Kunden — genutzt sowohl direkt
+// (genau ein Treffer) als auch nach Auflösung einer Mehrdeutigkeits-Rückfrage (aktion_feld
+// "scan_mehrdeutig" weiter unten), damit beide Pfade exakt dieselbe Duplikat-Prüfung durchlaufen.
+async function legeTeildokumenteBeiKundeAb(
+  supabase: ReturnType<typeof createClient>,
+  mitarbeiter: { id: string; name: string },
+  chatId: number,
+  kunde: KundeRow,
+  teildokumente: { dokument: TelegramDokument; kategorie: string; erkanntesDatum?: string }[],
+): Promise<void> {
+  const heute = new Date().toISOString().slice(0, 10)
+  const vorhandeneDokumente = (kunde.dokumente ?? []) as TelegramDokument[]
+  const abgelegteNamen: string[] = []
+  const neueDokumenteDirekt: TelegramDokument[] = []
+  const neueActivities: { id: string; date: string; text: string; user: string }[] = []
+  const duplikatWarteschlange: { dokument: TelegramDokument; bestehendesId: string; bestehenderName: string }[] = []
+
+  for (const { dokument, kategorie, erkanntesDatum } of teildokumente) {
+    const duplikat = findeVermutetesDuplikat(vorhandeneDokumente, kategorie, erkanntesDatum)
+    if (duplikat) {
+      duplikatWarteschlange.push({ dokument, bestehendesId: duplikat.id, bestehenderName: duplikat.name })
+    } else {
+      neueDokumenteDirekt.push(dokument)
+      abgelegteNamen.push(dokument.name)
+      neueActivities.push({
+        id: crypto.randomUUID(),
+        date: heute,
+        text: `Aus Sammel-Scan per Telegram von ${mitarbeiter.name} automatisch abgelegt: „${dokument.name}" — ${kategorie}`,
+        user: mitarbeiter.name,
+      })
+    }
+  }
+
+  if (neueDokumenteDirekt.length > 0) {
+    await supabase
+      .from('kunden')
+      .update({ dokumente: [...neueDokumenteDirekt, ...vorhandeneDokumente], activities: [...neueActivities, ...(kunde.activities ?? [])] })
+      .eq('id', kunde.id)
+  }
+  await supabase.from('mitarbeiter').update({ telegram_last_kunde_id: kunde.id, telegram_last_kunde_bereich: kunde.bereich }).eq('id', mitarbeiter.id)
+
+  if (duplikatWarteschlange.length === 0) {
+    await sendTelegramMessage(
+      chatId,
+      `Sammel-Scan aufgeteilt und bei ${kunde.firma} (${kunde.ansprechpartner}) abgelegt: ${abgelegteNamen.map((n) => `„${n}"`).join(', ')}.`,
+    )
+    return
+  }
+
+  await supabase
+    .from('mitarbeiter')
+    .update({
+      telegram_pending: {
+        text: '',
+        klass: null,
+        kandidaten_ids: [],
+        erstellt_am: new Date().toISOString(),
+        aktion_feld: 'duplikat_entscheidung',
+        duplikat_bereich: kunde.bereich,
+        duplikat_kunde_id: kunde.id,
+        duplikat_warteschlange: duplikatWarteschlange,
+      },
+    })
+    .eq('id', mitarbeiter.id)
+
+  const vorabText = abgelegteNamen.length > 0 ? `${abgelegteNamen.length} Dokument(e) bereits automatisch abgelegt. ` : ''
+  const erstes = duplikatWarteschlange[0]
+  const restHinweis =
+    duplikatWarteschlange.length > 1 ? ` (danach noch ${duplikatWarteschlange.length - 1} weitere Rückfrage${duplikatWarteschlange.length > 2 ? 'n' : ''})` : ''
+  await sendTelegramMessage(
+    chatId,
+    `${vorabText}Für „${erstes.dokument.name}" gibt es möglicherweise schon „${erstes.bestehenderName}" bei ${kunde.firma}. Was soll ich tun — "überschreiben", "kopie", "ignorieren" oder "prüfen" (als Kopie ablegen + Hinweis in der Akte)?${restHinweis}`,
+  )
 }
 
 // ---------- Firmenwissen-Kontext (Server-Port von src/lib/firmenwissenKontext.ts) — damit über
@@ -262,6 +528,26 @@ Deno.serve(async (req: Request) => {
       await sendTelegramMessage(chatId, 'Die Datei konnte nicht heruntergeladen werden.')
       return new Response('ok')
     }
+
+    // Mehrseitiger PDF-Sammel-Scan (z.B. ein ganzer Aktenordner auf einmal gescannt) — eigener Ablauf
+    // mit Aufteilung in Einzeldokumente + Duplikat-Prüfung, siehe handleMehrseitigerScan. Einzelne
+    // Fotos/Dokumente (1 Seite) laufen unverändert über den bestehenden Ablauf unten weiter.
+    if (document?.mime_type === 'application/pdf') {
+      const seiten = await pdfSeitenzahl(datei.bytes)
+      if (seiten && seiten > 1) {
+        await handleMehrseitigerScan(
+          supabase,
+          mitarbeiter,
+          chatId,
+          datei.bytes,
+          document.file_name ?? `scan_${Date.now()}.pdf`,
+          seiten,
+          message.caption?.trim() ?? '',
+        )
+        return new Response('ok')
+      }
+    }
+
     const caption: string = message.caption?.trim() ?? ''
     const dateiname = document?.file_name ?? `foto_${Date.now()}.jpg`
     const contentType = document?.mime_type ?? 'image/jpeg'
@@ -367,12 +653,24 @@ Deno.serve(async (req: Request) => {
         klass: any
         kandidaten_ids: string[]
         erstellt_am: string
-        aktion_feld?: 'bereich' | 'firma' | 'loeschen_bestaetigen' | 'neuer_kunde_bestaetigen'
+        aktion_feld?:
+          | 'bereich'
+          | 'firma'
+          | 'loeschen_bestaetigen'
+          | 'neuer_kunde_bestaetigen'
+          | 'neuer_kunde_scan_bestaetigen'
+          | 'scan_mehrdeutig'
+          | 'duplikat_entscheidung'
         loeschen_id?: string
         loeschen_name?: string
-        neuer_kunde_dokument?: { id: string; name: string; typ: string; datum: string; groesse: string; url: string }
+        neuer_kunde_dokument?: TelegramDokument
         neuer_kunde_name?: string
         neuer_kunde_firma?: string
+        neuer_kunde_scan_dokumente?: TelegramDokument[]
+        scan_teildokumente_meta?: { id: string; kategorie: string; erkanntesDatum?: string }[]
+        duplikat_bereich?: string
+        duplikat_kunde_id?: string
+        duplikat_warteschlange?: { dokument: TelegramDokument; bestehendesId: string; bestehenderName: string }[]
       }
     | null
   if (pending && Date.now() - new Date(pending.erstellt_am).getTime() < 10 * 60 * 1000) {
@@ -422,6 +720,134 @@ Deno.serve(async (req: Request) => {
       }
       await supabase.from('mitarbeiter').update({ telegram_last_kunde_id: neueId, telegram_last_kunde_bereich: genannterBereich }).eq('id', mitarbeiter.id)
       await sendTelegramMessage(chatId, `Neu angelegt: ${firma} (Bereich ${genannterBereich}) — Datei ist dort abgelegt.`)
+      return new Response('ok')
+    }
+    if (pending.aktion_feld === 'neuer_kunde_scan_bestaetigen') {
+      const BEREICHE_NEUANLAGE = ['beratung', 'erben', 'betriebsuebergabe', 'betriebsformen', 'akademie', 'finanzierungen']
+      const genannterBereich = BEREICHE_NEUANLAGE.find((b) => text.toLowerCase().includes(b))
+      if (!genannterBereich) {
+        await sendTelegramMessage(chatId, 'Ok, nichts angelegt. Die Dokumente bleiben gespeichert, du kannst sie manuell im CRM zuordnen.')
+        return new Response('ok')
+      }
+      const heute = new Date().toISOString().slice(0, 10)
+      const firma = pending.neuer_kunde_firma || pending.neuer_kunde_name || 'Unbekannt (Telegram-Scan)'
+      const neueId = `k_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`
+      const scanDokumente = pending.neuer_kunde_scan_dokumente ?? []
+      const DEFAULT_STATUS: Record<string, string> = {
+        beratung: 'lead', erben: 'erstkontakt', betriebsuebergabe: 'erstkontakt',
+        betriebsformen: 'erstkontakt', akademie: 'interessent', finanzierungen: 'interessent',
+      }
+      const { error: insertError } = await supabase.from('kunden').insert({
+        id: neueId,
+        bereich: genannterBereich,
+        firma,
+        ansprechpartner: pending.neuer_kunde_name || '',
+        email: '',
+        telefon: null,
+        prioritaet: 'Mittel',
+        status: DEFAULT_STATUS[genannterBereich],
+        follow_up: { date: heute, note: 'Von Telegram automatisch angelegt — Erstkontakt vereinbaren', done: false },
+        verantwortlich: mitarbeiter.name,
+        letzte_aktivitaet: heute,
+        activities: [{
+          id: crypto.randomUUID(),
+          date: heute,
+          text: `Per Telegram von ${mitarbeiter.name} angelegt (Sammel-Scan automatisch erkannt, kein passender Kunde gefunden) — ${scanDokumente.length} Dokument(e) abgelegt.`,
+          user: mitarbeiter.name,
+        }],
+        dokumente: scanDokumente,
+      })
+      if (insertError) {
+        await sendTelegramMessage(chatId, `Anlegen fehlgeschlagen: ${insertError.message}`)
+        return new Response('ok')
+      }
+      await supabase.from('mitarbeiter').update({ telegram_last_kunde_id: neueId, telegram_last_kunde_bereich: genannterBereich }).eq('id', mitarbeiter.id)
+      await sendTelegramMessage(
+        chatId,
+        `Neu angelegt: ${firma} (Bereich ${genannterBereich}) — ${scanDokumente.length} Dokument(e) aus dem Sammel-Scan sind dort abgelegt.`,
+      )
+      return new Response('ok')
+    }
+    if (pending.aktion_feld === 'scan_mehrdeutig') {
+      const textWoerter = new Set(woerter(text))
+      const treffer = alleKunden.filter(
+        (k) => pending.kandidaten_ids.includes(k.id) && [...woerter(k.firma), ...woerter(k.ansprechpartner)].some((w) => textWoerter.has(w)),
+      )
+      if (treffer.length !== 1) {
+        // Wieder unklar/kein Treffer: Rückfrage-Zustand erhalten bleiben lassen, statt stillschweigend
+        // im allgemeinen Text-Chat zu landen (genau das war der ursprüngliche Fehler).
+        await supabase.from('mitarbeiter').update({ telegram_pending: pending }).eq('id', mitarbeiter.id)
+        await sendTelegramMessage(chatId, 'Das war nicht eindeutig genug — bitte nenne den Firmen- oder Ansprechpartner-Namen genau wie oben aufgelistet.')
+        return new Response('ok')
+      }
+      const kundeRowRaw = treffer[0]
+      const dokumente = pending.neuer_kunde_scan_dokumente ?? []
+      const meta = pending.scan_teildokumente_meta ?? []
+      const teildokumente = dokumente.map((dokument) => {
+        const m = meta.find((x) => x.id === dokument.id)
+        return { dokument, kategorie: m?.kategorie ?? 'Sonstiges', erkanntesDatum: m?.erkanntesDatum }
+      })
+      await legeTeildokumenteBeiKundeAb(supabase, mitarbeiter, chatId, kundeRowRaw, teildokumente)
+      return new Response('ok')
+    }
+    if (pending.aktion_feld === 'duplikat_entscheidung') {
+      const warteschlange = pending.duplikat_warteschlange ?? []
+      const aktuelles = warteschlange[0]
+      if (!aktuelles || !pending.duplikat_kunde_id || !pending.duplikat_bereich) return new Response('ok')
+
+      const { data: kundeRow } = await supabase
+        .from('kunden')
+        .select('id, bereich, firma, ansprechpartner, dokumente, activities')
+        .eq('id', pending.duplikat_kunde_id)
+        .eq('bereich', pending.duplikat_bereich)
+        .maybeSingle()
+      if (!kundeRow) {
+        await sendTelegramMessage(chatId, 'Der zugehörige Kunde wurde nicht mehr gefunden.')
+        return new Response('ok')
+      }
+
+      const antwort = text.trim().toLowerCase()
+      let dokumente = (kundeRow.dokumente ?? []) as TelegramDokument[]
+      let aktionsText = ''
+      if (antwort.startsWith('über') || antwort.startsWith('uber')) {
+        dokumente = dokumente.map((d) => (d.id === aktuelles.bestehendesId ? { ...aktuelles.dokument, id: d.id } : d))
+        aktionsText = `„${aktuelles.bestehenderName}" durch „${aktuelles.dokument.name}" überschrieben`
+      } else if (antwort.startsWith('kopie')) {
+        dokumente = [aktuelles.dokument, ...dokumente]
+        aktionsText = `„${aktuelles.dokument.name}" als weitere Kopie abgelegt`
+      } else if (antwort.startsWith('prüf') || antwort.startsWith('pruf')) {
+        dokumente = [aktuelles.dokument, ...dokumente]
+        aktionsText = `„${aktuelles.dokument.name}" abgelegt, als möglicherweise doppelt markiert — bitte im CRM prüfen`
+      } else if (antwort.startsWith('ignor')) {
+        aktionsText = `„${aktuelles.dokument.name}" verworfen, „${aktuelles.bestehenderName}" bleibt unverändert`
+      } else {
+        // Nicht verstanden: Pending unverändert wieder zurückschreiben (wurde oben bereits gelöscht) und erneut nachfragen.
+        await supabase.from('mitarbeiter').update({ telegram_pending: pending }).eq('id', mitarbeiter.id)
+        await sendTelegramMessage(chatId, 'Das habe ich nicht verstanden — bitte antworte mit "überschreiben", "kopie", "ignorieren" oder "prüfen".')
+        return new Response('ok')
+      }
+
+      const heute = new Date().toISOString().slice(0, 10)
+      const activities = [
+        { id: crypto.randomUUID(), date: heute, text: `Duplikat-Entscheidung per Telegram von ${mitarbeiter.name}: ${aktionsText}`, user: mitarbeiter.name },
+        ...((kundeRow.activities ?? []) as { id: string; date: string; text: string; user: string }[]),
+      ]
+      await supabase.from('kunden').update({ dokumente, activities }).eq('id', kundeRow.id)
+
+      const rest = warteschlange.slice(1)
+      if (rest.length === 0) {
+        await sendTelegramMessage(chatId, `Erledigt: ${aktionsText}. Alle Rückfragen zum Sammel-Scan sind abgearbeitet.`)
+        return new Response('ok')
+      }
+      await supabase
+        .from('mitarbeiter')
+        .update({ telegram_pending: { ...pending, duplikat_warteschlange: rest, erstellt_am: new Date().toISOString() } })
+        .eq('id', mitarbeiter.id)
+      const naechstes = rest[0]
+      await sendTelegramMessage(
+        chatId,
+        `${aktionsText}. Nächste Rückfrage: Für „${naechstes.dokument.name}" gibt es möglicherweise schon „${naechstes.bestehenderName}". Was soll ich tun — "überschreiben", "kopie", "ignorieren" oder "prüfen"?`,
+      )
       return new Response('ok')
     }
     if (pending.aktion_feld === 'bereich') {

@@ -167,6 +167,14 @@
 //                                                   Person/Firma + Unterlagenart aus dem Inhalt,
 //                                                   damit telegram-gateway auch ohne Bildunterschrift
 //                                                   den richtigen Kunden finden kann
+//   { action: "split_scan_dokument", datei_base64, dateiname, seitenzahl }
+//                                                -> erkennt in einem mehrseitigen Sammel-Scan (z.B.
+//                                                   ein ganzer Aktenordner auf einmal gescannt) die
+//                                                   einzelnen darin enthaltenen Dokumente mit
+//                                                   Seitenbereich/Kategorie/Datum/Dateinamen-
+//                                                   Vorschlag — das eigentliche Zerschneiden der PDF
+//                                                   und Ablegen passiert im aufrufenden Kanal
+//                                                   (telegram-gateway)
 //   { action: "pflege_classify", text }          -> Pflege-Modus (KI-Assistent, nur GF/Admin):
 //                                                   klassifiziert eine Massenkorrektur-Anweisung
 //                                                   ("X ist kein Kunde", "verschiebe X zu Erben",
@@ -448,6 +456,12 @@ async function callClaudeTool<T>(
   prompt: string | ClaudeContentBlock[],
   tool: { name: string; description: string; input_schema: Record<string, unknown> },
   maxTokens = 1024,
+  model: 'claude-haiku-4-5-20251001' | 'claude-sonnet-5-5' = 'claude-haiku-4-5-20251001',
+  // Manche Modelle/Anfragen (siehe echter Fund: Sonnet bei einem langen, mehrseitigen PDF-Dokument-
+  // Block) lehnen ein erzwungenes tool_choice mit "tool_choice: type \"tool\" ... not supported for
+  // this model" ab — dann hilft nur "auto" (das Modell antwortet dann zwar frei, ruft das Tool aber
+  // i.d.R. trotzdem auf, da es das einzig sinnvolle Werkzeug ist).
+  toolChoice: 'tool' | 'auto' = 'tool',
 ): Promise<T> {
   const apiKey = env('ANTHROPIC_API_KEY')
   const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -458,10 +472,10 @@ async function callClaudeTool<T>(
       'content-type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'claude-haiku-4-5-20251001',
+      model,
       max_tokens: maxTokens,
       tools: [tool],
-      tool_choice: { type: 'tool', name: tool.name },
+      tool_choice: toolChoice === 'tool' ? { type: 'tool', name: tool.name } : { type: 'auto' },
       messages: [{ role: 'user', content: prompt }],
     }),
   })
@@ -1031,11 +1045,90 @@ async function classifyKundenDokument(mediaBase64: string, mediaType: string, da
   )
 }
 
+type ScanTeildokument = {
+  start_seite: number
+  end_seite: number
+  kategorie: string
+  erkannter_name?: string
+  erkanntes_datum?: string
+  vorgeschlagener_dateiname: string
+}
+
+type ScanAufteilung = {
+  erkannter_name?: string
+  erkannte_firma?: string
+  dokumente: ScanTeildokument[]
+}
+
+// Analysiert einen mehrseitigen Sammel-Scan (z.B. ein ganzer Ordner Kundenunterlagen in einem
+// Rutsch gescannt) und erkennt die einzelnen darin enthaltenen Einzeldokumente mit Seitenbereich,
+// Kategorie, Datum und Dateinamen-Vorschlag — die eigentliche Aufteilung der PDF-Datei in echte
+// Einzeldateien passiert im aufrufenden Kanal (telegram-gateway), hier wird nur die Struktur
+// erkannt. Seitenzählung ist 1-basiert. Erkennt das Modell nur EIN zusammenhängendes Dokument,
+// kommt trotzdem ein einzelner Eintrag zurück, der den gesamten Seitenbereich abdeckt — das
+// Aufteilen wird dann zu einem Durchlauf ohne echte Trennung.
+async function splitScanDokument(mediaBase64: string, dateiname: string, seitenzahl: number): Promise<ScanAufteilung> {
+  return callClaudeTool<ScanAufteilung>(
+    [
+      {
+        type: 'text',
+        text: `Ein Mitarbeiter hat einen Stapel Papierunterlagen zu EINEM Kunden/Mandanten auf einmal eingescannt und als eine PDF-Datei geschickt (ursprünglicher Dateiname: "${dateiname}", ${seitenzahl} Seiten). Die Datei enthält wahrscheinlich mehrere unterschiedliche Einzeldokumente hintereinander (z.B. erst ein Kontoauszug, dann eine Lohnabrechnung, dann ein Mietvertrag).
+
+Analysiere den tatsächlichen Inhalt jeder Seite und erkenne, wo ein Dokument endet und das nächste beginnt (z.B. anhand Briefkopf, Überschrift, Absender, Layout-Wechsel). Gib für jedes erkannte Einzeldokument zurück: den Seitenbereich (1-basiert, erste und letzte Seite dieses Dokuments), eine kurze Kategorie (z.B. "BWA", "Kontoauszug", "Personalausweis", "Mietvertrag", "Lohnabrechnung", "Steuerbescheid", "Handelsregisterauszug", "Gesellschaftervertrag", "Selbstauskunft", "Schufa-Auskunft", "Sonstiges"), falls im Dokument ein Datum erkennbar ist (Ausstellungsdatum, Abrechnungsmonat o.ä.) im Format YYYY-MM-DD oder YYYY-MM, und einen kurzen aussagekräftigen deutschen Dateinamen-Vorschlag (mit ".pdf"-Endung, ohne Leerzeichen).
+
+Gehört erkennbar alles zu derselben Person/Firma, nenne diese einmal zentral (Name und/oder Firma, exakt wie im Dokument geschrieben). Ist die gesamte Datei tatsächlich nur EIN einziges zusammenhängendes Dokument ohne erkennbare Trennstelle, gib trotzdem genau einen Eintrag zurück, der die Seiten 1 bis ${seitenzahl} abdeckt.`,
+      },
+      { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: mediaBase64 } },
+    ],
+    {
+      name: 'scan_aufteilung',
+      description: 'Erkennt die einzelnen Dokumente innerhalb eines mehrseitigen Sammel-Scans mit Seitenbereichen.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          erkannter_name: { type: 'string' },
+          erkannte_firma: { type: 'string' },
+          dokumente: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                start_seite: { type: 'integer' },
+                end_seite: { type: 'integer' },
+                kategorie: { type: 'string' },
+                erkannter_name: { type: 'string' },
+                erkanntes_datum: { type: 'string' },
+                vorgeschlagener_dateiname: { type: 'string' },
+              },
+              required: ['start_seite', 'end_seite', 'kategorie', 'vorgeschlagener_dateiname'],
+            },
+          },
+        },
+        required: ['dokumente'],
+      },
+    },
+    4096,
+    'claude-sonnet-5-5',
+    'auto',
+  )
+}
+
 // Nachfolger von scripts/extract-leads.mjs — macht dasselbe, aber automatisch und nur für Absender,
 // die wirklich neu sind (noch kein Kunde, noch kein Lead-Vorschlag), statt bei jedem Lauf alle
 // jemals eingegangenen E-Mails erneut zu klassifizieren.
 const INTERNE_DOMAINS = ['amayer-holding.com', 'fundament-it.de']
 const LEAD_BEREICHE = ['beratung', 'immobilien', 'erben', 'betriebsuebergabe', 'betriebsformen', 'akademie', 'finanzierungen']
+// bereich_vorschlag (Klassifizierer-Ausgabe) -> echter bereich-Wert in der kunden-Tabelle. "immobilien"
+// heißt dort "immobilienkunden" (siehe kundenBereiche.ts), "unklar" wird unten auf "beratung" gemappt.
+const BEREICH_VORSCHLAG_ZU_KUNDE_BEREICH: Record<string, string> = {
+  beratung: 'beratung',
+  immobilien: 'immobilienkunden',
+  erben: 'erben',
+  betriebsuebergabe: 'betriebsuebergabe',
+  betriebsformen: 'betriebsformen',
+  akademie: 'akademie',
+  finanzierungen: 'finanzierungen',
+}
 
 type LeadGruppe = { email: string; vonName: string; mails: { betreff: string; ausschnitt: string; datum: string }[] }
 type LeadErgebnis = {
@@ -1077,6 +1170,12 @@ async function classifyLeadBatch(gruppen: LeadGruppe[]): Promise<LeadErgebnis[]>
 
   const result = await callClaudeTool<{ ergebnisse: LeadErgebnis[] }>(
     `Du hilfst, aus dem E-Mail-Postfach einer Unternehmensberatungs-/Immobilien-/Finanzierungsholding (Mayer Holding, Bereiche: Unternehmensberatung, Immobilien, Erben, Betriebsübergabe, Betriebsformen, Akademie, Finanzierungen) Lead-Vorschläge für das CRM zu extrahieren. Du bekommst pro Absender eine Zusammenfassung mehrerer E-Mails. Bewerte pro Absender, ob es sich um einen echten (potenziellen) Kunden/Mandanten handelt, und falls ja, zu welchem Geschäftsbereich das am besten passt — orientiere dich dabei in erster Linie daran, WER die Leistung in Anspruch nimmt bzw. nehmen möchte (z. B. ein Beratungsmandat läuft über "Unternehmensberatung", auch wenn im Text auch andere Themen wie Immobilien oder Holding-Strukturen erwähnt werden, solange die eigentliche Dienstleistung Unternehmensberatung ist).
+
+WICHTIG: Jeder als relevant markierte Absender wird ohne weitere menschliche Prüfung sofort als Kundenakte angelegt. Markiere deshalb NUR als relevant, wer selbst eine Leistung der Mayer Holding in Anspruch nimmt oder erkennbar nehmen möchte. NICHT relevant (relevant=false) sind insbesondere:
+- Anbieter/Dienstleister, die der Holding selbst etwas verkaufen oder anbieten wollen (Kaltakquise, Newsletter, Software-/KI-Angebote, Fördermittel- oder Marketingberater, Objekt- oder Fahrzeugangebote).
+- Anwälte, Gerichte, Behörden, Insolvenzverwalter, Banken oder Steuerberater, die in eigener Sache oder zu einem Rechtsstreit/Verfahren schreiben.
+- Interne Kommunikation: Geschäftsführung, Mitarbeiter und Partner der Holding, auch wenn sie von einer privaten Adresse schreiben.
+Im Zweifel relevant=false.
 
 Absender:
 
@@ -1135,15 +1234,35 @@ async function classifyNewLeads(): Promise<{ geprueft: number; vorgeschlagen: nu
     gruppenMap.get(email)!.mails.push({ betreff: e.betreff, ausschnitt: e.ausschnitt, datum: e.mail_datum })
   }
 
-  // Bereits bekannte Absender (bestehender Kunde ODER schon mal bewerteter Lead-Vorschlag,
-  // unabhängig vom Status) werden nicht erneut klassifiziert.
+  // Bereits bekannte Absender (bestehender Kunde ODER schon als "offen"/übernommener Lead-Vorschlag
+  // bewertet) werden nicht erneut klassifiziert. AUSNAHME: ein als "nicht_relevant" abgelehnter
+  // Absender wird erneut geprüft, sobald seitdem eine NEUE E-Mail von ihm eingegangen ist — sonst
+  // bleibt ein Absender für immer "nicht relevant", selbst wenn später eine eindeutig geschäftliche
+  // Mail folgt (echter Fall: erste Mail von Christopher Lipps war nur "hier meine Adresse" und
+  // korrekt abgelehnt, die beiden Mails danach kündigten ein echtes Erstgespräch samt Unterlagen
+  // und eine Rechnung an — wurden aber nie mehr geprüft, weil der Absender schon einen Eintrag hatte).
   const [{ data: bekannteKunden }, { data: bekannteLeads }] = await Promise.all([
     supabase.from('kunden').select('email'),
-    supabase.from('vorgeschlagene_leads').select('email'),
+    supabase.from('vorgeschlagene_leads').select('email, status, erstellt_am'),
   ])
-  const bekannt = new Set([...(bekannteKunden ?? []), ...(bekannteLeads ?? [])].map((r: { email: string }) => (r.email ?? '').trim().toLowerCase()))
+  const kundenEmails = new Set((bekannteKunden ?? []).map((r: { email: string }) => (r.email ?? '').trim().toLowerCase()))
+  const endgueltigBekannt = new Set(
+    (bekannteLeads ?? [])
+      .filter((r: { status: string }) => r.status !== 'nicht_relevant')
+      .map((r: { email: string }) => (r.email ?? '').trim().toLowerCase()),
+  )
+  const abgelehntSeit = new Map(
+    (bekannteLeads ?? [])
+      .filter((r: { status: string }) => r.status === 'nicht_relevant')
+      .map((r: { email: string; erstellt_am: string }) => [(r.email ?? '').trim().toLowerCase(), new Date(r.erstellt_am).getTime()]),
+  )
 
-  const neueGruppen = [...gruppenMap.values()].filter((g) => !bekannt.has(g.email))
+  const neueGruppen = [...gruppenMap.values()].filter((g) => {
+    if (kundenEmails.has(g.email) || endgueltigBekannt.has(g.email)) return false
+    const abgelehntAm = abgelehntSeit.get(g.email)
+    if (abgelehntAm === undefined) return true // wirklich neuer Absender
+    return g.mails.some((m) => new Date(m.datum).getTime() > abgelehntAm) // seitdem neue Mail(s) -> erneut prüfen
+  })
   if (neueGruppen.length === 0) return { geprueft: 0, vorgeschlagen: 0, uebersprungen: 0 }
 
   const byEmail = new Map(neueGruppen.map((g) => [g.email, g]))
@@ -1161,12 +1280,43 @@ async function classifyNewLeads(): Promise<{ geprueft: number; vorgeschlagen: nu
         // Trotzdem anlegen (Status "nicht_relevant", taucht nie unter "Neue Leads" auf) — sonst würde
         // dieser Absender bei jedem künftigen Lauf erneut (unnötig) klassifiziert werden.
         await supabase.from('vorgeschlagene_leads').upsert(
-          { quelle: 'email-analyse', email: gruppe.email, name: r.name || gruppe.vonName, status: 'nicht_relevant', notiz: r.notiz },
+          // erstellt_am mitschreiben: sonst gilt jede Mail nach der ERSTEN Ablehnung für immer als "neu"
+          // und derselbe Absender wird bei jedem Lauf (alle paar Minuten per Cron) erneut klassifiziert.
+          { quelle: 'email-analyse', email: gruppe.email, name: r.name || gruppe.vonName, status: 'nicht_relevant', notiz: r.notiz, erstellt_am: new Date().toISOString() },
           { onConflict: 'email' },
         )
         uebersprungen++
         continue
       }
+      // Direkt als Kunde anlegen statt nur als Vorschlag abzulegen — der Nutzer will keinen manuellen
+      // "Übernehmen"-Klick mehr pro Lead. Der Mitarbeiter-Abgleich oben (siehe Kommentar beim
+      // Lipps-Fall) bleibt die eigentliche Sicherung gegen Fehlzuordnungen; zusätzlich landet jeder so
+      // angelegte Kunde mit einer klar als "automatisch" markierten Aktivitätsnotiz in der Akte, damit
+      // ein Fehlgriff beim nächsten Öffnen sofort auffällt statt sich zu verstecken.
+      const heute = new Date().toISOString().slice(0, 10)
+      const bereich = BEREICH_VORSCHLAG_ZU_KUNDE_BEREICH[r.bereich_vorschlag] ?? 'beratung'
+      const kundeId = `k_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`
+      const { error: kundeError } = await supabase.from('kunden').insert({
+        id: kundeId,
+        bereich,
+        firma: r.firma || r.name || gruppe.vonName || gruppe.email,
+        ansprechpartner: r.name || gruppe.vonName || '',
+        email: gruppe.email,
+        telefon: r.telefon || '',
+        prioritaet: 'Mittel',
+        status: 'lead',
+        follow_up: { date: heute, note: 'Erstkontakt aufnehmen', done: false },
+        verantwortlich: '',
+        letzte_aktivitaet: heute,
+        activities: [
+          {
+            id: crypto.randomUUID(),
+            date: heute,
+            text: `Automatisch aus eingehender Mail angelegt${r.bereich_vorschlag === 'unklar' ? ' (Bereich unklar, Beratung als Standard gesetzt — bitte prüfen)' : ''}: „${r.notiz}"`,
+            user: 'KI-Lead-Analyse (automatisch)',
+          },
+        ],
+      })
       const { error } = await supabase.from('vorgeschlagene_leads').upsert(
         {
           quelle: 'email-analyse',
@@ -1176,8 +1326,13 @@ async function classifyNewLeads(): Promise<{ geprueft: number; vorgeschlagen: nu
           telefon: r.telefon || null,
           bereich_vorschlag: r.bereich_vorschlag,
           notiz: r.notiz,
-          status: 'offen',
-          rohdaten: { anzahl_mails: gruppe.mails.length, erste_mail: gruppe.mails.at(-1)?.datum, letzte_mail: gruppe.mails[0]?.datum },
+          status: kundeError ? 'offen' : 'uebernommen',
+          rohdaten: {
+            anzahl_mails: gruppe.mails.length,
+            erste_mail: gruppe.mails.at(-1)?.datum,
+            letzte_mail: gruppe.mails[0]?.datum,
+            ...(kundeError ? { fehler: kundeError.message } : { automatisch_angelegter_kunde: kundeId, bereich }),
+          },
         },
         { onConflict: 'email' },
       )
@@ -1596,6 +1751,15 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ klassifikation }), { headers })
     }
 
+    if (body.action === 'split_scan_dokument') {
+      const { datei_base64, dateiname, seitenzahl } = body
+      if (!datei_base64 || typeof datei_base64 !== 'string') {
+        return new Response(JSON.stringify({ error: 'datei_base64 ist ein Pflichtfeld' }), { status: 400, headers })
+      }
+      const aufteilung = await splitScanDokument(datei_base64, dateiname || '', Number(seitenzahl) || 1)
+      return new Response(JSON.stringify({ aufteilung }), { headers })
+    }
+
     // Die folgenden drei Aktionen sind für die öffentlichen, unauthentifizierten Formulare unter
     // /formular/* gedacht (src/pages/formulare/Public*.tsx). Diese Seiten laufen ohne Mitarbeiter-
     // Login, die kunden-Tabelle in Supabase lässt per RLS aber nur Lese-/Schreibzugriff für
@@ -1905,7 +2069,7 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ ok: true }), { headers })
     }
 
-    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "bewertung_recherche_start" oder "firmenwissen_answer"' }), { status: 400, headers })
+    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "bewertung_recherche_start" oder "firmenwissen_answer"' }), { status: 400, headers })
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }

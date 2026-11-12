@@ -26,6 +26,26 @@ import { CURRENT_USER } from '../data/constants'
 import type { KundeBereich, Kunde } from '../types'
 
 type ChatMessage = { id: string; role: 'user' | 'assistant'; text: string; imageDataUrl?: string }
+
+// Der Gesprächsverlauf blieb bisher nur im React-State — beim Schließen der CRM-Seite (Tab zu,
+// neu laden) war der komplette Chat weg, obwohl das Zu-/Aufklappen des Panels selbst ihn schon
+// erhielt (reines Mounten/Unmounten war nie das Problem). Jetzt zusätzlich in localStorage
+// gespiegelt, pro Mitarbeiter getrennt (gemeinsam genutzter Bürorechner), mit Obergrenze gegen
+// unbegrenztes Wachstum.
+const KI_CHAT_MAX_NACHRICHTEN = 100
+function kiChatStorageKey(mitarbeiterId: string | undefined): string {
+  return `mh_crm_ki_assistent_messages_${mitarbeiterId ?? 'lokal'}`
+}
+function ladeKiChatNachrichten(mitarbeiterId: string | undefined): ChatMessage[] | null {
+  try {
+    const raw = localStorage.getItem(kiChatStorageKey(mitarbeiterId))
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) && parsed.length > 0 ? parsed : null
+  } catch {
+    return null
+  }
+}
 type PastedImage = { dataUrl: string; base64: string; mediaType: string }
 type AufnahmeKunde = { bereich: KundeBereich; kundeId: string; kundeName: string }
 
@@ -40,8 +60,10 @@ type PflegeVorschlag = { beschreibung: string } & (
 )
 
 // Persistentes Chat-Panel (statt Modal) für den KI-Assistenten — bleibt über die ganze Session
-// gemountet (siehe Layout.tsx), damit der Gesprächsverlauf beim Auf-/Zuklappen erhalten bleibt.
-// Antworten werden zusätzlich per Sprachausgabe vorgelesen (abschaltbar).
+// gemountet (siehe Layout.tsx), damit der Gesprächsverlauf beim Auf-/Zuklappen erhalten bleibt, UND
+// zusätzlich in localStorage gespiegelt (siehe ladeKiChatNachrichten oben), damit er auch ein
+// Schließen des Tabs/der Seite übersteht. Antworten werden zusätzlich per Sprachausgabe
+// vorgelesen (abschaltbar).
 export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: () => void }) {
   const { state, dispatch } = useApp()
   const { session, mitarbeiter } = useAuth()
@@ -53,9 +75,12 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
     : state.rolle === 'geschaeftsfuehrung'
   const followUps = collectFollowUpPriorities(state)
 
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    { id: uid('msg'), role: 'assistant', text: 'Hallo! Sag oder tipp mir eine Notiz, eine Aufgabe oder stell mir eine Frage zu einem Kunden.' },
-  ])
+  const [messages, setMessages] = useState<ChatMessage[]>(
+    () =>
+      ladeKiChatNachrichten(mitarbeiter?.id) ?? [
+        { id: uid('msg'), role: 'assistant', text: 'Hallo! Sag oder tipp mir eine Notiz, eine Aufgabe oder stell mir eine Frage zu einem Kunden.' },
+      ],
+  )
   const [verarbeiten, setVerarbeiten] = useState(false)
   const [ttsEnabled, setTtsEnabled] = useState(true)
   const [pastedImage, setPastedImage] = useState<PastedImage | null>(null)
@@ -89,6 +114,14 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' })
   }, [messages, aufnahmeKunde, pflegeVorschlag])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(kiChatStorageKey(mitarbeiter?.id), JSON.stringify(messages.slice(-KI_CHAT_MAX_NACHRICHTEN)))
+    } catch {
+      // z.B. Safari-Privatmodus oder Speicher voll — Chat bleibt dann nur für diese Sitzung erhalten.
+    }
+  }, [messages, mitarbeiter?.id])
 
   // Schaltet den Pflege-Modus hart ab, falls die Berechtigung währenddessen wegfällt (z.B. Admin-
   // Recht entzogen) — ein offener, unbestätigter Vorschlag wird dabei verworfen statt ausgeführt.

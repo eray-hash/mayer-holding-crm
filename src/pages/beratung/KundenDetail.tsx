@@ -13,6 +13,7 @@ import { PotenzialAnalyseSection } from '../../components/PotenzialAnalyseSectio
 import { KaeuferprofilSection } from '../../components/KaeuferprofilSection'
 import { UnternehmensbewertungSection } from '../../components/UnternehmensbewertungSection'
 import { StammdatenWarnungBanner } from '../../components/StammdatenWarnungBanner'
+import { StammdatenKarte } from '../../components/StammdatenKarte'
 import { KundeHinweise } from '../../components/PruefHinweisBadge'
 import { SelbstauskunftSection } from '../../components/SelbstauskunftSection'
 import { NdaSection } from '../../components/NdaSection'
@@ -129,13 +130,7 @@ export function KundenDetail() {
         <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
           <Card className="p-5 lg:col-span-1">
             <h3 className="mb-3 text-sm font-semibold text-slate-700">Stammdaten</h3>
-            <dl className="space-y-2 text-sm">
-              <Row label="Firma" value={kunde.firma} />
-              <Row label="Ansprechpartner" value={kunde.ansprechpartner} />
-              <Row label="E-Mail" value={kunde.email} />
-              <Row label="Telefon" value={kunde.telefon} />
-              <Row label="Verantwortlich" value={kunde.verantwortlich} />
-            </dl>
+            <StammdatenKarte bereich="beratung" kunde={kunde} />
             <div className="mt-4">
               <SecondaryButton onClick={() => setSendEmailOpen(true)} className="w-full justify-center">
                 <Mail size={14} /> E-Mail senden
@@ -322,14 +317,6 @@ export function KundenDetail() {
   )
 }
 
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex justify-between gap-4">
-      <dt className="text-slate-400">{label}</dt>
-      <dd className="text-right text-slate-700">{value}</dd>
-    </div>
-  )
-}
 
 export function RechnungStatusBadge({ status }: { status: string }) {
   const colors: Record<string, string> = {

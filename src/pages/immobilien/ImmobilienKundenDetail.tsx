@@ -12,6 +12,7 @@ import { GespraechsprotokolleSection } from '../../components/Gespraechsprotokol
 import { PotenzialAnalyseSection } from '../../components/PotenzialAnalyseSection'
 import { KaeuferprofilSection } from '../../components/KaeuferprofilSection'
 import { StammdatenWarnungBanner } from '../../components/StammdatenWarnungBanner'
+import { StammdatenKarte } from '../../components/StammdatenKarte'
 import { KundeHinweise } from '../../components/PruefHinweisBadge'
 import { SelbstauskunftSection } from '../../components/SelbstauskunftSection'
 import { NdaSection } from '../../components/NdaSection'
@@ -127,13 +128,7 @@ export function ImmobilienKundenDetail() {
         <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
           <Card className="p-5 lg:col-span-1">
             <h3 className="mb-3 text-sm font-semibold text-slate-700">Stammdaten</h3>
-            <dl className="space-y-2 text-sm">
-              <Row label="Name/Firma" value={kunde.firma} />
-              <Row label="Ansprechpartner" value={kunde.ansprechpartner} />
-              <Row label="E-Mail" value={kunde.email} />
-              <Row label="Telefon" value={kunde.telefon} />
-              <Row label="Verantwortlich" value={kunde.verantwortlich} />
-            </dl>
+            <StammdatenKarte bereich="immobilienkunden" kunde={kunde} labels={{ firma: 'Name/Firma' }} />
             <div className="mt-4 rounded-lg bg-slate-50 p-3">
               <div className="text-xs font-medium text-slate-400">Nächste Follow-up-Aufgabe</div>
               <div className={`text-sm ${overdue ? 'font-medium text-rose-600' : 'text-slate-700'}`}>{fmtDate(kunde.followUp.date)} — {kunde.followUp.note}</div>
@@ -184,15 +179,6 @@ export function ImmobilienKundenDetail() {
           }}
         />
       </Modal>
-    </div>
-  )
-}
-
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex justify-between gap-4">
-      <dt className="text-slate-400">{label}</dt>
-      <dd className="text-right text-slate-700">{value}</dd>
     </div>
   )
 }
