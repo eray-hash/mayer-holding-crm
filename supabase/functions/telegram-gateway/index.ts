@@ -17,7 +17,7 @@
 //   3. Mitarbeiter verknüpfen sich über "Mein Profil" (Code per /start <code> an den Bot).
 
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2'
-import { PDFDocument } from 'npm:pdf-lib@1.17.1'
+import { PDFDocument, degrees } from 'npm:pdf-lib@1.17.1'
 
 const BOT_TOKEN = Deno.env.get('TELEGRAM_BOT_TOKEN')
 const WEBHOOK_SECRET = Deno.env.get('TELEGRAM_WEBHOOK_SECRET')
@@ -269,17 +269,29 @@ async function pdfSeitenzahl(bytes: Uint8Array): Promise<number | null> {
   }
 }
 
-async function pdfSeitenAusschneiden(bytes: Uint8Array, startSeite: number, endSeite: number): Promise<Uint8Array> {
+// Schneidet die Seiten [startSeite, endSeite] (1-basiert) als eigene PDF aus und dreht dabei verdreht
+// eingescannte Seiten gerade. "drehungen" bildet Seitennummer im Gesamt-Scan auf Grad im Uhrzeigersinn ab.
+async function pdfSeitenAusschneiden(bytes: Uint8Array, startSeite: number, endSeite: number, drehungen: Map<number, number>): Promise<Uint8Array> {
   const quelle = await PDFDocument.load(bytes)
   const ziel = await PDFDocument.create()
   const indices = Array.from({ length: endSeite - startSeite + 1 }, (_, i) => startSeite - 1 + i)
-  for (const seite of await ziel.copyPages(quelle, indices)) ziel.addPage(seite)
+  const kopiert = await ziel.copyPages(quelle, indices)
+  kopiert.forEach((seite, i) => {
+    const grad = drehungen.get(startSeite + i)
+    if (grad) seite.setRotation(degrees((seite.getRotation().angle + grad) % 360))
+    ziel.addPage(seite)
+  })
   return ziel.save()
+}
+
+function gueltigeDrehung(grad: unknown): number {
+  return grad === 90 || grad === 180 || grad === 270 ? grad : 0
 }
 
 type ScanAufteilung = {
   erkannter_name?: string
   erkannte_firma?: string
+  seiten_drehung?: { seite: number; grad: number }[]
   dokumente: {
     start_seite: number
     end_seite: number
@@ -331,10 +343,12 @@ async function verarbeiteDateiEingang(supabase: Supa, message: any): Promise<str
     } catch (err) {
       console.error('split_scan_dokument fehlgeschlagen:', err)
     }
+    const drehungen = new Map<number, number>()
+    for (const d of aufteilung?.seiten_drehung ?? []) if (gueltigeDrehung(d?.grad)) drehungen.set(d.seite, d.grad)
     const zeilen: string[] = []
     for (const teil of aufteilung?.dokumente ?? []) {
       try {
-        const teilBytes = await pdfSeitenAusschneiden(bytes, teil.start_seite, teil.end_seite)
+        const teilBytes = await pdfSeitenAusschneiden(bytes, teil.start_seite, teil.end_seite, drehungen)
         const name = teil.vorgeschlagener_dateiname || `${teil.kategorie}_${teil.start_seite}-${teil.end_seite}.pdf`
         const pfad = await speichereDatei(supabase, teilBytes, name, 'application/pdf')
         if (!pfad) continue
@@ -349,7 +363,7 @@ async function verarbeiteDateiEingang(supabase: Supa, message: any): Promise<str
       const erkannt = [aufteilung?.erkannter_name && `Name „${aufteilung.erkannter_name}"`, aufteilung?.erkannte_firma && `Firma „${aufteilung.erkannte_firma}"`].filter(Boolean)
       return [
         ...kopf,
-        `Sammel-Scan mit ${seiten} Seiten, automatisch in ${zeilen.length} Einzeldokument(e) zerlegt.`,
+        `Scan mit ${seiten} Seiten. ${zeilen.length === 1 ? 'Als ein zusammenhängendes Dokument erkannt und nicht aufgeteilt.' : `Als Stapel aus ${zeilen.length} verschiedenen Dokumenten erkannt und entsprechend aufgeteilt.`}${drehungen.size > 0 ? ` ${drehungen.size} verdreht eingescannte Seite(n) wurden dabei gerade gedreht.` : ''}`,
         `Im Scan erkannt: ${erkannt.length > 0 ? erkannt.join(', ') : 'kein eindeutiger Name'}`,
         'Gespeichert, noch keiner Akte zugeordnet:',
         ...zeilen,
@@ -366,14 +380,24 @@ async function verarbeiteDateiEingang(supabase: Supa, message: any): Promise<str
     ].join('\n')
   }
 
-  let klassifikation: { erkannter_name?: string; erkannte_firma?: string; kategorie?: string } | null = null
+  let klassifikation: { erkannter_name?: string; erkannte_firma?: string; kategorie?: string; drehung?: number } | null = null
   try {
     const result = await callEmailGateway('classify_kunden_dokument', { datei_base64: bytesZuBase64(bytes), media_type: contentType, dateiname })
     klassifikation = result.klassifikation
   } catch (err) {
     console.error('classify_kunden_dokument fehlgeschlagen:', err)
   }
-  const pfad = await speichereDatei(supabase, bytes, dateiname, contentType)
+  // Verdreht eingescannte PDF vor dem Speichern gerade drehen (Fotos bleiben, wie sie sind).
+  let zuSpeichern = bytes
+  const drehung = contentType === 'application/pdf' ? gueltigeDrehung(klassifikation?.drehung) : 0
+  if (drehung && seiten) {
+    try {
+      zuSpeichern = await pdfSeitenAusschneiden(bytes, 1, seiten, new Map(Array.from({ length: seiten }, (_, i) => [i + 1, drehung])))
+    } catch (err) {
+      console.error('Drehen fehlgeschlagen:', err)
+    }
+  }
+  const pfad = await speichereDatei(supabase, zuSpeichern, dateiname, contentType)
   if (!pfad) return `${kopf.join('\n')}\nDie Datei konnte nicht gespeichert werden.`
   const erkannt = [
     klassifikation?.erkannter_name && `Name „${klassifikation.erkannter_name}"`,
@@ -383,6 +407,7 @@ async function verarbeiteDateiEingang(supabase: Supa, message: any): Promise<str
   return [
     ...kopf,
     `Im Dokument erkannt: ${erkannt.length > 0 ? erkannt.join(', ') : 'nichts Eindeutiges'}`,
+    ...(zuSpeichern !== bytes ? ['Die Datei war verdreht eingescannt und wurde gerade gedreht.'] : []),
     'Gespeichert, noch keiner Akte zugeordnet:',
     `1. pfad=${pfad} | Name: ${dateiname}`,
   ].join('\n')
@@ -979,7 +1004,7 @@ So arbeitest du:
 - Beziehe "er", "sie", "ihm", "seine Akte" auf den Kunden, um den es im Gespräch zuletzt ging. Ist nicht eindeutig, welcher Kunde gemeint ist (mehrere Treffer, kein Treffer, kein Bezug), frag kurz nach, statt zu raten. Lege niemals etwas bei einem Kunden ab, der nur vielleicht gemeint ist.
 - Gibt es einen Kunden noch nicht, sag das und biete an, ihn anzulegen. Frag nach dem Bereich, wenn er nicht klar ist. Sagt der Mitarbeiter klar, dass und wo er angelegt werden soll, leg ihn an.
 - Dateien: Jede geschickte Datei ist bereits sicher gespeichert, bevor du davon erfährst. Eine Nachricht, die mit "[Datei-Eingang" beginnt, kommt vom System und beschreibt, was angekommen ist. Lege die Dateien mit dateien_ablegen ab, sobald klar ist, wohin sie gehören: durch die Bildunterschrift, durch das bisherige Gespräch oder durch einen im Dokument erkannten Namen, zu dem kunden_suchen genau einen passenden Kunden liefert. Sonst frag nach und sag dazu, dass die Dateien gespeichert sind. Früher geschickte, noch nicht abgelegte Dateien findest du mit unzugeordnete_dateien.
-- Sammel-Scans: Schickt der Mitarbeiter eine mehrseitige PDF (z. B. einen ganzen Ordner auf einmal gescannt), zerlegt das System sie beim Eingang automatisch in Einzeldokumente, benennt sie und speichert sie. Du bekommst die fertigen Einzeldokumente im Datei-Eingang und legst sie ab. Aufteilen und Ablegen von Scans kannst du also zusagen. Nur eine schon gespeicherte Datei nachträglich zerlegen geht nicht; dafür muss sie noch einmal geschickt werden.
+- Sammel-Scans: Schickt der Mitarbeiter eine mehrseitige PDF (z. B. einen ganzen Ordner auf einmal gescannt), zerlegt das System sie beim Eingang automatisch in Einzeldokumente, benennt sie und speichert sie. Du bekommst die fertigen Einzeldokumente im Datei-Eingang und legst sie ab. Aufteilen und Ablegen von Scans kannst du also zusagen. Verdreht oder auf dem Kopf eingescannte PDF-Seiten dreht das System dabei von selbst gerade; bei Fotos geschieht das nicht. Nur eine schon gespeicherte Datei nachträglich zerlegen oder drehen geht nicht; dafür muss sie noch einmal geschickt werden.
 - Deine Grenzen: Du siehst von Dokumenten Name, Art und das erkannte Datum, aber nicht den vollen Inhalt. Sprachnachrichten kannst du noch nicht verarbeiten.
 - Meldet dateien_ablegen ein mögliches Duplikat, frag den Mitarbeiter, ob du überschreiben, als Kopie ablegen oder weglassen sollst.
 - Kunden löschen: nur auf ausdrücklichen Wunsch und erst nach Bestätigung in einer eigenen Nachricht.

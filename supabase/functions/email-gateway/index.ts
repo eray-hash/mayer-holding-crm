@@ -1005,6 +1005,7 @@ type KundenDokumentKlassifikation = {
   erkannter_name?: string
   erkannte_firma?: string
   kategorie: string
+  drehung?: number
 }
 
 // KI-Dokumentenverarbeitung für per Telegram geschickte Kunden-Unterlagen (siehe telegram-gateway):
@@ -1024,7 +1025,8 @@ async function classifyKundenDokument(mediaBase64: string, mediaType: string, da
         text: `Ein Mitarbeiter hat über Telegram eine Datei geschickt (ursprünglicher Dateiname: "${dateiname}"), die einer Kunden-/Mandantenakte in einem CRM zugeordnet werden soll. Erkenne anhand des TATSÄCHLICHEN INHALTS der Datei (nicht nur des Dateinamens):
 - den Namen der Person, zu der die Unterlage gehört (z.B. Kontoinhaber, Unterzeichner, im Ausweis genannte Person), exakt so wie er im Dokument steht — falls nicht erkennbar, weglassen.
 - die Firma/den Betrieb, falls im Dokument genannt (z.B. im Briefkopf, Handelsregisterauszug, Mietvertrag) — falls nicht erkennbar, weglassen.
-- eine kurze Kategorie der Unterlage (z.B. "BWA", "Kontoauszug", "Personalausweis", "Mietvertrag", "Lohnabrechnung", "Steuerbescheid", "Handelsregisterauszug", "Gesellschaftervertrag", "Selbstauskunft", "Schufa-Auskunft", "Sonstiges").`,
+- eine kurze Kategorie der Unterlage (z.B. "BWA", "Kontoauszug", "Personalausweis", "Mietvertrag", "Lohnabrechnung", "Steuerbescheid", "Handelsregisterauszug", "Gesellschaftervertrag", "Selbstauskunft", "Schufa-Auskunft", "Sonstiges").
+- ob die Datei verdreht eingescannt wurde: um wie viel Grad sie IM UHRZEIGERSINN gedreht werden muss, damit der Text aufrecht lesbar ist. Seiten, die bereits richtig liegen, brauchen 0. Maßgeblich ist, wie die Seite gerade aussieht: 180 = der Text steht auf dem Kopf; 90 = die Oberkante des Textes zeigt gerade nach links; 270 = die Oberkante des Textes zeigt gerade nach rechts. Eine Seite im Querformat, deren Text normal lesbar ist, ist NICHT verdreht.`,
       },
       block,
     ],
@@ -1037,6 +1039,7 @@ async function classifyKundenDokument(mediaBase64: string, mediaType: string, da
           erkannter_name: { type: 'string' },
           erkannte_firma: { type: 'string' },
           kategorie: { type: 'string' },
+          drehung: { type: 'integer', enum: [0, 90, 180, 270], description: 'Nötige Drehung im Uhrzeigersinn in Grad, damit der Text aufrecht steht. 0, wenn die Datei richtig herum ist.' },
         },
         required: ['kategorie'],
       },
@@ -1058,6 +1061,7 @@ type ScanAufteilung = {
   erkannter_name?: string
   erkannte_firma?: string
   dokumente: ScanTeildokument[]
+  seiten_drehung?: { seite: number; grad: number }[]
 }
 
 // Analysiert einen mehrseitigen Sammel-Scan (z.B. ein ganzer Ordner Kundenunterlagen in einem
@@ -1072,11 +1076,15 @@ async function splitScanDokument(mediaBase64: string, dateiname: string, seitenz
     [
       {
         type: 'text',
-        text: `Ein Mitarbeiter hat einen Stapel Papierunterlagen zu EINEM Kunden/Mandanten auf einmal eingescannt und als eine PDF-Datei geschickt (ursprünglicher Dateiname: "${dateiname}", ${seitenzahl} Seiten). Die Datei enthält wahrscheinlich mehrere unterschiedliche Einzeldokumente hintereinander (z.B. erst ein Kontoauszug, dann eine Lohnabrechnung, dann ein Mietvertrag).
+        text: `Ein Mitarbeiter hat Papierunterlagen zu EINEM Kunden/Mandanten eingescannt und als eine PDF-Datei geschickt (ursprünglicher Dateiname: "${dateiname}", ${seitenzahl} Seiten). Das kann EIN einziges mehrseitiges Dokument sein (z.B. ein Vertrag über 12 Seiten, ein Bescheid mit Anlagen, ein mehrseitiges Protokoll) oder ein Stapel mehrerer unterschiedlicher Dokumente hintereinander (z.B. erst ein Kontoauszug, dann eine Lohnabrechnung, dann ein Mietvertrag). Entscheide das allein anhand des Inhalts.
 
-Analysiere den tatsächlichen Inhalt jeder Seite und erkenne, wo ein Dokument endet und das nächste beginnt (z.B. anhand Briefkopf, Überschrift, Absender, Layout-Wechsel). Gib für jedes erkannte Einzeldokument zurück: den Seitenbereich (1-basiert, erste und letzte Seite dieses Dokuments), eine kurze Kategorie (z.B. "BWA", "Kontoauszug", "Personalausweis", "Mietvertrag", "Lohnabrechnung", "Steuerbescheid", "Handelsregisterauszug", "Gesellschaftervertrag", "Selbstauskunft", "Schufa-Auskunft", "Sonstiges"), falls im Dokument ein Datum erkennbar ist (Ausstellungsdatum, Abrechnungsmonat o.ä.) im Format YYYY-MM-DD oder YYYY-MM, und einen kurzen aussagekräftigen deutschen Dateinamen-Vorschlag (mit ".pdf"-Endung, ohne Leerzeichen).
+Analysiere den tatsächlichen Inhalt jeder Seite. Seiten gehören zum selben Dokument, wenn der Text fortläuft, die Seitennummerierung weiterzählt ("Seite 2 von 5"), Briefkopf, Aktenzeichen, Vertragsparteien oder Vorgang dieselben bleiben oder eine Seite erkennbar Anlage/Fortsetzung der vorigen ist. Ein neues Dokument beginnt nur dort, wo der Inhalt das klar zeigt: neuer Briefkopf oder Absender, neue Überschrift mit anderem Thema, anderes Datum und anderer Vorgang, deutlich anderes Layout. Trenne im Zweifel NICHT — ein fälschlich zerrissenes Dokument ist schlimmer als zwei zusammengebliebene.
 
-Gehört erkennbar alles zu derselben Person/Firma, nenne diese einmal zentral (Name und/oder Firma, exakt wie im Dokument geschrieben). Ist die gesamte Datei tatsächlich nur EIN einziges zusammenhängendes Dokument ohne erkennbare Trennstelle, gib trotzdem genau einen Eintrag zurück, der die Seiten 1 bis ${seitenzahl} abdeckt.`,
+Gib für jedes erkannte Dokument zurück: den Seitenbereich (1-basiert, erste und letzte Seite), eine kurze Kategorie (z.B. "BWA", "Kontoauszug", "Personalausweis", "Mietvertrag", "Lohnabrechnung", "Steuerbescheid", "Handelsregisterauszug", "Gesellschaftervertrag", "Selbstauskunft", "Schufa-Auskunft", "Sonstiges"), falls im Dokument ein Datum erkennbar ist (Ausstellungsdatum, Abrechnungsmonat o.ä.) im Format YYYY-MM-DD oder YYYY-MM, und einen kurzen aussagekräftigen deutschen Dateinamen-Vorschlag (mit ".pdf"-Endung, ohne Leerzeichen). Jede Seite gehört zu genau einem Dokument; die Seitenbereiche decken zusammen die Seiten 1 bis ${seitenzahl} lückenlos ab.
+
+Gehört erkennbar alles zu derselben Person/Firma, nenne diese einmal zentral (Name und/oder Firma, exakt wie im Dokument geschrieben). Ist die gesamte Datei ein einziges zusammenhängendes Dokument, gib genau einen Eintrag zurück, der die Seiten 1 bis ${seitenzahl} abdeckt.
+
+Prüfe außerdem jede Seite darauf, ob sie verdreht eingescannt wurde, und liste unter seiten_drehung jede verdrehte Seite mit der Gradzahl, um die sie IM UHRZEIGERSINN gedreht werden muss, damit der Text aufrecht lesbar ist. Seiten, die bereits richtig liegen, lässt du weg. Maßgeblich ist, wie die Seite gerade aussieht: 180 = der Text steht auf dem Kopf; 90 = die Oberkante des Textes zeigt gerade nach links; 270 = die Oberkante des Textes zeigt gerade nach rechts. Eine Seite im Querformat, deren Text normal lesbar ist, ist NICHT verdreht.`,
       },
       { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: mediaBase64 } },
     ],
@@ -1101,6 +1109,18 @@ Gehört erkennbar alles zu derselben Person/Firma, nenne diese einmal zentral (N
                 vorgeschlagener_dateiname: { type: 'string' },
               },
               required: ['start_seite', 'end_seite', 'kategorie', 'vorgeschlagener_dateiname'],
+            },
+          },
+          seiten_drehung: {
+            type: 'array',
+            description: 'Nur die verdreht eingescannten Seiten.',
+            items: {
+              type: 'object',
+              properties: {
+                seite: { type: 'integer', description: 'Seitennummer im Gesamt-Scan, 1-basiert.' },
+                grad: { type: 'integer', enum: [90, 180, 270], description: 'Nötige Drehung im Uhrzeigersinn.' },
+              },
+              required: ['seite', 'grad'],
             },
           },
         },
