@@ -56,6 +56,9 @@ export function StammdatenKarte({ bereich, kunde, labels = {} }: { bereich: Kund
             value={entwurf.verantwortlich}
             onChange={(e) => setEntwurf((x) => ({ ...x, verantwortlich: e.target.value }))}
           >
+            {!MITARBEITER.includes(entwurf.verantwortlich) && (
+              <option value={entwurf.verantwortlich}>{entwurf.verantwortlich || '— nicht zugewiesen —'}</option>
+            )}
             {MITARBEITER.map((m) => (
               <option key={m} value={m}>{m}</option>
             ))}
