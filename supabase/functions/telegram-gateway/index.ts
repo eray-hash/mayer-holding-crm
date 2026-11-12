@@ -446,13 +446,17 @@ type AgentState = {
 }
 
 // Liest ältere Zustände tolerant (ohne "zuege") — die werden einfach verworfen.
-function ladeState(raw: unknown): AgentState {
+export function ladeState(raw: unknown): AgentState {
   // deno-lint-ignore no-explicit-any
   const r = raw as any
   const grenze = Date.now() - 12 * 60 * 60 * 1000
   const zuege = r?.v === 3 && Array.isArray(r.zuege)
     // deno-lint-ignore no-explicit-any
-    ? r.zuege.filter((zug: any) => Array.isArray(zug?.msgs) && new Date(zug.z).getTime() > grenze)
+    ? r.zuege
+        // deno-lint-ignore no-explicit-any
+        .filter((zug: any) => Array.isArray(zug?.msgs) && new Date(zug.z).getTime() > grenze)
+        // deno-lint-ignore no-explicit-any
+        .map((zug: any) => ({ z: zug.z, msgs: fuerVerlauf(zug.msgs) })) // bereinigt auch ältere, noch unbereinigt gespeicherte Züge
     : []
   return {
     v: 3,
@@ -462,22 +466,32 @@ function ladeState(raw: unknown): AgentState {
   }
 }
 
-// Große Werkzeug-Ergebnisse (ganze Akte, Firmenüberblick) werden für den gespeicherten Verlauf
-// gekürzt; braucht der Assistent sie später wieder, ruft er das Werkzeug neu auf.
+// Bereitet Nachrichten für den gespeicherten Verlauf auf:
+// - Denk-Blöcke des Modells fliegen raus. Sie sind kryptografisch an genau den Gesprächsstand
+//   gebunden, in dem sie entstanden sind; der gespeicherte Verlauf weicht davon ab (gekürzte
+//   Ergebnisse, geändertes Aktionsprotokoll), und der KI-Dienst lehnt die Anfrage dann mit
+//   "Invalid signature in thinking block" ab — echter Fehler beim zweiten Scan in Folge.
+// - Große Werkzeug-Ergebnisse (ganze Akte, Firmenüberblick) werden gekürzt; braucht der Assistent
+//   sie später wieder, ruft er das Werkzeug neu auf.
 function fuerVerlauf(msgs: Nachricht[]): Nachricht[] {
-  return msgs.map((m) =>
-    Array.isArray(m.content)
-      ? {
-          ...m,
-          // deno-lint-ignore no-explicit-any
-          content: m.content.map((b: any) =>
-            b?.type === 'tool_result' && typeof b.content === 'string' && b.content.length > 2500
-              ? { ...b, content: `${b.content.slice(0, 2500)} … (für den Verlauf gekürzt — bei Bedarf Werkzeug erneut aufrufen)` }
-              : b,
-          ),
-        }
-      : m,
-  )
+  return msgs
+    .map((m) =>
+      Array.isArray(m.content)
+        ? {
+            ...m,
+            content: m.content
+              // deno-lint-ignore no-explicit-any
+              .filter((b: any) => b?.type !== 'thinking' && b?.type !== 'redacted_thinking')
+              // deno-lint-ignore no-explicit-any
+              .map((b: any) =>
+                b?.type === 'tool_result' && typeof b.content === 'string' && b.content.length > 2500
+                  ? { ...b, content: `${b.content.slice(0, 2500)} … (für den Verlauf gekürzt — bei Bedarf Werkzeug erneut aufrufen)` }
+                  : b,
+              ),
+          }
+        : m,
+    )
+    .filter((m) => !Array.isArray(m.content) || m.content.length > 0)
 }
 
 // ---------- Werkzeuge des Assistenten ----------
@@ -611,6 +625,15 @@ const TOOLS = [
         bei_duplikat: { type: 'string', enum: ['kopie', 'ueberschreiben', 'ignorieren'], description: 'Nur nach Rückfrage beim Mitarbeiter setzen.' },
       },
       required: ['kunde_id', 'dateien'],
+    },
+  },
+  {
+    name: 'dateien_aussortieren',
+    description: 'Sortiert gespeicherte, noch keiner Akte zugeordnete Dateien aus (z. B. doppelt geschickte Scans oder Fehlversuche), damit sie nicht mehr unter unzugeordnete_dateien auftauchen. Die Dateien werden nicht gelöscht, sondern in einen Ablageordner verschoben. Nur auf Wunsch des Mitarbeiters.',
+    input_schema: {
+      type: 'object',
+      properties: { pfade: { type: 'array', items: { type: 'string', description: 'Exakt wie angegeben, beginnt mit "telegram/".' } } },
+      required: ['pfade'],
     },
   },
   {
@@ -932,6 +955,30 @@ async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKontext): Pr
       abgelegt.length > 0 ? `In der Akte von ${kundeName(k)} abgelegt (${abgelegt.length}): ${abgelegt.join(', ')}.` : `Nichts in der Akte von ${kundeName(k)} abgelegt.`,
       ...meldungen,
     ].join('\n')
+  }
+
+  if (name === 'dateien_aussortieren') {
+    const pfade: string[] = Array.isArray(input.pfade) ? input.pfade.map(String) : []
+    if (pfade.length === 0) return 'Fehler: keine Dateien angegeben.'
+    const referenzen = await ladeReferenzen(supabase)
+    const meldungen: string[] = []
+    const aussortiert: string[] = []
+    for (const pfad of pfade) {
+      const dateiName = pfad.startsWith(`${ORDNER}/`) ? pfad.slice(ORDNER.length + 1) : ''
+      if (!dateiName || dateiName.includes('/')) {
+        meldungen.push(`„${pfad}": kein gültiger Pfad.`)
+        continue
+      }
+      if (referenzen.text.includes(`/${BUCKET}/${ORDNER}/${dateiName}`)) {
+        meldungen.push(`„${anzeigeName(dateiName)}": liegt in einer Akte und wird deshalb nicht aussortiert.`)
+        continue
+      }
+      const { error } = await supabase.storage.from(BUCKET).move(pfad, `${ORDNER}-aussortiert/${dateiName}`)
+      if (error) meldungen.push(`„${anzeigeName(dateiName)}": konnte nicht verschoben werden (${error.message}).`)
+      else aussortiert.push(anzeigeName(dateiName))
+    }
+    if (aussortiert.length > 0) protokolliere(`${aussortiert.length} unzugeordnete Datei(en) aussortiert: ${aussortiert.join(', ')}`)
+    return [aussortiert.length > 0 ? `Aussortiert (${aussortiert.length}): ${aussortiert.join(', ')}.` : 'Nichts aussortiert.', ...meldungen].join('\n')
   }
 
   if (name === 'dokument_aus_akte_nehmen') {
