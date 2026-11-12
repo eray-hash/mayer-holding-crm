@@ -204,6 +204,7 @@ import { ImapFlow } from 'npm:imapflow@1'
 import { simpleParser } from 'npm:mailparser@3'
 import nodemailer from 'npm:nodemailer@6'
 import { createClient } from 'npm:@supabase/supabase-js@2'
+import { unzipSync, strFromU8 } from 'npm:fflate@0.8.2'
 
 const ALLOWED_ORIGINS = [
   'https://eray-hash.github.io',
@@ -1133,6 +1134,39 @@ type SteuerZustand = {
   quellen?: string[]
 }
 
+const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+
+function istDocx(name: string, typ?: string): boolean {
+  return /\.docx$/i.test(name) || typ === DOCX_MIME
+}
+
+// Zieht den Fließtext aus einer Word-Datei (.docx = ZIP mit word/document.xml). Absätze und
+// Tabellenzeilen bleiben als Zeilen erhalten; eingebettete Bilder werden nicht gelesen. Das alte
+// .doc-Format ist kein ZIP und wird nicht unterstützt.
+function docxText(bytes: Uint8Array): string {
+  const dateien = unzipSync(bytes, { filter: (f) => f.name === 'word/document.xml' })
+  const xml = dateien['word/document.xml']
+  if (!xml) throw new Error('keine Word-Datei im .docx-Format')
+  const entschluesseln = (t: string) =>
+    t.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n))).replace(/&amp;/g, '&')
+  return strFromU8(xml)
+    .replace(/<w:tab\/>/g, '\t')
+    .replace(/<w:br[^>]*\/>/g, '\n')
+    .replace(/<\/w:tc>/g, '\t')
+    .split(/<\/w:p>/)
+    .map((absatz) => entschluesseln([...absatz.matchAll(/<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>|(\t)|(\n)/g)].map((m) => m[1] ?? m[2] ?? m[3]).join('')).trimEnd())
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+function base64NachBytes(b64: string): Uint8Array {
+  const bin = atob(b64)
+  const bytes = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+  return bytes
+}
+
 function bytesNachBase64(bytes: Uint8Array): string {
   let binaer = ''
   for (let i = 0; i < bytes.length; i += 0x8000) binaer += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
@@ -1203,8 +1237,9 @@ async function fuehreSteuerSchrittAus(bereich: string, kundeId: string, umleitun
           try {
             const istPdf = /\.pdf$/i.test(d.name) || d.typ === 'application/pdf'
             const istBild = /\.(jpe?g|png|webp)$/i.test(d.name) || (d.typ ?? '').startsWith('image/')
-            if (!istPdf && !istBild) {
-              gelesen.push({ name: d.name, ergebnis: 'nicht lesbar', hinweis: 'Dateityp kann nicht gelesen werden (nur PDF und Bilder)' })
+            const istWord = istDocx(d.name, d.typ)
+            if (!istPdf && !istBild && !istWord) {
+              gelesen.push({ name: d.name, ergebnis: 'nicht lesbar', hinweis: 'Dateityp kann nicht gelesen werden (nur PDF, Bilder und Word-Dateien im .docx-Format)' })
               return ''
             }
             const res = await fetch(d.url, { signal: AbortSignal.timeout(20_000) })
@@ -1215,9 +1250,11 @@ async function fuehreSteuerSchrittAus(bereich: string, kundeId: string, umleitun
               return ''
             }
             const mediaType = istPdf ? 'application/pdf' : d.typ && d.typ.startsWith('image/') ? d.typ : 'image/jpeg'
-            const block: ClaudeContentBlock = istPdf
-              ? { type: 'document', source: { type: 'base64', media_type: mediaType, data: bytesNachBase64(bytes) } }
-              : { type: 'image', source: { type: 'base64', media_type: mediaType, data: bytesNachBase64(bytes) } }
+            const block: ClaudeContentBlock = istWord
+              ? { type: 'text', text: `Text der Word-Datei (eingebettete Bilder und Skizzen fehlen):\n\n${docxText(bytes).slice(0, 80_000)}` }
+              : istPdf
+                ? { type: 'document', source: { type: 'base64', media_type: mediaType, data: bytesNachBase64(bytes) } }
+                : { type: 'image', source: { type: 'base64', media_type: mediaType, data: bytesNachBase64(bytes) } }
             const text = await callClaudeResearch(
               [
                 {
@@ -1450,9 +1487,11 @@ type KundenDokumentKlassifikation = {
 // eigentliche Zuordnung/ein etwaiges Neuanlegen passiert weiterhin im telegram-gateway, nie blind.
 async function classifyKundenDokument(mediaBase64: string, mediaType: string, dateiname: string): Promise<KundenDokumentKlassifikation> {
   const istPdf = mediaType === 'application/pdf'
-  const block: ClaudeContentBlock = istPdf
-    ? { type: 'document', source: { type: 'base64', media_type: mediaType, data: mediaBase64 } }
-    : { type: 'image', source: { type: 'base64', media_type: mediaType, data: mediaBase64 } }
+  const block: ClaudeContentBlock = istDocx(dateiname, mediaType)
+    ? { type: 'text', text: `Text der Word-Datei:\n\n${docxText(base64NachBytes(mediaBase64)).slice(0, 40_000)}` }
+    : istPdf
+      ? { type: 'document', source: { type: 'base64', media_type: mediaType, data: mediaBase64 } }
+      : { type: 'image', source: { type: 'base64', media_type: mediaType, data: mediaBase64 } }
   return callClaudeTool<KundenDokumentKlassifikation>(
     [
       {
