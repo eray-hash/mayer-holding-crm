@@ -5,7 +5,7 @@ import { KUNDEN_BEREICHE } from '../data/kundenBereiche'
 import { Card, Field, inputClass, Modal, PrimaryButton, SecondaryButton } from './ui'
 import { fmtEUR, today } from '../lib/dates'
 import { supabase } from '../lib/supabaseClient'
-import { starteBewertungRecherche } from '../lib/emailGateway'
+import { starteBewertungRecherche, setzeBewertungRechercheFort } from '../lib/emailGateway'
 import type { KundeBereich, Unternehmensbewertung } from '../types'
 
 function leererEntwurf(): Unternehmensbewertung {
@@ -57,6 +57,19 @@ export function UnternehmensbewertungSection({ bereich, kundeId }: { bereich: Ku
 
   const recherche = kunde?.unternehmensbewertungRecherche
 
+  // Tickt, solange eine Recherche läuft, damit "läuft seit …" und die Hänger-Erkennung aktuell bleiben.
+  const [jetzt, setJetzt] = useState(Date.now())
+  useEffect(() => {
+    if (recherche?.status !== 'laeuft') return
+    const t = setInterval(() => setJetzt(Date.now()), 10000)
+    return () => clearInterval(t)
+  }, [recherche?.status])
+  const letzterFortschritt = recherche ? new Date(recherche.aktualisiertAm ?? recherche.gestartetAm).getTime() : 0
+  // Ein Schritt dauert höchstens gut zwei Minuten, plus Wartezeit auf einen frischen Server-Prozess.
+  // Rührt sich fünf Minuten nichts, ist die Recherche abgebrochen und kommt von selbst nicht zurück.
+  const haengt = recherche?.status === 'laeuft' && jetzt - letzterFortschritt > 5 * 60 * 1000
+  const laeuftSeitMin = recherche ? Math.max(0, Math.round((jetzt - new Date(recherche.gestartetAm).getTime()) / 60000)) : 0
+
   // Pollt den Recherche-Status, während die Edge Function im Hintergrund weiterläuft (siehe
   // email-gateway "bewertung_recherche_start") — kein Realtime im Projekt vorhanden, daher einfaches
   // Intervall statt einer Subscription. Stoppt automatisch, sobald der Status nicht mehr "laeuft" ist.
@@ -72,7 +85,7 @@ export function UnternehmensbewertungSection({ bereich, kundeId }: { bereich: Ku
         .maybeSingle()
       const frisch = data?.unternehmensbewertung_recherche
       if (frisch && JSON.stringify(frisch) !== JSON.stringify(recherche)) {
-        dispatch({ type: 'UPDATE_KUNDE_IN_BEREICH', bereich, id: kundeId, patch: { unternehmensbewertungRecherche: frisch } })
+        dispatch({ type: 'KUNDE_VOM_SERVER', bereich, id: kundeId, patch: { unternehmensbewertungRecherche: frisch } })
       }
     }, 5000)
     return () => clearInterval(intervall)
@@ -104,7 +117,7 @@ export function UnternehmensbewertungSection({ bereich, kundeId }: { bereich: Ku
         vorhandeneZahlen,
       })
       dispatch({
-        type: 'UPDATE_KUNDE_IN_BEREICH',
+        type: 'KUNDE_VOM_SERVER',
         bereich,
         id: kundeId,
         patch: { unternehmensbewertungRecherche: { status: 'laeuft', schritt: 'Wird gestartet …', anlass, stichtag, gestartetAm: new Date().toISOString() } },
@@ -113,6 +126,16 @@ export function UnternehmensbewertungSection({ bereich, kundeId }: { bereich: Ku
       setRechercheFehler(err instanceof Error ? err.message : 'KI-Recherche konnte nicht gestartet werden.')
     } finally {
       setRechercheWirdGestartet(false)
+    }
+  }
+
+  async function rechercheFortsetzen() {
+    setRechercheFehler('')
+    try {
+      await setzeBewertungRechercheFort({ bereich, kundeId })
+      setJetzt(Date.now())
+    } catch (err) {
+      setRechercheFehler(err instanceof Error ? err.message : 'Die Recherche konnte nicht fortgesetzt werden.')
     }
   }
 
@@ -228,7 +251,7 @@ export function UnternehmensbewertungSection({ bereich, kundeId }: { bereich: Ku
         </div>
         {rechercheFehler && <p className="mb-2 text-sm text-rose-600">{rechercheFehler}</p>}
 
-        {(!recherche || recherche.status === 'fertig' || recherche.status === 'fehler') && (
+        {(!recherche || recherche.status === 'fertig' || recherche.status === 'fehler' || haengt) && (
           <div className="grid gap-3 sm:grid-cols-3">
             <Field label="Anlass">
               <select className={inputClass} value={anlass} onChange={(e) => setAnlass(e.target.value)}>
@@ -243,17 +266,39 @@ export function UnternehmensbewertungSection({ bereich, kundeId }: { bereich: Ku
             <div className="flex items-end">
               <SecondaryButton onClick={() => setKostenModal(true)} disabled={!entwurf.webseite || rechercheWirdGestartet} className="w-full justify-center">
                 {rechercheWirdGestartet ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-                {recherche?.status === 'fertig' ? 'Erneut recherchieren' : recherche?.status === 'fehler' ? 'Erneut versuchen' : 'KI-Recherche starten'}
+                {haengt ? 'Von vorn starten' : recherche?.status === 'fertig' ? 'Erneut recherchieren' : recherche?.status === 'fehler' ? 'Erneut versuchen' : 'KI-Recherche starten'}
               </SecondaryButton>
             </div>
             {!entwurf.webseite && <p className="sm:col-span-3 text-xs text-slate-400">Webseite der Firma oben im Bearbeiten-Modus hinterlegen, um die Recherche zu starten.</p>}
           </div>
         )}
 
-        {recherche?.status === 'laeuft' && (
-          <div className="flex items-center gap-2 text-sm text-slate-600">
-            <Loader2 size={16} className="animate-spin text-accent-600" />
-            {recherche.schritt ?? 'Recherche läuft …'}
+        {recherche?.status === 'laeuft' && !haengt && (
+          <div>
+            <div className="flex items-center gap-2 text-sm text-slate-600">
+              <Loader2 size={16} className="animate-spin text-accent-600" />
+              {recherche.schrittNr ? `Schritt ${recherche.schrittNr} von 4: ` : ''}
+              {recherche.schritt ?? 'Recherche läuft …'}
+            </div>
+            <p className="mt-1 text-xs text-slate-400">
+              Läuft seit {laeuftSeitMin < 1 ? 'weniger als einer Minute' : `${laeuftSeitMin} Min.`} — üblich sind 3 bis 6 Minuten. Du kannst die Seite verlassen, die Recherche läuft auf dem Server weiter.
+            </p>
+          </div>
+        )}
+
+        {haengt && (
+          <div className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
+            <p>
+              Die Recherche ist hängen geblieben: seit {Math.round((jetzt - letzterFortschritt) / 60000)} Minuten kein Fortschritt
+              {recherche?.schritt ? ` (zuletzt: ${recherche.schritt})` : ''}.
+            </p>
+            {recherche?.schrittNr ? (
+              <button onClick={rechercheFortsetzen} className="mt-2 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700">
+                Ab Schritt {recherche.schrittNr} fortsetzen
+              </button>
+            ) : (
+              <p className="mt-1 text-xs">Dieser Lauf lässt sich nicht fortsetzen — bitte oben von vorn starten.</p>
+            )}
           </div>
         )}
 

@@ -498,11 +498,14 @@ async function callClaudeTool<T>(
 // des Fließtexts aus (siehe z.B. abschließender ```json-Block der Bewertungssynthese).
 async function callClaudeResearch(
   prompt: string,
-  opts: { model: 'claude-haiku-4-5-20251001' | 'claude-sonnet-5-5'; maxSearches: number; maxTokens?: number },
+  opts: { model: 'claude-haiku-4-5-20251001' | 'claude-sonnet-5-5'; maxSearches: number; maxTokens?: number; timeoutMs?: number },
 ): Promise<string> {
   const apiKey = env('ANTHROPIC_API_KEY')
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
+    // Eigenes Zeitlimit, damit ein zu langer Aufruf als Fehler zurückkommt (und wiederholt werden
+    // kann), statt dass die Plattform den ganzen Worker kommentarlos beendet.
+    ...(opts.timeoutMs ? { signal: AbortSignal.timeout(opts.timeoutMs) } : {}),
     headers: {
       'x-api-key': apiKey,
       'anthropic-version': '2023-06-01',
@@ -786,79 +789,143 @@ Nachvollziehbarkeit: Jeder Eintrag der CRM-Daten trägt eine Kennung in eckigen 
   )
 }
 
-// Orchestriert die mehrstufige Unternehmensbewertung-Recherche (Firmenidentifikation → 5 parallele
-// Recherche-Agents → Prüf-Agent → Bewertungssynthese). Läuft per EdgeRuntime.waitUntil im
-// Hintergrund weiter, NACHDEM die Edge Function dem Frontend bereits geantwortet hat (mehrere
-// Minuten Laufzeit, zu lang für einen einzelnen synchronen Request) — deshalb wird hier keine
-// Response zurückgegeben, sondern jeder Zwischenstand direkt in kunden.unternehmensbewertung_
-// recherche geschrieben, die das Frontend selbst pollt. Jeder Fehler wird abgefangen und als
-// status "fehler" festgehalten, damit nichts endlos bei "laeuft" hängen bleibt.
-async function fuehreBewertungRechercheAus(input: {
-  bereich: string
-  kundeId: string
-  firma: string
-  webseite: string
+// Unternehmensbewertung-Recherche: Firmenidentifikation → 5 parallele Recherche-Agents → Prüf-Agent
+// → Bewertungssynthese.
+//
+// Jeder der vier Schritte läuft als EIGENER Funktionsaufruf; Zwischenergebnisse stehen in
+// kunden.unternehmensbewertung_recherche, das das Frontend pollt. Grund: Die Plattform beendet jeden
+// Worker hart nach WORKER_LEBENSDAUER_MS ab seinem Start (150 s im aktuellen Tarif) — gezählt ab
+// Worker-Start, nicht ab Eingang der Anfrage. Die frühere Fassung ließ alle vier Schritte in einem
+// Hintergrund-Task laufen (~2 Minuten). Traf die Anfrage einen schon 70 Sekunden alten Worker, wurde
+// er mitten in Schritt 3 beendet, ohne dass der catch-Block lief: der Status blieb für immer
+// "laeuft" (echter Fall: Christopher Lipps, 12.11.2026).
+//
+// Deshalb: Vor jedem Schritt wird geprüft, ob dem Worker genug Restlaufzeit bleibt. Wenn nicht,
+// wartet er, bis er selbst keine neuen Anfragen mehr bekommt (ab halber Lebensdauer), und reicht den
+// Schritt dann weiter — der landet auf einem frischen Worker. Jeder KI-Aufruf hat ein eigenes
+// Zeitlimit unterhalb der Restlaufzeit, damit ein zu langer Aufruf als Fehler ankommt und der Schritt
+// wiederholt werden kann.
+const WORKER_GEBOOTET = Date.now()
+const WORKER_LEBENSDAUER_MS = Number(Deno.env.get('WORKER_WALL_CLOCK_MS') ?? '150000')
+
+const RECHERCHE_SCHRITTE = [
+  { nr: 1, titel: 'Firmenidentifikation', bedarfMs: 45_000 },
+  { nr: 2, titel: 'Recherche-Agents (Firmenprofil, Finanzdaten, Markt, Risiken, Zinsen)', bedarfMs: 85_000 },
+  { nr: 3, titel: 'Prüfung der Rechercheergebnisse', bedarfMs: 115_000 },
+  { nr: 4, titel: 'Bewertung wird erstellt', bedarfMs: 115_000 },
+]
+
+type RechercheZustand = {
+  status: 'laeuft' | 'fertig' | 'fehler'
+  schritt?: string
+  schrittNr?: number
+  versuch?: number
+  laeuftSeit?: string | null
   anlass: string
   stichtag: string
-  vorhandeneZahlen: Record<string, unknown>
-}): Promise<void> {
-  const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
-  const gestartetAm = new Date().toISOString()
+  gestartetAm: string
+  aktualisiertAm?: string
+  eingabe?: { firma: string; webseite: string; vorhandeneZahlen: Record<string, unknown> }
+  zwischen?: { identifikation?: string; recherche?: string; pruefung?: string }
+  bericht?: string
+  abgeleiteteZahlen?: Record<string, number | null>
+  abgeschlossenAm?: string
+  fehler?: string
+}
 
-  async function schreibe(patch: Record<string, unknown>) {
-    await admin
-      .from('kunden')
-      .update({ unternehmensbewertung_recherche: { anlass: input.anlass, stichtag: input.stichtag, gestartetAm, ...patch } })
-      .eq('id', input.kundeId)
-      .eq('bereich', input.bereich)
+async function stosseRechercheSchrittAn(bereich: string, kundeId: string, umleitungen = 0): Promise<void> {
+  const secret = Deno.env.get('CRM_SHARED_SECRET')
+  await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/email-gateway`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...(secret ? { 'x-crm-secret': secret } : {}) },
+    body: JSON.stringify({ action: 'bewertung_recherche_schritt', bereich, kundeId, umleitungen }),
+  }).catch((err) => console.error('Recherche-Schritt konnte nicht angestoßen werden:', err))
+}
+
+// Wartet, bis dieser Worker die halbe Lebensdauer überschritten hat — danach bekommt er keine neuen
+// Anfragen mehr, die weitergereichte landet also auf einem frischen Worker.
+async function warteBisWorkerAbgeloestWird(): Promise<void> {
+  const alter = Date.now() - WORKER_GEBOOTET
+  const warte = WORKER_LEBENSDAUER_MS / 2 + 4000 - alter
+  if (warte > 0) await new Promise((r) => setTimeout(r, warte))
+}
+
+async function fuehreRechercheSchrittAus(bereich: string, kundeId: string, umleitungen: number): Promise<void> {
+  const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+  const { data } = await admin.from('kunden').select('unternehmensbewertung_recherche').eq('id', kundeId).eq('bereich', bereich).maybeSingle()
+  // deno-lint-ignore no-explicit-any
+  const z = (data as any)?.unternehmensbewertung_recherche as RechercheZustand | null
+  if (!z || z.status !== 'laeuft' || !z.eingabe || !z.schrittNr) return
+  const schritt = RECHERCHE_SCHRITTE.find((x) => x.nr === z.schrittNr)
+  if (!schritt) return
+  // Derselbe Schritt läuft gerade schon woanders (z. B. doppelter Klick auf "Fortsetzen").
+  if (z.laeuftSeit && Date.now() - new Date(z.laeuftSeit).getTime() < WORKER_LEBENSDAUER_MS) return
+
+  async function schreibe(patch: Partial<RechercheZustand>) {
+    Object.assign(z!, patch, { aktualisiertAm: new Date().toISOString() })
+    await admin.from('kunden').update({ unternehmensbewertung_recherche: z }).eq('id', kundeId).eq('bereich', bereich)
   }
 
+  const rest = WORKER_LEBENSDAUER_MS - (Date.now() - WORKER_GEBOOTET)
+  if (rest < schritt.bedarfMs + 10_000 && umleitungen < 3) {
+    await schreibe({ schritt: schritt.titel })
+    await warteBisWorkerAbgeloestWird()
+    await stosseRechercheSchrittAn(bereich, kundeId, umleitungen + 1)
+    return
+  }
+  const timeoutMs = Math.max(20_000, rest - 12_000)
+
+  const input = { firma: z.eingabe.firma, webseite: z.eingabe.webseite, anlass: z.anlass, stichtag: z.stichtag, vorhandeneZahlen: z.eingabe.vorhandeneZahlen ?? {} }
   const vorhandeneZahlenText = Object.keys(input.vorhandeneZahlen ?? {}).length
     ? `Folgende Zahlen wurden bereits intern bestätigt und müssen NICHT erneut recherchiert werden, nur gegen die Marktdaten auf Plausibilität geprüft: ${JSON.stringify(input.vorhandeneZahlen)}`
     : 'Es liegen keine intern bestätigten Zahlen vor — alles muss recherchiert werden.'
+  const identifikation = z.zwischen?.identifikation ?? ''
+  const rechercheGesamt = z.zwischen?.recherche ?? ''
+  const pruefung = z.zwischen?.pruefung ?? ''
 
   try {
-    await schreibe({ status: 'laeuft', schritt: 'Firmenidentifikation' })
-    const identifikation = await callClaudeResearch(
-      `Öffne die Webseite ${input.webseite} der Firma "${input.firma}" sowie deren Impressum. Halte fest: exakter Firmenname, Rechtsform, Sitz, Registergericht und HRB-/HRA-Nummer, Geschäftsführung, USt-ID. Antworte als kurzer Fließtext auf Deutsch, nur Fakten die du auf den geöffneten Seiten tatsächlich gefunden hast, fehlende Angaben als "nicht gefunden" kennzeichnen.`,
-      { model: 'claude-haiku-4-5-20251001', maxSearches: 3, maxTokens: 2048 },
-    )
+    await schreibe({ schritt: schritt.titel, laeuftSeit: new Date().toISOString() })
 
-    await schreibe({ status: 'laeuft', schritt: 'Recherche-Agents (Firmenprofil, Finanzdaten, Markt, Risiken, Zinsen)' })
-    const agentAuftraege: { key: string; prompt: string }[] = [
-      {
-        key: 'Firmenprofil',
-        prompt: `Firmenidentität:\n${identifikation}\n\nRecherchiere auf der Webseite ${input.webseite}: Produkte/Leistungen, Zielkunden, Standorte, Mitarbeiterzahl, Gründungsjahr, Referenzkunden, Zertifikate, aktuelle Stellenanzeigen (Hinweis auf Wachstum). Jede Angabe mit Quelle (URL), Datum der Quelle und Abrufdatum. Was du nicht findest, als "nicht gefunden" kennzeichnen. Antworte auf Deutsch als Stichpunkte.`,
-      },
-      {
-        key: 'Finanzdaten',
-        prompt: `Firmenidentität:\n${identifikation}\n\n${vorhandeneZahlenText}\n\nRecherchiere Jahresabschlüsse der letzten 3-5 Jahre im Unternehmensregister/Bundesanzeiger sowie ergänzend im Handelsregister. Erfasse: Umsatz (falls veröffentlicht), Bilanzsumme, Eigenkapital, Jahresüberschuss, EBIT, EBITDA, Verbindlichkeiten, Rückstellungen, Mitarbeiterzahl. Vermerke, falls nur ein kleiner Abschluss (nur Bilanz) offengelegt ist — das ist normal, keine Lücke. Jede Angabe mit Quelle, Datum, Abrufdatum. Antworte auf Deutsch.`,
-      },
-      {
-        key: 'Markt & Wettbewerb',
-        prompt: `Firmenidentität:\n${identifikation}\n\nRecherchiere: Branche (WZ-Code), Marktgröße und -wachstum, 3-5 direkte Wettbewerber mit Größe, aktuelle Branchen-Multiplikatoren (EBIT-, EBITDA-, Umsatz-Multiple) für kleine und mittlere Unternehmen dieser Branche, jeweils mit Quelle und Stand. Antworte auf Deutsch.`,
-      },
-      {
-        key: 'Risiken & Reputation',
-        prompt: `Firmenidentität:\n${identifikation}\n\nRecherchiere: Nachrichten der letzten 3 Jahre, Insolvenz- oder Registerbekanntmachungen, Gesellschafter-/Geschäftsführerwechsel, Rechtsstreitigkeiten, Kunden-/Arbeitgeberbewertungen (nur Tendenz, keine Einzelzitate), erkennbare Abhängigkeit von wenigen Großkunden oder vom Inhaber, Saisongeschäft. Nur öffentliche Firmendaten, keine privaten Daten von Personen über Name und Funktion hinaus. Antworte auf Deutsch.`,
-      },
-      {
-        key: 'Zinsen & Parameter',
-        prompt: `Recherchiere den aktuellen Basiszins (Rendite langfristiger Bundesanleihen bzw. Zinsstrukturkurve der Deutschen Bundesbank), die übliche Marktrisikoprämie und übliche Zuschläge für kleine Unternehmen im deutschen Mittelstand, jeweils mit Quelle und Stand (Stichtag ${input.stichtag}). Antworte auf Deutsch.`,
-      },
-    ]
-    const agentErgebnisse = await Promise.all(
-      agentAuftraege.map((a) =>
-        callClaudeResearch(a.prompt, { model: 'claude-haiku-4-5-20251001', maxSearches: 4, maxTokens: 4096 })
-          .then((text) => `### ${a.key}\n${text}`)
-          .catch((err) => `### ${a.key}\nRecherche fehlgeschlagen: ${err instanceof Error ? err.message : String(err)}`),
-      ),
-    )
-    const rechercheGesamt = agentErgebnisse.join('\n\n')
-
-    await schreibe({ status: 'laeuft', schritt: 'Prüfung der Rechercheergebnisse' })
-    const pruefung = await callClaudeResearch(
-      `Du bist ein unabhängiger Prüf-Agent. Firmenidentität:\n${identifikation}\n\nPrüfe die folgenden Rechercheergebnisse kritisch gegen:
+    if (schritt.nr === 1) {
+      const ergebnis = await callClaudeResearch(
+        `Öffne die Webseite ${input.webseite} der Firma "${input.firma}" sowie deren Impressum. Halte fest: exakter Firmenname, Rechtsform, Sitz, Registergericht und HRB-/HRA-Nummer, Geschäftsführung, USt-ID. Antworte als kurzer Fließtext auf Deutsch, nur Fakten die du auf den geöffneten Seiten tatsächlich gefunden hast, fehlende Angaben als "nicht gefunden" kennzeichnen.`,
+        { model: 'claude-haiku-4-5-20251001', maxSearches: 3, maxTokens: 2048, timeoutMs },
+      )
+      await schreibe({ zwischen: { ...z.zwischen, identifikation: ergebnis }, schrittNr: 2, versuch: 0, laeuftSeit: null })
+    } else if (schritt.nr === 2) {
+      const agentAuftraege: { key: string; prompt: string }[] = [
+        {
+          key: 'Firmenprofil',
+          prompt: `Firmenidentität:\n${identifikation}\n\nRecherchiere auf der Webseite ${input.webseite}: Produkte/Leistungen, Zielkunden, Standorte, Mitarbeiterzahl, Gründungsjahr, Referenzkunden, Zertifikate, aktuelle Stellenanzeigen (Hinweis auf Wachstum). Jede Angabe mit Quelle (URL), Datum der Quelle und Abrufdatum. Was du nicht findest, als "nicht gefunden" kennzeichnen. Antworte auf Deutsch als Stichpunkte.`,
+        },
+        {
+          key: 'Finanzdaten',
+          prompt: `Firmenidentität:\n${identifikation}\n\n${vorhandeneZahlenText}\n\nRecherchiere Jahresabschlüsse der letzten 3-5 Jahre im Unternehmensregister/Bundesanzeiger sowie ergänzend im Handelsregister. Erfasse: Umsatz (falls veröffentlicht), Bilanzsumme, Eigenkapital, Jahresüberschuss, EBIT, EBITDA, Verbindlichkeiten, Rückstellungen, Mitarbeiterzahl. Vermerke, falls nur ein kleiner Abschluss (nur Bilanz) offengelegt ist — das ist normal, keine Lücke. Jede Angabe mit Quelle, Datum, Abrufdatum. Antworte auf Deutsch.`,
+        },
+        {
+          key: 'Markt & Wettbewerb',
+          prompt: `Firmenidentität:\n${identifikation}\n\nRecherchiere: Branche (WZ-Code), Marktgröße und -wachstum, 3-5 direkte Wettbewerber mit Größe, aktuelle Branchen-Multiplikatoren (EBIT-, EBITDA-, Umsatz-Multiple) für kleine und mittlere Unternehmen dieser Branche, jeweils mit Quelle und Stand. Antworte auf Deutsch.`,
+        },
+        {
+          key: 'Risiken & Reputation',
+          prompt: `Firmenidentität:\n${identifikation}\n\nRecherchiere: Nachrichten der letzten 3 Jahre, Insolvenz- oder Registerbekanntmachungen, Gesellschafter-/Geschäftsführerwechsel, Rechtsstreitigkeiten, Kunden-/Arbeitgeberbewertungen (nur Tendenz, keine Einzelzitate), erkennbare Abhängigkeit von wenigen Großkunden oder vom Inhaber, Saisongeschäft. Nur öffentliche Firmendaten, keine privaten Daten von Personen über Name und Funktion hinaus. Antworte auf Deutsch.`,
+        },
+        {
+          key: 'Zinsen & Parameter',
+          prompt: `Recherchiere den aktuellen Basiszins (Rendite langfristiger Bundesanleihen bzw. Zinsstrukturkurve der Deutschen Bundesbank), die übliche Marktrisikoprämie und übliche Zuschläge für kleine Unternehmen im deutschen Mittelstand, jeweils mit Quelle und Stand (Stichtag ${input.stichtag}). Antworte auf Deutsch.`,
+        },
+      ]
+      const agentErgebnisse = await Promise.all(
+        agentAuftraege.map((a) =>
+          callClaudeResearch(a.prompt, { model: 'claude-haiku-4-5-20251001', maxSearches: 4, maxTokens: 4096, timeoutMs })
+            .then((text) => `### ${a.key}\n${text}`)
+            .catch((err) => `### ${a.key}\nRecherche fehlgeschlagen: ${err instanceof Error ? err.message : String(err)}`),
+        ),
+      )
+      await schreibe({ zwischen: { ...z.zwischen, recherche: agentErgebnisse.join('\n\n') }, schrittNr: 3, versuch: 0, laeuftSeit: null })
+    } else if (schritt.nr === 3) {
+      const ergebnis = await callClaudeResearch(
+        `Du bist ein unabhängiger Prüf-Agent. Firmenidentität:\n${identifikation}\n\nPrüfe die folgenden Rechercheergebnisse kritisch gegen:
 - Öffne jede zitierte Quelle erneut und prüfe, ob der Wert dort wirklich so steht.
 - Prüfe, ob jede Quelle zur richtigen Firma gehört (Registernummer, Sitz).
 - Wichtige Zahlen (Umsatz, Ergebnis, Eigenkapital, Multiplikator) brauchen möglichst 2 unabhängige Quellen; Widersprüche auflisten, nicht still auflösen.
@@ -872,12 +939,12 @@ Rechercheergebnisse:
 ${rechercheGesamt}
 
 Antworte auf Deutsch als strukturierte Liste.`,
-      { model: 'claude-sonnet-5-5', maxSearches: 6, maxTokens: 8192 },
-    )
-
-    await schreibe({ status: 'laeuft', schritt: 'Bewertung wird erstellt' })
-    const bewertung = await callClaudeResearch(
-      `Du bist ein erfahrener Berater für Unternehmensbewertung im Mittelstand. Anlass: ${input.anlass}. Stichtag: ${input.stichtag}.
+        { model: 'claude-sonnet-5-5', maxSearches: 6, maxTokens: 8192, timeoutMs },
+      )
+      await schreibe({ zwischen: { ...z.zwischen, pruefung: ergebnis }, schrittNr: 4, versuch: 0, laeuftSeit: null })
+    } else {
+      const bewertung = await callClaudeResearch(
+        `Du bist ein erfahrener Berater für Unternehmensbewertung im Mittelstand. Anlass: ${input.anlass}. Stichtag: ${input.stichtag}.
 
 Firmenidentität:
 ${identifikation}
@@ -906,23 +973,38 @@ Gib GANZ AM ENDE zusätzlich einen einzelnen Codeblock mit reinem JSON zurück (
 \`\`\`json
 {"ebit": null, "substanzwert": null, "nachhaltigerJahresueberschuss": null, "branchenmultiplikator": null, "kapitalisierungszinsProzent": null}
 \`\`\``,
-      { model: 'claude-sonnet-5-5', maxSearches: 0, maxTokens: 8192 },
-    )
-
-    const jsonMatch = bewertung.match(/```json\s*([\s\S]*?)```/)
-    let abgeleiteteZahlen: Record<string, number | null> | undefined
-    if (jsonMatch) {
-      try {
-        abgeleiteteZahlen = JSON.parse(jsonMatch[1])
-      } catch {
-        abgeleiteteZahlen = undefined
+        { model: 'claude-sonnet-5-5', maxSearches: 0, maxTokens: 8192, timeoutMs },
+      )
+      const jsonMatch = bewertung.match(/```json\s*([\s\S]*?)```/)
+      let abgeleiteteZahlen: Record<string, number | null> | undefined
+      if (jsonMatch) {
+        try {
+          abgeleiteteZahlen = JSON.parse(jsonMatch[1])
+        } catch {
+          abgeleiteteZahlen = undefined
+        }
       }
+      // Zwischenergebnisse und Eingabe werden nicht mehr gebraucht — der Bericht enthält alles.
+      await schreibe({ status: 'fertig', schritt: 'Fertig', schrittNr: undefined, laeuftSeit: null, zwischen: undefined, bericht: bewertung, abgeleiteteZahlen, abgeschlossenAm: new Date().toISOString() })
+      return
     }
-
-    await schreibe({ status: 'fertig', schritt: 'Fertig', bericht: bewertung, abgeleiteteZahlen, abgeschlossenAm: new Date().toISOString() })
+    await stosseRechercheSchrittAn(bereich, kundeId, 0)
   } catch (err) {
-    console.error('Unternehmensbewertung-Recherche fehlgeschlagen:', err)
-    await schreibe({ status: 'fehler', fehler: err instanceof Error ? err.message : String(err), abgeschlossenAm: new Date().toISOString() }).catch(() => {})
+    console.error(`Unternehmensbewertung-Recherche, Schritt ${schritt.nr} fehlgeschlagen:`, err)
+    const versuch = (z.versuch ?? 0) + 1
+    if (versuch <= 2) {
+      // Noch einmal versuchen, auf einem frischen Worker mit voller Laufzeit.
+      await schreibe({ versuch, laeuftSeit: null }).catch(() => {})
+      await warteBisWorkerAbgeloestWird()
+      await stosseRechercheSchrittAn(bereich, kundeId, 0)
+    } else {
+      await schreibe({
+        status: 'fehler',
+        laeuftSeit: null,
+        fehler: `Schritt „${schritt.titel}" ist auch nach drei Versuchen gescheitert: ${err instanceof Error ? err.message : String(err)}`,
+        abgeschlossenAm: new Date().toISOString(),
+      }).catch(() => {})
+    }
   }
 }
 
@@ -2120,22 +2202,41 @@ Deno.serve(async (req: Request) => {
       const gestartetAm = new Date().toISOString()
       const { error: startError } = await admin
         .from('kunden')
-        .update({ unternehmensbewertung_recherche: { status: 'laeuft', schritt: 'Wird gestartet …', anlass, stichtag, gestartetAm } })
+        .update({
+          unternehmensbewertung_recherche: {
+            status: 'laeuft',
+            schritt: 'Wird gestartet …',
+            schrittNr: 1,
+            versuch: 0,
+            anlass,
+            stichtag,
+            gestartetAm,
+            aktualisiertAm: gestartetAm,
+            eingabe: { firma, webseite, vorhandeneZahlen: vorhandeneZahlen ?? {} },
+            zwischen: {},
+          },
+        })
         .eq('id', kundeId)
         .eq('bereich', bereich)
       if (startError) return new Response(JSON.stringify({ error: startError.message }), { status: 500, headers })
-
-      // EdgeRuntime ist in der Supabase-Edge-Function-Laufzeit global verfügbar (Background Tasks),
-      // aber nicht in den Deno-Typings deklariert.
-      // @ts-ignore
-      EdgeRuntime.waitUntil(
-        fuehreBewertungRechercheAus({ bereich, kundeId, firma, webseite, anlass, stichtag, vorhandeneZahlen: vorhandeneZahlen ?? {} }),
-      )
-
+      await stosseRechercheSchrittAn(bereich, kundeId, 0)
       return new Response(JSON.stringify({ ok: true }), { headers })
     }
 
-    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "bewertung_recherche_start" oder "firmenwissen_answer"' }), { status: 400, headers })
+    // Führt den nächsten offenen Schritt einer laufenden Recherche aus (siehe fuehreRechercheSchrittAus).
+    // Antwortet sofort und arbeitet im Hintergrund weiter. Auch vom Frontend aufrufbar, um eine
+    // hängen gebliebene Recherche ab dem letzten fertigen Schritt fortzusetzen.
+    if (body.action === 'bewertung_recherche_schritt') {
+      const { bereich, kundeId, umleitungen } = body
+      if (!bereich || !kundeId) {
+        return new Response(JSON.stringify({ error: 'bereich und kundeId sind Pflichtfelder' }), { status: 400, headers })
+      }
+      // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
+      EdgeRuntime.waitUntil(fuehreRechercheSchrittAus(bereich, kundeId, Number(umleitungen) || 0))
+      return new Response(JSON.stringify({ ok: true }), { headers })
+    }
+
+    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "bewertung_recherche_start", "bewertung_recherche_schritt" oder "firmenwissen_answer"' }), { status: 400, headers })
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }

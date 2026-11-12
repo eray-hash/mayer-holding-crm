@@ -383,3 +383,9 @@ export async function starteBewertungRecherche(params: {
 }): Promise<void> {
   await call({ action: 'bewertung_recherche_start', ...params })
 }
+
+// Setzt eine hängen gebliebene Recherche beim nächsten offenen Schritt fort (bereits fertige
+// Schritte werden nicht wiederholt).
+export async function setzeBewertungRechercheFort(params: { bereich: string; kundeId: string }): Promise<void> {
+  await call({ action: 'bewertung_recherche_schritt', ...params })
+}

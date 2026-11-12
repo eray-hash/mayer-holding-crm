@@ -188,6 +188,10 @@ export type UnternehmensbewertungRecherche = {
   gestartetAm: string
   abgeschlossenAm?: string
   fehler?: string
+  // Vom Server gepflegt: welcher der vier Schritte als Nächstes dran ist und wann zuletzt etwas
+  // geschrieben wurde — daran erkennt die Oberfläche eine hängen gebliebene Recherche.
+  schrittNr?: number
+  aktualisiertAm?: string
 }
 
 // Fragenkatalog (Selbstauskunft): pro Bereich frei im CRM konfigurierbare Fragen, die einem

@@ -98,7 +98,9 @@ function kundeToRow(bereich: KundeBereich, k: Kunde) {
     dokumente: k.dokumente ?? null,
     pruef_hinweis: k.pruefHinweis ?? null,
     verknuepfte_kunden: k.verknuepfteKunden ?? null,
-    unternehmensbewertung_recherche: k.unternehmensbewertungRecherche ?? null,
+    // unternehmensbewertung_recherche fehlt hier bewusst: die Spalte gehört dem Server (die Recherche
+    // schreibt dort Schritt für Schritt ihren Zustand). Ein Zurückschreiben aus dem Browser würde
+    // einen neueren Zwischenstand mit einem älteren überschreiben und die Recherche abwürgen.
     // Nur mitschicken, wenn vorhanden: so überschreibt ein Tab mit altem Stand eine inzwischen
     // gespeicherte Analyse nicht mit "leer".
     ...(k.potenzialAnalyse ? { potenzial_analyse: k.potenzialAnalyse } : {}),

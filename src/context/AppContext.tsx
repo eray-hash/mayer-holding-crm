@@ -284,6 +284,12 @@ type Action =
   // Generisch über KUNDEN_BEREICHE (get/set) — ein Ort statt 7 bereichsspezifischer ADD_/UPDATE_X_MANDANT-
   // Varianten für bereichsübergreifenden Code (z.B. DokumenteSection.tsx, PruefHinweisBadge.tsx).
   | { type: 'UPDATE_KUNDE_IN_BEREICH'; bereich: KundeBereich; id: string; patch: Partial<Kunde> }
+  // Wie UPDATE_KUNDE_IN_BEREICH, aber für Werte, die gerade aus der Datenbank gelesen wurden
+  // (z. B. der Fortschritt einer serverseitigen Recherche): ändert nur die Anzeige und schreibt
+  // NICHT zurück. Sonst würde bei jedem Fortschritts-Abruf die ganze Kundenzeile aus dem
+  // Browser-Stand neu gespeichert — und dabei alles überschrieben, was Server oder Telegram-Bot
+  // inzwischen in dieselbe Akte geschrieben haben.
+  | { type: 'KUNDE_VOM_SERVER'; bereich: KundeBereich; id: string; patch: Partial<Kunde> }
   | { type: 'ADD_KUNDE_IN_BEREICH'; bereich: KundeBereich; kunde: Kunde }
   | { type: 'MOVE_KUNDE_BEREICH'; von: KundeBereich; nach: KundeBereich; id: string; patch?: Partial<Kunde> }
   | { type: 'SET_KUNDE_STATUS'; id: string; status: string; followUp?: FollowUp }
@@ -434,6 +440,7 @@ function reducer(state: AppData, action: Action): AppData {
         ...state,
         kunden: state.kunden.map((k) => (k.id === action.id ? { ...k, ...action.patch } : k)),
       }
+    case 'KUNDE_VOM_SERVER':
     case 'UPDATE_KUNDE_IN_BEREICH': {
       const def = KUNDEN_BEREICHE.find((b) => b.id === action.bereich)!
       return def.set(
@@ -1154,7 +1161,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const next = reducer(prev, action)
     stateRef.current = next
     dispatchRaw(action)
-    if (action.type !== 'HYDRATE_SUPABASE') syncAfterDispatch(prev, next)
+    if (action.type !== 'HYDRATE_SUPABASE' && action.type !== 'KUNDE_VOM_SERVER') syncAfterDispatch(prev, next)
   }, [])
 
   useEffect(() => {
