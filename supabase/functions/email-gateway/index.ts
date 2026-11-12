@@ -1001,11 +1001,22 @@ Falls im Dokument selbst ein Datum erkennbar ist (z.B. Ausstellungsdatum, Sticht
   )
 }
 
+type RechnungsDaten = {
+  nummer?: string
+  datum?: string
+  betrag_netto?: number
+  betrag_brutto?: number
+  zahlungsziel?: string
+  aussteller?: string
+  empfaenger?: string
+}
+
 type KundenDokumentKlassifikation = {
   erkannter_name?: string
   erkannte_firma?: string
   kategorie: string
   drehung?: number
+  rechnung?: RechnungsDaten
 }
 
 // KI-Dokumentenverarbeitung für per Telegram geschickte Kunden-Unterlagen (siehe telegram-gateway):
@@ -1026,7 +1037,8 @@ async function classifyKundenDokument(mediaBase64: string, mediaType: string, da
 - den Namen der Person, zu der die Unterlage gehört (z.B. Kontoinhaber, Unterzeichner, im Ausweis genannte Person), exakt so wie er im Dokument steht — falls nicht erkennbar, weglassen.
 - die Firma/den Betrieb, falls im Dokument genannt (z.B. im Briefkopf, Handelsregisterauszug, Mietvertrag) — falls nicht erkennbar, weglassen.
 - eine kurze Kategorie der Unterlage (z.B. "BWA", "Kontoauszug", "Personalausweis", "Mietvertrag", "Lohnabrechnung", "Steuerbescheid", "Handelsregisterauszug", "Gesellschaftervertrag", "Selbstauskunft", "Schufa-Auskunft", "Sonstiges").
-- ob die Datei verdreht eingescannt wurde: um wie viel Grad sie IM UHRZEIGERSINN gedreht werden muss, damit der Text aufrecht lesbar ist. Seiten, die bereits richtig liegen, brauchen 0. Maßgeblich ist, wie die Seite gerade aussieht: 180 = der Text steht auf dem Kopf; 90 = die Oberkante des Textes zeigt gerade nach links; 270 = die Oberkante des Textes zeigt gerade nach rechts. Eine Seite im Querformat, deren Text normal lesbar ist, ist NICHT verdreht.`,
+- ob die Datei verdreht eingescannt wurde: um wie viel Grad sie IM UHRZEIGERSINN gedreht werden muss, damit der Text aufrecht lesbar ist. Seiten, die bereits richtig liegen, brauchen 0. Maßgeblich ist, wie die Seite gerade aussieht: 180 = der Text steht auf dem Kopf; 90 = die Oberkante des Textes zeigt gerade nach links; 270 = die Oberkante des Textes zeigt gerade nach rechts. Eine Seite im Querformat, deren Text normal lesbar ist, ist NICHT verdreht.
+- Ist das Dokument eine Rechnung, fülle zusätzlich rechnung aus: Rechnungsnummer, Rechnungsdatum, Netto- und Bruttobetrag, Aussteller und Empfänger. Beträge nur angeben, wenn sie eindeutig lesbar sind — lieber weglassen als raten.`,
       },
       block,
     ],
@@ -1040,6 +1052,19 @@ async function classifyKundenDokument(mediaBase64: string, mediaType: string, da
           erkannte_firma: { type: 'string' },
           kategorie: { type: 'string' },
           drehung: { type: 'integer', enum: [0, 90, 180, 270], description: 'Nötige Drehung im Uhrzeigersinn in Grad, damit der Text aufrecht steht. 0, wenn die Datei richtig herum ist.' },
+          rechnung: {
+            type: 'object',
+            description: 'NUR ausfüllen, wenn das Dokument eine Rechnung ist.',
+            properties: {
+              nummer: { type: 'string', description: 'Rechnungsnummer exakt wie im Dokument.' },
+              datum: { type: 'string', description: 'Rechnungsdatum im Format JJJJ-MM-TT.' },
+              betrag_netto: { type: 'number', description: 'Nettobetrag in Euro als Zahl, z.B. 3250.00.' },
+              betrag_brutto: { type: 'number', description: 'Bruttobetrag (Gesamtbetrag) in Euro als Zahl, z.B. 3867.50.' },
+              zahlungsziel: { type: 'string', description: 'Fälligkeit im Format JJJJ-MM-TT, falls genannt oder aus einer Zahlungsfrist berechenbar.' },
+              aussteller: { type: 'string', description: 'Wer die Rechnung stellt (Briefkopf/Absender), exakt wie im Dokument.' },
+              empfaenger: { type: 'string', description: 'An wen die Rechnung gerichtet ist, exakt wie im Dokument.' },
+            },
+          },
         },
         required: ['kategorie'],
       },
@@ -1055,6 +1080,7 @@ type ScanTeildokument = {
   erkannter_name?: string
   erkanntes_datum?: string
   vorgeschlagener_dateiname: string
+  rechnung?: RechnungsDaten
 }
 
 type ScanAufteilung = {
@@ -1080,7 +1106,7 @@ async function splitScanDokument(mediaBase64: string, dateiname: string, seitenz
 
 Analysiere den tatsächlichen Inhalt jeder Seite. Seiten gehören zum selben Dokument, wenn der Text fortläuft, die Seitennummerierung weiterzählt ("Seite 2 von 5"), Briefkopf, Aktenzeichen, Vertragsparteien oder Vorgang dieselben bleiben oder eine Seite erkennbar Anlage/Fortsetzung der vorigen ist. Ein neues Dokument beginnt nur dort, wo der Inhalt das klar zeigt: neuer Briefkopf oder Absender, neue Überschrift mit anderem Thema, anderes Datum und anderer Vorgang, deutlich anderes Layout. Trenne im Zweifel NICHT — ein fälschlich zerrissenes Dokument ist schlimmer als zwei zusammengebliebene.
 
-Gib für jedes erkannte Dokument zurück: den Seitenbereich (1-basiert, erste und letzte Seite), eine kurze Kategorie (z.B. "BWA", "Kontoauszug", "Personalausweis", "Mietvertrag", "Lohnabrechnung", "Steuerbescheid", "Handelsregisterauszug", "Gesellschaftervertrag", "Selbstauskunft", "Schufa-Auskunft", "Sonstiges"), falls im Dokument ein Datum erkennbar ist (Ausstellungsdatum, Abrechnungsmonat o.ä.) im Format YYYY-MM-DD oder YYYY-MM, und einen kurzen aussagekräftigen deutschen Dateinamen-Vorschlag (mit ".pdf"-Endung, ohne Leerzeichen). Bilde den Dateinamen immer nach demselben Muster Art_Bezug_Datum.pdf, damit dasselbe Dokument bei jedem Scan gleich heißt: Bezug ist bei Rechnungen die Rechnungsnummer, bei Verträgen und Vereinbarungen der Vertragsgegenstand, sonst der Aussteller; Datum im Format JJJJ-MM-TT, soweit erkennbar. Jede Seite gehört zu genau einem Dokument; die Seitenbereiche decken zusammen die Seiten 1 bis ${seitenzahl} lückenlos ab.
+Gib für jedes erkannte Dokument zurück: den Seitenbereich (1-basiert, erste und letzte Seite), eine kurze Kategorie (z.B. "BWA", "Kontoauszug", "Personalausweis", "Mietvertrag", "Lohnabrechnung", "Steuerbescheid", "Handelsregisterauszug", "Gesellschaftervertrag", "Selbstauskunft", "Schufa-Auskunft", "Sonstiges"), falls im Dokument ein Datum erkennbar ist (Ausstellungsdatum, Abrechnungsmonat o.ä.) im Format YYYY-MM-DD oder YYYY-MM, und einen kurzen aussagekräftigen deutschen Dateinamen-Vorschlag (mit ".pdf"-Endung, ohne Leerzeichen). Bilde den Dateinamen immer nach demselben Muster Art_Bezug_Datum.pdf, damit dasselbe Dokument bei jedem Scan gleich heißt: Bezug ist bei Rechnungen die Rechnungsnummer, bei Verträgen und Vereinbarungen der Vertragsgegenstand, sonst der Aussteller; Datum im Format JJJJ-MM-TT, soweit erkennbar. Jede Seite gehört zu genau einem Dokument; die Seitenbereiche decken zusammen die Seiten 1 bis ${seitenzahl} lückenlos ab. Ist das Dokument eine Rechnung, fülle zusätzlich rechnung aus: Rechnungsnummer, Rechnungsdatum, Netto- und Bruttobetrag, Aussteller und Empfänger. Beträge nur angeben, wenn sie eindeutig lesbar sind — lieber weglassen als raten.
 
 Gehört erkennbar alles zu derselben Person/Firma, nenne diese einmal zentral (Name und/oder Firma, exakt wie im Dokument geschrieben). Ist die gesamte Datei ein einziges zusammenhängendes Dokument, gib genau einen Eintrag zurück, der die Seiten 1 bis ${seitenzahl} abdeckt.
 
@@ -1107,6 +1133,19 @@ Prüfe außerdem jede Seite darauf, ob sie verdreht eingescannt wurde, und liste
                 erkannter_name: { type: 'string' },
                 erkanntes_datum: { type: 'string' },
                 vorgeschlagener_dateiname: { type: 'string' },
+                rechnung: {
+                  type: 'object',
+                  description: 'NUR ausfüllen, wenn das Dokument eine Rechnung ist.',
+                  properties: {
+                    nummer: { type: 'string', description: 'Rechnungsnummer exakt wie im Dokument.' },
+                    datum: { type: 'string', description: 'Rechnungsdatum im Format JJJJ-MM-TT.' },
+                    betrag_netto: { type: 'number', description: 'Nettobetrag in Euro als Zahl, z.B. 3250.00.' },
+                    betrag_brutto: { type: 'number', description: 'Bruttobetrag (Gesamtbetrag) in Euro als Zahl, z.B. 3867.50.' },
+                    zahlungsziel: { type: 'string', description: 'Fälligkeit im Format JJJJ-MM-TT, falls genannt oder aus einer Zahlungsfrist berechenbar.' },
+                    aussteller: { type: 'string', description: 'Wer die Rechnung stellt (Briefkopf/Absender), exakt wie im Dokument.' },
+                    empfaenger: { type: 'string', description: 'An wen die Rechnung gerichtet ist, exakt wie im Dokument.' },
+                  },
+                },
               },
               required: ['start_seite', 'end_seite', 'kategorie', 'vorgeschlagener_dateiname'],
             },

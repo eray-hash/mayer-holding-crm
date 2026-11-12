@@ -288,6 +288,26 @@ function gueltigeDrehung(grad: unknown): number {
   return grad === 90 || grad === 180 || grad === 270 ? grad : 0
 }
 
+type RechnungsDaten = {
+  nummer?: string
+  datum?: string
+  betrag_netto?: number
+  betrag_brutto?: number
+  zahlungsziel?: string
+  aussteller?: string
+  empfaenger?: string
+}
+
+function euro(n: number | undefined | null): string {
+  return typeof n === 'number' && Number.isFinite(n) ? `${new Intl.NumberFormat('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n)} €` : '?'
+}
+
+// Was die Scan-Analyse aus einer Rechnung gelesen hat, als Zusatz zur Datei-Zeile im Datei-Eingang.
+function rechnungsZusatz(r: RechnungsDaten | undefined): string {
+  if (!r) return ''
+  return ` | Rechnung erkannt: Nr. ${r.nummer || '?'} vom ${r.datum || '?'}, netto ${euro(r.betrag_netto)}, brutto ${euro(r.betrag_brutto)}${r.zahlungsziel ? `, fällig ${r.zahlungsziel}` : ''}, Aussteller: ${r.aussteller || '?'}, Empfänger: ${r.empfaenger || '?'}`
+}
+
 type ScanAufteilung = {
   erkannter_name?: string
   erkannte_firma?: string
@@ -298,6 +318,7 @@ type ScanAufteilung = {
     kategorie: string
     erkanntes_datum?: string
     vorgeschlagener_dateiname: string
+    rechnung?: RechnungsDaten
   }[]
 }
 
@@ -388,7 +409,7 @@ async function verarbeiteDateiEingang(supabase: Supa, message: any): Promise<str
         const pfad = await speichereDatei(supabase, teilBytes, name, 'application/pdf', `${marke}p${teil.start_seite}-${teil.end_seite}`)
         if (!pfad) continue
         zeilen.push(
-          `${zeilen.length + 1}. pfad=${pfad} | Name: ${name} | Kategorie: ${teil.kategorie}${teil.erkanntes_datum ? ` | Datum im Dokument: ${teil.erkanntes_datum}` : ''} | Seiten ${teil.start_seite}–${teil.end_seite}`,
+          `${zeilen.length + 1}. pfad=${pfad} | Name: ${name} | Kategorie: ${teil.kategorie}${teil.erkanntes_datum ? ` | Datum im Dokument: ${teil.erkanntes_datum}` : ''} | Seiten ${teil.start_seite}–${teil.end_seite}${rechnungsZusatz(teil.rechnung)}`,
         )
       } catch (err) {
         console.error('Seiten-Ausschnitt fehlgeschlagen:', err)
@@ -415,7 +436,7 @@ async function verarbeiteDateiEingang(supabase: Supa, message: any): Promise<str
     ].join('\n')
   }
 
-  let klassifikation: { erkannter_name?: string; erkannte_firma?: string; kategorie?: string; drehung?: number } | null = null
+  let klassifikation: { erkannter_name?: string; erkannte_firma?: string; kategorie?: string; drehung?: number; rechnung?: RechnungsDaten } | null = null
   try {
     const result = await callEmailGateway('classify_kunden_dokument', { datei_base64: bytesZuBase64(bytes), media_type: contentType, dateiname })
     klassifikation = result.klassifikation
@@ -444,7 +465,7 @@ async function verarbeiteDateiEingang(supabase: Supa, message: any): Promise<str
     `Im Dokument erkannt: ${erkannt.length > 0 ? erkannt.join(', ') : 'nichts Eindeutiges'}`,
     ...(zuSpeichern !== bytes ? ['Die Datei war verdreht eingescannt und wurde gerade gedreht.'] : []),
     'Gespeichert, noch keiner Akte zugeordnet:',
-    `1. pfad=${pfad} | Name: ${dateiname}`,
+    `1. pfad=${pfad} | Name: ${dateiname}${rechnungsZusatz(klassifikation?.rechnung)}`,
   ].join('\n')
 }
 
@@ -663,6 +684,33 @@ const TOOLS = [
     },
   },
   {
+    name: 'rechnung_erfassen',
+    description: 'Trägt eine AUSGANGSRECHNUNG der Holding (die Holding stellt sie dem Kunden) in die Rechnungsübersicht des CRM ein. Speist auch das Mahnwesen: Status "Versendet" heißt offen. Nicht für Rechnungen verwenden, die jemand anderes ausgestellt hat.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        kunde_id: { type: 'string' },
+        nummer: { type: 'string', description: 'Rechnungsnummer exakt wie auf der Rechnung.' },
+        datum: { type: 'string', description: 'Rechnungsdatum als JJJJ-MM-TT.' },
+        betrag_netto: { type: 'number', description: 'Nettobetrag in Euro.' },
+        betrag_brutto: { type: 'number', description: 'Bruttobetrag in Euro.' },
+        status: { type: 'string', enum: ['Versendet', 'Bezahlt'], description: 'Bezahlt nur, wenn der Mitarbeiter das gesagt hat; sonst Versendet (offen).' },
+        zahlungsziel: { type: 'string', description: 'Fälligkeit als JJJJ-MM-TT. Ohne Angabe: 14 Tage nach Rechnungsdatum.' },
+        leistung: { type: 'string', description: 'Kurzbezeichnung der berechneten Leistung, falls bekannt.' },
+      },
+      required: ['kunde_id', 'nummer', 'datum', 'betrag_brutto', 'status'],
+    },
+  },
+  {
+    name: 'rechnung_status_setzen',
+    description: 'Ändert den Status einer erfassten Rechnung, z. B. auf Bezahlt, wenn das Geld eingegangen ist. Die Rechnungen eines Kunden stehen in kundenakte_lesen.',
+    input_schema: {
+      type: 'object',
+      properties: { nummer: { type: 'string' }, status: { type: 'string', enum: ['Versendet', 'Bezahlt', 'Überfällig'] } },
+      required: ['nummer', 'status'],
+    },
+  },
+  {
     name: 'dateien_aussortieren',
     description: 'Sortiert gespeicherte, noch keiner Akte zugeordnete Dateien aus (z. B. doppelt geschickte Scans oder Fehlversuche), damit sie nicht mehr unter unzugeordnete_dateien auftauchen. Die Dateien werden nicht gelöscht, sondern in einen Ablageordner verschoben. Nur auf Wunsch des Mitarbeiters.',
     input_schema: {
@@ -720,6 +768,7 @@ async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKontext): Pr
       .eq('kunde_id', k.id)
       .order('datum', { ascending: false })
       .limit(8)
+    const { data: rechnungen } = await supabase.from('rechnungen').select('nummer, datum, betrag_brutto, status, zahlungsziel').eq('kunde_id', k.id).order('datum', { ascending: false })
     const fehlend = [!k.telefon && 'Telefon', !k.email && 'E-Mail', !k.ansprechpartner && 'Ansprechpartner', !k.verantwortlich && 'Verantwortlich'].filter(Boolean)
     const fu = k.follow_up
     return kuerze(
@@ -732,6 +781,12 @@ async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKontext): Pr
         '',
         `Dokumente (${(k.dokumente ?? []).length}):`,
         ...((k.dokumente ?? []).length > 0 ? (k.dokumente ?? []).map((d) => `- ${d.name} (${deDatum(d.datum)}, ${d.groesse}) [dokument_id=${d.id}]`) : ['(keine)']),
+        '',
+        `Rechnungen an den Kunden (${(rechnungen ?? []).length}):`,
+        ...((rechnungen ?? []).length > 0
+          // deno-lint-ignore no-explicit-any
+          ? (rechnungen ?? []).map((r: any) => `- ${r.nummer} vom ${deDatum(r.datum)}: ${euro(Number(r.betrag_brutto))} brutto, Status ${r.status}${r.status === 'Bezahlt' ? '' : `, fällig ${deDatum(r.zahlungsziel)}`}`)
+          : ['(keine erfasst)']),
         '',
         'Aktivitäten/Notizen (neueste zuerst):',
         ...((k.activities ?? []).length > 0
@@ -998,6 +1053,61 @@ async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKontext): Pr
     ].join('\n')
   }
 
+  if (name === 'rechnung_erfassen') {
+    const k = await ladeKunde(supabase, input.kunde_id)
+    if (!k) return KEIN_KUNDE
+    const nummer = String(input.nummer ?? '').trim()
+    const datum = String(input.datum ?? '')
+    const brutto = Number(input.betrag_brutto)
+    if (!nummer) return 'Fehler: Rechnungsnummer fehlt.'
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(datum)) return 'Fehler: datum muss JJJJ-MM-TT sein.'
+    if (!Number.isFinite(brutto) || brutto <= 0) return 'Fehler: betrag_brutto fehlt oder ist nicht positiv.'
+    if (!['Versendet', 'Bezahlt'].includes(input.status)) return 'Fehler: status muss Versendet oder Bezahlt sein.'
+    const netto = Number.isFinite(Number(input.betrag_netto)) && Number(input.betrag_netto) > 0 ? Number(input.betrag_netto) : Math.round((brutto / 1.19) * 100) / 100
+    const { data: vorhanden } = await supabase.from('rechnungen').select('id, kunde_id, status').eq('nummer', nummer).limit(1)
+    if (vorhanden && vorhanden.length > 0) return `Nicht erfasst: Die Rechnung ${nummer} steht bereits in der Rechnungsübersicht (Status ${vorhanden[0].status}).`
+    const zahlungsziel = /^\d{4}-\d{2}-\d{2}$/.test(String(input.zahlungsziel ?? ''))
+      ? String(input.zahlungsziel)
+      : new Date(new Date(`${datum}T12:00:00Z`).getTime() + 14 * 86400000).toISOString().slice(0, 10)
+    const leistung = String(input.leistung ?? '').trim()
+    const { error } = await supabase.from('rechnungen').insert({
+      id: `r_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`,
+      nummer,
+      kunde_id: k.id,
+      datum,
+      betrag_netto: netto,
+      betrag_brutto: brutto,
+      status: input.status,
+      zahlungsziel,
+      leistung_bezeichnung: leistung || null,
+    })
+    if (error) return `Fehler beim Erfassen: ${error.message}`
+    await supabase
+      .from('kunden')
+      .update({
+        activities: [
+          { id: crypto.randomUUID(), date: heute, text: `Rechnung ${nummer} vom ${deDatum(datum)} über ${euro(brutto)} erfasst (${input.status === 'Bezahlt' ? 'bezahlt' : 'offen'}).`, user: mitarbeiter.name },
+          ...(k.activities ?? []),
+        ],
+        letzte_aktivitaet: heute,
+      })
+      .eq('id', k.id)
+    protokolliere(`Rechnung ${nummer} bei ${kundeName(k)} erfasst: brutto ${euro(brutto)}, ${input.status}`)
+    const hinweis = k.bereich === 'beratung' ? '' : ' Hinweis: Der Reiter „Rechnungen" in der Akte existiert bisher nur im Bereich Unternehmensberatung; die Rechnung steht aber in der Rechnungsübersicht.'
+    return `Rechnung ${nummer} bei ${kundeName(k)} erfasst: Datum ${deDatum(datum)}, netto ${euro(netto)}, brutto ${euro(brutto)}, Status ${input.status}${input.status === 'Versendet' ? `, fällig ${deDatum(zahlungsziel)}` : ''}.${hinweis}`
+  }
+
+  if (name === 'rechnung_status_setzen') {
+    const nummer = String(input.nummer ?? '').trim()
+    if (!['Versendet', 'Bezahlt', 'Überfällig'].includes(input.status)) return 'Fehler: ungültiger Status.'
+    const { data: treffer } = await supabase.from('rechnungen').select('id, kunde_id, status, betrag_brutto').eq('nummer', nummer).limit(1)
+    if (!treffer || treffer.length === 0) return `Es gibt keine erfasste Rechnung mit der Nummer ${nummer}.`
+    const { error } = await supabase.from('rechnungen').update({ status: input.status, ...(input.status === 'Bezahlt' ? { mahnstufe: null } : {}) }).eq('id', treffer[0].id)
+    if (error) return `Fehler beim Speichern: ${error.message}`
+    protokolliere(`Rechnung ${nummer}: Status ${treffer[0].status} -> ${input.status}`)
+    return `Rechnung ${nummer} (${euro(Number(treffer[0].betrag_brutto))}) steht jetzt auf ${input.status} (vorher ${treffer[0].status}).`
+  }
+
   if (name === 'dateien_aussortieren') {
     const pfade: string[] = Array.isArray(input.pfade) ? input.pfade.map(String) : []
     if (pfade.length === 0) return 'Fehler: keine Dateien angegeben.'
@@ -1096,6 +1206,7 @@ So arbeitest du:
 - Meldet ein Datei-Eingang, dass genau diese Datei schon einmal geschickt wurde, sag dem Mitarbeiter, dass du sie bereits hast und wo sie liegt. Teile davon, die noch in keiner Akte liegen, legst du ab, wenn klar ist wohin. Will er sie bewusst neu verarbeiten lassen (anders aufteilen oder drehen), müssen die früheren Dateien erst aus der Akte genommen und aussortiert werden; danach schickt er sie neu.
 - Deine Grenzen: Du siehst von Dokumenten Name, Art und das erkannte Datum, aber nicht den vollen Inhalt. Sprachnachrichten kannst du noch nicht verarbeiten.
 - Meldet dateien_ablegen ein mögliches Duplikat, frag den Mitarbeiter, ob du überschreiben, als Kopie ablegen oder weglassen sollst.
+- Rechnungen: Meldet ein Datei-Eingang "Rechnung erkannt" und ist der Aussteller die Holding selbst (Andreas Mayer Holding, Mayer Consulting, Ulmer Wirtschaftskanzlei oder ein anderer Name aus dem eigenen Haus), ist das eine Ausgangsrechnung an den Kunden. Dann legst du die Datei ab UND erfasst sie mit rechnung_erfassen. Status ist Versendet (offen), außer der Mitarbeiter hat gesagt, dass sie bezahlt ist. Nenne danach Nummer, Datum, Netto und Brutto, damit er die gelesenen Werte prüfen kann, und sag, dass sie als offen geführt wird. Fehlen Nummer oder Bruttobetrag oder sind sie unklar, frag nach, statt zu raten. Rechnungen, die jemand anderes ausgestellt hat (Lieferanten, Handwerker, Unterlagen des Kunden), sind nur Dokumente und werden nicht erfasst.
 - Kunden löschen: nur auf ausdrücklichen Wunsch und erst nach Bestätigung in einer eigenen Nachricht.
 - Für Fragen quer über alle Kunden oder Objekte ("was steht heute an", "wer sucht ...") nutze firmenueberblick.
 

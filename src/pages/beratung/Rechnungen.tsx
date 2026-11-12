@@ -7,6 +7,7 @@ import { RechnungStatusBadge } from './KundenDetail'
 import { fmtDate, fmtEUR, today, uid, addDays } from '../../lib/dates'
 import { holeLeistungen, type Leistung } from '../../lib/leistungen'
 import type { Rechnung, RechnungStatus } from '../../types'
+import { KUNDEN_BEREICHE } from '../../data/kundenBereiche'
 
 export function Rechnungen() {
   const { state, dispatch } = useApp()
@@ -59,7 +60,7 @@ export function Rechnungen() {
           </thead>
           <tbody>
             {state.rechnungen.map((r) => {
-              const kunde = state.kunden.find((k) => k.id === r.kundeId)
+              const kunde = KUNDEN_BEREICHE.flatMap((b) => b.get(state)).find((k) => k.id === r.kundeId)
               return (
                 <tr key={r.id} className="border-b border-slate-50 last:border-0 hover:bg-slate-50/60">
                   <td className="px-4 py-3 font-medium text-slate-700">{r.nummer}</td>

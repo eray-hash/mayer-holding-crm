@@ -4,6 +4,7 @@ import { useApp } from '../../context/AppContext'
 import { Card, EmptyState } from '../../components/ui'
 import { fmtEUR, daysSince } from '../../lib/dates'
 import { MAHNSTUFEN, mahnstufeLabel, nextMahnstufe } from '../../data/constants'
+import { KUNDEN_BEREICHE } from '../../data/kundenBereiche'
 
 export function Mahnwesen() {
   const { state, dispatch } = useApp()
@@ -43,7 +44,7 @@ export function Mahnwesen() {
           </thead>
           <tbody>
             {offen.map((r) => {
-              const kunde = state.kunden.find((k) => k.id === r.kundeId)
+              const kunde = KUNDEN_BEREICHE.flatMap((b) => b.get(state)).find((k) => k.id === r.kundeId)
               const tage = daysSince(r.zahlungsziel)
               const next = nextMahnstufe(r.mahnstufe)
               return (
