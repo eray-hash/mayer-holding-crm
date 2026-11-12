@@ -365,3 +365,19 @@ export async function sendePublicObjektFormular(params: {
 }): Promise<void> {
   await call({ action: 'public_submit_objekt_formular', ...params })
 }
+
+// Stößt die mehrstufige Unternehmensbewertung-Recherche an (siehe email-gateway/index.ts
+// fuehreBewertungRechercheAus) — läuft serverseitig im Hintergrund weiter und schreibt Fortschritt/
+// Ergebnis direkt in die Kundenzeile; diese Funktion liefert nur die sofortige Start-Bestätigung,
+// nicht das Ergebnis selbst (siehe UnternehmensbewertungSection.tsx für das Polling).
+export async function starteBewertungRecherche(params: {
+  bereich: import('../types').KundeBereich
+  kundeId: string
+  firma: string
+  webseite: string
+  anlass: string
+  stichtag: string
+  vorhandeneZahlen?: Record<string, unknown>
+}): Promise<void> {
+  await call({ action: 'bewertung_recherche_start', ...params })
+}

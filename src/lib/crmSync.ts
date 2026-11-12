@@ -97,6 +97,7 @@ function kundeToRow(bereich: KundeBereich, k: Kunde) {
     dokumente: k.dokumente ?? null,
     pruef_hinweis: k.pruefHinweis ?? null,
     verknuepfte_kunden: k.verknuepfteKunden ?? null,
+    unternehmensbewertung_recherche: k.unternehmensbewertungRecherche ?? null,
   }
 }
 
@@ -122,6 +123,7 @@ function rowToKunde(row: any): Kunde {
     dokumente: row.dokumente ?? undefined,
     pruefHinweis: row.pruef_hinweis ?? undefined,
     verknuepfteKunden: row.verknuepfte_kunden ?? undefined,
+    unternehmensbewertungRecherche: row.unternehmensbewertung_recherche ?? undefined,
   }
 }
 

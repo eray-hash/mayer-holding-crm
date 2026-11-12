@@ -151,6 +151,31 @@ export type Unternehmensbewertung = {
   kapitalisierungszinsProzent: number
   notizen: string
   erstelltAm: string
+  // Ausgangspunkt für die KI-Recherche (siehe UnternehmensbewertungRecherche), einmalig pro Kunde
+  // hinterlegt statt bei jedem Durchlauf neu abgefragt.
+  webseite?: string
+}
+
+// Mehrstufige KI-Recherche (Firmenidentifikation → Recherche-Agents → Prüf-Agent → Bewertung) als
+// Vorschlag für die obigen Eingabefelder — läuft asynchron im Hintergrund der Edge Function
+// (siehe email-gateway "bewertung_recherche_start"), das Frontend pollt den Status. Ersetzt die
+// echte Unternehmensbewertung oben nicht, sondern liefert nur Vorschläge zur Übernahme.
+export type UnternehmensbewertungRecherche = {
+  status: 'laeuft' | 'fertig' | 'fehler'
+  schritt?: string
+  bericht?: string
+  abgeleiteteZahlen?: {
+    ebit?: number
+    substanzwert?: number
+    nachhaltigerJahresueberschuss?: number
+    branchenmultiplikator?: number
+    kapitalisierungszinsProzent?: number
+  }
+  anlass: string
+  stichtag: string
+  gestartetAm: string
+  abgeschlossenAm?: string
+  fehler?: string
 }
 
 // Fragenkatalog (Selbstauskunft): pro Bereich frei im CRM konfigurierbare Fragen, die einem
@@ -215,6 +240,7 @@ export type Kunde = {
   selbstauskunft?: Selbstauskunft
   dokumente?: Dokument[]
   unternehmensbewertung?: Unternehmensbewertung
+  unternehmensbewertungRecherche?: UnternehmensbewertungRecherche
 }
 
 export type Vorlage = {

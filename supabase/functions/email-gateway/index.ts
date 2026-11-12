@@ -168,6 +168,20 @@
 //                                                   verschieben/loeschen/merge — die eigentliche
 //                                                   Kundenzuordnung und jede Datenänderung passiert
 //                                                   erst nach expliziter Bestätigung im Frontend
+//   { action: "bewertung_recherche_start", bereich, kundeId, firma, webseite, anlass, stichtag,
+//     vorhandeneZahlen? }                           -> KI-Recherche + Unternehmensbewertung (Modul:
+//                                                   Firmenidentifikation → 5 parallele Recherche-
+//                                                   Agents (Firmenprofil/Finanzdaten/Markt/Risiken/
+//                                                   Zinsen) → Prüf-Agent → finale Bewertungssynthese,
+//                                                   jeweils mit Websuche-Tool). Schreibt sofort
+//                                                   status "laeuft" in kunden.unternehmensbewertung_
+//                                                   recherche und läuft dann per EdgeRuntime.waitUntil
+//                                                   im Hintergrund weiter (mehrere Minuten Laufzeit,
+//                                                   zu lang für einen einzelnen synchronen Request) —
+//                                                   das Frontend pollt den Status selbst direkt per
+//                                                   Supabase-Select. Ergänzt den rein deterministischen
+//                                                   Unternehmensbewertung-Rechner nur um Vorschläge,
+//                                                   ersetzt ihn nicht (Nutzer-Entscheidung 2026-11-06).
 //
 // Alle Zugangsdaten kommen ausschließlich aus Supabase Function Secrets (nie im Code, nie im
 // Frontend). Siehe README-Abschnitt "E-Mail-Postfach-Anbindung" für die Einrichtung.
@@ -455,6 +469,47 @@ async function callClaudeTool<T>(
   return toolUse.input as T
 }
 
+// Für die Unternehmensbewertung-Recherche (bewertung_recherche_start): anders als callClaudeTool
+// erzwingt dies KEINE sofortige Tool-Antwort, da das Modell erst frei im Web recherchieren und erst
+// danach in Fließtext antworten soll. Das serverseitige Websuche-Tool braucht dafür tool_choice
+// "auto" (Default) statt eines erzwungenen eigenen Tools — beides zusammen unterstützt die
+// Anthropic-API nicht zuverlässig. Gibt den reinen Antworttext (alle text-Blöcke konkateniert)
+// zurück; etwaige Quellenangaben/strukturierte Zahlen bittet der jeweilige Prompt selbst als Teil
+// des Fließtexts aus (siehe z.B. abschließender ```json-Block der Bewertungssynthese).
+async function callClaudeResearch(
+  prompt: string,
+  opts: { model: 'claude-haiku-4-5-20251001' | 'claude-sonnet-5-5'; maxSearches: number; maxTokens?: number },
+): Promise<string> {
+  const apiKey = env('ANTHROPIC_API_KEY')
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: opts.model,
+      max_tokens: opts.maxTokens ?? 4096,
+      ...(opts.maxSearches > 0
+        ? { tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: opts.maxSearches }] }
+        : {}),
+      messages: [{ role: 'user', content: prompt }],
+    }),
+  })
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '')
+    throw new Error(`Anthropic-API-Fehler (${res.status}): ${detail.slice(0, 300)}`)
+  }
+  const data = await res.json()
+  const text = (data.content ?? [])
+    .filter((c: { type: string }) => c.type === 'text')
+    .map((c: { text: string }) => c.text)
+    .join('\n\n')
+  if (!text.trim()) throw new Error('Keine Textantwort von der Anthropic-API erhalten.')
+  return text
+}
+
 type AssistentKlassifikation = {
   typ: 'notiz' | 'aufgabe' | 'frage' | 'aufnahme'
   erkannter_name?: string
@@ -698,6 +753,146 @@ Gib maximal drei konkrete, plausible Chancen zurück, sortiert nach Priorität (
       },
     },
   )
+}
+
+// Orchestriert die mehrstufige Unternehmensbewertung-Recherche (Firmenidentifikation → 5 parallele
+// Recherche-Agents → Prüf-Agent → Bewertungssynthese). Läuft per EdgeRuntime.waitUntil im
+// Hintergrund weiter, NACHDEM die Edge Function dem Frontend bereits geantwortet hat (mehrere
+// Minuten Laufzeit, zu lang für einen einzelnen synchronen Request) — deshalb wird hier keine
+// Response zurückgegeben, sondern jeder Zwischenstand direkt in kunden.unternehmensbewertung_
+// recherche geschrieben, die das Frontend selbst pollt. Jeder Fehler wird abgefangen und als
+// status "fehler" festgehalten, damit nichts endlos bei "laeuft" hängen bleibt.
+async function fuehreBewertungRechercheAus(input: {
+  bereich: string
+  kundeId: string
+  firma: string
+  webseite: string
+  anlass: string
+  stichtag: string
+  vorhandeneZahlen: Record<string, unknown>
+}): Promise<void> {
+  const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+  const gestartetAm = new Date().toISOString()
+
+  async function schreibe(patch: Record<string, unknown>) {
+    await admin
+      .from('kunden')
+      .update({ unternehmensbewertung_recherche: { anlass: input.anlass, stichtag: input.stichtag, gestartetAm, ...patch } })
+      .eq('id', input.kundeId)
+      .eq('bereich', input.bereich)
+  }
+
+  const vorhandeneZahlenText = Object.keys(input.vorhandeneZahlen ?? {}).length
+    ? `Folgende Zahlen wurden bereits intern bestätigt und müssen NICHT erneut recherchiert werden, nur gegen die Marktdaten auf Plausibilität geprüft: ${JSON.stringify(input.vorhandeneZahlen)}`
+    : 'Es liegen keine intern bestätigten Zahlen vor — alles muss recherchiert werden.'
+
+  try {
+    await schreibe({ status: 'laeuft', schritt: 'Firmenidentifikation' })
+    const identifikation = await callClaudeResearch(
+      `Öffne die Webseite ${input.webseite} der Firma "${input.firma}" sowie deren Impressum. Halte fest: exakter Firmenname, Rechtsform, Sitz, Registergericht und HRB-/HRA-Nummer, Geschäftsführung, USt-ID. Antworte als kurzer Fließtext auf Deutsch, nur Fakten die du auf den geöffneten Seiten tatsächlich gefunden hast, fehlende Angaben als "nicht gefunden" kennzeichnen.`,
+      { model: 'claude-haiku-4-5-20251001', maxSearches: 3, maxTokens: 1024 },
+    )
+
+    await schreibe({ status: 'laeuft', schritt: 'Recherche-Agents (Firmenprofil, Finanzdaten, Markt, Risiken, Zinsen)' })
+    const agentAuftraege: { key: string; prompt: string }[] = [
+      {
+        key: 'Firmenprofil',
+        prompt: `Firmenidentität:\n${identifikation}\n\nRecherchiere auf der Webseite ${input.webseite}: Produkte/Leistungen, Zielkunden, Standorte, Mitarbeiterzahl, Gründungsjahr, Referenzkunden, Zertifikate, aktuelle Stellenanzeigen (Hinweis auf Wachstum). Jede Angabe mit Quelle (URL), Datum der Quelle und Abrufdatum. Was du nicht findest, als "nicht gefunden" kennzeichnen. Antworte auf Deutsch als Stichpunkte.`,
+      },
+      {
+        key: 'Finanzdaten',
+        prompt: `Firmenidentität:\n${identifikation}\n\n${vorhandeneZahlenText}\n\nRecherchiere Jahresabschlüsse der letzten 3-5 Jahre im Unternehmensregister/Bundesanzeiger sowie ergänzend im Handelsregister. Erfasse: Umsatz (falls veröffentlicht), Bilanzsumme, Eigenkapital, Jahresüberschuss, EBIT, EBITDA, Verbindlichkeiten, Rückstellungen, Mitarbeiterzahl. Vermerke, falls nur ein kleiner Abschluss (nur Bilanz) offengelegt ist — das ist normal, keine Lücke. Jede Angabe mit Quelle, Datum, Abrufdatum. Antworte auf Deutsch.`,
+      },
+      {
+        key: 'Markt & Wettbewerb',
+        prompt: `Firmenidentität:\n${identifikation}\n\nRecherchiere: Branche (WZ-Code), Marktgröße und -wachstum, 3-5 direkte Wettbewerber mit Größe, aktuelle Branchen-Multiplikatoren (EBIT-, EBITDA-, Umsatz-Multiple) für kleine und mittlere Unternehmen dieser Branche, jeweils mit Quelle und Stand. Antworte auf Deutsch.`,
+      },
+      {
+        key: 'Risiken & Reputation',
+        prompt: `Firmenidentität:\n${identifikation}\n\nRecherchiere: Nachrichten der letzten 3 Jahre, Insolvenz- oder Registerbekanntmachungen, Gesellschafter-/Geschäftsführerwechsel, Rechtsstreitigkeiten, Kunden-/Arbeitgeberbewertungen (nur Tendenz, keine Einzelzitate), erkennbare Abhängigkeit von wenigen Großkunden oder vom Inhaber, Saisongeschäft. Nur öffentliche Firmendaten, keine privaten Daten von Personen über Name und Funktion hinaus. Antworte auf Deutsch.`,
+      },
+      {
+        key: 'Zinsen & Parameter',
+        prompt: `Recherchiere den aktuellen Basiszins (Rendite langfristiger Bundesanleihen bzw. Zinsstrukturkurve der Deutschen Bundesbank), die übliche Marktrisikoprämie und übliche Zuschläge für kleine Unternehmen im deutschen Mittelstand, jeweils mit Quelle und Stand (Stichtag ${input.stichtag}). Antworte auf Deutsch.`,
+      },
+    ]
+    const agentErgebnisse = await Promise.all(
+      agentAuftraege.map((a) =>
+        callClaudeResearch(a.prompt, { model: 'claude-haiku-4-5-20251001', maxSearches: 4, maxTokens: 2048 })
+          .then((text) => `### ${a.key}\n${text}`)
+          .catch((err) => `### ${a.key}\nRecherche fehlgeschlagen: ${err instanceof Error ? err.message : String(err)}`),
+      ),
+    )
+    const rechercheGesamt = agentErgebnisse.join('\n\n')
+
+    await schreibe({ status: 'laeuft', schritt: 'Prüfung der Rechercheergebnisse' })
+    const pruefung = await callClaudeResearch(
+      `Du bist ein unabhängiger Prüf-Agent. Firmenidentität:\n${identifikation}\n\nPrüfe die folgenden Rechercheergebnisse kritisch gegen:
+- Öffne jede zitierte Quelle erneut und prüfe, ob der Wert dort wirklich so steht.
+- Prüfe, ob jede Quelle zur richtigen Firma gehört (Registernummer, Sitz).
+- Wichtige Zahlen (Umsatz, Ergebnis, Eigenkapital, Multiplikator) brauchen möglichst 2 unabhängige Quellen; Widersprüche auflisten, nicht still auflösen.
+- Markiere veraltete Daten (älter als 2 Jahre zum Stichtag ${input.stichtag}).
+- Intern bereits bestätigte Zahlen (siehe unten) nicht erneut recherchieren, nur auf Plausibilität gegen die Marktdaten prüfen.
+- Ergebnis je Angabe: bestätigt / abweichend / nicht prüfbar, mit Begründung.
+
+${vorhandeneZahlenText}
+
+Rechercheergebnisse:
+${rechercheGesamt}
+
+Antworte auf Deutsch als strukturierte Liste.`,
+      { model: 'claude-sonnet-5-5', maxSearches: 6, maxTokens: 3072 },
+    )
+
+    await schreibe({ status: 'laeuft', schritt: 'Bewertung wird erstellt' })
+    const bewertung = await callClaudeResearch(
+      `Du bist ein erfahrener Berater für Unternehmensbewertung im Mittelstand. Anlass: ${input.anlass}. Stichtag: ${input.stichtag}.
+
+Firmenidentität:
+${identifikation}
+
+Rechercheergebnisse:
+${rechercheGesamt}
+
+Prüfergebnis:
+${pruefung}
+
+${vorhandeneZahlenText}
+
+Erstelle daraus eine praxisnahe Kaufpreis-Schätzung:
+1. Bereinige Inhabergehalt (falls kein marktübliches Geschäftsführergehalt abgezogen ist) und Einmaleffekte — lege offen, was angepasst wurde.
+2. Leite aus den recherchierten Branchendaten einen Branchenmultiplikator ab (typisch 3-7) und begründe die Wahl.
+3. Leite aus Basiszins + Marktrisikoprämie + Zuschlag einen Kapitalisierungszins ab (typisch 8-12%).
+4. Rechne mit mindestens zwei Verfahren, nur wofür ausreichend Daten vorliegen — benenne explizit, welches Verfahren entfällt und warum: Multiplikatorverfahren (EBIT × Branchenmultiplikator), Ertragswertverfahren (nachhaltiger Jahresüberschuss ÷ (Kapitalisierungszins / 100)), Substanzwertverfahren (Substanzwert als Wertuntergrenze).
+5. Sensitivität: wie ändert sich der Wert bei ±1 Prozentpunkt Kapitalisierungszins und ±10% Ergebnis?
+6. Zeige das Ergebnis als Bandbreite (Minimum/Mittelwert/Maximum), niemals eine einzelne exakte Zahl.
+7. Liste Widersprüche/offene Fragen, die nur mit internen Unterlagen (BWA, Planung, Verträge) zu klären sind, sowie die Quellenliste.
+8. Schließe mit dem Hinweis: Ergebnis beruht auf öffentlichen Daten bzw. den übergebenen Angaben und ersetzt kein Gutachten eines Wirtschaftsprüfers oder Steuerberaters.
+
+Antworte auf Deutsch, klar und ohne Fachjargon, als vollständiger Bericht mit den Abschnitten Kurzfazit, Firmensteckbrief, Bewertungsrechnung, Sensitivität, Widersprüche/offene Fragen, Quellenliste, Hinweis.
+
+Gib GANZ AM ENDE zusätzlich einen einzelnen Codeblock mit reinem JSON zurück (danach nichts mehr), exakt in diesem Format, mit den von dir verwendeten Werten (null wenn ein Wert nicht ermittelbar war):
+\`\`\`json
+{"ebit": null, "substanzwert": null, "nachhaltigerJahresueberschuss": null, "branchenmultiplikator": null, "kapitalisierungszinsProzent": null}
+\`\`\``,
+      { model: 'claude-sonnet-5-5', maxSearches: 0, maxTokens: 4096 },
+    )
+
+    const jsonMatch = bewertung.match(/```json\s*([\s\S]*?)```/)
+    let abgeleiteteZahlen: Record<string, number | null> | undefined
+    if (jsonMatch) {
+      try {
+        abgeleiteteZahlen = JSON.parse(jsonMatch[1])
+      } catch {
+        abgeleiteteZahlen = undefined
+      }
+    }
+
+    await schreibe({ status: 'fertig', schritt: 'Fertig', bericht: bewertung, abgeleiteteZahlen, abgeschlossenAm: new Date().toISOString() })
+  } catch (err) {
+    console.error('Unternehmensbewertung-Recherche fehlgeschlagen:', err)
+    await schreibe({ status: 'fehler', fehler: err instanceof Error ? err.message : String(err), abgeschlossenAm: new Date().toISOString() }).catch(() => {})
+  }
 }
 
 // Beantwortet eine Frage zu einem per Copy/Paste im KI-Assistenten eingefügten Bild (z.B. ein
@@ -1623,7 +1818,31 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ listings }), { headers })
     }
 
-    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag" oder "firmenwissen_answer"' }), { status: 400, headers })
+    if (body.action === 'bewertung_recherche_start') {
+      const { bereich, kundeId, firma, webseite, anlass, stichtag, vorhandeneZahlen } = body
+      if (!bereich || !kundeId || !firma || !webseite || !anlass || !stichtag) {
+        return new Response(JSON.stringify({ error: 'bereich, kundeId, firma, webseite, anlass und stichtag sind Pflichtfelder' }), { status: 400, headers })
+      }
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const gestartetAm = new Date().toISOString()
+      const { error: startError } = await admin
+        .from('kunden')
+        .update({ unternehmensbewertung_recherche: { status: 'laeuft', schritt: 'Wird gestartet …', anlass, stichtag, gestartetAm } })
+        .eq('id', kundeId)
+        .eq('bereich', bereich)
+      if (startError) return new Response(JSON.stringify({ error: startError.message }), { status: 500, headers })
+
+      // EdgeRuntime ist in der Supabase-Edge-Function-Laufzeit global verfügbar (Background Tasks),
+      // aber nicht in den Deno-Typings deklariert.
+      // @ts-ignore
+      EdgeRuntime.waitUntil(
+        fuehreBewertungRechercheAus({ bereich, kundeId, firma, webseite, anlass, stichtag, vorhandeneZahlen: vorhandeneZahlen ?? {} }),
+      )
+
+      return new Response(JSON.stringify({ ok: true }), { headers })
+    }
+
+    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "bewertung_recherche_start" oder "firmenwissen_answer"' }), { status: 400, headers })
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }

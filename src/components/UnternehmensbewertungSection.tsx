@@ -1,9 +1,11 @@
-import { useState } from 'react'
-import { Save } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Loader2, Save, Sparkles } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { KUNDEN_BEREICHE } from '../data/kundenBereiche'
-import { Card, Field, inputClass, PrimaryButton } from './ui'
+import { Card, Field, inputClass, Modal, PrimaryButton, SecondaryButton } from './ui'
 import { fmtEUR, today } from '../lib/dates'
+import { supabase } from '../lib/supabaseClient'
+import { starteBewertungRecherche } from '../lib/emailGateway'
 import type { KundeBereich, Unternehmensbewertung } from '../types'
 
 function leererEntwurf(): Unternehmensbewertung {
@@ -47,12 +49,85 @@ export function UnternehmensbewertungSection({ bereich, kundeId }: { bereich: Ku
   const kunde = KUNDEN_BEREICHE.find((b) => b.id === bereich)!.get(state).find((k) => k.id === kundeId)
   const [entwurf, setEntwurf] = useState<Unternehmensbewertung>(kunde?.unternehmensbewertung ?? leererEntwurf())
   const [bearbeiten, setBearbeiten] = useState(!kunde?.unternehmensbewertung)
+  const [kostenModal, setKostenModal] = useState(false)
+  const [anlass, setAnlass] = useState('Nachfolge')
+  const [stichtag, setStichtag] = useState(today())
+  const [rechercheWirdGestartet, setRechercheWirdGestartet] = useState(false)
+  const [rechercheFehler, setRechercheFehler] = useState('')
+
+  const recherche = kunde?.unternehmensbewertungRecherche
+
+  // Pollt den Recherche-Status, während die Edge Function im Hintergrund weiterläuft (siehe
+  // email-gateway "bewertung_recherche_start") — kein Realtime im Projekt vorhanden, daher einfaches
+  // Intervall statt einer Subscription. Stoppt automatisch, sobald der Status nicht mehr "laeuft" ist.
+  useEffect(() => {
+    const client = supabase
+    if (!client || recherche?.status !== 'laeuft') return
+    const intervall = setInterval(async () => {
+      const { data } = await client
+        .from('kunden')
+        .select('unternehmensbewertung_recherche')
+        .eq('id', kundeId)
+        .eq('bereich', bereich)
+        .maybeSingle()
+      const frisch = data?.unternehmensbewertung_recherche
+      if (frisch && JSON.stringify(frisch) !== JSON.stringify(recherche)) {
+        dispatch({ type: 'UPDATE_KUNDE_IN_BEREICH', bereich, id: kundeId, patch: { unternehmensbewertungRecherche: frisch } })
+      }
+    }, 5000)
+    return () => clearInterval(intervall)
+  }, [recherche, bereich, kundeId, dispatch])
 
   if (!kunde) return null
 
   function speichern() {
     dispatch({ type: 'SET_UNTERNEHMENSBEWERTUNG', bereich, kundeId, bewertung: { ...entwurf, erstelltAm: today() } })
     setBearbeiten(false)
+  }
+
+  async function rechercheStarten() {
+    setKostenModal(false)
+    setRechercheWirdGestartet(true)
+    setRechercheFehler('')
+    try {
+      const vorhandeneZahlen: Record<string, number> = {}
+      if (entwurf.ebit !== undefined) vorhandeneZahlen.ebit = entwurf.ebit
+      if (entwurf.substanzwert !== undefined) vorhandeneZahlen.substanzwert = entwurf.substanzwert
+      if (entwurf.nachhaltigerJahresueberschuss !== undefined) vorhandeneZahlen.nachhaltigerJahresueberschuss = entwurf.nachhaltigerJahresueberschuss
+      await starteBewertungRecherche({
+        bereich,
+        kundeId,
+        firma: kunde!.firma,
+        webseite: entwurf.webseite ?? '',
+        anlass,
+        stichtag,
+        vorhandeneZahlen,
+      })
+      dispatch({
+        type: 'UPDATE_KUNDE_IN_BEREICH',
+        bereich,
+        id: kundeId,
+        patch: { unternehmensbewertungRecherche: { status: 'laeuft', schritt: 'Wird gestartet …', anlass, stichtag, gestartetAm: new Date().toISOString() } },
+      })
+    } catch (err) {
+      setRechercheFehler(err instanceof Error ? err.message : 'KI-Recherche konnte nicht gestartet werden.')
+    } finally {
+      setRechercheWirdGestartet(false)
+    }
+  }
+
+  function werteUebernehmen() {
+    if (!recherche?.abgeleiteteZahlen) return
+    const z = recherche.abgeleiteteZahlen
+    setEntwurf((x) => ({
+      ...x,
+      ebit: z.ebit ?? x.ebit,
+      substanzwert: z.substanzwert ?? x.substanzwert,
+      nachhaltigerJahresueberschuss: z.nachhaltigerJahresueberschuss ?? x.nachhaltigerJahresueberschuss,
+      branchenmultiplikator: z.branchenmultiplikator ?? x.branchenmultiplikator,
+      kapitalisierungszinsProzent: z.kapitalisierungszinsProzent ?? x.kapitalisierungszinsProzent,
+    }))
+    setBearbeiten(true)
   }
 
   const ergebnisse = berechneErgebnisse(bearbeiten ? entwurf : kunde.unternehmensbewertung ?? entwurf)
@@ -105,6 +180,9 @@ export function UnternehmensbewertungSection({ bereich, kundeId }: { bereich: Ku
             <Field label="Kapitalisierungszins (%)">
               <input type="number" step="0.5" className={inputClass} value={entwurf.kapitalisierungszinsProzent} onChange={(e) => setEntwurf((x) => ({ ...x, kapitalisierungszinsProzent: Number(e.target.value) || 0 }))} />
             </Field>
+            <Field label="Webseite der Firma (für KI-Recherche)">
+              <input type="text" placeholder="z. B. www.firma.de" className={inputClass} value={entwurf.webseite ?? ''} onChange={(e) => setEntwurf((x) => ({ ...x, webseite: e.target.value }))} />
+            </Field>
           </div>
           <Field label="Notizen">
             <textarea className={inputClass} rows={2} value={entwurf.notizen} onChange={(e) => setEntwurf((x) => ({ ...x, notizen: e.target.value }))} />
@@ -143,6 +221,67 @@ export function UnternehmensbewertungSection({ bereich, kundeId }: { bereich: Ku
           </ul>
         </Card>
       )}
+
+      <Card className="p-4">
+        <div className="mb-3 flex items-center justify-between">
+          <h4 className="flex items-center gap-1.5 text-sm font-semibold text-slate-700"><Sparkles size={14} className="text-accent-600" /> KI-Recherche</h4>
+        </div>
+        {rechercheFehler && <p className="mb-2 text-sm text-rose-600">{rechercheFehler}</p>}
+
+        {(!recherche || recherche.status === 'fertig' || recherche.status === 'fehler') && (
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Field label="Anlass">
+              <select className={inputClass} value={anlass} onChange={(e) => setAnlass(e.target.value)}>
+                <option>Nachfolge</option>
+                <option>Kauf</option>
+                <option>Beteiligung</option>
+              </select>
+            </Field>
+            <Field label="Stichtag">
+              <input type="date" className={inputClass} value={stichtag} onChange={(e) => setStichtag(e.target.value)} />
+            </Field>
+            <div className="flex items-end">
+              <SecondaryButton onClick={() => setKostenModal(true)} disabled={!entwurf.webseite || rechercheWirdGestartet} className="w-full justify-center">
+                {rechercheWirdGestartet ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                {recherche?.status === 'fertig' ? 'Erneut recherchieren' : recherche?.status === 'fehler' ? 'Erneut versuchen' : 'KI-Recherche starten'}
+              </SecondaryButton>
+            </div>
+            {!entwurf.webseite && <p className="sm:col-span-3 text-xs text-slate-400">Webseite der Firma oben im Bearbeiten-Modus hinterlegen, um die Recherche zu starten.</p>}
+          </div>
+        )}
+
+        {recherche?.status === 'laeuft' && (
+          <div className="flex items-center gap-2 text-sm text-slate-600">
+            <Loader2 size={16} className="animate-spin text-accent-600" />
+            {recherche.schritt ?? 'Recherche läuft …'}
+          </div>
+        )}
+
+        {recherche?.status === 'fehler' && recherche.fehler && (
+          <p className="mt-2 text-sm text-rose-600">Fehler: {recherche.fehler}</p>
+        )}
+
+        {recherche?.status === 'fertig' && recherche.bericht && (
+          <div className="mt-3 space-y-3">
+            {recherche.abgeleiteteZahlen && (
+              <SecondaryButton onClick={werteUebernehmen}><Save size={14} /> Vorgeschlagene Werte in den Rechner übernehmen</SecondaryButton>
+            )}
+            <div className="whitespace-pre-wrap rounded-lg bg-slate-50 p-3 text-sm text-slate-700">{recherche.bericht}</div>
+          </div>
+        )}
+      </Card>
+
+      <Modal open={kostenModal} onClose={() => setKostenModal(false)} title="KI-Recherche starten">
+        <p className="mb-4 text-sm text-slate-600">
+          Dies startet eine mehrstufige KI-Recherche (Firmenidentifikation, 5 Recherche-Agents, Prüfung,
+          Bewertung) mit echter Websuche. Geschätzte Kosten: <strong>ca. 0,50–1,50 € pro Durchlauf</strong> (echtes
+          Anthropic-API-Guthaben). Dauer: mehrere Minuten. Fortfahren?
+        </p>
+        <div className="flex justify-end gap-2">
+          <SecondaryButton onClick={() => setKostenModal(false)}>Abbrechen</SecondaryButton>
+          <PrimaryButton onClick={rechercheStarten}>Jetzt starten</PrimaryButton>
+        </div>
+      </Modal>
     </div>
   )
 }
