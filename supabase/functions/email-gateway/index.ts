@@ -506,7 +506,11 @@ async function callClaudeResearch(
     .filter((c: { type: string }) => c.type === 'text')
     .map((c: { text: string }) => c.text)
     .join('\n\n')
-  if (!text.trim()) throw new Error('Keine Textantwort von der Anthropic-API erhalten.')
+  if (!text.trim()) {
+    // stop_reason "max_tokens" heißt meist: zu viele Websuchen haben das Antwort-Token-Budget
+    // aufgebraucht, bevor überhaupt Text geschrieben wurde — dann hilft nur ein höheres maxTokens.
+    throw new Error(`Keine Textantwort von der Anthropic-API erhalten (stop_reason: ${data.stop_reason ?? 'unbekannt'}).`)
+  }
   return text
 }
 
@@ -790,7 +794,7 @@ async function fuehreBewertungRechercheAus(input: {
     await schreibe({ status: 'laeuft', schritt: 'Firmenidentifikation' })
     const identifikation = await callClaudeResearch(
       `Öffne die Webseite ${input.webseite} der Firma "${input.firma}" sowie deren Impressum. Halte fest: exakter Firmenname, Rechtsform, Sitz, Registergericht und HRB-/HRA-Nummer, Geschäftsführung, USt-ID. Antworte als kurzer Fließtext auf Deutsch, nur Fakten die du auf den geöffneten Seiten tatsächlich gefunden hast, fehlende Angaben als "nicht gefunden" kennzeichnen.`,
-      { model: 'claude-haiku-4-5-20251001', maxSearches: 3, maxTokens: 1024 },
+      { model: 'claude-haiku-4-5-20251001', maxSearches: 3, maxTokens: 2048 },
     )
 
     await schreibe({ status: 'laeuft', schritt: 'Recherche-Agents (Firmenprofil, Finanzdaten, Markt, Risiken, Zinsen)' })
@@ -818,7 +822,7 @@ async function fuehreBewertungRechercheAus(input: {
     ]
     const agentErgebnisse = await Promise.all(
       agentAuftraege.map((a) =>
-        callClaudeResearch(a.prompt, { model: 'claude-haiku-4-5-20251001', maxSearches: 4, maxTokens: 2048 })
+        callClaudeResearch(a.prompt, { model: 'claude-haiku-4-5-20251001', maxSearches: 4, maxTokens: 4096 })
           .then((text) => `### ${a.key}\n${text}`)
           .catch((err) => `### ${a.key}\nRecherche fehlgeschlagen: ${err instanceof Error ? err.message : String(err)}`),
       ),
@@ -841,7 +845,7 @@ Rechercheergebnisse:
 ${rechercheGesamt}
 
 Antworte auf Deutsch als strukturierte Liste.`,
-      { model: 'claude-sonnet-5-5', maxSearches: 6, maxTokens: 3072 },
+      { model: 'claude-sonnet-5-5', maxSearches: 6, maxTokens: 8192 },
     )
 
     await schreibe({ status: 'laeuft', schritt: 'Bewertung wird erstellt' })
@@ -869,13 +873,13 @@ Erstelle daraus eine praxisnahe Kaufpreis-Schätzung:
 7. Liste Widersprüche/offene Fragen, die nur mit internen Unterlagen (BWA, Planung, Verträge) zu klären sind, sowie die Quellenliste.
 8. Schließe mit dem Hinweis: Ergebnis beruht auf öffentlichen Daten bzw. den übergebenen Angaben und ersetzt kein Gutachten eines Wirtschaftsprüfers oder Steuerberaters.
 
-Antworte auf Deutsch, klar und ohne Fachjargon, als vollständiger Bericht mit den Abschnitten Kurzfazit, Firmensteckbrief, Bewertungsrechnung, Sensitivität, Widersprüche/offene Fragen, Quellenliste, Hinweis.
+Antworte auf Deutsch, klar und ohne Fachjargon, als Bericht mit den Abschnitten Kurzfazit, Firmensteckbrief, Bewertungsrechnung, Sensitivität, Widersprüche/offene Fragen, Quellenliste, Hinweis. WICHTIG: Fasse dich prägnant — insgesamt maximal ca. 700 Wörter Fließtext über alle Abschnitte zusammen, auch wenn die Datenlage unsicher ist oder viele Widersprüche vorliegen (dann die Unsicherheiten knapp stichpunktartig benennen statt sie einzeln auszubreiten). Der abschließende JSON-Block (siehe unten) MUSS in jedem Fall noch Platz haben und vollständig ausgegeben werden — das hat Vorrang vor Ausführlichkeit im Fließtext.
 
 Gib GANZ AM ENDE zusätzlich einen einzelnen Codeblock mit reinem JSON zurück (danach nichts mehr), exakt in diesem Format, mit den von dir verwendeten Werten (null wenn ein Wert nicht ermittelbar war):
 \`\`\`json
 {"ebit": null, "substanzwert": null, "nachhaltigerJahresueberschuss": null, "branchenmultiplikator": null, "kapitalisierungszinsProzent": null}
 \`\`\``,
-      { model: 'claude-sonnet-5-5', maxSearches: 0, maxTokens: 4096 },
+      { model: 'claude-sonnet-5-5', maxSearches: 0, maxTokens: 8192 },
     )
 
     const jsonMatch = bewertung.match(/```json\s*([\s\S]*?)```/)
