@@ -1160,6 +1160,89 @@ function docxText(bytes: Uint8Array): string {
     .trim()
 }
 
+const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+
+function istXlsx(name: string, typ?: string): boolean {
+  return /\.xlsx$/i.test(name) || typ === XLSX_MIME
+}
+
+function istCsv(name: string, typ?: string): boolean {
+  return /\.csv$/i.test(name) || typ === 'text/csv'
+}
+
+const xmlText = (t: string) =>
+  t.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n))).replace(/&amp;/g, '&')
+
+// Liest eine Excel-Datei (.xlsx = ZIP mit XML-Tabellenblättern) als Text: je Blatt eine Überschrift,
+// je Zeile die Zellen durch Tabulator getrennt, Spaltenpositionen bleiben erhalten. Formeln erscheinen
+// mit ihrem zuletzt gespeicherten Ergebnis. Das alte .xls-Format ist kein ZIP und wird nicht unterstützt.
+function xlsxText(bytes: Uint8Array, maxZeichen = 80_000): string {
+  const zip = unzipSync(bytes, { filter: (f) => /^xl\/(workbook\.xml|sharedStrings\.xml|styles\.xml|_rels\/workbook\.xml\.rels|worksheets\/[^/]+\.xml)$/.test(f.name) })
+  const lies = (name: string) => (zip[name] ? strFromU8(zip[name]) : '')
+  if (!zip['xl/workbook.xml']) throw new Error('keine Excel-Datei im .xlsx-Format')
+
+  const texte = [...lies('xl/sharedStrings.xml').matchAll(/<si>([\s\S]*?)<\/si>/g)].map((m) => xmlText([...m[1].matchAll(/<t(?:\s[^>]*)?>([^<]*)<\/t>/g)].map((t) => t[1]).join('')))
+
+  // Welche Zellformate sind Datumsformate? (Excel speichert ein Datum als laufende Tageszahl.)
+  const styles = lies('xl/styles.xml')
+  const eigeneFormate = new Map([...styles.matchAll(/<numFmt\s+numFmtId="(\d+)"\s+formatCode="([^"]*)"/g)].map((m) => [Number(m[1]), m[2]]))
+  const zellFormate = [...(styles.match(/<cellXfs[\s\S]*?<\/cellXfs>/)?.[0] ?? '').matchAll(/<xf\s[^>]*?numFmtId="(\d+)"/g)].map((m) => Number(m[1]))
+  const istDatum = (stil: number) => {
+    const id = zellFormate[stil]
+    if (id === undefined) return false
+    if ((id >= 14 && id <= 22) || (id >= 45 && id <= 47)) return true
+    const code = eigeneFormate.get(id)
+    return !!code && /[dmy]/i.test(code.replace(/"[^"]*"|\[[^\]]*\]/g, ''))
+  }
+
+  const ziele = new Map([...lies('xl/_rels/workbook.xml.rels').matchAll(/<Relationship\s[^>]*?Id="([^"]+)"[^>]*?Target="([^"]+)"|<Relationship\s[^>]*?Target="([^"]+)"[^>]*?Id="([^"]+)"/g)].map((m) => [m[1] ?? m[4], m[2] ?? m[3]]))
+  const blaetter = [...lies('xl/workbook.xml').matchAll(/<sheet\s[^>]*?name="([^"]*)"[^>]*?r:id="([^"]+)"/g)].map((m) => ({ name: xmlText(m[1]), pfad: `xl/${(ziele.get(m[2]) ?? '').replace(/^\/?xl\//, '').replace(/^\//, '')}` }))
+
+  const spalte = (ref: string) => [...ref.replace(/\d+/g, '')].reduce((n, c) => n * 26 + (c.charCodeAt(0) - 64), 0) - 1
+  const teile: string[] = []
+  for (const blatt of blaetter) {
+    const xml = lies(blatt.pfad)
+    if (!xml) continue
+    const zeilen: string[] = []
+    for (const z of xml.matchAll(/<row\s[^>]*>([\s\S]*?)<\/row>/g)) {
+      const zellen: string[] = []
+      for (const c of z[1].matchAll(/<c\s([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
+        const attr = c[1]
+        const inhalt = c[2] ?? ''
+        const ref = attr.match(/r="([A-Z]+\d+)"/)?.[1]
+        const typ = attr.match(/t="([^"]+)"/)?.[1]
+        const stil = Number(attr.match(/s="(\d+)"/)?.[1] ?? -1)
+        const v = inhalt.match(/<v>([^<]*)<\/v>/)?.[1]
+        let wert = ''
+        if (typ === 's') wert = texte[Number(v)] ?? ''
+        else if (typ === 'inlineStr') wert = xmlText([...inhalt.matchAll(/<t(?:\s[^>]*)?>([^<]*)<\/t>/g)].map((t) => t[1]).join(''))
+        else if (typ === 'b') wert = v === '1' ? 'ja' : 'nein'
+        else if (v !== undefined && typ !== 'str' && typ !== 'e' && stil >= 0 && istDatum(stil) && !Number.isNaN(Number(v))) {
+          wert = new Date(Math.round((Number(v) - 25569) * 86400000)).toISOString().slice(0, 10)
+        } else if (v !== undefined && typ !== 'str' && typ !== 'e' && !Number.isNaN(Number(v))) {
+          // Rechenungenauigkeiten wie 204549.59999999998 glätten, ohne echte Nachkommastellen zu verlieren.
+          wert = String(Math.round(Number(v) * 1e6) / 1e6)
+        } else wert = xmlText(v ?? '')
+        if (ref) zellen[spalte(ref)] = wert.replace(/[\t\n\r]+/g, ' ')
+        else zellen.push(wert)
+      }
+      const zeile = Array.from(zellen, (x) => x ?? '').join('\t').trimEnd()
+      if (zeile.trim()) zeilen.push(zeile)
+    }
+    teile.push(`=== Tabellenblatt: ${blatt.name} ===\n${zeilen.length > 0 ? zeilen.join('\n') : '(leer)'}`)
+  }
+  const text = teile.join('\n\n')
+  return text.length > maxZeichen ? `${text.slice(0, maxZeichen)}\n… (gekürzt: die Datei ist länger, als hier gelesen wurde)` : text
+}
+
+// Text einer Büro-Datei (Word, Excel, CSV) für die KI aufbereiten; null, wenn es keine solche Datei ist.
+function bueroDateiText(name: string, typ: string | undefined, bytes: Uint8Array, maxZeichen: number): string | null {
+  if (istDocx(name, typ)) return `Text der Word-Datei (eingebettete Bilder und Skizzen fehlen):\n\n${docxText(bytes).slice(0, maxZeichen)}`
+  if (istXlsx(name, typ)) return `Inhalt der Excel-Datei (Zellen einer Zeile durch Tabulator getrennt, Formeln mit ihrem gespeicherten Ergebnis):\n\n${xlsxText(bytes, maxZeichen)}`
+  if (istCsv(name, typ)) return `Inhalt der CSV-Datei:\n\n${new TextDecoder().decode(bytes).slice(0, maxZeichen)}`
+  return null
+}
+
 function base64NachBytes(b64: string): Uint8Array {
   const bin = atob(b64)
   const bytes = new Uint8Array(bin.length)
@@ -1223,8 +1306,11 @@ async function fuehreSteuerSchrittAus(bereich: string, kundeId: string, umleitun
       const gelesen: NonNullable<SteuerZustand['gelesen']> = []
       // Finanzunterlagen zuerst, dann Gesprächsprotokolle und Notizen (dort stehen oft Pläne, Fristen
       // und Zahlen aus dem Gespräch); zusammen höchstens sechs Dateien.
-      const finanz = dokumente.filter((d) => FINANZ_DATEI.test(d.name))
-      const kontext = dokumente.filter((d) => !FINANZ_DATEI.test(d.name) && KONTEXT_DATEI.test(d.name))
+      // Tabellen (Excel, CSV) gelten immer als Finanzunterlage — in einer Kundenakte sind das praktisch
+      // immer Auswertungen, Summenlisten oder Planungen, egal wie die Datei heißt.
+      const istFinanz = (d: { name: string; typ?: string }) => FINANZ_DATEI.test(d.name) || istXlsx(d.name, d.typ) || istCsv(d.name, d.typ)
+      const finanz = dokumente.filter(istFinanz)
+      const kontext = dokumente.filter((d) => !istFinanz(d) && KONTEXT_DATEI.test(d.name))
       const kandidaten = [...finanz, ...kontext]
       for (const d of dokumente.filter((d) => !kandidaten.includes(d))) {
         gelesen.push({ name: d.name, ergebnis: 'übersprungen', hinweis: 'dem Namen nach weder Finanzunterlage noch Gesprächsnotiz' })
@@ -1237,9 +1323,9 @@ async function fuehreSteuerSchrittAus(bereich: string, kundeId: string, umleitun
           try {
             const istPdf = /\.pdf$/i.test(d.name) || d.typ === 'application/pdf'
             const istBild = /\.(jpe?g|png|webp)$/i.test(d.name) || (d.typ ?? '').startsWith('image/')
-            const istWord = istDocx(d.name, d.typ)
-            if (!istPdf && !istBild && !istWord) {
-              gelesen.push({ name: d.name, ergebnis: 'nicht lesbar', hinweis: 'Dateityp kann nicht gelesen werden (nur PDF, Bilder und Word-Dateien im .docx-Format)' })
+            const istBuero = istDocx(d.name, d.typ) || istXlsx(d.name, d.typ) || istCsv(d.name, d.typ)
+            if (!istPdf && !istBild && !istBuero) {
+              gelesen.push({ name: d.name, ergebnis: 'nicht lesbar', hinweis: 'Dateityp kann nicht gelesen werden (lesbar sind PDF, Bilder, Word .docx, Excel .xlsx und CSV)' })
               return ''
             }
             const res = await fetch(d.url, { signal: AbortSignal.timeout(20_000) })
@@ -1250,8 +1336,8 @@ async function fuehreSteuerSchrittAus(bereich: string, kundeId: string, umleitun
               return ''
             }
             const mediaType = istPdf ? 'application/pdf' : d.typ && d.typ.startsWith('image/') ? d.typ : 'image/jpeg'
-            const block: ClaudeContentBlock = istWord
-              ? { type: 'text', text: `Text der Word-Datei (eingebettete Bilder und Skizzen fehlen):\n\n${docxText(bytes).slice(0, 80_000)}` }
+            const block: ClaudeContentBlock = istBuero
+              ? { type: 'text', text: bueroDateiText(d.name, d.typ, bytes, 80_000) ?? '' }
               : istPdf
                 ? { type: 'document', source: { type: 'base64', media_type: mediaType, data: bytesNachBase64(bytes) } }
                 : { type: 'image', source: { type: 'base64', media_type: mediaType, data: bytesNachBase64(bytes) } }
@@ -1487,8 +1573,9 @@ type KundenDokumentKlassifikation = {
 // eigentliche Zuordnung/ein etwaiges Neuanlegen passiert weiterhin im telegram-gateway, nie blind.
 async function classifyKundenDokument(mediaBase64: string, mediaType: string, dateiname: string): Promise<KundenDokumentKlassifikation> {
   const istPdf = mediaType === 'application/pdf'
-  const block: ClaudeContentBlock = istDocx(dateiname, mediaType)
-    ? { type: 'text', text: `Text der Word-Datei:\n\n${docxText(base64NachBytes(mediaBase64)).slice(0, 40_000)}` }
+  const bueroText = istDocx(dateiname, mediaType) || istXlsx(dateiname, mediaType) || istCsv(dateiname, mediaType) ? bueroDateiText(dateiname, mediaType, base64NachBytes(mediaBase64), 40_000) : null
+  const block: ClaudeContentBlock = bueroText
+    ? { type: 'text', text: bueroText }
     : istPdf
       ? { type: 'document', source: { type: 'base64', media_type: mediaType, data: mediaBase64 } }
       : { type: 'image', source: { type: 'base64', media_type: mediaType, data: mediaBase64 } }
