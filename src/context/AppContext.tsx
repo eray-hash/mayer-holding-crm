@@ -411,24 +411,7 @@ function appendKundeActivity(
 // komplett aus seinem bisherigen Bereichs-Array entfernen oder in ein anderes verschieben (anders
 // als appendKundeActivity oben, das nur innerhalb eines Bereichs patcht).
 function setKundenListe(state: AppData, bereich: KundeBereich, liste: Kunde[]): AppData {
-  switch (bereich) {
-    case 'beratung':
-      return { ...state, kunden: liste }
-    case 'erben':
-      return { ...state, erbenMandanten: liste }
-    case 'betriebsuebergabe':
-      return { ...state, betriebsuebergabeMandanten: liste }
-    case 'betriebsformen':
-      return { ...state, betriebsformenMandanten: liste }
-    case 'akademie':
-      return { ...state, akademieTeilnehmer: liste }
-    case 'finanzierungen':
-      return { ...state, finanzierungenMandanten: liste }
-    case 'privat':
-      return { ...state, privatKunden: liste }
-    default:
-      return state
-  }
+  return KUNDEN_BEREICHE.find((b) => b.id === bereich)!.set(state, liste)
 }
 
 function getKundenListe(state: AppData, bereich: KundeBereich): Kunde[] {
