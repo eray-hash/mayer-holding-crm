@@ -724,6 +724,8 @@ type PotenzialChance = {
   begruendung: string
   naechster_schritt: string
   prioritaet: 'Hoch' | 'Mittel' | 'Niedrig'
+  quellen?: string[]
+  annahmen?: string
 }
 
 // Beschreibung der sieben Leistungsbereiche der Holding als Wissensgrundlage für die
@@ -751,7 +753,9 @@ ${LEISTUNGSBEREICHE}
 CRM-Daten zum Kunden:
 """${kontext}"""
 
-Gib maximal drei konkrete, plausible Chancen zurück, sortiert nach Priorität (höchste zuerst). Schlage keine Chance im selben Bereich vor, in dem der Kunde ohnehin schon aktiv betreut wird, außer es gibt eine klar erkennbare zusätzliche Leistung. Jede Chance braucht: den passenden Bereich (exakt eine der sieben Bereichs-IDs oben, z. B. "erben"), einen kurzen prägnanten Titel, eine nachvollziehbare Begründung basierend auf den CRM-Daten (zwei bis drei Sätze, auf Deutsch, in einfacher und klarer Sprache ohne Anglizismen oder Fachjargon), einen konkreten nächsten Schritt, und eine Priorität (Hoch/Mittel/Niedrig). Wenn aus den Daten keine plausible Chance erkennbar ist, gib eine leere Liste zurück statt zu spekulieren.`,
+Gib maximal drei konkrete, plausible Chancen zurück, sortiert nach Priorität (höchste zuerst). Schlage keine Chance im selben Bereich vor, in dem der Kunde ohnehin schon aktiv betreut wird, außer es gibt eine klar erkennbare zusätzliche Leistung. Jede Chance braucht: den passenden Bereich (exakt eine der sieben Bereichs-IDs oben, z. B. "erben"), einen kurzen prägnanten Titel, eine nachvollziehbare Begründung basierend auf den CRM-Daten (zwei bis drei Sätze, auf Deutsch, in einfacher und klarer Sprache ohne Anglizismen oder Fachjargon), einen konkreten nächsten Schritt, und eine Priorität (Hoch/Mittel/Niedrig). Wenn aus den Daten keine plausible Chance erkennbar ist, gib eine leere Liste zurück statt zu spekulieren.
+
+Nachvollziehbarkeit: Jeder Eintrag der CRM-Daten trägt eine Kennung in eckigen Klammern (z. B. [S1], [A3], [D2], [P1], [R1]). Nenne zu jeder Chance unter quellen genau die Kennungen, auf die sich deine Begründung tatsächlich stützt — keine, die du nicht verwendet hast. Von Dokumenten kennst du nur den Dateinamen, nicht den Inhalt: stütze dich nicht auf vermuteten Inhalt. Benenne unter annahmen in ein bis zwei Sätzen ehrlich, was du nur vermutest oder aus einem Dateinamen bzw. einer kurzen Notiz geschlossen hast und was vor einem Gespräch mit dem Kunden geprüft werden sollte.`,
     {
       name: 'potenzial_analyse',
       description: 'Schlägt Cross-Sell-/Upsell-Chancen für einen Kunden in den Leistungsbereichen der Holding vor.',
@@ -768,14 +772,17 @@ Gib maximal drei konkrete, plausible Chancen zurück, sortiert nach Priorität (
                 begruendung: { type: 'string' },
                 naechster_schritt: { type: 'string' },
                 prioritaet: { type: 'string', enum: ['Hoch', 'Mittel', 'Niedrig'] },
+                quellen: { type: 'array', items: { type: 'string' }, description: 'Kennungen der CRM-Einträge, auf die sich die Begründung stützt, z. B. ["A2", "D1"].' },
+                annahmen: { type: 'string', description: 'Was hier nur vermutet oder geschlossen wurde und noch zu prüfen ist.' },
               },
-              required: ['bereich', 'titel', 'begruendung', 'naechster_schritt', 'prioritaet'],
+              required: ['bereich', 'titel', 'begruendung', 'naechster_schritt', 'prioritaet', 'quellen', 'annahmen'],
             },
           },
         },
         required: ['chancen'],
       },
     },
+    2048,
   )
 }
 

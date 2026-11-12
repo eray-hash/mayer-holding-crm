@@ -291,6 +291,7 @@ type Action =
   | { type: 'SET_KUNDE_PRIORITAET'; id: string; prioritaet: Prioritaet }
   | { type: 'ADD_RECHNUNG'; rechnung: Rechnung }
   | { type: 'UPDATE_RECHNUNG'; id: string; patch: Partial<Rechnung> }
+  | { type: 'DELETE_RECHNUNG'; id: string }
   | { type: 'ADD_PROTOKOLL'; protokoll: Protokoll }
   | { type: 'ADD_OBJEKT'; objekt: Objekt }
   | { type: 'UPDATE_OBJEKT'; id: string; patch: Partial<Objekt> }
@@ -493,6 +494,8 @@ function reducer(state: AppData, action: Action): AppData {
         ...state,
         rechnungen: state.rechnungen.map((r) => (r.id === action.id ? { ...r, ...action.patch } : r)),
       }
+    case 'DELETE_RECHNUNG':
+      return { ...state, rechnungen: state.rechnungen.filter((r) => r.id !== action.id) }
     case 'ADD_PROTOKOLL': {
       const activity = {
         id: uid('act'),

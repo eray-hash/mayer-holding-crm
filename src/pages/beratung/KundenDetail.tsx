@@ -24,6 +24,7 @@ import { LoeschenKundeButton } from '../../components/LoeschenKundeButton'
 import { SendEmailModal } from '../../components/SendEmailModal'
 import { FollowUpForm } from '../../components/FollowUpEditor'
 import type { Prioritaet } from '../../types'
+import { angezeigterStatus } from '../../lib/rechnungen'
 
 const TABS = [
   { id: 'uebersicht', label: 'Übersicht' },
@@ -201,7 +202,7 @@ export function KundenDetail() {
                   <td className="px-4 py-3 font-medium text-slate-700">{r.nummer}</td>
                   <td className="px-4 py-3 text-slate-500">{fmtDate(r.datum)}</td>
                   <td className="px-4 py-3 text-slate-700">{fmtEURCent(r.betragBrutto)}</td>
-                  <td className="px-4 py-3"><RechnungStatusBadge status={r.status} /></td>
+                  <td className="px-4 py-3"><RechnungStatusBadge status={angezeigterStatus(r)} /></td>
                 </tr>
               ))}
               {rechnungen.length === 0 && <tr><td colSpan={4} className="px-4 py-8 text-center text-slate-400">Keine Rechnungen.</td></tr>}
