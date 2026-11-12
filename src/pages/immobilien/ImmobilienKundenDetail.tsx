@@ -13,6 +13,7 @@ import { PotenzialAnalyseSection } from '../../components/PotenzialAnalyseSectio
 import { KaeuferprofilSection } from '../../components/KaeuferprofilSection'
 import { StammdatenWarnungBanner } from '../../components/StammdatenWarnungBanner'
 import { StammdatenKarte } from '../../components/StammdatenKarte'
+import { AktivitaetenTimeline } from '../../components/AktivitaetenTimeline'
 import { KundeHinweise } from '../../components/PruefHinweisBadge'
 import { SelbstauskunftSection } from '../../components/SelbstauskunftSection'
 import { NdaSection } from '../../components/NdaSection'
@@ -136,18 +137,7 @@ export function ImmobilienKundenDetail() {
           </Card>
           <Card className="p-5 lg:col-span-2">
             <h3 className="mb-3 text-sm font-semibold text-slate-700">Aktivitäten-Timeline</h3>
-            <ul className="space-y-3">
-              {kunde.activities.map((a) => (
-                <li key={a.id} className="flex gap-3 text-sm">
-                  <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-accent-400" />
-                  <div>
-                    <div className="text-slate-700">{a.text}</div>
-                    <div className="text-xs text-slate-400">{fmtDate(a.date)} · {a.user}</div>
-                  </div>
-                </li>
-              ))}
-              {kunde.activities.length === 0 && <EmptyState text="Keine Aktivitäten." />}
-            </ul>
+            <AktivitaetenTimeline bereich="immobilienkunden" kunde={kunde} />
           </Card>
 
           <ZugewieseneObjekte bereich="immobilienkunden" kundeId={kunde.id} />
