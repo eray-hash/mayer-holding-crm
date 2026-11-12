@@ -387,6 +387,17 @@ export async function starteBewertungRecherche(params: {
   await call({ action: 'bewertung_recherche_start', ...params })
 }
 
+// Startet die steuerliche Analyse eines Kunden (Unterlagen lesen, Firmen ermitteln, öffentliche
+// Abschlüsse und Rechtsstand prüfen, Vorschläge). Läuft auf dem Server weiter; Fortschritt und
+// Ergebnis stehen in kunden.steuer_analyse.
+export async function starteSteuerAnalyse(params: { bereich: string; kundeId: string; gestartetVon: string }): Promise<void> {
+  await call({ action: 'steuer_analyse_start', ...params })
+}
+
+export async function setzeSteuerAnalyseFort(params: { bereich: string; kundeId: string }): Promise<void> {
+  await call({ action: 'steuer_analyse_schritt', ...params })
+}
+
 export type UmfeldFund = { text: string; quelle_url?: string; sicherheit?: 'gesichert' | 'wahrscheinlich' | 'unsicher'; bereits_bekannt?: boolean }
 
 // Öffentliche Internet-Recherche über einen Kunden: weitere Firmen, Funktionen und Beteiligungen der

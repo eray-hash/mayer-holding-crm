@@ -497,7 +497,7 @@ async function callClaudeTool<T>(
 // zurück; etwaige Quellenangaben/strukturierte Zahlen bittet der jeweilige Prompt selbst als Teil
 // des Fließtexts aus (siehe z.B. abschließender ```json-Block der Bewertungssynthese).
 async function callClaudeResearch(
-  prompt: string,
+  prompt: string | ClaudeContentBlock[],
   opts: { model: 'claude-haiku-4-5-20251001' | 'claude-sonnet-5-5'; maxSearches: number; maxTokens?: number; timeoutMs?: number },
 ): Promise<string> {
   const apiKey = env('ANTHROPIC_API_KEY')
@@ -894,12 +894,12 @@ type RechercheZustand = {
   fehler?: string
 }
 
-async function stosseRechercheSchrittAn(bereich: string, kundeId: string, umleitungen = 0): Promise<void> {
+async function stosseRechercheSchrittAn(bereich: string, kundeId: string, umleitungen = 0, action = 'bewertung_recherche_schritt'): Promise<void> {
   const secret = Deno.env.get('CRM_SHARED_SECRET')
   await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/email-gateway`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', ...(secret ? { 'x-crm-secret': secret } : {}) },
-    body: JSON.stringify({ action: 'bewertung_recherche_schritt', bereich, kundeId, umleitungen }),
+    body: JSON.stringify({ action, bereich, kundeId, umleitungen }),
   }).catch((err) => console.error('Recherche-Schritt konnte nicht angestoßen werden:', err))
 }
 
@@ -1062,6 +1062,256 @@ Gib GANZ AM ENDE zusätzlich einen einzelnen Codeblock mit reinem JSON zurück (
       await schreibe({ versuch, laeuftSeit: null }).catch(() => {})
       await warteBisWorkerAbgeloestWird()
       await stosseRechercheSchrittAn(bereich, kundeId, 0)
+    } else {
+      await schreibe({
+        status: 'fehler',
+        laeuftSeit: null,
+        fehler: `Schritt „${schritt.titel}" ist auch nach drei Versuchen gescheitert: ${err instanceof Error ? err.message : String(err)}`,
+        abgeschlossenAm: new Date().toISOString(),
+      }).catch(() => {})
+    }
+  }
+}
+
+// ---------- Steuerliche Ansatzpunkte (Teil der Potenzial-Analyse) ----------
+//
+// Liest Finanzunterlagen aus der Akte (BWA, Jahresabschluss, …) tatsächlich inhaltlich, ermittelt
+// alle Firmen des Kunden samt öffentlich einsehbarer Abschlüsse, prüft den aktuellen Rechtsstand der
+// gängigen Gestaltungsmittel und leitet daraus Vorschläge zur Steuerersparnis (dauerhaft) und
+// Steuerverlagerung (zeitlich) ab. Läuft wie die Unternehmensbewertung als Kette einzelner Aufrufe
+// (Worker-Lebensdauer, siehe oben); der Zustand liegt in kunden.steuer_analyse und gehört dem Server.
+//
+// Das Ergebnis ist ausdrücklich KEINE Steuerberatung, sondern eine Vorbereitung für das Gespräch mit
+// dem Steuerberater — die Oberfläche sagt das, und jeder Vorschlag nennt seine Datengrundlage.
+const STEUER_SCHRITTE = [
+  { nr: 1, titel: 'Unterlagen aus der Akte lesen', bedarfMs: 110_000 },
+  { nr: 2, titel: 'Firmen des Kunden ermitteln', bedarfMs: 85_000 },
+  { nr: 3, titel: 'Öffentliche Abschlüsse und aktuelle Steuerregeln prüfen', bedarfMs: 110_000 },
+  { nr: 4, titel: 'Vorschläge erarbeiten', bedarfMs: 120_000 },
+]
+
+// Welche Dateien der Akte sind Finanz- oder Strukturunterlagen? Bewusst eine einfache, nachvollziehbare
+// Namensregel statt einer KI-Auswahl — die Oberfläche zeigt, was gelesen und was übersprungen wurde.
+const FINANZ_DATEI = /bwa|jahresabschluss|abschluss|bilanz|guv|gewinn|verlust|e[uü]r|einnahmen|summen|saldenliste|susa|kontennachweis|anlage(n|spiegel|verzeichnis)|steuer|bescheid|lohn|gehalt|betriebswirtschaft|struktur|finanz|kennzahl|planung|budget|liquidit/i
+
+type SteuerVorschlag = {
+  titel: string
+  art: 'Steuerersparnis' | 'Steuerverlagerung'
+  firma: string
+  massnahme: string
+  wirkung: string
+  voraussetzungen: string
+  haken: string
+  naechster_schritt: string
+  rechtsgrundlage: string
+  grundlage: string
+  belastbarkeit: 'hoch' | 'mittel' | 'niedrig'
+}
+
+type SteuerZustand = {
+  status: 'laeuft' | 'fertig' | 'fehler'
+  schritt?: string
+  schrittNr?: number
+  versuch?: number
+  laeuftSeit?: string | null
+  gestartetAm: string
+  gestartetVon?: string
+  aktualisiertAm?: string
+  abgeschlossenAm?: string
+  fehler?: string
+  zwischen?: { unterlagen?: string; firmen?: string; zahlen?: string; rechtsstand?: string }
+  gelesen?: { name: string; ergebnis: 'gelesen' | 'nicht lesbar' | 'übersprungen'; hinweis?: string }[]
+  zusammenfassung?: string
+  datenlage?: string
+  vorschlaege?: SteuerVorschlag[]
+  quellen?: string[]
+}
+
+function bytesNachBase64(bytes: Uint8Array): string {
+  let binaer = ''
+  for (let i = 0; i < bytes.length; i += 0x8000) binaer += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+  return btoa(binaer)
+}
+
+async function fuehreSteuerSchrittAus(bereich: string, kundeId: string, umleitungen: number): Promise<void> {
+  const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+  const { data } = await admin
+    .from('kunden')
+    .select('firma, ansprechpartner, email, activities, dokumente, unternehmensbewertung, steuer_analyse')
+    .eq('id', kundeId)
+    .eq('bereich', bereich)
+    .maybeSingle()
+  // deno-lint-ignore no-explicit-any
+  const kunde = data as any
+  const z = kunde?.steuer_analyse as SteuerZustand | null
+  if (!kunde || !z || z.status !== 'laeuft' || !z.schrittNr) return
+  const schritt = STEUER_SCHRITTE.find((x) => x.nr === z.schrittNr)
+  if (!schritt) return
+  if (z.laeuftSeit && Date.now() - new Date(z.laeuftSeit).getTime() < WORKER_LEBENSDAUER_MS) return
+
+  async function schreibe(patch: Partial<SteuerZustand>) {
+    Object.assign(z!, patch, { aktualisiertAm: new Date().toISOString() })
+    await admin.from('kunden').update({ steuer_analyse: z }).eq('id', kundeId).eq('bereich', bereich)
+  }
+
+  const rest = WORKER_LEBENSDAUER_MS - (Date.now() - WORKER_GEBOOTET)
+  if (rest < schritt.bedarfMs + 10_000 && umleitungen < 3) {
+    await schreibe({ schritt: schritt.titel })
+    await warteBisWorkerAbgeloestWird()
+    await stosseRechercheSchrittAn(bereich, kundeId, umleitungen + 1, 'steuer_analyse_schritt')
+    return
+  }
+  const timeoutMs = Math.max(20_000, rest - 12_000)
+  const heute = new Date().toISOString().slice(0, 10)
+  const person = kunde.ansprechpartner || kunde.firma
+  // deno-lint-ignore no-explicit-any
+  const dokumente: { name: string; url: string; typ?: string; groesse?: string }[] = (kunde.dokumente ?? []) as any[]
+
+  try {
+    await schreibe({ schritt: schritt.titel, laeuftSeit: new Date().toISOString() })
+
+    if (schritt.nr === 1) {
+      const gelesen: NonNullable<SteuerZustand['gelesen']> = []
+      const kandidaten = dokumente.filter((d) => FINANZ_DATEI.test(d.name))
+      for (const d of dokumente.filter((d) => !FINANZ_DATEI.test(d.name))) {
+        gelesen.push({ name: d.name, ergebnis: 'übersprungen', hinweis: 'dem Namen nach keine Finanz- oder Strukturunterlage' })
+      }
+      const zuLesen = kandidaten.slice(0, 5)
+      for (const d of kandidaten.slice(5)) gelesen.push({ name: d.name, ergebnis: 'übersprungen', hinweis: 'mehr als fünf Finanzunterlagen — nur die fünf neuesten wurden gelesen' })
+
+      const auszuege = await Promise.all(
+        zuLesen.map(async (d) => {
+          try {
+            const istPdf = /\.pdf$/i.test(d.name) || d.typ === 'application/pdf'
+            const istBild = /\.(jpe?g|png|webp)$/i.test(d.name) || (d.typ ?? '').startsWith('image/')
+            if (!istPdf && !istBild) {
+              gelesen.push({ name: d.name, ergebnis: 'nicht lesbar', hinweis: 'Dateityp kann nicht gelesen werden (nur PDF und Bilder)' })
+              return ''
+            }
+            const res = await fetch(d.url, { signal: AbortSignal.timeout(20_000) })
+            if (!res.ok) throw new Error(`Datei nicht abrufbar (${res.status})`)
+            const bytes = new Uint8Array(await res.arrayBuffer())
+            if (bytes.length > 15 * 1024 * 1024) {
+              gelesen.push({ name: d.name, ergebnis: 'nicht lesbar', hinweis: 'Datei größer als 15 MB' })
+              return ''
+            }
+            const mediaType = istPdf ? 'application/pdf' : d.typ && d.typ.startsWith('image/') ? d.typ : 'image/jpeg'
+            const block: ClaudeContentBlock = istPdf
+              ? { type: 'document', source: { type: 'base64', media_type: mediaType, data: bytesNachBase64(bytes) } }
+              : { type: 'image', source: { type: 'base64', media_type: mediaType, data: bytesNachBase64(bytes) } }
+            const text = await callClaudeResearch(
+              [
+                {
+                  type: 'text',
+                  text: `Lies dieses Dokument aus einer Kundenakte vollständig (Dateiname: "${d.name}"). Halte fest: Art des Dokuments, betroffene Firma oder Person, Zeitraum bzw. Stichtag, und alle steuerlich relevanten Zahlen und Angaben EXAKT wie im Dokument — soweit vorhanden: Umsatz, Material-/Wareneinsatz, Personalaufwand, Vergütung der Geschäftsführer, Abschreibungen, Zinsen, Ergebnis vor und nach Steuern, Steueraufwand, Anlagevermögen nach Gruppen, Vorräte, Forderungen, liquide Mittel, Eigenkapital, Rückstellungen (besonders Pensionsrückstellungen), Verbindlichkeiten, Gesellschafterdarlehen, Entnahmen/Ausschüttungen, Fahrzeuge, geplante Investitionen, Mitarbeiterzahl, Rechtsform, Beteiligungsverhältnisse und Firmenstruktur, außerdem alle handschriftlichen Anmerkungen. Was nicht im Dokument steht, lässt du weg — nichts schätzen, nichts ergänzen. Unleserliches kennzeichnest du als unleserlich. Antworte als kompakte Stichpunktliste auf Deutsch.`,
+                },
+                block,
+              ],
+              { model: 'claude-sonnet-5-5', maxSearches: 0, maxTokens: 2500, timeoutMs },
+            )
+            gelesen.push({ name: d.name, ergebnis: 'gelesen' })
+            return `### Unterlage aus der Akte: ${d.name}\n${text}`
+          } catch (err) {
+            gelesen.push({ name: d.name, ergebnis: 'nicht lesbar', hinweis: err instanceof Error ? err.message : String(err) })
+            return ''
+          }
+        }),
+      )
+      await schreibe({ zwischen: { ...z.zwischen, unterlagen: auszuege.filter(Boolean).join('\n\n') }, gelesen, schrittNr: 2, versuch: 0, laeuftSeit: null })
+    } else if (schritt.nr === 2) {
+      // deno-lint-ignore no-explicit-any
+      const notizen = ((kunde.activities ?? []) as any[]).slice(0, 15).map((a) => `- Notiz ${a.date}: ${a.text}`)
+      const firmen = await callClaudeResearch(
+        `${umfeldAuftrag({
+          person,
+          firma: kunde.firma,
+          email: kunde.email,
+          webseite: kunde.unternehmensbewertung?.webseite,
+          bekannt: [...notizen, ...dokumente.slice(0, 40).map((d) => `- Dokument: ${d.name}`), z.zwischen?.unterlagen ? `\nAus gelesenen Unterlagen der Akte:\n${z.zwischen.unterlagen.slice(0, 3000)}` : ''].join('\n'),
+        })}\n\nAntworte auf Deutsch als Liste der Firmen. Je Firma: genauer Name, Rechtsform, Sitz, Registernummer, Rolle der Person (Geschäftsführer, Gesellschafter mit Anteil falls bekannt), Branche, Status, Quelle (URL), Sicherheit der Zuordnung, und [NEU] oder [BEKANNT laut Akte].`,
+        { model: 'claude-haiku-4-5-20251001', maxSearches: 8, maxTokens: 4096, timeoutMs },
+      )
+      await schreibe({ zwischen: { ...z.zwischen, firmen }, schrittNr: 3, versuch: 0, laeuftSeit: null })
+    } else if (schritt.nr === 3) {
+      const [zahlen, rechtsstand] = await Promise.all([
+        callClaudeResearch(
+          `Für die folgenden Firmen eines Kunden sollen die öffentlich und kostenlos einsehbaren Finanzdaten zusammengetragen werden.\n\nFirmen:\n${z.zwischen?.firmen ?? '(keine ermittelt)'}\n\nSuche je Firma nach offengelegten Jahresabschlüssen und Kennzahlen in kostenlos zugänglichen Quellen: Unternehmensregister (unternehmensregister.de), Bundesanzeiger (bundesanzeiger.de), Handelsregister-Bekanntmachungen sowie frei einsehbare Firmenprofile (z. B. northdata.de, companyhouse.de, openregister.de, implisense.com). Keine kostenpflichtigen Abrufe. Erfasse je Firma und Geschäftsjahr, soweit veröffentlicht: Bilanzsumme, Anlagevermögen, Umlaufvermögen, Eigenkapital, Gewinn- oder Verlustvortrag, Jahresüberschuss/-fehlbetrag, Rückstellungen, Verbindlichkeiten, Umsatz, Mitarbeiterzahl, Größenklasse (Kleinst/klein/mittel), sowie ob überhaupt ein Abschluss veröffentlicht ist. Kleine Gesellschaften veröffentlichen oft nur eine verkürzte Bilanz — das vermerken, nicht als Lücke werten. Jede Zahl mit Quelle (URL) und Geschäftsjahr. Was du nicht findest, als "nicht veröffentlicht/nicht gefunden" kennzeichnen — nichts schätzen. Antworte auf Deutsch, je Firma ein Abschnitt.`,
+          { model: 'claude-haiku-4-5-20251001', maxSearches: 10, maxTokens: 4096, timeoutMs },
+        ).catch((err) => `Öffentliche Finanzdaten konnten nicht abgerufen werden: ${err instanceof Error ? err.message : String(err)}`),
+        callClaudeResearch(
+          `Prüfe den zum ${heute} in Deutschland geltenden Rechtsstand für diese steuerlichen Gestaltungsmittel und nenne je Mittel die aktuellen Werte, Grenzen und Fristen mit Quelle (URL, möglichst Gesetzestext, BMF, IHK, Steuerberaterkammer oder Haufe/DATEV):\n1. Investitionsabzugsbetrag nach § 7g EStG (Prozentsatz, Höchstbetrag, Gewinngrenze, Investitionsfrist, Rückgängigmachung) und Sonderabschreibung nach § 7g Abs. 5 EStG.\n2. Geringwertige Wirtschaftsgüter und Sammelposten (Grenzen).\n3. Degressive Abschreibung für bewegliche Wirtschaftsgüter (gilt sie aktuell, für welche Anschaffungszeiträume, welcher Satz) und Sonderregeln für Elektrofahrzeuge sowie die Dienstwagenbesteuerung von Elektro- und Hybridfahrzeugen.\n4. Steuerfreie oder pauschal versteuerte Arbeitgeberleistungen: Sachbezugsfreigrenze, Aufmerksamkeiten, Essenszuschuss, Jobticket/Deutschlandticket, Kindergartenzuschuss, Gesundheitsförderung, Erholungsbeihilfe, Internetpauschale, Überlassung von Fahrrädern und Elektrogeräten.\n5. Betriebliche Altersversorgung für Gesellschafter-Geschäftsführer: Direktversicherung (steuer- und sozialversicherungsfreie Höchstbeträge, aktuelle Beitragsbemessungsgrenze), Pensionszusage (Anerkennungsvoraussetzungen wie Erdienbarkeit, Probezeit, Angemessenheit), Unterstützungskasse, Pensionsfonds.\n6. Thesaurierung und Ausschüttung: Körperschaftsteuersatz (auch beschlossene künftige Änderungen), Thesaurierungsbegünstigung § 34a EStG, Option zur Körperschaftsbesteuerung § 1a KStG, Steuerfreistellung von Beteiligungserträgen und Veräußerungsgewinnen § 8b KStG.\n7. Rücklage nach § 6b EStG, Gewerbesteuer-Freibetrag und Anrechnung nach § 35 EStG, Verlustrücktrag und -vortrag (aktuelle Höchstbeträge).\nKennzeichne ausdrücklich, was du nicht sicher belegen konntest. Antworte auf Deutsch als nummerierte Liste.`,
+          { model: 'claude-haiku-4-5-20251001', maxSearches: 10, maxTokens: 4096, timeoutMs },
+        ).catch((err) => `Der aktuelle Rechtsstand konnte nicht geprüft werden: ${err instanceof Error ? err.message : String(err)}`),
+      ])
+      await schreibe({ zwischen: { ...z.zwischen, zahlen, rechtsstand }, schrittNr: 4, versuch: 0, laeuftSeit: null })
+    } else {
+      const antwort = await callClaudeResearch(
+        `Du bereitest für eine Beratungsholding ein Gespräch mit einem Mandanten und dessen Steuerberater vor. Aufgabe: konkrete Ansatzpunkte finden, wie der Mandant über ALLE seine Firmen hinweg Steuern sparen (dauerhaft) oder Steuern in spätere Jahre verlagern (zeitlich) kann. Heute ist der ${heute}.
+
+Mandant: ${person} (in der Akte geführt als "${kunde.firma}")
+
+1) Aus Unterlagen der Akte gelesen (BWA, Jahresabschluss, Strukturunterlagen):
+${z.zwischen?.unterlagen || '(Es lag keine lesbare Finanzunterlage in der Akte vor.)'}
+
+2) Firmen des Mandanten laut öffentlicher Recherche:
+${z.zwischen?.firmen || '(keine ermittelt)'}
+
+3) Öffentlich einsehbare Finanzdaten dieser Firmen:
+${z.zwischen?.zahlen || '(keine gefunden)'}
+
+4) Geprüfter aktueller Rechtsstand:
+${z.zwischen?.rechtsstand || '(nicht geprüft)'}
+
+Prüfe für jede Firma mindestens diese Ansätze und schlage nur vor, was zur jeweiligen Firma passt:
+- Investitionsabzugsbetrag (§ 7g EStG) für geplante Anschaffungen und Sonderabschreibung; Auflösung/Frist bestehender Abzugsbeträge.
+- Anschaffungen mit schneller Abschreibung (geringwertige Wirtschaftsgüter, Sammelposten, degressive Abschreibung, Elektrofahrzeuge), vorgezogene Instandhaltung und Aufwendungen vor dem Bilanzstichtag.
+- Vergütung an Mitarbeiter über steuerfreie oder pauschal versteuerte Leistungen statt Lohnerhöhung (Sachbezug, Essenszuschuss, Jobticket, Kindergartenzuschuss, Gesundheitsförderung, Fahrrad- und Geräteüberlassung).
+- Altersvorsorge der Geschäftsführer über die Firma (Direktversicherung, Pensionszusage, Unterstützungskasse) — Aufwand in der Firma, Vorteil beim Geschäftsführer.
+- Darüber hinaus alles, was du selbst aus den Zahlen und der Firmenstruktur ableitest, z. B.: Gewinn in der Holding belassen statt ausschütten, Steuerfreistellung von Beteiligungserträgen, Mischung aus Geschäftsführergehalt und Ausschüttung, Verrechnung von Verlusten zwischen den Firmen (Organschaft), Vermietung zwischen den Firmen und Risiken einer Betriebsaufspaltung, Rücklage nach § 6b EStG, Rückstellungen, Gewerbesteuer, Verlagerung von Einnahmen und Ausgaben über den Jahreswechsel.
+
+Regeln:
+- Jeder Vorschlag gehört zu genau einer Firma (oder "Mandant persönlich" bzw. "firmenübergreifend").
+- "wirkung": Rechne nur, wenn die nötigen Zahlen oben stehen, und zeige dann die Rechnung mit den verwendeten Zahlen. Sonst beschreibe die Wirkung in Worten und sage, welche Zahl für eine Rechnung fehlt. Erfinde keine Zahlen.
+- "grundlage": Nenne genau, worauf sich der Vorschlag stützt (welche Unterlage, welche veröffentlichte Zahl mit Jahr, welche Annahme).
+- "belastbarkeit": hoch nur, wenn er auf Zahlen aus Unterlagen der Akte beruht; mittel bei veröffentlichten Zahlen; niedrig, wenn er nur aus Branche und Struktur abgeleitet ist.
+- "rechtsgrundlage": Paragraf und der oben geprüfte aktuelle Wert. Wo der Rechtsstand nicht sicher belegt ist, schreibe das dazu.
+- "haken": ehrlich die Nachteile, Bindungen und Risiken (z. B. Verzinsung bei Rückgängigmachung, Liquiditätsabfluss, Anerkennung durch das Finanzamt, verdeckte Gewinnausschüttung).
+- Einfache, klare Sprache ohne englische Begriffe. Kurze Sätze.
+- Höchstens neun Vorschläge, die wichtigsten zuerst. Lieber wenige belastbare als viele allgemeine.
+
+Gib NUR einen einzelnen Codeblock mit reinem JSON zurück, exakt in dieser Form:
+\`\`\`json
+{"zusammenfassung": "drei bis fünf Sätze: Lage des Mandanten und die wichtigsten Hebel", "datenlage": "ein bis drei Sätze: wie gut die Zahlenbasis ist und was fehlt, um genauer zu werden", "vorschlaege": [{"titel": "", "art": "Steuerersparnis oder Steuerverlagerung", "firma": "", "massnahme": "", "wirkung": "", "voraussetzungen": "", "haken": "", "naechster_schritt": "", "rechtsgrundlage": "", "grundlage": "", "belastbarkeit": "hoch, mittel oder niedrig"}], "quellen": ["Titel – URL"]}
+\`\`\``,
+        { model: 'claude-sonnet-5-5', maxSearches: 0, maxTokens: 8192, timeoutMs },
+      )
+      const m = antwort.match(/```json\s*([\s\S]*?)```/) ?? antwort.match(/(\{[\s\S]*\})/)
+      if (!m) throw new Error('Die KI hat kein auswertbares Ergebnis geliefert.')
+      // deno-lint-ignore no-explicit-any
+      const ergebnis = JSON.parse(m[1]) as any
+      // deno-lint-ignore no-explicit-any
+      const vorschlaege: SteuerVorschlag[] = (Array.isArray(ergebnis.vorschlaege) ? ergebnis.vorschlaege : []).filter((v: any) => v?.titel && v?.massnahme).slice(0, 9)
+      await schreibe({
+        status: 'fertig',
+        schritt: 'Fertig',
+        schrittNr: undefined,
+        laeuftSeit: null,
+        zusammenfassung: String(ergebnis.zusammenfassung ?? ''),
+        datenlage: String(ergebnis.datenlage ?? ''),
+        vorschlaege,
+        quellen: Array.isArray(ergebnis.quellen) ? ergebnis.quellen.map(String).slice(0, 30) : [],
+        abgeschlossenAm: new Date().toISOString(),
+      })
+      return
+    }
+    await stosseRechercheSchrittAn(bereich, kundeId, 0, 'steuer_analyse_schritt')
+  } catch (err) {
+    console.error(`Steuer-Analyse, Schritt ${schritt.nr} fehlgeschlagen:`, err)
+    const versuch = (z.versuch ?? 0) + 1
+    if (versuch <= 2) {
+      await schreibe({ versuch, laeuftSeit: null }).catch(() => {})
+      await warteBisWorkerAbgeloestWird()
+      await stosseRechercheSchrittAn(bereich, kundeId, 0, 'steuer_analyse_schritt')
     } else {
       await schreibe({
         status: 'fehler',
@@ -2310,6 +2560,44 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ ok: true }), { headers })
     }
 
+    if (body.action === 'steuer_analyse_start') {
+      const { bereich, kundeId, gestartetVon } = body
+      if (!bereich || !kundeId) {
+        return new Response(JSON.stringify({ error: 'bereich und kundeId sind Pflichtfelder' }), { status: 400, headers })
+      }
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const gestartetAm = new Date().toISOString()
+      const { error: startError } = await admin
+        .from('kunden')
+        .update({
+          steuer_analyse: {
+            status: 'laeuft',
+            schritt: 'Wird gestartet …',
+            schrittNr: 1,
+            versuch: 0,
+            gestartetAm,
+            aktualisiertAm: gestartetAm,
+            gestartetVon: typeof gestartetVon === 'string' ? gestartetVon : '',
+            zwischen: {},
+          },
+        })
+        .eq('id', kundeId)
+        .eq('bereich', bereich)
+      if (startError) return new Response(JSON.stringify({ error: startError.message }), { status: 500, headers })
+      await stosseRechercheSchrittAn(bereich, kundeId, 0, 'steuer_analyse_schritt')
+      return new Response(JSON.stringify({ ok: true }), { headers })
+    }
+
+    if (body.action === 'steuer_analyse_schritt') {
+      const { bereich, kundeId, umleitungen } = body
+      if (!bereich || !kundeId) {
+        return new Response(JSON.stringify({ error: 'bereich und kundeId sind Pflichtfelder' }), { status: 400, headers })
+      }
+      // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
+      EdgeRuntime.waitUntil(fuehreSteuerSchrittAus(bereich, kundeId, Number(umleitungen) || 0))
+      return new Response(JSON.stringify({ ok: true }), { headers })
+    }
+
     // Führt den nächsten offenen Schritt einer laufenden Recherche aus (siehe fuehreRechercheSchrittAus).
     // Antwortet sofort und arbeitet im Hintergrund weiter. Auch vom Frontend aufrufbar, um eine
     // hängen gebliebene Recherche ab dem letzten fertigen Schritt fortzusetzen.
@@ -2323,7 +2611,7 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ ok: true }), { headers })
     }
 
-    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "bewertung_recherche_start", "bewertung_recherche_schritt", "kunden_umfeld_recherche" oder "firmenwissen_answer"' }), { status: 400, headers })
+    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "bewertung_recherche_start", "bewertung_recherche_schritt", "kunden_umfeld_recherche", "steuer_analyse_start", "steuer_analyse_schritt" oder "firmenwissen_answer"' }), { status: 400, headers })
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }

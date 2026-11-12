@@ -258,6 +258,40 @@ export type Kunde = {
   unternehmensbewertung?: Unternehmensbewertung
   unternehmensbewertungRecherche?: UnternehmensbewertungRecherche
   potenzialAnalyse?: PotenzialAnalyse
+  steuerAnalyse?: SteuerAnalyse
+}
+
+export type SteuerVorschlag = {
+  titel: string
+  art: 'Steuerersparnis' | 'Steuerverlagerung'
+  firma: string
+  massnahme: string
+  wirkung: string
+  voraussetzungen: string
+  haken: string
+  naechster_schritt: string
+  rechtsgrundlage: string
+  grundlage: string
+  belastbarkeit: 'hoch' | 'mittel' | 'niedrig'
+}
+
+// Steuerliche Ansatzpunkte eines Kunden über alle seine Firmen. Wird vom Server Schritt für Schritt
+// geschrieben (kunden.steuer_analyse) und im Browser nur gelesen — nie zurückgeschrieben.
+export type SteuerAnalyse = {
+  status: 'laeuft' | 'fertig' | 'fehler'
+  schritt?: string
+  schrittNr?: number
+  gestartetAm: string
+  gestartetVon?: string
+  aktualisiertAm?: string
+  abgeschlossenAm?: string
+  fehler?: string
+  gelesen?: { name: string; ergebnis: 'gelesen' | 'nicht lesbar' | 'übersprungen'; hinweis?: string }[]
+  zusammenfassung?: string
+  datenlage?: string
+  vorschlaege?: SteuerVorschlag[]
+  quellen?: string[]
+  zwischen?: { unterlagen?: string; firmen?: string; zahlen?: string; rechtsstand?: string }
 }
 
 // Ein Eintrag der Akte, der der KI für die Potenzial-Analyse vorlag — mit Kennung, damit jede

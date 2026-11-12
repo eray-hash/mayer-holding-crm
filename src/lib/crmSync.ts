@@ -131,6 +131,8 @@ function rowToKunde(row: any): Kunde {
     verknuepfteKunden: row.verknuepfte_kunden ?? undefined,
     unternehmensbewertungRecherche: row.unternehmensbewertung_recherche ?? undefined,
     potenzialAnalyse: row.potenzial_analyse ?? undefined,
+    // Nur lesen: steuer_analyse gehört dem Server (siehe email-gateway "steuer_analyse_schritt").
+    steuerAnalyse: row.steuer_analyse ?? undefined,
   }
 }
 
