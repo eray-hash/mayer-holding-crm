@@ -394,7 +394,9 @@ export async function starteSteuerAnalyse(params: { bereich: string; kundeId: st
   await call({ action: 'steuer_analyse_start', ...params })
 }
 
-export async function setzeSteuerAnalyseFort(params: { bereich: string; kundeId: string }): Promise<void> {
+// wiederaufnehmen: auch nach einem Fehler ab dem gescheiterten Schritt weitermachen (fertige Schritte
+// bleiben erhalten).
+export async function setzeSteuerAnalyseFort(params: { bereich: string; kundeId: string; wiederaufnehmen?: boolean }): Promise<void> {
   await call({ action: 'steuer_analyse_schritt', ...params })
 }
 

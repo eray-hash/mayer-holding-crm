@@ -498,7 +498,7 @@ async function callClaudeTool<T>(
 // des Fließtexts aus (siehe z.B. abschließender ```json-Block der Bewertungssynthese).
 async function callClaudeResearch(
   prompt: string | ClaudeContentBlock[],
-  opts: { model: 'claude-haiku-4-5-20251001' | 'claude-sonnet-5-5'; maxSearches: number; maxTokens?: number; timeoutMs?: number },
+  opts: { model: 'claude-haiku-4-5-20251001' | 'claude-sonnet-5-5'; maxSearches: number; maxTokens?: number; timeoutMs?: number; ohneNachdenken?: boolean },
 ): Promise<string> {
   const apiKey = env('ANTHROPIC_API_KEY')
   const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -514,6 +514,10 @@ async function callClaudeResearch(
     body: JSON.stringify({
       model: opts.model,
       max_tokens: opts.maxTokens ?? 4096,
+      // Sonnet denkt von sich aus vor der Antwort nach, und das zählt gegen max_tokens. Bei langen,
+      // strukturierten Antworten war das Kontingent schon fürs Nachdenken verbraucht — es kam gar kein
+      // Text zurück (stop_reason max_tokens). Damit steht das ganze Kontingent der Antwort zur Verfügung.
+      ...(opts.ohneNachdenken ? { thinking: { type: 'between_tools' } } : {}),
       ...(opts.maxSearches > 0
         ? { tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: opts.maxSearches }] }
         : {}),
@@ -1135,7 +1139,7 @@ function bytesNachBase64(bytes: Uint8Array): string {
   return btoa(binaer)
 }
 
-async function fuehreSteuerSchrittAus(bereich: string, kundeId: string, umleitungen: number): Promise<void> {
+async function fuehreSteuerSchrittAus(bereich: string, kundeId: string, umleitungen: number, wiederaufnehmen = false): Promise<void> {
   const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
   const { data } = await admin
     .from('kunden')
@@ -1146,6 +1150,15 @@ async function fuehreSteuerSchrittAus(bereich: string, kundeId: string, umleitun
   // deno-lint-ignore no-explicit-any
   const kunde = data as any
   const z = kunde?.steuer_analyse as SteuerZustand | null
+  // Nach einem Fehler ab dem gescheiterten Schritt weitermachen, statt die fertigen Schritte (und
+  // deren Kosten) zu wiederholen.
+  if (z && z.status === 'fehler' && z.schrittNr && wiederaufnehmen) {
+    z.status = 'laeuft'
+    z.versuch = 0
+    z.fehler = undefined
+    z.abgeschlossenAm = undefined
+    z.laeuftSeit = null
+  }
   if (!kunde || !z || z.status !== 'laeuft' || !z.schrittNr) return
   const schritt = STEUER_SCHRITTE.find((x) => x.nr === z.schrittNr)
   if (!schritt) return
@@ -1213,7 +1226,7 @@ async function fuehreSteuerSchrittAus(bereich: string, kundeId: string, umleitun
                 },
                 block,
               ],
-              { model: 'claude-sonnet-5-5', maxSearches: 0, maxTokens: 2500, timeoutMs },
+              { model: 'claude-sonnet-5-5', maxSearches: 0, maxTokens: 2500, timeoutMs, ohneNachdenken: true },
             )
             gelesen.push({ name: d.name, ergebnis: 'gelesen' })
             return `### Unterlage aus der Akte: ${d.name}\n${text}`
@@ -1284,12 +1297,13 @@ Regeln:
 - "haken": ehrlich die Nachteile, Bindungen und Risiken (z. B. Verzinsung bei Rückgängigmachung, Liquiditätsabfluss, Anerkennung durch das Finanzamt, verdeckte Gewinnausschüttung).
 - Einfache, klare Sprache ohne englische Begriffe. Kurze Sätze.
 - Höchstens neun Vorschläge, die wichtigsten zuerst. Lieber wenige belastbare als viele allgemeine.
+- Jedes Feld höchstens drei kurze Sätze, damit die Antwort vollständig bleibt.
 
 Gib NUR einen einzelnen Codeblock mit reinem JSON zurück, exakt in dieser Form:
 \`\`\`json
 {"zusammenfassung": "drei bis fünf Sätze: Lage des Mandanten und die wichtigsten Hebel", "datenlage": "ein bis drei Sätze: wie gut die Zahlenbasis ist und was fehlt, um genauer zu werden", "vorschlaege": [{"titel": "", "art": "Steuerersparnis oder Steuerverlagerung", "firma": "", "massnahme": "", "wirkung": "", "voraussetzungen": "", "haken": "", "naechster_schritt": "", "rechtsgrundlage": "", "grundlage": "", "belastbarkeit": "hoch, mittel oder niedrig"}], "quellen": ["Titel – URL"]}
 \`\`\``,
-        { model: 'claude-sonnet-5-5', maxSearches: 0, maxTokens: 8192, timeoutMs },
+        { model: 'claude-sonnet-5-5', maxSearches: 0, maxTokens: 8192, timeoutMs, ohneNachdenken: true },
       )
       const m = antwort.match(/```json\s*([\s\S]*?)```/) ?? antwort.match(/(\{[\s\S]*\})/)
       if (!m) throw new Error('Die KI hat kein auswertbares Ergebnis geliefert.')
@@ -2600,7 +2614,7 @@ Deno.serve(async (req: Request) => {
         return new Response(JSON.stringify({ error: 'bereich und kundeId sind Pflichtfelder' }), { status: 400, headers })
       }
       // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
-      EdgeRuntime.waitUntil(fuehreSteuerSchrittAus(bereich, kundeId, Number(umleitungen) || 0))
+      EdgeRuntime.waitUntil(fuehreSteuerSchrittAus(bereich, kundeId, Number(umleitungen) || 0, body.wiederaufnehmen === true))
       return new Response(JSON.stringify({ ok: true }), { headers })
     }
 

@@ -76,7 +76,11 @@ export function SteuerAnalyseSection({ bereich, kundeId }: { bereich: KundeBerei
   async function fortsetzen() {
     setFehler('')
     try {
-      await setzeSteuerAnalyseFort({ bereich, kundeId })
+      const nachFehler = analyse?.status === 'fehler'
+      await setzeSteuerAnalyseFort({ bereich, kundeId, wiederaufnehmen: nachFehler })
+      if (nachFehler && analyse) {
+        dispatch({ type: 'KUNDE_VOM_SERVER', bereich, id: kundeId, patch: { steuerAnalyse: { ...analyse, status: 'laeuft', fehler: undefined, aktualisiertAm: new Date().toISOString() } } })
+      }
       setJetzt(Date.now())
     } catch (err) {
       setFehler(err instanceof Error ? err.message : 'Die Steuer-Analyse konnte nicht fortgesetzt werden.')
@@ -138,7 +142,16 @@ export function SteuerAnalyseSection({ bereich, kundeId }: { bereich: KundeBerei
         </div>
       )}
 
-      {analyse?.status === 'fehler' && <p className="rounded-lg bg-rose-50 p-3 text-sm text-rose-600">Fehler: {analyse.fehler ?? 'unbekannt'}</p>}
+      {analyse?.status === 'fehler' && (
+        <div className="rounded-lg bg-rose-50 p-3 text-sm text-rose-600">
+          <p>Fehler: {analyse.fehler ?? 'unbekannt'}</p>
+          {analyse.schrittNr && (
+            <button onClick={fortsetzen} className="mt-2 rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-rose-700">
+              Ab Schritt {analyse.schrittNr} erneut versuchen (fertige Schritte bleiben erhalten)
+            </button>
+          )}
+        </div>
+      )}
 
       {analyse?.status === 'fertig' && (
         <div className="space-y-3">
