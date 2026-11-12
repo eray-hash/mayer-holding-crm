@@ -326,6 +326,10 @@ export type PotenzialAnalyse = {
   // Wie die Internet-Recherche ausging: 'ok' (auch bei null Funden), 'fehlgeschlagen', oder fehlend
   // bei Analysen von vor dem 12.11.2026, als noch gar nicht im Internet gesucht wurde.
   webRecherche?: 'ok' | 'fehlgeschlagen'
+  // Wie viele Dokumente der Akte mit ihrem Inhalt (Kurzfassung) in die Analyse eingingen und wie
+  // viele zum Zeitpunkt der Analyse noch eingelesen wurden. Fehlt bei älteren Analysen.
+  dokumenteMitInhalt?: number
+  dokumenteInArbeit?: number
 }
 
 export type Vorlage = {

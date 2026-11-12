@@ -400,6 +400,16 @@ export async function setzeSteuerAnalyseFort(params: { bereich: string; kundeId:
   await call({ action: 'steuer_analyse_schritt', ...params })
 }
 
+export type DokumentInhaltInfo = { url: string; status: 'gelesen' | 'laeuft' | 'ungelesen' | 'nicht lesbar' | 'fehler'; zusammenfassung: string; seiten: number | null }
+
+// Welche Dokumente einer Akte sind schon inhaltlich gelesen (mit Kurzfassung)? Mit einlesen=true wird
+// das Lesen der übrigen auf dem Server angestoßen (dauert je Dokument bis zu ein paar Minuten).
+export async function holeDokumentInhalte(dokumente: { url: string; name: string; typ?: string }[], einlesen = true): Promise<{ dokumente: DokumentInhaltInfo[]; angestossen: number }> {
+  if (dokumente.length === 0) return { dokumente: [], angestossen: 0 }
+  const data = await call({ action: 'dokument_inhalte', dokumente: dokumente.map((d) => ({ url: d.url, name: d.name, typ: d.typ })), einlesen })
+  return { dokumente: data.dokumente ?? [], angestossen: data.angestossen ?? 0 }
+}
+
 export type UmfeldFund = { text: string; quelle_url?: string; sicherheit?: 'gesichert' | 'wahrscheinlich' | 'unsicher'; bereits_bekannt?: boolean }
 
 // Öffentliche Internet-Recherche über einen Kunden: weitere Firmen, Funktionen und Beteiligungen der

@@ -205,6 +205,7 @@ import { simpleParser } from 'npm:mailparser@3'
 import nodemailer from 'npm:nodemailer@6'
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { unzipSync, strFromU8 } from 'npm:fflate@0.8.2'
+import { PDFDocument } from 'npm:pdf-lib@1.17.1'
 
 const ALLOWED_ORIGINS = [
   'https://eray-hash.github.io',
@@ -763,7 +764,7 @@ CRM-Daten zum Kunden:
 
 Gib maximal drei konkrete, plausible Chancen zurück, sortiert nach Priorität (höchste zuerst). Schlage keine Chance im selben Bereich vor, in dem der Kunde ohnehin schon aktiv betreut wird, außer es gibt eine klar erkennbare zusätzliche Leistung. Jede Chance braucht: den passenden Bereich (exakt eine der sieben Bereichs-IDs oben, z. B. "erben"), einen kurzen prägnanten Titel, eine nachvollziehbare Begründung basierend auf den CRM-Daten (zwei bis drei Sätze, auf Deutsch, in einfacher und klarer Sprache ohne Anglizismen oder Fachjargon), einen konkreten nächsten Schritt, und eine Priorität (Hoch/Mittel/Niedrig). Wenn aus den Daten keine plausible Chance erkennbar ist, gib eine leere Liste zurück statt zu spekulieren.
 
-Nachvollziehbarkeit: Jeder Eintrag der CRM-Daten trägt eine Kennung in eckigen Klammern (z. B. [S1], [A3], [D2], [P1], [R1]). Nenne zu jeder Chance unter quellen genau die Kennungen, auf die sich deine Begründung tatsächlich stützt — keine, die du nicht verwendet hast. Von Dokumenten kennst du nur den Dateinamen, nicht den Inhalt: stütze dich nicht auf vermuteten Inhalt. Einträge mit der Kennung [W…] stammen aus einer öffentlichen Internet-Recherche über den Kunden (weitere Firmen, Funktionen, Beteiligungen) und tragen eine Angabe zur Sicherheit; nutze sie ausdrücklich für deine Vorschläge, behandle "unsicher" gekennzeichnete Funde aber als zu prüfende Vermutung. Benenne unter annahmen in ein bis zwei Sätzen ehrlich, was du nur vermutest oder aus einem Dateinamen bzw. einer kurzen Notiz geschlossen hast und was vor einem Gespräch mit dem Kunden geprüft werden sollte.`,
+Nachvollziehbarkeit: Jeder Eintrag der CRM-Daten trägt eine Kennung in eckigen Klammern (z. B. [S1], [A3], [D2], [P1], [R1]). Nenne zu jeder Chance unter quellen genau die Kennungen, auf die sich deine Begründung tatsächlich stützt — keine, die du nicht verwendet hast. Zu Dokumenten liegt dir der Dateiname vor und — wo angegeben — eine Kurzfassung des Inhalts; steht dort "Inhalt lag nicht vor", kennst du nur den Namen: stütze dich nie auf vermuteten Inhalt. Einträge mit der Kennung [W…] stammen aus einer öffentlichen Internet-Recherche über den Kunden (weitere Firmen, Funktionen, Beteiligungen) und tragen eine Angabe zur Sicherheit; nutze sie ausdrücklich für deine Vorschläge, behandle "unsicher" gekennzeichnete Funde aber als zu prüfende Vermutung. Benenne unter annahmen in ein bis zwei Sätzen ehrlich, was du nur vermutest oder aus einem Dateinamen bzw. einer kurzen Notiz geschlossen hast und was vor einem Gespräch mit dem Kunden geprüft werden sollte.`,
     {
       name: 'potenzial_analyse',
       description: 'Schlägt Cross-Sell-/Upsell-Chancen für einen Kunden in den Leistungsbereichen der Holding vor.',
@@ -1078,6 +1079,242 @@ Gib GANZ AM ENDE zusätzlich einen einzelnen Codeblock mit reinem JSON zurück (
   }
 }
 
+// ---------- Dokumente inhaltlich lesen und den Inhalt aufbewahren ----------
+//
+// Jedes Dokument einer Akte wird EINMAL gelesen (Scans und Fotos per KI inkl. Handschrift, Word/Excel/
+// CSV direkt) und der Volltext samt Kurzfassung in der Tabelle dokument_inhalte abgelegt. Telegram-Bot
+// und Analysen greifen darauf zu, statt nur Dateinamen zu kennen oder jedes Mal neu zu lesen.
+// Schlüssel ist der Speicherort der Datei, nicht die Akte — der Inhalt bleibt also erhalten, wenn ein
+// Dokument in eine andere Akte umzieht. Die Tabelle ist nur für den Server zugänglich.
+//
+// Dokumente liegen an zwei Orten: Mail- und Telegram-Anhänge im Bucket "email-anhaenge" (url ist die
+// volle Adresse), im CRM hochgeladene Dateien im privaten Bucket "kunden-dokumente" (url ist der Pfad).
+const SEITEN_JE_TEIL = 8
+const MAX_TEILE = 8
+
+type DokumentRef = { url: string; name: string; typ?: string }
+type DokumentInhaltZeile = {
+  schluessel: string
+  name: string
+  status: 'laeuft' | 'gelesen' | 'fehler'
+  zusammenfassung: string | null
+  inhalt: string
+  teile: Record<string, string> | null
+  teile_gesamt: number | null
+  seiten: number | null
+  versuche: number
+  fehler: string | null
+  aktualisiert_am: string
+}
+
+function dokumentSchluessel(url: string): string {
+  const marker = '/object/public/'
+  if (/^https?:\/\//i.test(url)) return url.includes(marker) ? decodeURIComponent(url.split(marker)[1].split('?')[0]) : url
+  return `kunden-dokumente/${url}`
+}
+
+// deno-lint-ignore no-explicit-any
+async function ladeDokumentBytes(admin: any, url: string): Promise<Uint8Array> {
+  if (/^https?:\/\//i.test(url)) {
+    const res = await fetch(url, { signal: AbortSignal.timeout(25_000) })
+    if (!res.ok) throw new Error(`Datei nicht abrufbar (${res.status})`)
+    return new Uint8Array(await res.arrayBuffer())
+  }
+  const { data, error } = await admin.storage.from('kunden-dokumente').download(url)
+  if (error || !data) throw new Error(`Datei nicht abrufbar (${error?.message ?? 'unbekannt'})`)
+  return new Uint8Array(await data.arrayBuffer())
+}
+
+function lesbareArt(name: string, typ?: string): 'pdf' | 'bild' | 'buero' | null {
+  if (/\.pdf$/i.test(name) || typ === 'application/pdf') return 'pdf'
+  if (istDocx(name, typ) || istXlsx(name, typ) || istCsv(name, typ)) return 'buero'
+  if (/\.(jpe?g|png|webp|gif)$/i.test(name) || (typ ?? '').startsWith('image/')) return 'bild'
+  return null
+}
+
+const ABSCHRIFT_AUFTRAG = `Gib den Inhalt dieses Dokuments vollständig und wortgetreu als Text wieder, Seite für Seite (jede Seite beginnt mit einer Zeile "--- Seite n ---"). Tabellen als Zeilen mit " | " zwischen den Spalten. Zahlen, Namen, Daten und Beträge exakt wie im Dokument. Handschriftliches gibst du ebenfalls wieder und kennzeichnest es mit [handschriftlich: …]; was du nicht sicher lesen kannst, mit [unleserlich] oder [unsicher: …]. Stempel, Unterschriften und Skizzen beschreibst du kurz in eckigen Klammern. Nichts zusammenfassen, nichts weglassen, nichts ergänzen.
+
+Beginne deine Antwort mit genau diesen zwei Zeilen und danach einer Zeile "=====":
+ZUSAMMENFASSUNG: zwei bis drei Sätze — was für ein Dokument das ist, von wem an wen, welches Datum, die Kernaussage und die wichtigsten Zahlen.
+ART: die Dokumentart in ein bis drei Wörtern.`
+
+function trenneAbschrift(text: string): { zusammenfassung: string; inhalt: string } {
+  const [kopf, ...rest] = text.split(/\n={5,}\n?/)
+  if (rest.length === 0) return { zusammenfassung: '', inhalt: text.trim() }
+  const zus = kopf.match(/ZUSAMMENFASSUNG:\s*([\s\S]*?)(?:\nART:|$)/)?.[1]?.trim() ?? ''
+  const art = kopf.match(/ART:\s*(.+)/)?.[1]?.trim()
+  return { zusammenfassung: [art ? `${art}.` : '', zus].filter(Boolean).join(' '), inhalt: rest.join('\n=====\n').trim() }
+}
+
+async function stosseDokumentLesenAn(ref: DokumentRef, extra: Record<string, unknown> = {}): Promise<void> {
+  const secret = Deno.env.get('CRM_SHARED_SECRET')
+  await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/email-gateway`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...(secret ? { 'x-crm-secret': secret } : {}) },
+    body: JSON.stringify({ action: 'dokument_lesen', ...ref, ...extra }),
+  }).catch((err) => console.error('Dokument-Lesen konnte nicht angestoßen werden:', err))
+}
+
+// Liest ein Dokument (oder bei langen PDFs einen Teil davon) und legt das Ergebnis ab. Lange PDFs
+// werden in Teilen zu je SEITEN_JE_TEIL Seiten nacheinander gelesen — jeder Teil ist ein eigener
+// Aufruf mit eigener Laufzeit, und nacheinander statt parallel, damit sich die Teile beim Speichern
+// nicht gegenseitig überschreiben.
+async function leseDokument(ref: DokumentRef, teil: number, umleitungen: number): Promise<void> {
+  const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+  const schluessel = dokumentSchluessel(ref.url)
+  const art = lesbareArt(ref.name, ref.typ)
+  const { data: vorhandenRoh } = await admin.from('dokument_inhalte').select('*').eq('schluessel', schluessel).maybeSingle()
+  const vorhanden = vorhandenRoh as DokumentInhaltZeile | null
+  if (vorhanden?.status === 'gelesen') return
+  const jetztIso = () => new Date().toISOString()
+
+  if (!art) {
+    await admin.from('dokument_inhalte').upsert({ schluessel, name: ref.name, status: 'fehler', fehler: 'Dateityp kann nicht gelesen werden', versuche: 3, aktualisiert_am: jetztIso() })
+    return
+  }
+  // Ein neuer Lauf (teil 0) startet nur, wenn nicht gerade schon einer arbeitet.
+  if (teil === 0 && umleitungen === 0 && vorhanden?.status === 'laeuft' && Date.now() - new Date(vorhanden.aktualisiert_am).getTime() < 4 * 60 * 1000) return
+
+  const rest = WORKER_LEBENSDAUER_MS - (Date.now() - WORKER_GEBOOTET)
+  if (rest < 120_000 && umleitungen < 3) {
+    if (teil === 0) await admin.from('dokument_inhalte').upsert({ schluessel, name: ref.name, status: 'laeuft', versuche: vorhanden?.versuche ?? 0, aktualisiert_am: jetztIso() })
+    await warteBisWorkerAbgeloestWird()
+    await stosseDokumentLesenAn(ref, { teil, umleitungen: umleitungen + 1 })
+    return
+  }
+  const timeoutMs = Math.max(20_000, rest - 12_000)
+
+  try {
+    if (teil === 0) {
+      const { error: startFehler } = await admin.from('dokument_inhalte').upsert({
+        schluessel,
+        name: ref.name,
+        status: 'laeuft',
+        inhalt: '',
+        teile: null,
+        teile_gesamt: null,
+        fehler: null,
+        versuche: (vorhanden?.versuche ?? 0) + 1,
+        aktualisiert_am: jetztIso(),
+      })
+      // Ohne Ablageort (Tabelle fehlt oder nicht erreichbar) gar nicht erst lesen — das Ergebnis ginge verloren.
+      if (startFehler) throw new Error(`Ablage für Dokument-Inhalte nicht erreichbar: ${startFehler.message}`)
+    }
+    const bytes = await ladeDokumentBytes(admin, ref.url)
+    if (bytes.length > 20 * 1024 * 1024) throw new Error('Datei größer als 20 MB')
+
+    if (art === 'buero') {
+      const text = bueroDateiText(ref.name, ref.typ, bytes, 200_000) ?? ''
+      const zusammenfassung = await callClaudeResearch(
+        `Fasse in zwei bis drei Sätzen zusammen, was für ein Dokument das ist (Art, von wem, an wen oder worüber, Datum bzw. Zeitraum, Kernaussage und wichtigste Zahlen). Nur die Zusammenfassung, kein Vorspann.\n\nDateiname: ${ref.name}\n\n${text.slice(0, 12_000)}`,
+        { model: 'claude-haiku-4-5-20251001', maxSearches: 0, maxTokens: 400, timeoutMs },
+      ).catch(() => '')
+      await admin.from('dokument_inhalte').update({ status: 'gelesen', inhalt: text, zusammenfassung: zusammenfassung.trim(), aktualisiert_am: jetztIso() }).eq('schluessel', schluessel)
+      return
+    }
+
+    if (art === 'bild') {
+      const mediaType = ref.typ && ref.typ.startsWith('image/') ? ref.typ : /\.png$/i.test(ref.name) ? 'image/png' : /\.gif$/i.test(ref.name) ? 'image/gif' : /\.webp$/i.test(ref.name) ? 'image/webp' : 'image/jpeg'
+      const antwort = await callClaudeResearch(
+        [{ type: 'text', text: `${ABSCHRIFT_AUFTRAG}\n\nDateiname: ${ref.name}. Ist es kein Dokument, sondern ein Foto (z. B. von einem Gebäude) oder ein Logo, beschreibe kurz, was zu sehen ist.` }, { type: 'image', source: { type: 'base64', media_type: mediaType, data: bytesNachBase64(bytes) } }],
+        { model: 'claude-sonnet-5-5', maxSearches: 0, maxTokens: 4000, timeoutMs, ohneNachdenken: true },
+      )
+      await admin.from('dokument_inhalte').update({ status: 'gelesen', ...trenneAbschrift(antwort), seiten: 1, aktualisiert_am: jetztIso() }).eq('schluessel', schluessel)
+      return
+    }
+
+    // PDF
+    let seiten = 0
+    try {
+      seiten = (await PDFDocument.load(bytes, { ignoreEncryption: true })).getPageCount()
+    } catch {
+      seiten = 0 // beschädigt oder ungewöhnlich aufgebaut: als Ganzes versuchen
+    }
+    const teileGesamt = seiten > SEITEN_JE_TEIL + 2 ? Math.min(MAX_TEILE, Math.ceil(seiten / SEITEN_JE_TEIL)) : 1
+    let teilBytes = bytes
+    let bereich = ''
+    if (teileGesamt > 1) {
+      const von = teil * SEITEN_JE_TEIL
+      const bis = Math.min(seiten, von + SEITEN_JE_TEIL)
+      const quelle = await PDFDocument.load(bytes, { ignoreEncryption: true })
+      const ziel = await PDFDocument.create()
+      for (const seite of await ziel.copyPages(quelle, Array.from({ length: bis - von }, (_, i) => von + i))) ziel.addPage(seite)
+      teilBytes = await ziel.save()
+      bereich = ` Dir liegen die Seiten ${von + 1} bis ${bis} von insgesamt ${seiten} vor; nummeriere die Seiten entsprechend ab ${von + 1}.${teil > 0 ? ' Lass die Zeilen ZUSAMMENFASSUNG und ART leer, sie stehen schon beim ersten Teil.' : ''}`
+    }
+    const antwort = await callClaudeResearch(
+      [{ type: 'text', text: `${ABSCHRIFT_AUFTRAG}\n\nDateiname: ${ref.name}.${bereich}` }, { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: bytesNachBase64(teilBytes) } }],
+      { model: 'claude-sonnet-5-5', maxSearches: 0, maxTokens: 8192, timeoutMs, ohneNachdenken: true },
+    )
+    const abschrift = trenneAbschrift(antwort)
+
+    if (teileGesamt === 1) {
+      await admin.from('dokument_inhalte').update({ status: 'gelesen', ...abschrift, seiten: seiten || null, aktualisiert_am: jetztIso() }).eq('schluessel', schluessel)
+      return
+    }
+    const { data: aktuellRoh } = await admin.from('dokument_inhalte').select('teile, zusammenfassung').eq('schluessel', schluessel).maybeSingle()
+    // deno-lint-ignore no-explicit-any
+    const aktuell = aktuellRoh as any
+    const teile: Record<string, string> = { ...(aktuell?.teile ?? {}), [String(teil)]: abschrift.inhalt }
+    const fertig = teil + 1 >= teileGesamt
+    const abgeschnitten = seiten > MAX_TEILE * SEITEN_JE_TEIL ? `\n\n[Hinweis: Das Dokument hat ${seiten} Seiten; gelesen wurden die ersten ${MAX_TEILE * SEITEN_JE_TEIL}.]` : ''
+    await admin
+      .from('dokument_inhalte')
+      .update({
+        status: fertig ? 'gelesen' : 'laeuft',
+        teile: fertig ? null : teile,
+        teile_gesamt: teileGesamt,
+        seiten,
+        zusammenfassung: teil === 0 ? abschrift.zusammenfassung : aktuell?.zusammenfassung ?? '',
+        inhalt: fertig ? Array.from({ length: teileGesamt }, (_, i) => teile[String(i)] ?? '').join('\n\n') + abgeschnitten : '',
+        aktualisiert_am: jetztIso(),
+      })
+      .eq('schluessel', schluessel)
+    if (!fertig) await stosseDokumentLesenAn(ref, { teil: teil + 1, umleitungen: 0 })
+  } catch (err) {
+    console.error(`Dokument lesen fehlgeschlagen (${ref.name}, Teil ${teil}):`, err)
+    await admin
+      .from('dokument_inhalte')
+      .update({ status: 'fehler', fehler: err instanceof Error ? err.message : String(err), aktualisiert_am: jetztIso() })
+      .eq('schluessel', schluessel)
+  }
+}
+
+// Liefert zu einer Liste von Dokumenten, was schon gelesen ist, und stößt auf Wunsch das Lesen der
+// übrigen an (höchstens zwölf je Aufruf, damit nicht eine ganze Akte auf einmal Kosten auslöst).
+async function dokumentInhalte(dokumente: DokumentRef[], einlesen: boolean, volltext: boolean) {
+  const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+  const refs = dokumente.filter((d) => d?.url).slice(0, 200)
+  const schluessel = refs.map((d) => dokumentSchluessel(d.url))
+  const { data, error } = await admin.from('dokument_inhalte').select(volltext ? '*' : 'schluessel, status, zusammenfassung, seiten, versuche, fehler, aktualisiert_am').in('schluessel', schluessel)
+  if (error) throw new Error(`Dokument-Inhalte nicht lesbar: ${error.message}`)
+  // deno-lint-ignore no-explicit-any
+  const nach = new Map(((data ?? []) as any[]).map((z) => [z.schluessel, z]))
+  let angestossen = 0
+  const ergebnis = []
+  for (let i = 0; i < refs.length; i++) {
+    const zeile = nach.get(schluessel[i])
+    const lesbar = !!lesbareArt(refs[i].name, refs[i].typ)
+    let status: string = zeile?.status ?? (lesbar ? 'ungelesen' : 'nicht lesbar')
+    const haengt = zeile?.status === 'laeuft' && Date.now() - new Date(zeile.aktualisiert_am).getTime() > 6 * 60 * 1000
+    const darfNochmal = (zeile?.status === 'fehler' && (zeile.versuche ?? 0) < 3) || haengt
+    if (einlesen && lesbar && (!zeile || darfNochmal) && angestossen < 12) {
+      await stosseDokumentLesenAn(refs[i])
+      angestossen++
+      status = 'laeuft'
+    }
+    ergebnis.push({
+      url: refs[i].url,
+      status,
+      zusammenfassung: zeile?.zusammenfassung ?? '',
+      seiten: zeile?.seiten ?? null,
+      fehler: zeile?.status === 'fehler' ? zeile.fehler : undefined,
+      ...(volltext ? { inhalt: zeile?.inhalt ?? '' } : {}),
+    })
+  }
+  return { dokumente: ergebnis, angestossen }
+}
+
 // ---------- Steuerliche Ansatzpunkte (Teil der Potenzial-Analyse) ----------
 //
 // Liest Finanzunterlagen aus der Akte (BWA, Jahresabschluss, …) tatsächlich inhaltlich, ermittelt
@@ -1098,6 +1335,8 @@ const STEUER_SCHRITTE = [
 // Welche Dateien der Akte sind Finanz- oder Strukturunterlagen? Bewusst eine einfache, nachvollziehbare
 // Namensregel statt einer KI-Auswahl — die Oberfläche zeigt, was gelesen und was übersprungen wurde.
 const FINANZ_DATEI = /bwa|jahresabschluss|abschluss|bilanz|guv|gewinn|verlust|e[uü]r|einnahmen|summen|saldenliste|susa|kontennachweis|anlage(n|spiegel|verzeichnis)|steuer|bescheid|lohn|gehalt|betriebswirtschaft|struktur|finanz|kennzahl|planung|budget|liquidit/i
+
+const STEUER_LESEAUFTRAG = (dateiname: string) => `Lies dieses Dokument aus einer Kundenakte vollständig (Dateiname: "${dateiname}"). Halte fest: Art des Dokuments, betroffene Firma oder Person, Zeitraum bzw. Stichtag, und alle steuerlich relevanten Zahlen und Angaben EXAKT wie im Dokument — soweit vorhanden: Umsatz, Material-/Wareneinsatz, Personalaufwand, Vergütung der Geschäftsführer, Abschreibungen, Zinsen, Ergebnis vor und nach Steuern, Steueraufwand, Anlagevermögen nach Gruppen, Vorräte, Forderungen, liquide Mittel, Eigenkapital, Rückstellungen (besonders Pensionsrückstellungen), Verbindlichkeiten, Gesellschafterdarlehen, Entnahmen/Ausschüttungen, Fahrzeuge, geplante Investitionen, Mitarbeiterzahl, Rechtsform, Beteiligungsverhältnisse und Firmenstruktur, außerdem alle handschriftlichen Anmerkungen. Was nicht im Dokument steht, lässt du weg — nichts schätzen, nichts ergänzen. Unleserliches kennzeichnest du als unleserlich. Antworte als kompakte Stichpunktliste auf Deutsch.`
 
 const KONTEXT_DATEI = /protokoll|notiz|gespr[aä]e?ch|to-?do|memo|vermerk|aufnahme/i
 
@@ -1316,6 +1555,10 @@ async function fuehreSteuerSchrittAus(bereich: string, kundeId: string, umleitun
         gelesen.push({ name: d.name, ergebnis: 'übersprungen', hinweis: 'dem Namen nach weder Finanzunterlage noch Gesprächsnotiz' })
       }
       const zuLesen = kandidaten.slice(0, 6)
+      // Was schon einmal vollständig gelesen wurde, wird nicht erneut aus der Datei gelesen.
+      const { data: inhaltZeilen } = await admin.from('dokument_inhalte').select('schluessel, inhalt').eq('status', 'gelesen').in('schluessel', zuLesen.map((d) => dokumentSchluessel(d.url)))
+      // deno-lint-ignore no-explicit-any
+      const gespeicherteInhalte = new Map<string, string>(((inhaltZeilen ?? []) as any[]).filter((r) => r.inhalt).map((r) => [r.schluessel, r.inhalt]))
       for (const d of kandidaten.slice(6)) gelesen.push({ name: d.name, ergebnis: 'übersprungen', hinweis: 'mehr als sechs passende Unterlagen — nur die ersten sechs wurden gelesen' })
 
       const auszuege = await Promise.all(
@@ -1328,9 +1571,16 @@ async function fuehreSteuerSchrittAus(bereich: string, kundeId: string, umleitun
               gelesen.push({ name: d.name, ergebnis: 'nicht lesbar', hinweis: 'Dateityp kann nicht gelesen werden (lesbar sind PDF, Bilder, Word .docx, Excel .xlsx und CSV)' })
               return ''
             }
-            const res = await fetch(d.url, { signal: AbortSignal.timeout(20_000) })
-            if (!res.ok) throw new Error(`Datei nicht abrufbar (${res.status})`)
-            const bytes = new Uint8Array(await res.arrayBuffer())
+            const gespeichert = gespeicherteInhalte.get(dokumentSchluessel(d.url))
+            if (gespeichert) {
+              const text = await callClaudeResearch(
+                `${STEUER_LESEAUFTRAG(d.name)}\n\nVollständige Abschrift des Dokuments:\n\n${gespeichert.slice(0, 120_000)}`,
+                { model: 'claude-sonnet-5-5', maxSearches: 0, maxTokens: 2500, timeoutMs, ohneNachdenken: true },
+              )
+              gelesen.push({ name: d.name, ergebnis: 'gelesen' })
+              return `### Unterlage aus der Akte: ${d.name}\n${text}`
+            }
+            const bytes = await ladeDokumentBytes(admin, d.url)
             if (bytes.length > 15 * 1024 * 1024) {
               gelesen.push({ name: d.name, ergebnis: 'nicht lesbar', hinweis: 'Datei größer als 15 MB' })
               return ''
@@ -1345,7 +1595,7 @@ async function fuehreSteuerSchrittAus(bereich: string, kundeId: string, umleitun
               [
                 {
                   type: 'text',
-                  text: `Lies dieses Dokument aus einer Kundenakte vollständig (Dateiname: "${d.name}"). Halte fest: Art des Dokuments, betroffene Firma oder Person, Zeitraum bzw. Stichtag, und alle steuerlich relevanten Zahlen und Angaben EXAKT wie im Dokument — soweit vorhanden: Umsatz, Material-/Wareneinsatz, Personalaufwand, Vergütung der Geschäftsführer, Abschreibungen, Zinsen, Ergebnis vor und nach Steuern, Steueraufwand, Anlagevermögen nach Gruppen, Vorräte, Forderungen, liquide Mittel, Eigenkapital, Rückstellungen (besonders Pensionsrückstellungen), Verbindlichkeiten, Gesellschafterdarlehen, Entnahmen/Ausschüttungen, Fahrzeuge, geplante Investitionen, Mitarbeiterzahl, Rechtsform, Beteiligungsverhältnisse und Firmenstruktur, außerdem alle handschriftlichen Anmerkungen. Was nicht im Dokument steht, lässt du weg — nichts schätzen, nichts ergänzen. Unleserliches kennzeichnest du als unleserlich. Antworte als kompakte Stichpunktliste auf Deutsch.`,
+                  text: STEUER_LESEAUFTRAG(d.name),
                 },
                 block,
               ],
@@ -2706,6 +2956,20 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ ok: true }), { headers })
     }
 
+    if (body.action === 'dokument_lesen') {
+      const { url, name, typ } = body
+      if (!url || !name) return new Response(JSON.stringify({ error: 'url und name sind Pflichtfelder' }), { status: 400, headers })
+      // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
+      EdgeRuntime.waitUntil(leseDokument({ url: String(url), name: String(name), typ: typeof typ === 'string' ? typ : undefined }, Number(body.teil) || 0, Number(body.umleitungen) || 0))
+      return new Response(JSON.stringify({ ok: true }), { headers })
+    }
+
+    if (body.action === 'dokument_inhalte') {
+      if (!Array.isArray(body.dokumente)) return new Response(JSON.stringify({ error: 'dokumente ist ein Pflichtfeld' }), { status: 400, headers })
+      const ergebnis = await dokumentInhalte(body.dokumente, body.einlesen === true, body.volltext === true)
+      return new Response(JSON.stringify(ergebnis), { headers })
+    }
+
     if (body.action === 'steuer_analyse_start') {
       const { bereich, kundeId, gestartetVon } = body
       if (!bereich || !kundeId) {
@@ -2757,7 +3021,7 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ ok: true }), { headers })
     }
 
-    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "bewertung_recherche_start", "bewertung_recherche_schritt", "kunden_umfeld_recherche", "steuer_analyse_start", "steuer_analyse_schritt" oder "firmenwissen_answer"' }), { status: 400, headers })
+    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "bewertung_recherche_start", "bewertung_recherche_schritt", "kunden_umfeld_recherche", "steuer_analyse_start", "steuer_analyse_schritt", "dokument_lesen", "dokument_inhalte" oder "firmenwissen_answer"' }), { status: 400, headers })
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }

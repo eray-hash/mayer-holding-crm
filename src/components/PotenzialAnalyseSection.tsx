@@ -4,7 +4,7 @@ import { useApp } from '../context/AppContext'
 import { KUNDEN_BEREICHE } from '../data/kundenBereiche'
 import { getStatusMap } from '../data/statusNetworks'
 import { CURRENT_USER } from '../data/constants'
-import { analysierePotenzial, rechercheKundenUmfeld } from '../lib/emailGateway'
+import { analysierePotenzial, rechercheKundenUmfeld, holeDokumentInhalte, type DokumentInhaltInfo } from '../lib/emailGateway'
 import { akteWissen } from '../lib/akteWissen'
 import { SteuerAnalyseSection } from './SteuerAnalyseSection'
 import { Card, PrimaryButton, PriorityBadge, EmptyState } from './ui'
@@ -59,8 +59,14 @@ export function PotenzialAnalyseSection({ bereich, kundeId, kundeName }: { berei
     dispatch({ type: 'UPDATE_KUNDE_IN_BEREICH', bereich, id: kundeId, patch: { potenzialAnalyse: neu } })
   }
 
-  function sammleQuellen(): PotenzialQuelle[] {
+  function sammleQuellen(inhalte: Map<string, DokumentInhaltInfo>): PotenzialQuelle[] {
     if (!kunde) return []
+    const inhaltVermerk = (url: string) => {
+      const i = inhalte.get(url)
+      if (i?.status === 'gelesen') return i.zusammenfassung ? ` — Inhalt: ${i.zusammenfassung}` : ' — Inhalt gelesen'
+      if (i?.status === 'laeuft') return ' — Inhalt wird gerade eingelesen, lag noch nicht vor'
+      return ' — Inhalt lag nicht vor, nur der Dateiname'
+    }
     const statusLabel = getStatusMap(bereich)[kunde.status]?.label ?? kunde.status
     const protokolle = state.protokolle.filter((p) => p.bereich === bereich && p.kundeId === kundeId)
     const rechnungen = state.rechnungen.filter((r) => r.kundeId === kundeId)
@@ -71,7 +77,7 @@ export function PotenzialAnalyseSection({ bereich, kundeId, kundeName }: { berei
         text: `${kunde.firma}${kunde.ansprechpartner && kunde.ansprechpartner !== kunde.firma ? ` (${kunde.ansprechpartner})` : ''} · Bereich ${BEREICH_LABELS[bereich] ?? bereich} · Status ${statusLabel} · Priorität ${kunde.prioritaet}`,
       },
       ...kunde.activities.slice(0, 20).map((a, i): PotenzialQuelle => ({ id: `A${i + 1}`, art: 'Aktivität', text: `${fmtDate(a.date)}: ${a.text}` })),
-      ...(kunde.dokumente ?? []).slice(0, 40).map((d, i): PotenzialQuelle => ({ id: `D${i + 1}`, art: 'Dokument', text: `${d.name} (abgelegt ${fmtDate(d.datum)})` })),
+      ...(kunde.dokumente ?? []).slice(0, 40).map((d, i): PotenzialQuelle => ({ id: `D${i + 1}`, art: 'Dokument', text: `${d.name} (abgelegt ${fmtDate(d.datum)})${inhaltVermerk(d.url ?? '')}` })),
       ...protokolle.map((p, i): PotenzialQuelle => ({ id: `P${i + 1}`, art: 'Gesprächsprotokoll', text: `${fmtDate(p.datum)} „${p.betreff}": ${p.kiZusammenfassung ?? p.text}` })),
       ...rechnungen.map((r, i): PotenzialQuelle => ({
         id: `R${i + 1}`,
@@ -111,8 +117,16 @@ export function PotenzialAnalyseSection({ bereich, kundeId, kundeName }: { berei
       } catch {
         webRecherche = 'fehlgeschlagen'
       }
+      // Kurzfassungen der schon gelesenen Dokumente holen; das Lesen der übrigen läuft dabei an.
+      let inhalte = new Map<string, DokumentInhaltInfo>()
+      try {
+        const r = await holeDokumentInhalte((kunde.dokumente ?? []).slice(0, 40).flatMap((d) => (d.url ? [{ url: d.url, name: d.name, typ: d.typ }] : [])))
+        inhalte = new Map(r.dokumente.map((d) => [d.url, d]))
+      } catch {
+        inhalte = new Map()
+      }
       setPhase('Werte Akte und Funde aus …')
-      const quellen = [...sammleQuellen(), ...webQuellen]
+      const quellen = [...sammleQuellen(inhalte), ...webQuellen]
       const abschnitt = (titel: string, art: PotenzialQuelle['art'], hinweis = '') => {
         const eintraege = quellen.filter((q) => q.art === art)
         return [`${titel}${hinweis}:`, ...(eintraege.length > 0 ? eintraege.map((q) => `[${q.id}] ${q.text}`) : ['(keine)']), '']
@@ -120,7 +134,7 @@ export function PotenzialAnalyseSection({ bereich, kundeId, kundeName }: { berei
       const kontext = [
         ...abschnitt('Stammdaten', 'Stammdaten'),
         ...abschnitt('Aktivitäten (neueste zuerst)', 'Aktivität'),
-        ...abschnitt('Dokumente in der Akte', 'Dokument', ' — es liegt jeweils nur der Dateiname vor, nicht der Inhalt'),
+        ...abschnitt('Dokumente in der Akte', 'Dokument', ' — mit Kurzfassung des Inhalts, soweit das Dokument schon gelesen ist'),
         ...abschnitt('Gesprächsprotokolle', 'Gesprächsprotokoll'),
         ...abschnitt('Rechnungen der Holding an den Kunden', 'Rechnung'),
         webRecherche === 'ok' ? 'Öffentliche Internet-Recherche über den Kunden (weitere Firmen, Funktionen, Beteiligungen):' : 'Internet-Recherche: nicht verfügbar.',
@@ -136,6 +150,8 @@ export function PotenzialAnalyseSection({ bereich, kundeId, kundeName }: { berei
         chancen: chancen.map((c) => ({ ...c, quellen: (c.quellen ?? []).map((q) => q.replace(/[[\]\s]/g, '')).filter((q) => bekannt.has(q)) })),
         quellen,
         webRecherche,
+        dokumenteMitInhalt: [...inhalte.values()].filter((d) => d.status === 'gelesen').length,
+        dokumenteInArbeit: [...inhalte.values()].filter((d) => d.status === 'laeuft').length,
       })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Analyse fehlgeschlagen.')
@@ -209,8 +225,12 @@ export function PotenzialAnalyseSection({ bereich, kundeId, kundeName }: { berei
           </div>
           <p className="mt-2 text-xs text-slate-500">
             Aus der Akte lagen der KI vor: Stammdaten, {zahl('Aktivität', 'Aktivität', 'Aktivitäten')}, {zahl('Dokument', 'Dokument', 'Dokumente')},{' '}
-            {zahl('Gesprächsprotokoll', 'Gesprächsprotokoll', 'Gesprächsprotokolle')} und {zahl('Rechnung', 'Rechnung', 'Rechnungen')}. Von Dokumenten kennt sie nur den
-            Dateinamen, nicht den Inhalt.{' '}
+            {zahl('Gesprächsprotokoll', 'Gesprächsprotokoll', 'Gesprächsprotokolle')} und {zahl('Rechnung', 'Rechnung', 'Rechnungen')}.{' '}
+            {analyse.dokumenteMitInhalt === undefined
+              ? 'Von Dokumenten kannte sie bei dieser älteren Analyse nur den Dateinamen.'
+              : `Von den Dokumenten lagen ${analyse.dokumenteMitInhalt} mit ihrem Inhalt vor${
+                  analyse.dokumenteInArbeit ? `; ${analyse.dokumenteInArbeit} wurden gerade erst eingelesen — in ein paar Minuten erneut analysieren, dann fließen auch sie ein` : ''
+                }. Von den übrigen kannte sie nur den Dateinamen.`}{' '}
             {analyse.webRecherche === 'ok'
               ? `Zusätzlich wurde öffentlich im Internet nach weiteren Firmen, Funktionen und Beteiligungen gesucht (${zahl('Internet-Recherche', 'Fund', 'Funde')}).`
               : analyse.webRecherche === 'fehlgeschlagen'

@@ -339,7 +339,26 @@ async function speichereDatei(supabase: Supa, bytes: Uint8Array, dateiname: stri
     console.error('Upload fehlgeschlagen:', error.message)
     return null
   }
+  // Den Inhalt gleich im Hintergrund lesen und aufbewahren lassen (email-gateway "dokument_lesen"),
+  // damit kurz nach dem Schicken schon Fragen zum Inhalt beantwortet werden können.
+  await callEmailGateway('dokument_lesen', { url: supabase.storage.from(BUCKET).getPublicUrl(pfad).data.publicUrl, name: dateiname, typ: contentType }).catch((err) =>
+    console.error('Lesen konnte nicht angestoßen werden:', err),
+  )
   return pfad
+}
+
+type InhaltInfo = { url: string; status: string; zusammenfassung: string; seiten: number | null; fehler?: string; inhalt?: string }
+
+// Fragt ab, welche Dokumente schon inhaltlich gelesen sind, und stößt das Lesen der übrigen an.
+async function holeInhalte(dokumente: Dokument[], volltext = false): Promise<Map<string, InhaltInfo>> {
+  if (dokumente.length === 0) return new Map()
+  try {
+    const r = await callEmailGateway('dokument_inhalte', { dokumente: dokumente.map((d) => ({ url: d.url, name: d.name, typ: d.typ })), einlesen: true, volltext })
+    return new Map(((r.dokumente ?? []) as InhaltInfo[]).map((x) => [x.url, x]))
+  } catch (err) {
+    console.error('Dokument-Inhalte nicht abrufbar:', err)
+    return new Map()
+  }
 }
 
 const MARKE_MUSTER = /^\d{10,}_(h[0-9a-f]{12}(?:p\d+-\d+)?)_/
@@ -576,8 +595,21 @@ const TOOLS = [
   },
   {
     name: 'kundenakte_lesen',
-    description: 'Liest die vollständige Akte eines Kunden: Stammdaten, Status, Follow-up, Aktivitäten/Notizen (mit ID), Dokumente (mit ID), Gesprächsprotokolle. Grundlage für jede Frage zu einem Kunden (offene Punkte, vorhandene oder fehlende Unterlagen, letzter Stand).',
+    description: 'Liest die vollständige Akte eines Kunden: Stammdaten, Status, Follow-up, Aktivitäten/Notizen (mit ID), Dokumente (mit ID und Kurzfassung des Inhalts, soweit schon gelesen), Rechnungen, Gesprächsprotokolle. Grundlage für jede Frage zu einem Kunden (offene Punkte, vorhandene oder fehlende Unterlagen, letzter Stand). Für den genauen Inhalt eines Dokuments danach dokument_inhalt nutzen.',
     input_schema: { type: 'object', properties: { kunde_id: { type: 'string' } }, required: ['kunde_id'] },
+  },
+  {
+    name: 'dokument_inhalt',
+    description: 'Liefert den vollständigen Inhalt (Abschrift) eines Dokuments aus einer Akte — auch von Scans und handschriftlichen Notizen. Nutze das für jede Frage, die sich auf das bezieht, was IN einem Dokument steht. Welche Dokumente es gibt und was sie grob enthalten, zeigt kundenakte_lesen; die dokument_id steht dort.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        kunde_id: { type: 'string' },
+        dokument_id: { type: 'string' },
+        ab_zeichen: { type: 'integer', description: 'Nur für die Fortsetzung langer Dokumente, wenn ein früherer Aufruf das angeboten hat.' },
+      },
+      required: ['kunde_id', 'dokument_id'],
+    },
   },
   {
     name: 'notiz_speichern',
@@ -769,6 +801,16 @@ async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKontext): Pr
       .order('datum', { ascending: false })
       .limit(8)
     const { data: rechnungen } = await supabase.from('rechnungen').select('nummer, datum, betrag_brutto, status, zahlungsziel').eq('kunde_id', k.id).order('datum', { ascending: false })
+    const inhalte = await holeInhalte(k.dokumente ?? [])
+    const inhaltVermerk = (d: Dokument) => {
+      const i = inhalte.get(d.url)
+      if (!i) return ''
+      if (i.status === 'gelesen') return ` — Inhalt gelesen${i.zusammenfassung ? `: ${kuerze(i.zusammenfassung, 400)}` : ''}`
+      if (i.status === 'laeuft') return ' — Inhalt wird gerade eingelesen'
+      if (i.status === 'nicht lesbar') return ' — Dateityp nicht lesbar'
+      if (i.status === 'fehler') return ` — Lesen fehlgeschlagen${i.fehler ? ` (${kuerze(i.fehler, 80)})` : ''}`
+      return ''
+    }
     const fehlend = [!k.telefon && 'Telefon', !k.email && 'E-Mail', !k.ansprechpartner && 'Ansprechpartner', !k.verantwortlich && 'Verantwortlich'].filter(Boolean)
     const fu = k.follow_up
     return kuerze(
@@ -780,7 +822,7 @@ async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKontext): Pr
         `Fehlende Stammdaten: ${fehlend.length > 0 ? fehlend.join(', ') : 'keine'}`,
         '',
         `Dokumente (${(k.dokumente ?? []).length}):`,
-        ...((k.dokumente ?? []).length > 0 ? (k.dokumente ?? []).map((d) => `- ${d.name} (${deDatum(d.datum)}, ${d.groesse}) [dokument_id=${d.id}]`) : ['(keine)']),
+        ...((k.dokumente ?? []).length > 0 ? (k.dokumente ?? []).map((d) => `- ${d.name} (${deDatum(d.datum)}, ${d.groesse}) [dokument_id=${d.id}]${inhaltVermerk(d)}`) : ['(keine)']),
         '',
         `Rechnungen an den Kunden (${(rechnungen ?? []).length}):`,
         ...((rechnungen ?? []).length > 0
@@ -799,8 +841,32 @@ async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKontext): Pr
           ? (protokolle ?? []).map((p: any) => `- ${deDatum(p.datum)} „${p.betreff}" (Teilnehmer: ${p.teilnehmer}): ${kuerze(String(p.ki_zusammenfassung ?? p.text ?? ''), 900)}`)
           : ['(keine)']),
       ].join('\n'),
-      14000,
+      24000,
     )
+  }
+
+  if (name === 'dokument_inhalt') {
+    const k = await ladeKunde(supabase, input.kunde_id)
+    if (!k) return KEIN_KUNDE
+    const dok = (k.dokumente ?? []).find((d) => d.id === input.dokument_id)
+    if (!dok) return 'Fehler: Dieses Dokument gibt es in der Akte nicht. Lies die Akte neu (kundenakte_lesen).'
+    let info = (await holeInhalte([dok], true)).get(dok.url)
+    // Noch nicht gelesen: das Lesen läuft jetzt an — kurz warten, kurze Dokumente sind schnell da.
+    for (let i = 0; i < 7 && info?.status === 'laeuft'; i++) {
+      await new Promise((r) => setTimeout(r, 5000))
+      info = (await holeInhalte([dok], true)).get(dok.url)
+    }
+    if (!info) return 'Der Inhalt konnte gerade nicht abgerufen werden. Versuch es gleich noch einmal.'
+    if (info.status === 'gelesen') {
+      const text = info.inhalt ?? ''
+      const ab = Math.max(0, Number(input.ab_zeichen) || 0)
+      const fenster = text.slice(ab, ab + 24000)
+      const mehr = ab + 24000 < text.length ? `\n\n[Hier endet der Ausschnitt. Das Dokument geht weiter — rufe dokument_inhalt erneut mit ab_zeichen=${ab + 24000} auf, falls du den Rest brauchst. Gesamtlänge: ${text.length} Zeichen.]` : ''
+      return `Dokument „${dok.name}" (${info.seiten ? `${info.seiten} Seiten, ` : ''}vollständige Abschrift${ab > 0 ? ` ab Zeichen ${ab}` : ''}):\n\n${fenster}${mehr}`
+    }
+    if (info.status === 'laeuft') return `„${dok.name}" wird gerade zum ersten Mal eingelesen. Bei langen Dokumenten dauert das ein bis drei Minuten. Sag dem Mitarbeiter, dass er die Frage gleich noch einmal stellen soll.`
+    if (info.status === 'nicht lesbar') return `„${dok.name}" hat einen Dateityp, der nicht gelesen werden kann (lesbar sind PDF, Bilder, Word .docx, Excel .xlsx und CSV).`
+    return `„${dok.name}" konnte nicht gelesen werden${info.fehler ? `: ${info.fehler}` : ''}.`
   }
 
   if (name === 'notiz_speichern') {
@@ -1204,7 +1270,8 @@ So arbeitest du:
 - Dateien: Jede geschickte Datei ist bereits sicher gespeichert, bevor du davon erfährst. Eine Nachricht, die mit "[Datei-Eingang" beginnt, kommt vom System und beschreibt, was angekommen ist. Lege die Dateien mit dateien_ablegen ab, sobald klar ist, wohin sie gehören: durch die Bildunterschrift, durch das bisherige Gespräch oder durch einen im Dokument erkannten Namen, zu dem kunden_suchen genau einen passenden Kunden liefert. Sonst frag nach und sag dazu, dass die Dateien gespeichert sind. Früher geschickte, noch nicht abgelegte Dateien findest du mit unzugeordnete_dateien.
 - Sammel-Scans: Schickt der Mitarbeiter eine mehrseitige PDF (z. B. einen ganzen Ordner auf einmal gescannt), zerlegt das System sie beim Eingang automatisch in Einzeldokumente, benennt sie und speichert sie. Du bekommst die fertigen Einzeldokumente im Datei-Eingang und legst sie ab. Aufteilen und Ablegen von Scans kannst du also zusagen. Verdreht oder auf dem Kopf eingescannte PDF-Seiten dreht das System dabei von selbst gerade; bei Fotos geschieht das nicht. Nur eine schon gespeicherte Datei nachträglich zerlegen oder drehen geht nicht; dafür muss sie noch einmal geschickt werden.
 - Meldet ein Datei-Eingang, dass genau diese Datei schon einmal geschickt wurde, sag dem Mitarbeiter, dass du sie bereits hast und wo sie liegt. Teile davon, die noch in keiner Akte liegen, legst du ab, wenn klar ist wohin. Will er sie bewusst neu verarbeiten lassen (anders aufteilen oder drehen), müssen die früheren Dateien erst aus der Akte genommen und aussortiert werden; danach schickt er sie neu.
-- Deine Grenzen: Du siehst von Dokumenten Name, Art und das erkannte Datum, aber nicht den vollen Inhalt. Sprachnachrichten kannst du noch nicht verarbeiten.
+- Inhalt von Dokumenten: Du kannst Dokumente lesen. kundenakte_lesen zeigt zu jedem Dokument eine Kurzfassung, dokument_inhalt liefert die vollständige Abschrift, auch von Scans und Handschrift. Beantworte Fragen zum Inhalt nur aus der Abschrift, nenne das Dokument, aus dem die Antwort stammt, und gib unsichere Stellen ([unsicher …], [unleserlich]) als unsicher weiter. Ist ein Dokument noch nicht eingelesen, sag das und bitte um einen Moment Geduld, statt zu raten.
+- Deine Grenzen: Sprachnachrichten kannst du noch nicht verarbeiten.
 - Meldet dateien_ablegen ein mögliches Duplikat, frag den Mitarbeiter, ob du überschreiben, als Kopie ablegen oder weglassen sollst.
 - Rechnungen: Meldet ein Datei-Eingang "Rechnung erkannt" und ist der Aussteller die Holding selbst (Andreas Mayer Holding, Mayer Consulting, Ulmer Wirtschaftskanzlei oder ein anderer Name aus dem eigenen Haus), ist das eine Ausgangsrechnung an den Kunden. Dann legst du die Datei ab UND erfasst sie mit rechnung_erfassen. Status ist Versendet (offen), außer der Mitarbeiter hat gesagt, dass sie bezahlt ist. Nenne danach Nummer, Datum, Netto und Brutto, damit er die gelesenen Werte prüfen kann, und sag, dass sie als offen geführt wird. Fehlen Nummer oder Bruttobetrag oder sind sie unklar, frag nach, statt zu raten. Rechnungen, die jemand anderes ausgestellt hat (Lieferanten, Handwerker, Unterlagen des Kunden), sind nur Dokumente und werden nicht erfasst.
 - Kunden löschen: nur auf ausdrücklichen Wunsch und erst nach Bestätigung in einer eigenen Nachricht.
