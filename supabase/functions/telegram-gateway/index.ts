@@ -301,8 +301,18 @@ type ScanAufteilung = {
   }[]
 }
 
-async function speichereDatei(supabase: Supa, bytes: Uint8Array, dateiname: string, contentType: string): Promise<string | null> {
-  const pfad = `${ORDNER}/${Date.now()}_${sicheresPfadsegment(dateiname)}`
+// Fingerabdruck des Dateiinhalts (SHA-256, gekürzt). Steckt als "h<hash>" im gespeicherten Dateinamen,
+// bei Teilen eines Sammel-Scans ergänzt um den Seitenbereich ("h<hash>p3-5"). Darüber wird erkannt,
+// dass genau dieselbe Datei schon einmal geschickt wurde — unabhängig davon, wie die KI sie benannt hat.
+// Echter Anlass: derselbe Scan zweimal geschickt, die Rechnung darin hieß einmal "…_CL-001…" und einmal
+// "…_LiMa_GmbH…", und der Assistent konnte nicht wissen, dass beides dasselbe Dokument ist.
+export async function inhaltsHash(bytes: Uint8Array): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes as BufferSource))
+  return [...digest.slice(0, 6)].map((b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+async function speichereDatei(supabase: Supa, bytes: Uint8Array, dateiname: string, contentType: string, marke: string): Promise<string | null> {
+  const pfad = `${ORDNER}/${Date.now()}_${marke}_${sicheresPfadsegment(dateiname)}`
   const { error } = await supabase.storage.from(BUCKET).upload(pfad, bytes, { contentType, upsert: true })
   if (error) {
     console.error('Upload fehlgeschlagen:', error.message)
@@ -311,8 +321,10 @@ async function speichereDatei(supabase: Supa, bytes: Uint8Array, dateiname: stri
   return pfad
 }
 
-function anzeigeName(dateiImOrdner: string): string {
-  return dateiImOrdner.replace(/^\d{10,}_/, '')
+const MARKE_MUSTER = /^\d{10,}_(h[0-9a-f]{12}(?:p\d+-\d+)?)_/
+
+export function anzeigeName(dateiImOrdner: string): string {
+  return dateiImOrdner.replace(MARKE_MUSTER, '').replace(/^\d{10,}_/, '')
 }
 
 // Sichert eine per Telegram geschickte Datei (Sammel-Scans werden vorher in Einzeldokumente zerlegt)
@@ -334,6 +346,29 @@ async function verarbeiteDateiEingang(supabase: Supa, message: any): Promise<str
     `Bildunterschrift des Mitarbeiters: ${caption ? `„${caption}"` : '(keine)'}`,
   ]
 
+  // Genau diese Datei schon einmal bekommen? Dann nicht noch einmal zerlegen und speichern.
+  const marke = `h${await inhaltsHash(bytes)}`
+  try {
+    const frueher = (await listeOrdner(supabase)).filter((d) => d.name.includes(`_${marke}`))
+    if (frueher.length > 0) {
+      const referenzen = await ladeReferenzen(supabase)
+      const wann = frueher.at(-1)?.created_at
+        ? new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', dateStyle: 'short', timeStyle: 'short' }).format(new Date(frueher.at(-1)!.created_at!))
+        : 'einem früheren Zeitpunkt'
+      return [
+        ...kopf,
+        `Genau diese Datei (inhaltsgleich) wurde bereits am ${wann} geschickt und verarbeitet. Sie wurde deshalb NICHT noch einmal gespeichert oder zerlegt.`,
+        'Aus dem früheren Eingang vorhanden:',
+        ...frueher.map((d, i) => {
+          const kunde = referenzen.kunden.find((k) => (k.dokumente ?? []).some((x) => x.url.includes(`/${BUCKET}/${ORDNER}/${d.name}`)))
+          return `${i + 1}. pfad=${ORDNER}/${d.name} | Name: ${anzeigeName(d.name)} | ${kunde ? `liegt in der Akte von ${kundeName(kunde)}` : 'noch keiner Akte zugeordnet'}`
+        }),
+      ].join('\n')
+    }
+  } catch (err) {
+    console.error('Prüfung auf früheren Eingang fehlgeschlagen:', err) // dann normal weiterverarbeiten
+  }
+
   const seiten = contentType === 'application/pdf' ? await pdfSeitenzahl(bytes) : null
   if (seiten && seiten > 1) {
     let aufteilung: ScanAufteilung | null = null
@@ -350,7 +385,7 @@ async function verarbeiteDateiEingang(supabase: Supa, message: any): Promise<str
       try {
         const teilBytes = await pdfSeitenAusschneiden(bytes, teil.start_seite, teil.end_seite, drehungen)
         const name = teil.vorgeschlagener_dateiname || `${teil.kategorie}_${teil.start_seite}-${teil.end_seite}.pdf`
-        const pfad = await speichereDatei(supabase, teilBytes, name, 'application/pdf')
+        const pfad = await speichereDatei(supabase, teilBytes, name, 'application/pdf', `${marke}p${teil.start_seite}-${teil.end_seite}`)
         if (!pfad) continue
         zeilen.push(
           `${zeilen.length + 1}. pfad=${pfad} | Name: ${name} | Kategorie: ${teil.kategorie}${teil.erkanntes_datum ? ` | Datum im Dokument: ${teil.erkanntes_datum}` : ''} | Seiten ${teil.start_seite}–${teil.end_seite}`,
@@ -370,7 +405,7 @@ async function verarbeiteDateiEingang(supabase: Supa, message: any): Promise<str
       ].join('\n')
     }
     // Aufteilung nicht gelungen: den Scan als Ganzes sichern statt ihn zu verlieren.
-    const pfad = await speichereDatei(supabase, bytes, dateiname, contentType)
+    const pfad = await speichereDatei(supabase, bytes, dateiname, contentType, marke)
     if (!pfad) return `${kopf.join('\n')}\nDie Datei konnte nicht gespeichert werden.`
     return [
       ...kopf,
@@ -397,7 +432,7 @@ async function verarbeiteDateiEingang(supabase: Supa, message: any): Promise<str
       console.error('Drehen fehlgeschlagen:', err)
     }
   }
-  const pfad = await speichereDatei(supabase, zuSpeichern, dateiname, contentType)
+  const pfad = await speichereDatei(supabase, zuSpeichern, dateiname, contentType, marke)
   if (!pfad) return `${kopf.join('\n')}\nDie Datei konnte nicht gespeichert werden.`
   const erkannt = [
     klassifikation?.erkannter_name && `Name „${klassifikation.erkannter_name}"`,
@@ -906,6 +941,12 @@ async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKontext): Pr
         meldungen.push(`„${name}": liegt bereits in dieser Akte.`)
         continue
       }
+      const abdruck = dateiName.match(MARKE_MUSTER)?.[1]
+      const inhaltsgleich = abdruck ? dokumente.find((d) => d.url.includes(`_${abdruck}_`)) : undefined
+      if (inhaltsgleich) {
+        meldungen.push(`„${name}": inhaltsgleich mit „${inhaltsgleich.name}", das schon in dieser Akte liegt — nicht noch einmal abgelegt.`)
+        continue
+      }
       const andererKunde = referenzen.kunden.find((x) => x.id !== k.id && (x.dokumente ?? []).some((d) => d.url === url))
       if (andererKunde) {
         meldungen.push(`„${name}": liegt bereits in der Akte von ${kundeName(andererKunde)} (kunde_id=${andererKunde.id}) — dort zuerst mit dokument_aus_akte_nehmen herausnehmen, falls es umziehen soll.`)
@@ -1052,6 +1093,7 @@ So arbeitest du:
 - Gibt es einen Kunden noch nicht, sag das und biete an, ihn anzulegen. Frag nach dem Bereich, wenn er nicht klar ist. Sagt der Mitarbeiter klar, dass und wo er angelegt werden soll, leg ihn an.
 - Dateien: Jede geschickte Datei ist bereits sicher gespeichert, bevor du davon erfährst. Eine Nachricht, die mit "[Datei-Eingang" beginnt, kommt vom System und beschreibt, was angekommen ist. Lege die Dateien mit dateien_ablegen ab, sobald klar ist, wohin sie gehören: durch die Bildunterschrift, durch das bisherige Gespräch oder durch einen im Dokument erkannten Namen, zu dem kunden_suchen genau einen passenden Kunden liefert. Sonst frag nach und sag dazu, dass die Dateien gespeichert sind. Früher geschickte, noch nicht abgelegte Dateien findest du mit unzugeordnete_dateien.
 - Sammel-Scans: Schickt der Mitarbeiter eine mehrseitige PDF (z. B. einen ganzen Ordner auf einmal gescannt), zerlegt das System sie beim Eingang automatisch in Einzeldokumente, benennt sie und speichert sie. Du bekommst die fertigen Einzeldokumente im Datei-Eingang und legst sie ab. Aufteilen und Ablegen von Scans kannst du also zusagen. Verdreht oder auf dem Kopf eingescannte PDF-Seiten dreht das System dabei von selbst gerade; bei Fotos geschieht das nicht. Nur eine schon gespeicherte Datei nachträglich zerlegen oder drehen geht nicht; dafür muss sie noch einmal geschickt werden.
+- Meldet ein Datei-Eingang, dass genau diese Datei schon einmal geschickt wurde, sag dem Mitarbeiter, dass du sie bereits hast und wo sie liegt. Teile davon, die noch in keiner Akte liegen, legst du ab, wenn klar ist wohin. Will er sie bewusst neu verarbeiten lassen (anders aufteilen oder drehen), müssen die früheren Dateien erst aus der Akte genommen und aussortiert werden; danach schickt er sie neu.
 - Deine Grenzen: Du siehst von Dokumenten Name, Art und das erkannte Datum, aber nicht den vollen Inhalt. Sprachnachrichten kannst du noch nicht verarbeiten.
 - Meldet dateien_ablegen ein mögliches Duplikat, frag den Mitarbeiter, ob du überschreiben, als Kopie ablegen oder weglassen sollst.
 - Kunden löschen: nur auf ausdrücklichen Wunsch und erst nach Bestätigung in einer eigenen Nachricht.
