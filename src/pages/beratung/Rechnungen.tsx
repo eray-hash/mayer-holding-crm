@@ -483,7 +483,8 @@ function RechnungFormular({ rechnung, onClose }: { rechnung?: Rechnung; onClose:
         </Field>
       </div>
 
-      {fehler && <p className="mb-1 mt-1 text-xs text-rose-600">{fehler}</p>}
+      {/* Beim leeren neuen Formular noch nicht meckern — der Hinweis erscheint, sobald etwas eingetragen ist. */}
+      {fehler && (String(netto).trim() !== '' || !!rechnung) && <p className="mb-1 mt-1 text-xs text-rose-600">{fehler}</p>}
       <div className="mt-4 flex justify-end gap-2">
         <SecondaryButton onClick={onClose}>Abbrechen</SecondaryButton>
         <PrimaryButton onClick={speichern} disabled={!!fehler}>{rechnung ? 'Änderungen speichern' : 'Rechnung anlegen'}</PrimaryButton>

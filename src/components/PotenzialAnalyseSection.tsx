@@ -130,7 +130,10 @@ export function PotenzialAnalyseSection({ bereich, kundeId, kundeName }: { berei
   }
 
   const quelleNachId = new Map((analyse?.quellen ?? []).map((q) => [q.id, q]))
-  const anzahl = (art: PotenzialQuelle['art']) => (analyse?.quellen ?? []).filter((q) => q.art === art).length
+  const zahl = (art: PotenzialQuelle['art'], einzahl: string, mehrzahl: string) => {
+    const n = (analyse?.quellen ?? []).filter((q) => q.art === art).length
+    return `${n} ${n === 1 ? einzahl : mehrzahl}`
+  }
 
   return (
     <div>
@@ -163,8 +166,8 @@ export function PotenzialAnalyseSection({ bereich, kundeId, kundeName }: { berei
             </button>
           </div>
           <p className="mt-2 text-xs text-slate-500">
-            Der KI lagen ausschließlich diese Angaben aus der Akte vor: Stammdaten, {anzahl('Aktivität')} Aktivitäten, {anzahl('Dokument')} Dokumente,{' '}
-            {anzahl('Gesprächsprotokoll')} Gesprächsprotokolle und {anzahl('Rechnung')} Rechnungen. Von Dokumenten kennt sie nur den Dateinamen, nicht den Inhalt. Dazu kommt
+            Der KI lagen ausschließlich diese Angaben aus der Akte vor: Stammdaten, {zahl('Aktivität', 'Aktivität', 'Aktivitäten')}, {zahl('Dokument', 'Dokument', 'Dokumente')},{' '}
+            {zahl('Gesprächsprotokoll', 'Gesprächsprotokoll', 'Gesprächsprotokolle')} und {zahl('Rechnung', 'Rechnung', 'Rechnungen')}. Von Dokumenten kennt sie nur den Dateinamen, nicht den Inhalt. Dazu kommt
             ihr allgemeines Fachwissen; externe Datenbanken oder das Internet wurden nicht abgefragt. Die Vorschläge sind Einschätzungen und keine geprüften Fakten.
           </p>
           {grundlageOffen && (
