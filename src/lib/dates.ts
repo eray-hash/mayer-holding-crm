@@ -39,6 +39,11 @@ export function fmtEUR(value: number): string {
   return value.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 })
 }
 
+// Für Rechnungsbeträge: mit Cent. fmtEUR rundet auf ganze Euro (3.867,50 € würde als 3.868 € erscheinen).
+export function fmtEURCent(value: number): string {
+  return value.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
 export function addDays(iso: string, days: number): string {
   const d = new Date(iso + 'T00:00:00')
   d.setDate(d.getDate() + days)

@@ -4,7 +4,7 @@ import { ArrowLeft, Mail } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { StatusWidget } from '../../components/StatusWidget'
 import { StatusBadge, Card, Modal, inputClass, SecondaryButton, EmptyState } from '../../components/ui'
-import { fmtDate, isOverdue, today, uid, fmtEUR } from '../../lib/dates'
+import { fmtDate, isOverdue, today, uid, fmtEUR, fmtEURCent } from '../../lib/dates'
 import { PRIORITAETEN, CURRENT_USER } from '../../data/constants'
 import { ZugewieseneObjekte } from '../../components/ZugewieseneObjekte'
 import { FormularLinkButtons } from '../../components/FormularLink'
@@ -200,7 +200,7 @@ export function KundenDetail() {
                 <tr key={r.id} className="border-b border-slate-50 last:border-0">
                   <td className="px-4 py-3 font-medium text-slate-700">{r.nummer}</td>
                   <td className="px-4 py-3 text-slate-500">{fmtDate(r.datum)}</td>
-                  <td className="px-4 py-3 text-slate-700">{fmtEUR(r.betragBrutto)}</td>
+                  <td className="px-4 py-3 text-slate-700">{fmtEURCent(r.betragBrutto)}</td>
                   <td className="px-4 py-3"><RechnungStatusBadge status={r.status} /></td>
                 </tr>
               ))}

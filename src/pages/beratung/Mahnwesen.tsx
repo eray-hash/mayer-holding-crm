@@ -2,7 +2,7 @@ import { useNavigate } from 'react-router-dom'
 import { ArrowRight } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { Card, EmptyState } from '../../components/ui'
-import { fmtEUR, daysSince } from '../../lib/dates'
+import { daysSince, fmtEURCent } from '../../lib/dates'
 import { MAHNSTUFEN, mahnstufeLabel, nextMahnstufe } from '../../data/constants'
 import { KUNDEN_BEREICHE } from '../../data/kundenBereiche'
 
@@ -53,7 +53,7 @@ export function Mahnwesen() {
                     {kunde?.firma ?? '–'}
                   </td>
                   <td className="px-4 py-3 text-slate-500">{r.nummer}</td>
-                  <td className="px-4 py-3 text-slate-700">{fmtEUR(r.betragBrutto)}</td>
+                  <td className="px-4 py-3 text-slate-700">{fmtEURCent(r.betragBrutto)}</td>
                   <td className={`px-4 py-3 ${tage > 0 ? 'font-medium text-rose-600' : 'text-slate-500'}`}>{tage} Tage</td>
                   <td className="px-4 py-3 text-slate-600">{mahnstufeLabel(r.mahnstufe)}</td>
                   <td className="px-4 py-3 text-right">

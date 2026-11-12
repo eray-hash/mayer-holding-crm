@@ -4,7 +4,7 @@ import { Plus } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { Card, PrimaryButton, Modal, Field, inputClass } from '../../components/ui'
 import { RechnungStatusBadge } from './KundenDetail'
-import { fmtDate, fmtEUR, today, uid, addDays } from '../../lib/dates'
+import { fmtDate, fmtEUR, today, uid, addDays, fmtEURCent } from '../../lib/dates'
 import { holeLeistungen, type Leistung } from '../../lib/leistungen'
 import type { Rechnung, RechnungStatus } from '../../types'
 import { KUNDEN_BEREICHE } from '../../data/kundenBereiche'
@@ -73,7 +73,7 @@ export function Rechnungen() {
                       : '–'}
                   </td>
                   <td className="px-4 py-3 text-slate-500">{fmtDate(r.datum)}</td>
-                  <td className="px-4 py-3 text-slate-700">{fmtEUR(r.betragNetto)} / {fmtEUR(r.betragBrutto)}</td>
+                  <td className="px-4 py-3 text-slate-700">{fmtEURCent(r.betragNetto)} / {fmtEURCent(r.betragBrutto)}</td>
                   <td className="px-4 py-3"><RechnungStatusBadge status={r.status} /></td>
                   <td className="px-4 py-3 text-slate-500">{fmtDate(r.zahlungsziel)}</td>
                 </tr>
