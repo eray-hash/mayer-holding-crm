@@ -9,6 +9,7 @@ import { isLeadsDbConfigured, fetchOffeneLeads, setLeadStatus } from '../../lib/
 import { isEmailGatewayConfigured, classifyNewLeads } from '../../lib/emailGateway'
 import { matchKundeByEmail, suggestKunde } from '../../lib/matchKunde'
 import { KUNDEN_BEREICHE, kundeBereichLabel } from '../../data/kundenBereiche'
+import { getHauptpfad } from '../../data/statusNetworks'
 import { uid, today, addDays, fmtDateTime } from '../../lib/dates'
 import { MITARBEITER } from '../../data/constants'
 import { SendEmailModal } from '../../components/SendEmailModal'
@@ -24,7 +25,7 @@ function fmtGroesse(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-function neuerKunde(lead: VorgeschlagenerLead) {
+function neuerKunde(lead: VorgeschlagenerLead, bereich: KundeBereich) {
   return {
     id: uid('k'),
     firma: lead.firma || lead.name || lead.email,
@@ -32,7 +33,7 @@ function neuerKunde(lead: VorgeschlagenerLead) {
     email: lead.email,
     telefon: lead.telefon || '',
     prioritaet: 'Mittel' as const,
-    status: 'lead',
+    status: getHauptpfad(bereich)[0],
     followUp: { date: addDays(today(), 2), note: 'Erstkontakt aufnehmen', done: false },
     verantwortlich: MITARBEITER[0],
     letzteAktivitaet: today(),
@@ -40,29 +41,17 @@ function neuerKunde(lead: VorgeschlagenerLead) {
   }
 }
 
+// Über die generische Aktion statt eines Bereichs-Schalters: der alte Schalter kannte den Bereich
+// Immobilien nicht, tat dort stillschweigend nichts — und der Vorschlag galt danach trotzdem als
+// übernommen. Außerdem bekam jeder Bereich den Beratungs-Status "lead", den es dort gar nicht gibt.
 function addKundeZuBereich(
   dispatch: ReturnType<typeof useApp>['dispatch'],
   bereich: KundeBereich,
   lead: VorgeschlagenerLead,
   eigeneEmail?: string,
 ) {
-  const kunde = neuerKunde(lead)
-  switch (bereich) {
-    case 'beratung':
-      return dispatch({ type: 'ADD_KUNDE', kunde })
-    case 'erben':
-      return dispatch({ type: 'ADD_ERBEN_MANDANT', kunde })
-    case 'betriebsuebergabe':
-      return dispatch({ type: 'ADD_BETRIEBSUEBERGABE_MANDANT', kunde })
-    case 'betriebsformen':
-      return dispatch({ type: 'ADD_BETRIEBSFORMEN_MANDANT', kunde })
-    case 'akademie':
-      return dispatch({ type: 'ADD_AKADEMIE_TEILNEHMER', kunde })
-    case 'finanzierungen':
-      return dispatch({ type: 'ADD_FINANZIERUNGEN_MANDANT', kunde })
-    case 'privat':
-      return dispatch({ type: 'ADD_PRIVAT_KONTAKT', kunde: { ...kunde, verantwortlichEmail: eigeneEmail } })
-  }
+  const kunde = neuerKunde(lead, bereich)
+  dispatch({ type: 'ADD_KUNDE_IN_BEREICH', bereich, kunde: bereich === 'privat' ? { ...kunde, verantwortlichEmail: eigeneEmail } : kunde })
 }
 
 export function Postfach() {

@@ -28,7 +28,8 @@ function toLead(row: Row): VorgeschlagenerLead {
     name: row.name ?? undefined,
     firma: row.firma ?? undefined,
     telefon: row.telefon ?? undefined,
-    bereichVorschlag: (row.bereich_vorschlag as KundeBereich | 'unklar' | null) ?? 'unklar',
+    // Der Klassifizierer sagt "immobilien"; der Kundenbereich dazu heißt im CRM "immobilienkunden".
+    bereichVorschlag: row.bereich_vorschlag === 'immobilien' ? 'immobilienkunden' : ((row.bereich_vorschlag as KundeBereich | 'unklar' | null) ?? 'unklar'),
     notiz: row.notiz ?? '',
     status: (row.status as VorgeschlagenerLead['status']) ?? 'offen',
     erstelltAm: row.erstellt_am,
