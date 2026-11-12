@@ -128,6 +128,8 @@ export type PotenzialChance = {
   begruendung: string
   naechster_schritt: string
   prioritaet: 'Hoch' | 'Mittel' | 'Niedrig'
+  quellen?: string[]
+  annahmen?: string
 }
 
 // Firmen-Wissens-KI (bereichsübergreifende Fragen, siehe firmenwissenKontext.ts für den Aufbau des

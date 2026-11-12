@@ -253,6 +253,33 @@ export type Kunde = {
   dokumente?: Dokument[]
   unternehmensbewertung?: Unternehmensbewertung
   unternehmensbewertungRecherche?: UnternehmensbewertungRecherche
+  potenzialAnalyse?: PotenzialAnalyse
+}
+
+// Ein Eintrag der Akte, der der KI für die Potenzial-Analyse vorlag — mit Kennung, damit jede
+// vorgeschlagene Chance auf ihre Grundlage zurückverweisen kann.
+export type PotenzialQuelle = {
+  id: string
+  art: 'Stammdaten' | 'Aktivität' | 'Dokument' | 'Gesprächsprotokoll' | 'Rechnung'
+  text: string
+}
+
+// Gespeichertes Ergebnis der letzten Potenzial-Analyse eines Kunden. Vorher lebte es nur im
+// Bildschirmzustand und war nach einem Reiterwechsel weg.
+export type PotenzialAnalyse = {
+  erstelltAm: string
+  erstelltVon: string
+  chancen: {
+    bereich: string
+    titel: string
+    begruendung: string
+    naechster_schritt: string
+    prioritaet: 'Hoch' | 'Mittel' | 'Niedrig'
+    quellen?: string[]
+    annahmen?: string
+    uebernommen?: 'followup' | 'vermerkt'
+  }[]
+  quellen: PotenzialQuelle[]
 }
 
 export type Vorlage = {

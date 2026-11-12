@@ -99,6 +99,9 @@ function kundeToRow(bereich: KundeBereich, k: Kunde) {
     pruef_hinweis: k.pruefHinweis ?? null,
     verknuepfte_kunden: k.verknuepfteKunden ?? null,
     unternehmensbewertung_recherche: k.unternehmensbewertungRecherche ?? null,
+    // Nur mitschicken, wenn vorhanden: so überschreibt ein Tab mit altem Stand eine inzwischen
+    // gespeicherte Analyse nicht mit "leer".
+    ...(k.potenzialAnalyse ? { potenzial_analyse: k.potenzialAnalyse } : {}),
   }
 }
 
@@ -125,6 +128,7 @@ function rowToKunde(row: any): Kunde {
     pruefHinweis: row.pruef_hinweis ?? undefined,
     verknuepfteKunden: row.verknuepfte_kunden ?? undefined,
     unternehmensbewertungRecherche: row.unternehmensbewertung_recherche ?? undefined,
+    potenzialAnalyse: row.potenzial_analyse ?? undefined,
   }
 }
 
