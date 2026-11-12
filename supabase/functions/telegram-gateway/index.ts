@@ -1,42 +1,70 @@
-// Edge Function "telegram-gateway" — Telegram als zusätzlicher Kanal für denselben KI-Assistenten,
-// den es im CRM-Web-Chat schon gibt (siehe KiAssistentPanel.tsx). Mitarbeiter schreiben dem CRM-Bot
-// in ihrem eigenen, normalen Telegram ganz normal — dieselbe Klassifizierung/Beantwortung läuft über
-// die bereits bestehenden Actions in email-gateway (assistant_classify/assistant_answer), nur dass
-// hier serverseitig dieselbe Kunden-Zuordnung und das Schreiben von Notizen/Aufgaben nachgebaut wird,
-// die im Web normalerweise der Browser (React-State) übernimmt — ein Telegram-Webhook hat ja kein
-// offenes CRM im Browser, auf dessen State er zugreifen könnte.
+// Edge Function "telegram-gateway" — der CRM-Assistent im Telegram-Chat.
+//
+// Mitarbeiter schreiben dem Bot wie einem Kollegen. Dahinter läuft ein echter Assistent mit
+// Werkzeugen (Kunden suchen, Akte lesen, Notiz/Aufgabe setzen, Kunden anlegen/ändern, geschickte
+// Dateien ablegen) und einem Gesprächsgedächtnis pro Mitarbeiter. Früher wurde jede Nachricht stur in
+// "Notiz / Aufgabe / Frage" einsortiert — eine Bitte wie "leg die Dateien in seine Akte" wurde dadurch
+// als Aufgabe gespeichert statt ausgeführt, und Rückfragen liefen über starre Schlüsselwörter.
+//
+// Zustand: mitarbeiter.telegram_pending (jsonb) hält Gesprächsverlauf und Aktionsprotokoll.
+// Dateien: jede geschickte Datei wird sofort im Bucket "email-anhaenge" unter "telegram/" gesichert.
+// "Noch nicht zugeordnet" heißt schlicht: liegt dort, wird aber von keiner Akte referenziert — dafür
+// braucht es keinen eigenen Zustand, und auch früher liegengebliebene Dateien bleiben auffindbar.
 //
 // Setup (einmalig):
-//   1. Secrets TELEGRAM_BOT_TOKEN und TELEGRAM_WEBHOOK_SECRET sind bereits gesetzt.
-//   2. Nach dem Deploy: setWebhook bei Telegram registrieren (einmaliger Aufruf, siehe unten im
-//      Projekt-Chat dokumentiert) mit secret_token = TELEGRAM_WEBHOOK_SECRET.
-//   3. Mitarbeiter verknüpfen sich selbst über "Mein Profil" (erzeugt einen Code, den sie per
-//      /start <code> an den Bot schicken) — siehe self_register-ähnliches Muster in email-gateway.
+//   1. Secrets TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET und ANTHROPIC_API_KEY sind gesetzt.
+//   2. Nach dem Deploy: setWebhook bei Telegram mit secret_token = TELEGRAM_WEBHOOK_SECRET.
+//   3. Mitarbeiter verknüpfen sich über "Mein Profil" (Code per /start <code> an den Bot).
 
-import { createClient } from 'npm:@supabase/supabase-js@2'
+import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2'
 import { PDFDocument } from 'npm:pdf-lib@1.17.1'
 
-const BOT_TOKEN = Deno.env.get('TELEGRAM_BOT_TOKEN')!
+const BOT_TOKEN = Deno.env.get('TELEGRAM_BOT_TOKEN')
 const WEBHOOK_SECRET = Deno.env.get('TELEGRAM_WEBHOOK_SECRET')
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 const CRM_SHARED_SECRET = Deno.env.get('CRM_SHARED_SECRET')
+const ANTHROPIC_API_KEY = Deno.env.get('ANTHROPIC_API_KEY')
+const AGENT_MODEL = Deno.env.get('TELEGRAM_AGENT_MODEL') ?? 'claude-sonnet-5-5'
 
-function supa() {
+const BUCKET = 'email-anhaenge'
+const ORDNER = 'telegram'
+
+// deno-lint-ignore no-explicit-any
+type Supa = SupabaseClient<any, any, any>
+
+function supa(): Supa {
   return createClient(SUPABASE_URL, SERVICE_ROLE_KEY)
 }
 
+// Ohne Bot-Token (lokaler Testlauf) wird die Antwort nur protokolliert.
 async function sendTelegramMessage(chatId: number, text: string): Promise<void> {
-  await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ chat_id: chatId, text }),
-  })
+  if (!BOT_TOKEN) {
+    console.log(`[Telegram -> ${chatId}] ${text}`)
+    return
+  }
+  // Telegram erlaubt höchstens 4096 Zeichen pro Nachricht.
+  for (let i = 0; i < text.length; i += 4000) {
+    const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text: text.slice(i, i + 4000) }),
+    })
+    if (!res.ok) console.error('sendMessage fehlgeschlagen:', res.status, await res.text().catch(() => ''))
+  }
 }
 
-// Delegiert die eigentlichen LLM-Aufrufe an die schon bestehenden Actions in email-gateway, statt
-// dieselben Claude-Prompts hier zu duplizieren — eine Quelle der Wahrheit für die KI-Logik, egal ob
-// Web-Chat oder Telegram sie aufruft.
+async function sendeTippen(chatId: number): Promise<void> {
+  if (!BOT_TOKEN) return
+  await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendChatAction`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ chat_id: chatId, action: 'typing' }),
+  }).catch(() => {})
+}
+
+// Dokumenten-Analyse (Einzeldokument klassifizieren, Sammel-Scan aufteilen) bleibt in email-gateway.
+// deno-lint-ignore no-explicit-any
 async function callEmailGateway(action: string, body: Record<string, unknown>): Promise<any> {
   const res = await fetch(`${SUPABASE_URL}/functions/v1/email-gateway`, {
     method: 'POST',
@@ -51,71 +79,30 @@ async function callEmailGateway(action: string, body: Record<string, unknown>): 
   return data
 }
 
-// ---------- Kunden-Zuordnung (Port von src/lib/matchKunde.ts, siehe dort für die Begründung der
-// Einzelfälle — muss inhaltlich mit der Web-Variante übereinstimmen, da Mitarbeiter denselben
-// Assistenten über zwei Kanäle nutzen) ----------
+// ---------- Kleine Helfer ----------
 
-const FUELLWOERTER = new Set([
-  'bei', 'der', 'die', 'das', 'den', 'dem', 'des', 'und', 'ist', 'war', 'wie', 'was', 'wer', 'wen',
-  'wem', 'für', 'mit', 'von', 'vom', 'zum', 'zur', 'auf', 'aus', 'hat', 'hab', 'sein', 'ihr',
-  'ihre', 'dein', 'deine', 'mein', 'meine', 'noch', 'nach', 'vor', 'über', 'unter', 'nur', 'auch',
-  'kein', 'keine', 'man', 'wir', 'ich', 'du', 'sie', 'wird', 'werden', 'kann', 'soll', 'will',
-])
-
-function woerter(text: string): string[] {
-  return (text.toLowerCase().match(/[a-zäöüß]{3,}/g) ?? []).filter((w) => !FUELLWOERTER.has(w))
+function heuteBerlin(): string {
+  return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Berlin' }).format(new Date())
 }
 
-type KundeRow = {
-  id: string
-  bereich: string
-  firma: string
-  ansprechpartner: string
-  email: string
-  telefon: string | null
-  status: string | null
-  follow_up: { date: string; note: string; done: boolean } | null
-  activities: { id: string; date: string; text: string; user: string }[] | null
-  dokumente: { id: string; name: string; typ: string; datum: string; groesse: string; url: string }[] | null
+function deDatum(iso: string | undefined | null): string {
+  const m = (iso ?? '').match(/^(\d{4})-(\d{2})-(\d{2})/)
+  return m ? `${m[3]}.${m[2]}.${m[1]}` : (iso ?? '')
 }
 
-type KundeMatch = { kunde: KundeRow; score: number }
-
-function matchKandidaten(kunden: KundeRow[], text: string): KundeMatch[] {
-  const tokens = woerter(text)
-  if (tokens.length === 0) return []
-  let bestScore = 0
-  let beste: KundeMatch[] = []
-  for (const k of kunden) {
-    const ansprechpartnerWoerter = woerter(k.ansprechpartner)
-    const haystackWoerter = new Set(woerter(`${k.firma} ${k.ansprechpartner} ${k.email}`))
-    const score = tokens.filter((t) => haystackWoerter.has(t)).length
-    if (score === 0) continue
-    const matchedWoerter = new Set(tokens.filter((t) => haystackWoerter.has(t)))
-    const nurVorname =
-      ansprechpartnerWoerter.length > 1 &&
-      matchedWoerter.size === 1 &&
-      matchedWoerter.has(ansprechpartnerWoerter[0]) &&
-      !ansprechpartnerWoerter.slice(1).some((w) => matchedWoerter.has(w))
-    if (nurVorname) continue
-    if (score > bestScore) {
-      bestScore = score
-      beste = [{ kunde: k, score }]
-    } else if (score === bestScore) {
-      beste.push({ kunde: k, score })
-    }
-  }
-  return beste
+function formatGroesse(bytes: number): string {
+  return bytes < 1024 * 1024 ? `${Math.round(bytes / 1024)} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
-
-// ---------- Datei-Download von Telegram, Upload in denselben Storage-Bucket wie E-Mail-Anhänge ----------
 
 function sicheresPfadsegment(s: string): string {
   return s.replace(/[^a-zA-Z0-9._-]/g, '_')
 }
 
-// btoa auf das gesamte Array gespreizt würde bei großen Scans (mehrere MB) den Call-Stack sprengen —
-// deshalb in 32-KB-Blöcken.
+function kuerze(s: string, max: number): string {
+  return s.length > max ? `${s.slice(0, max)} … (gekürzt)` : s
+}
+
+// btoa auf das gesamte Array gespreizt würde bei großen Scans den Call-Stack sprengen.
 function bytesZuBase64(bytes: Uint8Array): string {
   let binaer = ''
   const blockgroesse = 0x8000
@@ -125,63 +112,171 @@ function bytesZuBase64(bytes: Uint8Array): string {
   return btoa(binaer)
 }
 
-async function telegramDateiHerunterladen(fileId: string): Promise<{ bytes: Uint8Array; telegramPfad: string } | null> {
+// ---------- Kunden ----------
+
+type Activity = { id: string; date: string; text: string; user: string }
+type Dokument = { id: string; name: string; typ: string; datum: string; groesse: string; url: string }
+type KundeRow = {
+  id: string
+  bereich: string
+  firma: string
+  ansprechpartner: string
+  email: string
+  telefon: string | null
+  status: string | null
+  prioritaet: string | null
+  verantwortlich: string | null
+  follow_up: { date?: string; note?: string; done?: boolean } | null
+  activities: Activity[] | null
+  dokumente: Dokument[] | null
+}
+
+const KUNDE_SPALTEN = 'id, bereich, firma, ansprechpartner, email, telefon, status, prioritaet, verantwortlich, follow_up, activities, dokumente'
+
+const BEREICH_LABEL: Record<string, string> = {
+  beratung: 'Unternehmensberatung',
+  immobilienkunden: 'Immobilien',
+  erben: 'Erben',
+  betriebsuebergabe: 'Betriebsübergabe',
+  betriebsformen: 'Betriebsformen',
+  akademie: 'Akademie',
+  finanzierungen: 'Finanzierungen',
+  privat: 'Privat',
+}
+
+// Gespiegelt aus src/data/statusNetworks.ts (eigene Laufzeit, kein gemeinsamer Import möglich).
+const STATUS_JE_BEREICH: Record<string, Record<string, string>> = {
+  beratung: {
+    lead: 'Lead / Neuanfrage', erstkontakt: 'Erstkontakt hergestellt', termin: 'Erstgespräch terminiert',
+    durchgefuehrt: 'Erstgespräch durchgeführt', konzept: 'Konzeptvorstellung', angebot: 'Angebot / Beratungsvertrag versendet',
+    unterschrieben: 'Beratungsvertrag unterschrieben', aktives_mandat: 'Aktives Mandat / laufende Beratung',
+    rechnung_gestellt: 'Leistung erbracht / Rechnung gestellt', abgeschlossen: 'Abgeschlossen',
+    wiedervorlage: 'Wiedervorlage / On Hold', verloren: 'Verloren / Kein Interesse', nicht_qualifiziert: 'Nicht qualifiziert',
+  },
+  erben: {
+    erstkontakt: 'Erstkontakt', bedarfsanalyse: 'Bedarfsanalyse / Erstgespräch', unterlagen_angefordert: 'Unterlagen/Mandantenfragebogen angefordert',
+    konzept_erstellt: 'Mandantenmemo/Konzept erstellt', beratungsgespraech: 'Beratungsgespräch geführt',
+    umsetzung: 'Umsetzung (Testament/Vollmacht/Stiftung)', abgeschlossen: 'Abgeschlossen',
+    wiedervorlage: 'Wiedervorlage / On Hold', verloren: 'Verloren / Kein Interesse',
+  },
+  betriebsuebergabe: {
+    erstkontakt: 'Erstkontakt', bedarfsanalyse: 'Bedarfsanalyse / Erstgespräch', unternehmensbewertung: 'Unternehmensbewertung / Analyse',
+    nachfolgekonzept: 'Nachfolgekonzept erstellt', nachfolgersuche: 'Nachfolger-/Käufersuche', verhandlung: 'Verhandlung / Vertragsentwurf',
+    notartermin: 'Notartermin / Übergabe vollzogen', abgeschlossen: 'Abgeschlossen',
+    wiedervorlage: 'Wiedervorlage / On Hold', verloren: 'Verloren / Kein Interesse',
+  },
+  betriebsformen: {
+    erstkontakt: 'Erstkontakt', bedarfsanalyse: 'Ist-Analyse aktuelle Rechtsform', konzept_erstellt: 'Rechtsformvergleich/Konzept erstellt',
+    beratungsgespraech: 'Beratungsgespräch geführt', umsetzung: 'Umsetzung (Gründung/Umwandlung)',
+    handelsregister: 'Notartermin/Handelsregistereintrag', abgeschlossen: 'Abgeschlossen',
+    wiedervorlage: 'Wiedervorlage / On Hold', verloren: 'Verloren / Kein Interesse',
+  },
+  akademie: {
+    interessent: 'Interessent', anmeldung_eingegangen: 'Anmeldung eingegangen', platz_bestaetigt: 'Kursplatz bestätigt',
+    kurs_laeuft: 'Kurs läuft', abgeschlossen: 'Abgeschlossen / Zertifikat ausgestellt',
+    wiedervorlage: 'Wiedervorlage / On Hold', verloren: 'Abgebrochen / Kein Interesse',
+  },
+  finanzierungen: {
+    interessent: 'Interessent', risikoprofil_erstellt: 'Risikoprofil / Geeignetheitsprüfung erstellt',
+    beratungsgespraech: 'Beratungsgespräch geführt (Beratungsprotokoll)', zeichnung_eingegangen: 'Zeichnungsschein eingegangen',
+    kapital_eingezahlt: 'Kapital eingezahlt', abgeschlossen: 'Abgeschlossen (Aktiver Investor)',
+    wiedervorlage: 'Wiedervorlage / On Hold', verloren: 'Verloren / Kein Interesse',
+  },
+  privat: {
+    neu: 'Neu', in_kontakt: 'In Kontakt', termin_vereinbart: 'Termin vereinbart', erledigt: 'Erledigt',
+    wiedervorlage: 'Wiedervorlage / On Hold', abgebrochen: 'Abgebrochen / Nicht weiter verfolgt',
+  },
+  immobilienkunden: {
+    interessent: 'Interessent / Erstkontakt', besichtigung: 'Besichtigung vereinbart', angebot: 'Angebot abgegeben',
+    verhandlung: 'In Verhandlung', abgeschlossen: 'Abgeschlossen',
+    wiedervorlage: 'Wiedervorlage / On Hold', verloren: 'Verloren / Kein Interesse',
+  },
+}
+
+const NEUANLAGE_BEREICHE = ['beratung', 'immobilienkunden', 'erben', 'betriebsuebergabe', 'betriebsformen', 'akademie', 'finanzierungen']
+const START_STATUS: Record<string, string> = {
+  beratung: 'lead', erben: 'erstkontakt', betriebsuebergabe: 'erstkontakt', betriebsformen: 'erstkontakt',
+  akademie: 'interessent', finanzierungen: 'interessent', immobilienkunden: 'interessent',
+}
+
+function norm(s: string | null | undefined): string {
+  return (s ?? '').toLowerCase().replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss')
+}
+
+const FUELLWOERTER = new Set(
+  [
+    'bei', 'der', 'die', 'das', 'den', 'dem', 'des', 'und', 'ist', 'war', 'wie', 'was', 'wer', 'für', 'mit', 'von',
+    'vom', 'zum', 'zur', 'auf', 'aus', 'herr', 'herrn', 'frau', 'firma', 'kunde', 'kunden', 'kundin', 'mandant', 'akte',
+  ].map(norm),
+)
+
+function suchWoerter(s: string): string[] {
+  return (norm(s).match(/[a-z0-9]{2,}/g) ?? []).filter((w) => !FUELLWOERTER.has(w))
+}
+
+function sucheKunden(kunden: KundeRow[], begriff: string): KundeRow[] {
+  const q = suchWoerter(begriff)
+  if (q.length === 0) return []
+  const ganzerBegriff = norm(begriff).trim()
+  return kunden
+    .map((k) => {
+      const hay = norm(`${k.firma} ${k.ansprechpartner} ${k.email}`)
+      const hayWoerter: string[] = hay.match(/[a-z0-9]{2,}/g) ?? []
+      let score = 0
+      for (const t of q) {
+        if (hayWoerter.includes(t)) score += 3
+        else if (t.length >= 3 && hayWoerter.some((w) => w.startsWith(t))) score += 2
+        else if (t.length >= 4 && hay.includes(t)) score += 1
+      }
+      if (ganzerBegriff.length >= 4 && hay.includes(ganzerBegriff)) score += 3
+      return { k, score }
+    })
+    .filter((x) => x.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 8)
+    .map((x) => x.k)
+}
+
+async function ladeKunde(supabase: Supa, id: unknown): Promise<KundeRow | null> {
+  if (typeof id !== 'string' || !id) return null
+  const { data } = await supabase.from('kunden').select(KUNDE_SPALTEN).eq('id', id).maybeSingle()
+  return (data as KundeRow | null) ?? null
+}
+
+function kundeName(k: { firma: string; ansprechpartner: string }): string {
+  return k.ansprechpartner && k.ansprechpartner !== k.firma ? `${k.firma} (${k.ansprechpartner})` : k.firma
+}
+
+const KEIN_KUNDE = 'Fehler: Es gibt keinen Kunden mit dieser kunde_id. Ermittle die richtige ID mit kunden_suchen.'
+
+// ---------- Dateien ----------
+
+async function telegramDateiHerunterladen(fileId: string): Promise<Uint8Array | null> {
+  if (!BOT_TOKEN) return null
   const metaRes = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/getFile?file_id=${fileId}`)
   const meta = await metaRes.json()
   if (!meta.ok) return null
-  const telegramPfad = meta.result.file_path as string
-  const fileRes = await fetch(`https://api.telegram.org/file/bot${BOT_TOKEN}/${telegramPfad}`)
+  const fileRes = await fetch(`https://api.telegram.org/file/bot${BOT_TOKEN}/${meta.result.file_path}`)
   if (!fileRes.ok) return null
-  return { bytes: new Uint8Array(await fileRes.arrayBuffer()), telegramPfad }
+  return new Uint8Array(await fileRes.arrayBuffer())
 }
-
-// ---------- Sammel-Scan aufteilen (ein ganzer Aktenordner auf einmal gescannt und geschickt) ----------
 
 async function pdfSeitenzahl(bytes: Uint8Array): Promise<number | null> {
   try {
-    const doc = await PDFDocument.load(bytes)
-    return doc.getPageCount()
+    return (await PDFDocument.load(bytes)).getPageCount()
   } catch {
-    return null // z.B. beschädigt/verschlüsselt — dann läuft die Datei einfach als Einzeldokument weiter.
+    return null // beschädigt/verschlüsselt — läuft dann als Einzeldatei weiter
   }
 }
 
-// Schneidet die Seiten [startSeite, endSeite] (1-basiert, beide inklusive) als eigenständige PDF aus.
 async function pdfSeitenAusschneiden(bytes: Uint8Array, startSeite: number, endSeite: number): Promise<Uint8Array> {
   const quelle = await PDFDocument.load(bytes)
   const ziel = await PDFDocument.create()
   const indices = Array.from({ length: endSeite - startSeite + 1 }, (_, i) => startSeite - 1 + i)
-  const kopiert = await ziel.copyPages(quelle, indices)
-  for (const seite of kopiert) ziel.addPage(seite)
+  for (const seite of await ziel.copyPages(quelle, indices)) ziel.addPage(seite)
   return ziel.save()
 }
 
-// Grobe, aber praxistaugliche Duplikat-Erkennung: kein Abgleich des tatsächlichen Dateiinhalts
-// (dafür müsste jedes bereits abgelegte Dokument erneut gelesen werden), sondern ein Abgleich der
-// vorhandenen Dateinamen gegen Kategorie + erkanntes Datum des neuen Teildokuments — reicht für den
-// praktischen Fall ("gleiche Unterlage versehentlich zweimal eingescannt") meist aus.
-function findeVermutetesDuplikat(
-  vorhandeneDokumente: { id: string; name: string }[],
-  kategorie: string,
-  erkanntesDatum: string | undefined,
-): { id: string; name: string } | null {
-  const kategorieWort = kategorie.toLowerCase().replace(/[^a-zäöüß]/g, '')
-  if (!kategorieWort) return null
-  const datumsTeile = (erkanntesDatum ?? '').split('-').filter(Boolean) // [YYYY, MM, DD?]
-  for (const d of vorhandeneDokumente) {
-    const nameNorm = d.name.toLowerCase()
-    if (!nameNorm.includes(kategorieWort)) continue
-    if (datumsTeile.length === 0) return d // Kategorie passt, kein Datum zum Gegenprüfen vorhanden
-    const passtZumDatum = datumsTeile.every((teil) => nameNorm.includes(teil))
-    if (passtZumDatum) return d
-  }
-  return null
-}
-
-type TelegramDokument = { id: string; name: string; typ: string; datum: string; groesse: string; url: string }
-
-// Spiegelt die Antwortstruktur der email-gateway-Action "split_scan_dokument" (eigene Edge Function,
-// kein geteilter Import möglich).
 type ScanAufteilung = {
   erkannter_name?: string
   erkannte_firma?: string
@@ -189,286 +284,783 @@ type ScanAufteilung = {
     start_seite: number
     end_seite: number
     kategorie: string
-    erkannter_name?: string
     erkanntes_datum?: string
     vorgeschlagener_dateiname: string
   }[]
 }
 
-// Verarbeitet einen mehrseitigen PDF-Sammel-Scan vollständig: KI-Analyse (Aufteilung in
-// Einzeldokumente), Kunden-Zuordnung, tatsächliches Zerschneiden der PDF, Duplikat-Prüfung gegen die
-// bereits vorhandenen Dokumente des Kunden und — falls nötig — Start einer Rückfrage-Warteschlange
-// (ein Duplikat nach dem anderen, siehe aktion_feld "duplikat_entscheidung" weiter unten). Dokumente
-// ohne Duplikat-Verdacht werden sofort automatisch abgelegt.
-async function handleMehrseitigerScan(
-  supabase: ReturnType<typeof createClient>,
-  mitarbeiter: { id: string; name: string },
-  chatId: number,
-  bytes: Uint8Array,
-  dateiname: string,
-  seitenzahl: number,
-  caption: string,
-): Promise<void> {
-  let aufteilung: ScanAufteilung | null = null
-  try {
-    const base64 = bytesZuBase64(bytes)
-    const result = await callEmailGateway('split_scan_dokument', { datei_base64: base64, dateiname, seitenzahl })
-    aufteilung = result.aufteilung
-  } catch (err) {
-    console.error('split_scan_dokument fehlgeschlagen:', err)
+async function speichereDatei(supabase: Supa, bytes: Uint8Array, dateiname: string, contentType: string): Promise<string | null> {
+  const pfad = `${ORDNER}/${Date.now()}_${sicheresPfadsegment(dateiname)}`
+  const { error } = await supabase.storage.from(BUCKET).upload(pfad, bytes, { contentType, upsert: true })
+  if (error) {
+    console.error('Upload fehlgeschlagen:', error.message)
+    return null
   }
-  if (!aufteilung || !aufteilung.dokumente || aufteilung.dokumente.length === 0) {
-    await sendTelegramMessage(chatId, 'Der Sammel-Scan konnte nicht automatisch analysiert werden — bitte nochmal schicken oder einzeln aufteilen.')
-    return
-  }
-
-  // Erst ALLE Teildokumente zerschneiden und sichern — unabhängig davon, ob schon ein passender
-  // Kunde existiert. Vorher wurde bei fehlendem/mehrdeutigem Treffer gar nichts gespeichert (echter
-  // Fund beim Testen: ein ganz neuer Kunde, der noch nicht im CRM existiert, bekam nur "keinen
-  // passenden Kunden gefunden" zu hören und die Scans waren verloren — genau der Fall, für den die
-  // Funktion eigentlich gedacht ist).
-  const heute = new Date().toISOString().slice(0, 10)
-  const alleTeildokumente: { dokument: TelegramDokument; kategorie: string; erkanntesDatum?: string }[] = []
-  for (const teil of aufteilung.dokumente) {
-    let teilBytes: Uint8Array
-    try {
-      teilBytes = await pdfSeitenAusschneiden(bytes, teil.start_seite, teil.end_seite)
-    } catch (err) {
-      console.error('Seiten-Ausschnitt fehlgeschlagen:', err)
-      continue
-    }
-    const teilDateiname = teil.vorgeschlagener_dateiname || `${teil.kategorie}_${teil.start_seite}-${teil.end_seite}.pdf`
-    const pfad = `telegram/${Date.now()}_${sicheresPfadsegment(teilDateiname)}`
-    const { error: uploadError } = await supabase.storage.from('email-anhaenge').upload(pfad, teilBytes, { contentType: 'application/pdf', upsert: true })
-    if (uploadError) {
-      console.error('Upload Teildokument fehlgeschlagen:', uploadError.message)
-      continue
-    }
-    const { data: urlData } = supabase.storage.from('email-anhaenge').getPublicUrl(pfad)
-    alleTeildokumente.push({
-      dokument: {
-        id: crypto.randomUUID(),
-        name: teilDateiname,
-        typ: 'application/pdf',
-        datum: heute,
-        groesse: formatGroesse(teilBytes.length),
-        url: urlData.publicUrl,
-      },
-      kategorie: teil.kategorie,
-      erkanntesDatum: teil.erkanntes_datum,
-    })
-  }
-  if (alleTeildokumente.length === 0) {
-    await sendTelegramMessage(chatId, 'Die erkannten Dokumente konnten nicht gespeichert werden — bitte nochmal schicken.')
-    return
-  }
-
-  const { data: kundenRows } = await supabase
-    .from('kunden')
-    .select('id, bereich, firma, ansprechpartner, email, telefon, status, follow_up, activities, dokumente')
-  const alleKunden = (kundenRows ?? []) as KundeRow[]
-  const suchtext = [caption, aufteilung.erkannter_name, aufteilung.erkannte_firma].filter(Boolean).join(' ')
-  const kandidaten = suchtext ? matchKandidaten(alleKunden, suchtext) : []
-
-  if (kandidaten.length > 1) {
-    // Mehrdeutig: anders als beim normalen Text-Chat (siehe Rückfrage-Auflösung weiter unten) gab es
-    // hier bisher KEINEN Rückfrage-Zustand — die nächste Antwort ("Lipps", "nein rückgängig machen",
-    // ...) landete dadurch im allgemeinen Text-Assistenten und wurde dort, mangels eigenem Treffer,
-    // fälschlich dem zuletzt bearbeiteten (völlig anderen) Kunden als Notiz zugeordnet. Echter Fund
-    // beim Testen. Jetzt wird die Mehrdeutigkeit wie beim Text-Chat per Rückfrage-Zustand aufgelöst.
-    await supabase
-      .from('mitarbeiter')
-      .update({
-        telegram_pending: {
-          text: '',
-          klass: null,
-          kandidaten_ids: kandidaten.map((k) => k.kunde.id),
-          erstellt_am: new Date().toISOString(),
-          aktion_feld: 'scan_mehrdeutig',
-          neuer_kunde_scan_dokumente: alleTeildokumente.map((t) => t.dokument),
-          scan_teildokumente_meta: alleTeildokumente.map((t) => ({ id: t.dokument.id, kategorie: t.kategorie, erkanntesDatum: t.erkanntesDatum })),
-        },
-      })
-      .eq('id', mitarbeiter.id)
-    await sendTelegramMessage(
-      chatId,
-      `Der Scan enthält ${alleTeildokumente.length} erkannte Dokument(e) und ist gespeichert, aber ich habe mehrere passende Kunden gefunden: ${kandidaten.map((k) => `${k.kunde.firma} (${k.kunde.ansprechpartner})`).join(', ')}. Welchen genau meinst du?`,
-    )
-    return
-  }
-
-  if (kandidaten.length === 0) {
-    // Kein Treffer: neuen Kunden für den GESAMTEN Scan vorschlagen (nicht nur eine einzelne Datei
-    // wie im Einzeldokument-Ablauf) — der Standardfall beim Erstanlegen eines Aktenordners.
-    await supabase
-      .from('mitarbeiter')
-      .update({
-        telegram_pending: {
-          text: '',
-          klass: null,
-          kandidaten_ids: [],
-          erstellt_am: new Date().toISOString(),
-          aktion_feld: 'neuer_kunde_scan_bestaetigen',
-          neuer_kunde_name: aufteilung.erkannter_name ?? '',
-          neuer_kunde_firma: aufteilung.erkannte_firma ?? caption ?? '',
-          neuer_kunde_scan_dokumente: alleTeildokumente.map((t) => t.dokument),
-        },
-      })
-      .eq('id', mitarbeiter.id)
-    await sendTelegramMessage(
-      chatId,
-      `Der Scan enthält ${alleTeildokumente.length} erkannte Dokument(e) (${[...new Set(aufteilung.dokumente.map((d) => d.kategorie))].join(', ')}), aber ich habe keinen passenden Kunden gefunden. Alle Dokumente sind gespeichert. Soll ich dafür einen neuen Kunden anlegen? Antworte mit dem Bereich (z.B. "finanzierungen", "erben", "beratung", "betriebsuebergabe", "betriebsformen" oder "akademie") oder "nein".`,
-    )
-    return
-  }
-
-  await legeTeildokumenteBeiKundeAb(supabase, mitarbeiter, chatId, kandidaten[0].kunde, alleTeildokumente)
+  return pfad
 }
 
-// Gemeinsame Ablage-Logik für einen bereits eindeutig feststehenden Kunden — genutzt sowohl direkt
-// (genau ein Treffer) als auch nach Auflösung einer Mehrdeutigkeits-Rückfrage (aktion_feld
-// "scan_mehrdeutig" weiter unten), damit beide Pfade exakt dieselbe Duplikat-Prüfung durchlaufen.
-async function legeTeildokumenteBeiKundeAb(
-  supabase: ReturnType<typeof createClient>,
-  mitarbeiter: { id: string; name: string },
-  chatId: number,
-  kunde: KundeRow,
-  teildokumente: { dokument: TelegramDokument; kategorie: string; erkanntesDatum?: string }[],
-): Promise<void> {
-  const heute = new Date().toISOString().slice(0, 10)
-  const vorhandeneDokumente = (kunde.dokumente ?? []) as TelegramDokument[]
-  const abgelegteNamen: string[] = []
-  const neueDokumenteDirekt: TelegramDokument[] = []
-  const neueActivities: { id: string; date: string; text: string; user: string }[] = []
-  const duplikatWarteschlange: { dokument: TelegramDokument; bestehendesId: string; bestehenderName: string }[] = []
+function anzeigeName(dateiImOrdner: string): string {
+  return dateiImOrdner.replace(/^\d{10,}_/, '')
+}
 
-  for (const { dokument, kategorie, erkanntesDatum } of teildokumente) {
-    const duplikat = findeVermutetesDuplikat(vorhandeneDokumente, kategorie, erkanntesDatum)
-    if (duplikat) {
-      duplikatWarteschlange.push({ dokument, bestehendesId: duplikat.id, bestehenderName: duplikat.name })
-    } else {
-      neueDokumenteDirekt.push(dokument)
-      abgelegteNamen.push(dokument.name)
-      neueActivities.push({
-        id: crypto.randomUUID(),
-        date: heute,
-        text: `Aus Sammel-Scan per Telegram von ${mitarbeiter.name} automatisch abgelegt: „${dokument.name}" — ${kategorie}`,
-        user: mitarbeiter.name,
-      })
+// Sichert eine per Telegram geschickte Datei (Sammel-Scans werden vorher in Einzeldokumente zerlegt)
+// und liefert eine Beschreibung des Eingangs, die der Assistent als Nachricht bekommt. Die Zuordnung
+// zum Kunden entscheidet der Assistent — er kennt das Gespräch ("die Scans sind für Lipps").
+// deno-lint-ignore no-explicit-any
+async function verarbeiteDateiEingang(supabase: Supa, message: any): Promise<string> {
+  const photo = message.photo?.at(-1) // höchste Auflösung ist der letzte Eintrag
+  const document = message.document
+  const caption: string = message.caption?.trim() ?? ''
+  const bytes = await telegramDateiHerunterladen(document?.file_id ?? photo.file_id)
+  if (!bytes) return '[Datei-Eingang per Telegram] Die geschickte Datei konnte nicht von Telegram heruntergeladen werden. Nichts wurde gespeichert.'
+
+  const dateiname: string = document?.file_name ?? `foto_${Date.now()}.jpg`
+  const contentType: string = document?.mime_type ?? 'image/jpeg'
+  const kopf = [
+    '[Datei-Eingang per Telegram — Systemmeldung, nicht vom Mitarbeiter getippt]',
+    `Originaldatei: „${dateiname}"`,
+    `Bildunterschrift des Mitarbeiters: ${caption ? `„${caption}"` : '(keine)'}`,
+  ]
+
+  const seiten = contentType === 'application/pdf' ? await pdfSeitenzahl(bytes) : null
+  if (seiten && seiten > 1) {
+    let aufteilung: ScanAufteilung | null = null
+    try {
+      const result = await callEmailGateway('split_scan_dokument', { datei_base64: bytesZuBase64(bytes), dateiname, seitenzahl: seiten })
+      aufteilung = result.aufteilung
+    } catch (err) {
+      console.error('split_scan_dokument fehlgeschlagen:', err)
     }
+    const zeilen: string[] = []
+    for (const teil of aufteilung?.dokumente ?? []) {
+      try {
+        const teilBytes = await pdfSeitenAusschneiden(bytes, teil.start_seite, teil.end_seite)
+        const name = teil.vorgeschlagener_dateiname || `${teil.kategorie}_${teil.start_seite}-${teil.end_seite}.pdf`
+        const pfad = await speichereDatei(supabase, teilBytes, name, 'application/pdf')
+        if (!pfad) continue
+        zeilen.push(
+          `${zeilen.length + 1}. pfad=${pfad} | Name: ${name} | Kategorie: ${teil.kategorie}${teil.erkanntes_datum ? ` | Datum im Dokument: ${teil.erkanntes_datum}` : ''} | Seiten ${teil.start_seite}–${teil.end_seite}`,
+        )
+      } catch (err) {
+        console.error('Seiten-Ausschnitt fehlgeschlagen:', err)
+      }
+    }
+    if (zeilen.length > 0) {
+      const erkannt = [aufteilung?.erkannter_name && `Name „${aufteilung.erkannter_name}"`, aufteilung?.erkannte_firma && `Firma „${aufteilung.erkannte_firma}"`].filter(Boolean)
+      return [
+        ...kopf,
+        `Sammel-Scan mit ${seiten} Seiten, automatisch in ${zeilen.length} Einzeldokument(e) zerlegt.`,
+        `Im Scan erkannt: ${erkannt.length > 0 ? erkannt.join(', ') : 'kein eindeutiger Name'}`,
+        'Gespeichert, noch keiner Akte zugeordnet:',
+        ...zeilen,
+      ].join('\n')
+    }
+    // Aufteilung nicht gelungen: den Scan als Ganzes sichern statt ihn zu verlieren.
+    const pfad = await speichereDatei(supabase, bytes, dateiname, contentType)
+    if (!pfad) return `${kopf.join('\n')}\nDie Datei konnte nicht gespeichert werden.`
+    return [
+      ...kopf,
+      `Sammel-Scan mit ${seiten} Seiten. Die automatische Aufteilung in Einzeldokumente ist fehlgeschlagen; der Scan wurde als eine Datei gespeichert.`,
+      'Gespeichert, noch keiner Akte zugeordnet:',
+      `1. pfad=${pfad} | Name: ${dateiname}`,
+    ].join('\n')
   }
 
-  if (neueDokumenteDirekt.length > 0) {
-    await supabase
-      .from('kunden')
-      .update({ dokumente: [...neueDokumenteDirekt, ...vorhandeneDokumente], activities: [...neueActivities, ...(kunde.activities ?? [])] })
-      .eq('id', kunde.id)
+  let klassifikation: { erkannter_name?: string; erkannte_firma?: string; kategorie?: string } | null = null
+  try {
+    const result = await callEmailGateway('classify_kunden_dokument', { datei_base64: bytesZuBase64(bytes), media_type: contentType, dateiname })
+    klassifikation = result.klassifikation
+  } catch (err) {
+    console.error('classify_kunden_dokument fehlgeschlagen:', err)
   }
-  await supabase.from('mitarbeiter').update({ telegram_last_kunde_id: kunde.id, telegram_last_kunde_bereich: kunde.bereich }).eq('id', mitarbeiter.id)
+  const pfad = await speichereDatei(supabase, bytes, dateiname, contentType)
+  if (!pfad) return `${kopf.join('\n')}\nDie Datei konnte nicht gespeichert werden.`
+  const erkannt = [
+    klassifikation?.erkannter_name && `Name „${klassifikation.erkannter_name}"`,
+    klassifikation?.erkannte_firma && `Firma „${klassifikation.erkannte_firma}"`,
+    klassifikation?.kategorie && `Art: ${klassifikation.kategorie}`,
+  ].filter(Boolean)
+  return [
+    ...kopf,
+    `Im Dokument erkannt: ${erkannt.length > 0 ? erkannt.join(', ') : 'nichts Eindeutiges'}`,
+    'Gespeichert, noch keiner Akte zugeordnet:',
+    `1. pfad=${pfad} | Name: ${dateiname}`,
+  ].join('\n')
+}
 
-  if (duplikatWarteschlange.length === 0) {
-    await sendTelegramMessage(
-      chatId,
-      `Sammel-Scan aufgeteilt und bei ${kunde.firma} (${kunde.ansprechpartner}) abgelegt: ${abgelegteNamen.map((n) => `„${n}"`).join(', ')}.`,
-    )
-    return
+type OrdnerDatei = { name: string; created_at?: string; metadata?: { size?: number; mimetype?: string } | null }
+
+async function listeOrdner(supabase: Supa): Promise<OrdnerDatei[]> {
+  const { data, error } = await supabase.storage.from(BUCKET).list(ORDNER, { limit: 1000, sortBy: { column: 'created_at', order: 'desc' } })
+  if (error) throw new Error(`Dateiablage nicht lesbar: ${error.message}`)
+  return ((data ?? []) as OrdnerDatei[]).filter((d) => d.metadata) // Unterordner haben keine Metadaten
+}
+
+// Alles, was irgendeine Kunden- oder Objektakte an Dateien referenziert, als ein durchsuchbarer Text.
+async function ladeReferenzen(supabase: Supa): Promise<{ text: string; kunden: Pick<KundeRow, 'id' | 'firma' | 'ansprechpartner' | 'dokumente'>[] }> {
+  const [{ data: kunden }, { data: objekte }] = await Promise.all([
+    supabase.from('kunden').select('id, firma, ansprechpartner, dokumente'),
+    supabase.from('objekte').select('dokumente'),
+  ])
+  return { text: JSON.stringify([kunden ?? [], objekte ?? []]), kunden: (kunden ?? []) as Pick<KundeRow, 'id' | 'firma' | 'ansprechpartner' | 'dokumente'>[] }
+}
+
+// ---------- Gesprächszustand ----------
+
+// Ein Zug = eine Nachricht des Mitarbeiters samt allem, was der Assistent daraufhin getan hat
+// (Werkzeug-Aufrufe und deren Ergebnisse) und seiner Antwort. Die Werkzeug-Ergebnisse müssen im
+// Verlauf bleiben: sieht der Assistent später nur noch seine eigenen Sätze, hält er sie für ungeprüft
+// und nimmt korrekte Aussagen wieder zurück.
+// deno-lint-ignore no-explicit-any
+type Nachricht = { role: 'user' | 'assistant'; content: any }
+type AgentState = {
+  v: 3
+  zuege: { z: string; msgs: Nachricht[] }[]
+  aktionen: { z: string; text: string }[]
+  loesch_anfrage?: { kunde_id: string; name: string; z: string }
+}
+
+// Liest ältere Zustände tolerant (ohne "zuege") — die werden einfach verworfen.
+function ladeState(raw: unknown): AgentState {
+  // deno-lint-ignore no-explicit-any
+  const r = raw as any
+  const grenze = Date.now() - 12 * 60 * 60 * 1000
+  const zuege = r?.v === 3 && Array.isArray(r.zuege)
+    // deno-lint-ignore no-explicit-any
+    ? r.zuege.filter((zug: any) => Array.isArray(zug?.msgs) && new Date(zug.z).getTime() > grenze)
+    : []
+  return {
+    v: 3,
+    zuege,
+    aktionen: Array.isArray(r?.aktionen) ? r.aktionen.slice(-12) : [],
+    loesch_anfrage: r?.loesch_anfrage,
   }
+}
 
-  await supabase
-    .from('mitarbeiter')
-    .update({
-      telegram_pending: {
-        text: '',
-        klass: null,
-        kandidaten_ids: [],
-        erstellt_am: new Date().toISOString(),
-        aktion_feld: 'duplikat_entscheidung',
-        duplikat_bereich: kunde.bereich,
-        duplikat_kunde_id: kunde.id,
-        duplikat_warteschlange: duplikatWarteschlange,
-      },
-    })
-    .eq('id', mitarbeiter.id)
-
-  const vorabText = abgelegteNamen.length > 0 ? `${abgelegteNamen.length} Dokument(e) bereits automatisch abgelegt. ` : ''
-  const erstes = duplikatWarteschlange[0]
-  const restHinweis =
-    duplikatWarteschlange.length > 1 ? ` (danach noch ${duplikatWarteschlange.length - 1} weitere Rückfrage${duplikatWarteschlange.length > 2 ? 'n' : ''})` : ''
-  await sendTelegramMessage(
-    chatId,
-    `${vorabText}Für „${erstes.dokument.name}" gibt es möglicherweise schon „${erstes.bestehenderName}" bei ${kunde.firma}. Was soll ich tun — "überschreiben", "kopie", "ignorieren" oder "prüfen" (als Kopie ablegen + Hinweis in der Akte)?${restHinweis}`,
+// Große Werkzeug-Ergebnisse (ganze Akte, Firmenüberblick) werden für den gespeicherten Verlauf
+// gekürzt; braucht der Assistent sie später wieder, ruft er das Werkzeug neu auf.
+function fuerVerlauf(msgs: Nachricht[]): Nachricht[] {
+  return msgs.map((m) =>
+    Array.isArray(m.content)
+      ? {
+          ...m,
+          // deno-lint-ignore no-explicit-any
+          content: m.content.map((b: any) =>
+            b?.type === 'tool_result' && typeof b.content === 'string' && b.content.length > 2500
+              ? { ...b, content: `${b.content.slice(0, 2500)} … (für den Verlauf gekürzt — bei Bedarf Werkzeug erneut aufrufen)` }
+              : b,
+          ),
+        }
+      : m,
   )
 }
 
-// ---------- Firmenwissen-Kontext (Server-Port von src/lib/firmenwissenKontext.ts) — damit über
-// Telegram wirklich JEDE Frage zu Kunden/Objekten/Prozessen beantwortbar ist, nicht nur zu einem per
-// Name erkannten einzelnen Kunden. Dieselbe Sicherheitslogik wie im Web: keine zusätzliche
-// Bereichs-Einschränkung, jeder aktive Mitarbeiter darf per RLS ohnehin alles lesen. ----------
+// ---------- Werkzeuge des Assistenten ----------
 
-async function buildFirmenwissenKontextServer(supabase: ReturnType<typeof createClient>): Promise<string> {
-  const [{ data: kundenRows }, { data: objekteRows }] = await Promise.all([
-    supabase.from('kunden').select('bereich, firma, ansprechpartner, status, verantwortlich, letzte_aktivitaet, kaeuferprofil'),
-    supabase.from('objekte').select('bezeichnung, adresse, typ, status, verantwortlich, activities, dokumente, eigentuemer'),
-  ])
+type Mitarbeiter = { id: string; name: string; rolle?: string | null; ist_admin?: boolean | null }
+type ToolKontext = {
+  supabase: Supa
+  mitarbeiter: Mitarbeiter
+  state: AgentState
+  vorherigeLoeschAnfrage: AgentState['loesch_anfrage']
+}
 
-  const abschnitte: string[] = []
-  abschnitte.push('=== KUNDEN / MANDANTEN (alle Bereiche) ===')
-  const nachBereich = new Map<string, any[]>()
-  for (const k of kundenRows ?? []) {
-    if (!nachBereich.has(k.bereich)) nachBereich.set(k.bereich, [])
-    nachBereich.get(k.bereich)!.push(k)
+const STATUS_HINWEIS = Object.entries(STATUS_JE_BEREICH)
+  .map(([bereich, stati]) => `${bereich}: ${Object.entries(stati).map(([id, label]) => `${id} (${label})`).join(', ')}`)
+  .join('\n')
+
+const TOOLS = [
+  {
+    name: 'kunden_suchen',
+    description: 'Sucht Kunden/Mandanten über alle Bereiche nach Name, Firma oder E-Mail. Liefert die kunde_id, die alle anderen Werkzeuge brauchen. Immer zuerst aufrufen, wenn ein Kunde genannt wird, dessen kunde_id du im Gespräch noch nicht ermittelt hast.',
+    input_schema: {
+      type: 'object',
+      properties: { suchbegriff: { type: 'string', description: 'Name, Firma oder E-Mail, z. B. "Lipps" oder "Simpfendörfer".' } },
+      required: ['suchbegriff'],
+    },
+  },
+  {
+    name: 'kundenakte_lesen',
+    description: 'Liest die vollständige Akte eines Kunden: Stammdaten, Status, Follow-up, Aktivitäten/Notizen (mit ID), Dokumente (mit ID), Gesprächsprotokolle. Grundlage für jede Frage zu einem Kunden (offene Punkte, vorhandene oder fehlende Unterlagen, letzter Stand).',
+    input_schema: { type: 'object', properties: { kunde_id: { type: 'string' } }, required: ['kunde_id'] },
+  },
+  {
+    name: 'notiz_speichern',
+    description: 'Schreibt eine Notiz in die Aktivitäten-Timeline eines Kunden. Nur verwenden, wenn der Mitarbeiter ausdrücklich etwas festhalten will.',
+    input_schema: {
+      type: 'object',
+      properties: { kunde_id: { type: 'string' }, text: { type: 'string', description: 'Der Notiztext, sauber ausformuliert.' } },
+      required: ['kunde_id', 'text'],
+    },
+  },
+  {
+    name: 'aufgabe_setzen',
+    description: 'Setzt das Follow-up (die nächste Aufgabe) eines Kunden oder hakt es ab. Jeder Kunde hat genau ein Follow-up; ein neues ersetzt das bisherige. Nur verwenden, wenn der Mitarbeiter sich etwas vormerken will — nicht für Dinge, die du selbst sofort erledigen kannst.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        kunde_id: { type: 'string' },
+        titel: { type: 'string', description: 'Was zu tun ist.' },
+        faellig_am: { type: 'string', description: 'Fälligkeit als JJJJ-MM-TT. Ohne Angabe des Mitarbeiters: heute.' },
+        erledigt: { type: 'boolean', description: 'true, um das bestehende Follow-up als erledigt abzuhaken (titel/faellig_am dann weglassen).' },
+      },
+      required: ['kunde_id'],
+    },
+  },
+  {
+    name: 'aktivitaet_aendern',
+    description: 'Korrigiert oder löscht einen einzelnen Eintrag der Aktivitäten-Timeline (z. B. eine falsch abgelegte Notiz). Die aktivitaet_id steht in kundenakte_lesen.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        kunde_id: { type: 'string' },
+        aktivitaet_id: { type: 'string' },
+        neuer_text: { type: 'string', description: 'Neuer Text des Eintrags.' },
+        loeschen: { type: 'boolean', description: 'true, um den Eintrag zu entfernen.' },
+      },
+      required: ['kunde_id', 'aktivitaet_id'],
+    },
+  },
+  {
+    name: 'kunde_anlegen',
+    description: 'Legt eine neue Kundenakte an. Vorher mit kunden_suchen prüfen, dass es den Kunden noch nicht gibt. Der Bereich muss feststehen — im Zweifel den Mitarbeiter fragen.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        bereich: { type: 'string', enum: NEUANLAGE_BEREICHE, description: 'beratung = Unternehmensberatung, immobilienkunden = Immobilien.' },
+        name: { type: 'string', description: 'Firmenname, bei Privatpersonen der volle Name.' },
+        ansprechpartner: { type: 'string' },
+        email: { type: 'string' },
+        telefon: { type: 'string' },
+      },
+      required: ['bereich', 'name'],
+    },
+  },
+  {
+    name: 'kunde_aendern',
+    description: `Ändert Stammdaten, Status, Priorität oder Zuständigkeit eines Kunden. Nur die Felder angeben, die sich ändern. Gültige Status-Werte je Bereich:\n${STATUS_HINWEIS}`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        kunde_id: { type: 'string' },
+        firma: { type: 'string' },
+        ansprechpartner: { type: 'string' },
+        email: { type: 'string' },
+        telefon: { type: 'string' },
+        prioritaet: { type: 'string', enum: ['Hoch', 'Mittel', 'Niedrig'] },
+        verantwortlich: { type: 'string', description: 'Name eines Mitarbeiters.' },
+        status: { type: 'string', description: 'Status-ID aus der Liste des jeweiligen Bereichs.' },
+      },
+      required: ['kunde_id'],
+    },
+  },
+  {
+    name: 'kunde_loeschen',
+    description: 'Löscht eine Kundenakte unwiderruflich. Der erste Aufruf löscht nie, sondern verlangt eine ausdrückliche Bestätigung des Mitarbeiters in seiner nächsten Nachricht; erst der Aufruf danach löscht.',
+    input_schema: { type: 'object', properties: { kunde_id: { type: 'string' } }, required: ['kunde_id'] },
+  },
+  {
+    name: 'unzugeordnete_dateien',
+    description: 'Listet per Telegram geschickte Dateien der letzten 30 Tage, die gespeichert, aber noch in keiner Akte abgelegt sind (neueste zuerst). Nutze das, wenn der Mitarbeiter sich auf früher geschickte Dateien oder Scans bezieht.',
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'dateien_ablegen',
+    description: 'Legt gespeicherte Dateien in die Akte eines Kunden. Die pfad-Werte stammen aus einem Datei-Eingang oder aus unzugeordnete_dateien. Meldet das Werkzeug ein mögliches Duplikat, frag den Mitarbeiter und rufe es für diese Datei erneut mit bei_duplikat auf.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        kunde_id: { type: 'string' },
+        dateien: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              pfad: { type: 'string', description: 'Exakt wie angegeben, beginnt mit "telegram/".' },
+              name: { type: 'string', description: 'Anzeigename in der Akte. Nur setzen, wenn der gespeicherte Name nichtssagend ist (z. B. foto_123.jpg) — dann einen sprechenden Namen mit Dateiendung.' },
+              kategorie: { type: 'string', description: 'Art des Dokuments, z. B. Rechnung, Vertrag, Ausweis.' },
+            },
+            required: ['pfad'],
+          },
+        },
+        bei_duplikat: { type: 'string', enum: ['kopie', 'ueberschreiben', 'ignorieren'], description: 'Nur nach Rückfrage beim Mitarbeiter setzen.' },
+      },
+      required: ['kunde_id', 'dateien'],
+    },
+  },
+  {
+    name: 'dokument_aus_akte_nehmen',
+    description: 'Nimmt ein Dokument wieder aus einer Akte heraus (z. B. beim falschen Kunden abgelegt). Die Datei selbst bleibt gespeichert und kann danach mit dateien_ablegen woanders abgelegt werden. Die dokument_id steht in kundenakte_lesen.',
+    input_schema: {
+      type: 'object',
+      properties: { kunde_id: { type: 'string' }, dokument_id: { type: 'string' } },
+      required: ['kunde_id', 'dokument_id'],
+    },
+  },
+  {
+    name: 'firmenueberblick',
+    description: 'Überblick über ALLE Kunden und Immobilien-Objekte (Status, Zuständigkeit, letzte Aktivität, Suchprofile) samt aller fälligen Follow-ups. Für Fragen, die nicht einen einzelnen Kunden betreffen ("was steht heute an", "welche Käufer suchen …", "wer ist im Status …").',
+    input_schema: { type: 'object', properties: {} },
+  },
+]
+
+// deno-lint-ignore no-explicit-any
+async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKontext): Promise<string> {
+  const { supabase, mitarbeiter, state } = ctx
+  const heute = heuteBerlin()
+  const protokolliere = (text: string) => state.aktionen.push({ z: new Date().toISOString(), text })
+
+  if (name === 'kunden_suchen') {
+    const { data } = await supabase.from('kunden').select(KUNDE_SPALTEN)
+    const treffer = sucheKunden((data ?? []) as KundeRow[], String(input.suchbegriff ?? ''))
+    if (treffer.length === 0) return 'Keine Treffer. Es gibt im CRM keinen Kunden, der dazu passt.'
+    return JSON.stringify(
+      treffer.map((k) => ({
+        kunde_id: k.id,
+        bereich: BEREICH_LABEL[k.bereich] ?? k.bereich,
+        firma: k.firma,
+        ansprechpartner: k.ansprechpartner,
+        email: k.email,
+        telefon: k.telefon,
+        status: STATUS_JE_BEREICH[k.bereich]?.[k.status ?? ''] ?? k.status,
+      })),
+    )
   }
-  for (const [bereich, kunden] of nachBereich) {
-    abschnitte.push(`-- ${bereich} (${kunden.length}) --`)
-    for (const k of kunden) {
+
+  if (name === 'kundenakte_lesen') {
+    const k = await ladeKunde(supabase, input.kunde_id)
+    if (!k) return KEIN_KUNDE
+    const { data: protokolle } = await supabase
+      .from('protokolle')
+      .select('datum, betreff, teilnehmer, text, ki_zusammenfassung')
+      .eq('bereich', k.bereich)
+      .eq('kunde_id', k.id)
+      .order('datum', { ascending: false })
+      .limit(8)
+    const fehlend = [!k.telefon && 'Telefon', !k.email && 'E-Mail', !k.ansprechpartner && 'Ansprechpartner', !k.verantwortlich && 'Verantwortlich'].filter(Boolean)
+    const fu = k.follow_up
+    return kuerze(
+      [
+        `Kunde: ${k.firma} | Ansprechpartner: ${k.ansprechpartner || '—'} | Bereich: ${BEREICH_LABEL[k.bereich] ?? k.bereich} (${k.bereich})`,
+        `E-Mail: ${k.email || '—'} | Telefon: ${k.telefon || '—'} | Verantwortlich: ${k.verantwortlich || '—'} | Priorität: ${k.prioritaet || '—'}`,
+        `Status: ${k.status ?? '—'} (${STATUS_JE_BEREICH[k.bereich]?.[k.status ?? ''] ?? 'unbekannt'})`,
+        `Follow-up: ${fu?.note ? `${fu.note} — fällig ${deDatum(fu.date)}${fu.done ? ' (erledigt)' : ''}` : 'keines'}`,
+        `Fehlende Stammdaten: ${fehlend.length > 0 ? fehlend.join(', ') : 'keine'}`,
+        '',
+        `Dokumente (${(k.dokumente ?? []).length}):`,
+        ...((k.dokumente ?? []).length > 0 ? (k.dokumente ?? []).map((d) => `- ${d.name} (${deDatum(d.datum)}, ${d.groesse}) [dokument_id=${d.id}]`) : ['(keine)']),
+        '',
+        'Aktivitäten/Notizen (neueste zuerst):',
+        ...((k.activities ?? []).length > 0
+          ? (k.activities ?? []).slice(0, 30).map((a) => `- ${deDatum(a.date)} ${a.user}: ${a.text} [aktivitaet_id=${a.id}]`)
+          : ['(keine)']),
+        '',
+        'Gesprächsprotokolle (neueste zuerst):',
+        ...((protokolle ?? []).length > 0
+          // deno-lint-ignore no-explicit-any
+          ? (protokolle ?? []).map((p: any) => `- ${deDatum(p.datum)} „${p.betreff}" (Teilnehmer: ${p.teilnehmer}): ${kuerze(String(p.ki_zusammenfassung ?? p.text ?? ''), 900)}`)
+          : ['(keine)']),
+      ].join('\n'),
+      14000,
+    )
+  }
+
+  if (name === 'notiz_speichern') {
+    const k = await ladeKunde(supabase, input.kunde_id)
+    if (!k) return KEIN_KUNDE
+    const text = String(input.text ?? '').trim()
+    if (!text) return 'Fehler: leerer Notiztext.'
+    const { error } = await supabase
+      .from('kunden')
+      .update({ activities: [{ id: crypto.randomUUID(), date: heute, text, user: mitarbeiter.name }, ...(k.activities ?? [])], letzte_aktivitaet: heute })
+      .eq('id', k.id)
+    if (error) return `Fehler beim Speichern: ${error.message}`
+    protokolliere(`Notiz bei ${kundeName(k)} gespeichert: „${kuerze(text, 120)}"`)
+    return `Notiz bei ${kundeName(k)} gespeichert.`
+  }
+
+  if (name === 'aufgabe_setzen') {
+    const k = await ladeKunde(supabase, input.kunde_id)
+    if (!k) return KEIN_KUNDE
+    if (input.erledigt === true) {
+      if (!k.follow_up?.note) return `${kundeName(k)} hat kein offenes Follow-up.`
+      const { error } = await supabase
+        .from('kunden')
+        .update({
+          follow_up: { ...k.follow_up, done: true },
+          activities: [{ id: crypto.randomUUID(), date: heute, text: `Follow-up erledigt: „${k.follow_up.note}"`, user: mitarbeiter.name }, ...(k.activities ?? [])],
+          letzte_aktivitaet: heute,
+        })
+        .eq('id', k.id)
+      if (error) return `Fehler beim Speichern: ${error.message}`
+      protokolliere(`Follow-up bei ${kundeName(k)} abgehakt: „${k.follow_up.note}"`)
+      return `Follow-up „${k.follow_up.note}" bei ${kundeName(k)} als erledigt markiert.`
+    }
+    const titel = String(input.titel ?? '').trim()
+    if (!titel) return 'Fehler: titel fehlt.'
+    const faellig = /^\d{4}-\d{2}-\d{2}$/.test(String(input.faellig_am ?? '')) ? String(input.faellig_am) : heute
+    const ersetzt = k.follow_up?.note && !k.follow_up.done ? ` Das bisherige offene Follow-up „${k.follow_up.note}" wurde damit ersetzt.` : ''
+    const { error } = await supabase
+      .from('kunden')
+      .update({
+        follow_up: { date: faellig, note: titel, done: false },
+        activities: [{ id: crypto.randomUUID(), date: heute, text: `Aufgabe gesetzt: „${titel}" (fällig ${deDatum(faellig)})`, user: mitarbeiter.name }, ...(k.activities ?? [])],
+        letzte_aktivitaet: heute,
+      })
+      .eq('id', k.id)
+    if (error) return `Fehler beim Speichern: ${error.message}`
+    protokolliere(`Aufgabe bei ${kundeName(k)} gesetzt: „${titel}" (fällig ${deDatum(faellig)})`)
+    return `Aufgabe „${titel}" bei ${kundeName(k)} gesetzt, fällig ${deDatum(faellig)}.${ersetzt}`
+  }
+
+  if (name === 'aktivitaet_aendern') {
+    const k = await ladeKunde(supabase, input.kunde_id)
+    if (!k) return KEIN_KUNDE
+    const eintrag = (k.activities ?? []).find((a) => a.id === input.aktivitaet_id)
+    if (!eintrag) return 'Fehler: Diesen Eintrag gibt es in der Akte nicht. Lies die Akte neu (kundenakte_lesen).'
+    const neuerText = String(input.neuer_text ?? '').trim()
+    if (input.loeschen !== true && !neuerText) return 'Fehler: neuer_text oder loeschen=true angeben.'
+    const activities = input.loeschen === true
+      ? (k.activities ?? []).filter((a) => a.id !== eintrag.id)
+      : (k.activities ?? []).map((a) => (a.id === eintrag.id ? { ...a, text: neuerText } : a))
+    const { error } = await supabase.from('kunden').update({ activities }).eq('id', k.id)
+    if (error) return `Fehler beim Speichern: ${error.message}`
+    const was = input.loeschen === true ? 'gelöscht' : 'geändert'
+    protokolliere(`Eintrag bei ${kundeName(k)} ${was}: „${kuerze(eintrag.text, 100)}"`)
+    return `Eintrag „${kuerze(eintrag.text, 100)}" bei ${kundeName(k)} ${was}.`
+  }
+
+  if (name === 'kunde_anlegen') {
+    const bereich = String(input.bereich ?? '')
+    const firma = String(input.name ?? '').trim()
+    if (!NEUANLAGE_BEREICHE.includes(bereich)) return `Fehler: ungültiger Bereich. Erlaubt: ${NEUANLAGE_BEREICHE.join(', ')}.`
+    if (!firma) return 'Fehler: name fehlt.'
+    const { data: alle } = await supabase.from('kunden').select(KUNDE_SPALTEN)
+    const email = String(input.email ?? '').trim()
+    const doppelt = ((alle ?? []) as KundeRow[]).find(
+      (k) => norm(k.firma) === norm(firma) || (email && norm(k.email) === norm(email)),
+    )
+    if (doppelt) return `Nicht angelegt: Es gibt bereits ${kundeName(doppelt)} im Bereich ${BEREICH_LABEL[doppelt.bereich] ?? doppelt.bereich} (kunde_id=${doppelt.id}).`
+    const id = `k_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`
+    const { error } = await supabase.from('kunden').insert({
+      id,
+      bereich,
+      firma,
+      ansprechpartner: String(input.ansprechpartner ?? '').trim() || firma,
+      email,
+      telefon: String(input.telefon ?? '').trim(),
+      prioritaet: 'Mittel',
+      status: START_STATUS[bereich],
+      follow_up: { date: heute, note: 'Erstkontakt aufnehmen', done: false },
+      verantwortlich: mitarbeiter.name,
+      letzte_aktivitaet: heute,
+      activities: [{ id: crypto.randomUUID(), date: heute, text: `Akte per Telegram von ${mitarbeiter.name} angelegt.`, user: mitarbeiter.name }],
+      dokumente: [],
+    })
+    if (error) return `Fehler beim Anlegen: ${error.message}`
+    protokolliere(`Kunde ${firma} im Bereich ${BEREICH_LABEL[bereich]} angelegt (kunde_id=${id})`)
+    return `Angelegt: ${firma}, Bereich ${BEREICH_LABEL[bereich]}, Status „${STATUS_JE_BEREICH[bereich][START_STATUS[bereich]]}", verantwortlich ${mitarbeiter.name}. kunde_id=${id}`
+  }
+
+  if (name === 'kunde_aendern') {
+    const k = await ladeKunde(supabase, input.kunde_id)
+    if (!k) return KEIN_KUNDE
+    const patch: Record<string, unknown> = {}
+    const geaendert: string[] = []
+    for (const feld of ['firma', 'ansprechpartner', 'email', 'telefon'] as const) {
+      if (typeof input[feld] === 'string') {
+        patch[feld] = input[feld].trim()
+        geaendert.push(`${feld}: ${input[feld].trim() || '(leer)'}`)
+      }
+    }
+    if (typeof input.prioritaet === 'string') {
+      if (!['Hoch', 'Mittel', 'Niedrig'].includes(input.prioritaet)) return 'Fehler: prioritaet muss Hoch, Mittel oder Niedrig sein.'
+      patch.prioritaet = input.prioritaet
+      geaendert.push(`Priorität: ${input.prioritaet}`)
+    }
+    if (typeof input.verantwortlich === 'string') {
+      const { data: team } = await supabase.from('mitarbeiter').select('name').eq('aktiv', true)
+      const namen = ((team ?? []) as { name: string }[]).map((m) => m.name)
+      const treffer = namen.find((n) => norm(n) === norm(input.verantwortlich)) ?? namen.find((n) => norm(n).includes(norm(input.verantwortlich)))
+      if (!treffer) return `Fehler: „${input.verantwortlich}" ist kein aktiver Mitarbeiter. Möglich: ${namen.join(', ')}.`
+      patch.verantwortlich = treffer
+      geaendert.push(`verantwortlich: ${treffer}`)
+    }
+    if (typeof input.status === 'string') {
+      const erlaubt = STATUS_JE_BEREICH[k.bereich] ?? {}
+      if (!erlaubt[input.status]) return `Fehler: ungültiger Status für ${k.bereich}. Erlaubt: ${Object.entries(erlaubt).map(([id, l]) => `${id} (${l})`).join(', ')}.`
+      patch.status = input.status
+      geaendert.push(`Status: ${erlaubt[input.status]}`)
+    }
+    if (geaendert.length === 0) return 'Fehler: kein Feld zum Ändern angegeben.'
+    patch.activities = [{ id: crypto.randomUUID(), date: heute, text: `Per Telegram geändert — ${geaendert.join('; ')}`, user: mitarbeiter.name }, ...(k.activities ?? [])]
+    patch.letzte_aktivitaet = heute
+    const { error } = await supabase.from('kunden').update(patch).eq('id', k.id)
+    if (error) return `Fehler beim Speichern: ${error.message}`
+    protokolliere(`${kundeName(k)} geändert — ${geaendert.join('; ')}`)
+    return `Bei ${kundeName(k)} geändert — ${geaendert.join('; ')}.`
+  }
+
+  if (name === 'kunde_loeschen') {
+    if (!(mitarbeiter.rolle === 'geschaeftsfuehrung' || mitarbeiter.ist_admin)) return 'Nicht erlaubt: Kunden löschen darf nur Geschäftsführung/Admin.'
+    const k = await ladeKunde(supabase, input.kunde_id)
+    if (!k) return KEIN_KUNDE
+    const anfrage = ctx.vorherigeLoeschAnfrage
+    const bestaetigbar = anfrage?.kunde_id === k.id && Date.now() - new Date(anfrage.z).getTime() < 10 * 60 * 1000
+    if (!bestaetigbar) {
+      state.loesch_anfrage = { kunde_id: k.id, name: kundeName(k), z: new Date().toISOString() }
+      return `NOCH NICHT GELÖSCHT. Frage den Mitarbeiter jetzt ausdrücklich, ob ${kundeName(k)} (Bereich ${BEREICH_LABEL[k.bereich] ?? k.bereich}, ${(k.dokumente ?? []).length} Dokumente, ${(k.activities ?? []).length} Einträge) unwiderruflich gelöscht werden soll. Nur wenn er das in seiner nächsten Nachricht klar bestätigt, rufe kunde_loeschen erneut auf.`
+    }
+    const { error } = await supabase.from('kunden').delete().eq('id', k.id)
+    if (error) return `Fehler beim Löschen: ${error.message}`
+    protokolliere(`Kunde ${kundeName(k)} gelöscht`)
+    return `Gelöscht: ${kundeName(k)}.`
+  }
+
+  if (name === 'unzugeordnete_dateien') {
+    const [dateien, referenzen] = await Promise.all([listeOrdner(supabase), ladeReferenzen(supabase)])
+    const grenze = Date.now() - 30 * 24 * 60 * 60 * 1000
+    const offen = dateien
+      .filter((d) => !referenzen.text.includes(`/${BUCKET}/${ORDNER}/${d.name}`))
+      .filter((d) => !d.created_at || new Date(d.created_at).getTime() > grenze)
+      .slice(0, 40)
+    if (offen.length === 0) return 'Es gibt keine gespeicherten Dateien, die noch keiner Akte zugeordnet sind.'
+    return offen
+      .map((d, i) => {
+        const wann = d.created_at ? new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', dateStyle: 'short', timeStyle: 'short' }).format(new Date(d.created_at)) : '?'
+        return `${i + 1}. pfad=${ORDNER}/${d.name} | Name: ${anzeigeName(d.name)} | hochgeladen ${wann} | ${formatGroesse(d.metadata?.size ?? 0)}`
+      })
+      .join('\n')
+  }
+
+  if (name === 'dateien_ablegen') {
+    const k = await ladeKunde(supabase, input.kunde_id)
+    if (!k) return KEIN_KUNDE
+    // deno-lint-ignore no-explicit-any
+    const gewuenscht: any[] = Array.isArray(input.dateien) ? input.dateien : []
+    if (gewuenscht.length === 0) return 'Fehler: keine Dateien angegeben.'
+    const [ordner, referenzen] = await Promise.all([listeOrdner(supabase), ladeReferenzen(supabase)])
+    const imOrdner = new Map(ordner.map((d) => [d.name, d]))
+    let dokumente = [...(k.dokumente ?? [])]
+    const abgelegt: string[] = []
+    const meldungen: string[] = []
+    for (const g of gewuenscht) {
+      const pfad = String(g?.pfad ?? '')
+      const dateiName = pfad.startsWith(`${ORDNER}/`) ? pfad.slice(ORDNER.length + 1) : ''
+      const datei = imOrdner.get(dateiName)
+      if (!datei) {
+        meldungen.push(`„${pfad}": Diese Datei gibt es in der Ablage nicht (pfad exakt übernehmen).`)
+        continue
+      }
+      const url = supabase.storage.from(BUCKET).getPublicUrl(pfad).data.publicUrl
+      const name = String(g?.name ?? '').trim() || anzeigeName(dateiName)
+      if (dokumente.some((d) => d.url === url)) {
+        meldungen.push(`„${name}": liegt bereits in dieser Akte.`)
+        continue
+      }
+      const andererKunde = referenzen.kunden.find((x) => x.id !== k.id && (x.dokumente ?? []).some((d) => d.url === url))
+      if (andererKunde) {
+        meldungen.push(`„${name}": liegt bereits in der Akte von ${kundeName(andererKunde)} (kunde_id=${andererKunde.id}) — dort zuerst mit dokument_aus_akte_nehmen herausnehmen, falls es umziehen soll.`)
+        continue
+      }
+      const neu: Dokument = {
+        id: crypto.randomUUID(),
+        name,
+        typ: datei.metadata?.mimetype ?? 'application/octet-stream',
+        datum: heute,
+        groesse: formatGroesse(datei.metadata?.size ?? 0),
+        url,
+      }
+      const duplikat = dokumente.find((d) => norm(d.name) === norm(name))
+      if (duplikat && !input.bei_duplikat) {
+        meldungen.push(`„${name}": NICHT abgelegt — in der Akte gibt es schon ein Dokument mit diesem Namen (vom ${deDatum(duplikat.datum)}). Frag den Mitarbeiter: überschreiben, als Kopie ablegen oder weglassen?`)
+        continue
+      }
+      if (duplikat && input.bei_duplikat === 'ignorieren') {
+        meldungen.push(`„${name}": weggelassen, das vorhandene Dokument bleibt.`)
+        continue
+      }
+      if (duplikat && input.bei_duplikat === 'ueberschreiben') {
+        dokumente = dokumente.map((d) => (d.id === duplikat.id ? { ...neu, id: d.id } : d))
+        abgelegt.push(`${name} (vorhandenes ersetzt)`)
+        continue
+      }
+      dokumente = [duplikat ? { ...neu, name: name.replace(/(\.[a-z0-9]+)?$/i, ' (2)$1') } : neu, ...dokumente]
+      abgelegt.push(`${name}${g?.kategorie ? ` — ${g.kategorie}` : ''}`)
+    }
+    if (abgelegt.length > 0) {
+      const { error } = await supabase
+        .from('kunden')
+        .update({
+          dokumente,
+          activities: [
+            { id: crypto.randomUUID(), date: heute, text: `Per Telegram von ${mitarbeiter.name} abgelegt: ${abgelegt.map((n) => `„${n}"`).join(', ')}`, user: mitarbeiter.name },
+            ...(k.activities ?? []),
+          ],
+          letzte_aktivitaet: heute,
+        })
+        .eq('id', k.id)
+      if (error) return `Fehler beim Speichern: ${error.message}. Nichts wurde abgelegt.`
+      protokolliere(`${abgelegt.length} Datei(en) bei ${kundeName(k)} abgelegt: ${abgelegt.join(', ')}`)
+    }
+    return [
+      abgelegt.length > 0 ? `In der Akte von ${kundeName(k)} abgelegt (${abgelegt.length}): ${abgelegt.join(', ')}.` : `Nichts in der Akte von ${kundeName(k)} abgelegt.`,
+      ...meldungen,
+    ].join('\n')
+  }
+
+  if (name === 'dokument_aus_akte_nehmen') {
+    const k = await ladeKunde(supabase, input.kunde_id)
+    if (!k) return KEIN_KUNDE
+    const dok = (k.dokumente ?? []).find((d) => d.id === input.dokument_id)
+    if (!dok) return 'Fehler: Dieses Dokument gibt es in der Akte nicht. Lies die Akte neu (kundenakte_lesen).'
+    const { error } = await supabase
+      .from('kunden')
+      .update({
+        dokumente: (k.dokumente ?? []).filter((d) => d.id !== dok.id),
+        activities: [{ id: crypto.randomUUID(), date: heute, text: `Dokument per Telegram aus der Akte genommen: „${dok.name}"`, user: mitarbeiter.name }, ...(k.activities ?? [])],
+      })
+      .eq('id', k.id)
+    if (error) return `Fehler beim Speichern: ${error.message}`
+    protokolliere(`Dokument „${dok.name}" aus der Akte von ${kundeName(k)} genommen`)
+    const marker = `/${BUCKET}/${ORDNER}/`
+    const pfad = dok.url.includes(marker) ? `${ORDNER}/${dok.url.split(marker)[1]}` : null
+    return `„${dok.name}" aus der Akte von ${kundeName(k)} genommen.${pfad ? ` Die Datei bleibt gespeichert: pfad=${pfad}` : ' Die Datei stammt nicht aus Telegram und kann hier nicht neu zugeordnet werden.'}`
+  }
+
+  if (name === 'firmenueberblick') {
+    const [{ data: kunden }, { data: objekte }] = await Promise.all([
+      supabase.from('kunden').select('bereich, firma, ansprechpartner, status, verantwortlich, letzte_aktivitaet, follow_up, kaeuferprofil'),
+      supabase.from('objekte').select('bezeichnung, adresse, typ, status, verantwortlich, eigentuemer'),
+    ])
+    const zeilen: string[] = [`Heute: ${deDatum(heute)}`, '', 'FÄLLIGE UND ÜBERFÄLLIGE FOLLOW-UPS:']
+    // deno-lint-ignore no-explicit-any
+    const faellig = ((kunden ?? []) as any[])
+      .filter((k) => k.follow_up?.note && !k.follow_up.done && k.follow_up.date <= heute)
+      .sort((a, b) => String(a.follow_up.date).localeCompare(String(b.follow_up.date)))
+    zeilen.push(...(faellig.length > 0 ? faellig.map((k) => `- ${k.firma}: ${k.follow_up.note} — fällig ${deDatum(k.follow_up.date)} (verantwortlich: ${k.verantwortlich || '—'})`) : ['(keine)']))
+    zeilen.push('', 'KUNDEN / MANDANTEN:')
+    // deno-lint-ignore no-explicit-any
+    for (const k of (kunden ?? []) as any[]) {
       const teile = [
-        `${k.firma} (${k.ansprechpartner})`,
-        `Status: ${k.status}`,
-        `Verantwortlich: ${k.verantwortlich}`,
-        `Letzte Aktivität: ${k.letzte_aktivitaet}`,
+        `${k.firma}${k.ansprechpartner && k.ansprechpartner !== k.firma ? ` (${k.ansprechpartner})` : ''}`,
+        BEREICH_LABEL[k.bereich] ?? k.bereich,
+        `Status: ${STATUS_JE_BEREICH[k.bereich]?.[k.status] ?? k.status}`,
+        `Verantwortlich: ${k.verantwortlich || '—'}`,
+        `Letzte Aktivität: ${deDatum(k.letzte_aktivitaet)}`,
       ]
       if (k.kaeuferprofil) {
         const kp = k.kaeuferprofil
         teile.push(`Suchprofil: ${(kp.objekttypen ?? []).join('/') || 'beliebig'}, Budget ${kp.budgetMin ?? '?'}–${kp.budgetMax ?? '?'} €, Lage „${kp.bevorzugteLage || 'offen'}"`)
       }
-      abschnitte.push(`  - ${teile.join(' · ')}`)
+      zeilen.push(`- ${teile.join(' · ')}`)
     }
+    zeilen.push('', 'IMMOBILIEN-OBJEKTE:')
+    // deno-lint-ignore no-explicit-any
+    for (const o of (objekte ?? []) as any[]) {
+      zeilen.push(`- ${o.bezeichnung} (${o.adresse}) · Typ: ${o.typ} · Status: ${o.status} · Verantwortlich: ${o.verantwortlich || '—'}${o.eigentuemer?.name ? ` · Eigentümer: ${o.eigentuemer.name}` : ''}`)
+    }
+    return kuerze(zeilen.join('\n'), 40000)
   }
 
-  abschnitte.push('\n=== IMMOBILIEN-OBJEKTE ===')
-  for (const o of objekteRows ?? []) {
-    const vorhandeneOrdner = Object.entries(o.dokumente ?? {})
-      .filter(([, liste]: [string, any]) => (liste?.length ?? 0) > 0)
-      .map(([name]) => name)
-    const teile = [
-      `${o.bezeichnung} (${o.adresse})`,
-      `Typ: ${o.typ}`,
-      `Status: ${o.status}`,
-      `Verantwortlich: ${o.verantwortlich}`,
-      `Letzte Aktivität: ${o.activities?.[0] ? o.activities[0].date : 'keine'}`,
-      `Vorhandene Unterlagen: ${vorhandeneOrdner.length > 0 ? vorhandeneOrdner.join(', ') : 'keine'}`,
-    ]
-    if (o.eigentuemer) teile.push(`Eigentümer: ${o.eigentuemer.name}${o.eigentuemer.ansprechpartner ? ` (Ansprechpartner: ${o.eigentuemer.ansprechpartner})` : ''}`)
-    abschnitte.push(`  - ${teile.join(' · ')}`)
-  }
-
-  return abschnitte.join('\n')
+  return `Fehler: unbekanntes Werkzeug ${name}.`
 }
 
-function formatGroesse(bytes: number): string {
-  return bytes < 1024 * 1024 ? `${Math.round(bytes / 1024)} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+// ---------- Der Assistent ----------
+
+const SYSTEM_PROMPT = `Du bist der Assistent der Andreas Mayer Holding (Ulm) im Telegram-Chat mit einem Mitarbeiter. Du arbeitest direkt im CRM der Holding: Du schlägst Kundenakten nach und beantwortest Fragen dazu, legst Kunden an und änderst sie, setzt Notizen und Aufgaben und legst per Telegram geschickte Dateien in die richtige Akte.
+
+So arbeitest du:
+- Du führst ein normales Gespräch und erledigst, worum man dich bittet. Will jemand etwas wissen, schlägst du es mit deinen Werkzeugen nach und antwortest. Will jemand etwas erledigt haben, erledigst du es mit deinen Werkzeugen und sagst danach genau, was du getan hast.
+- Speichere eine Notiz oder Aufgabe NUR, wenn der Mitarbeiter ausdrücklich etwas festhalten oder sich etwas vormerken will. Eine Bitte wie "leg die Dateien in seine Akte" ist ein Auftrag an dich und keine Aufgabe für später: führe ihn aus. Eine Ankündigung wie "ich schicke dir gleich Scans für Kunde X" beantwortest du kurz und merkst dir den Kunden für die folgenden Dateien; du speicherst dafür nichts.
+- Behaupte nie, etwas erledigt zu haben, was kein Werkzeug bestätigt hat. Meldet ein Werkzeug einen Fehler oder kannst du etwas nicht, sag das offen und was stattdessen geht.
+- Erfinde nichts. Was nicht in Werkzeug-Ergebnissen oder im Gespräch steht, weißt du nicht. Ob es einen Kunden gibt oder nicht, sagst du erst, nachdem du mit kunden_suchen nachgesehen hast.
+- Die Bereiche der Holding heißen: Unternehmensberatung, Immobilien, Erben, Betriebsübergabe, Betriebsformen, Akademie, Finanzierungen. Verwende im Gespräch diese Namen.
+- Beziehe "er", "sie", "ihm", "seine Akte" auf den Kunden, um den es im Gespräch zuletzt ging. Ist nicht eindeutig, welcher Kunde gemeint ist (mehrere Treffer, kein Treffer, kein Bezug), frag kurz nach, statt zu raten. Lege niemals etwas bei einem Kunden ab, der nur vielleicht gemeint ist.
+- Gibt es einen Kunden noch nicht, sag das und biete an, ihn anzulegen. Frag nach dem Bereich, wenn er nicht klar ist. Sagt der Mitarbeiter klar, dass und wo er angelegt werden soll, leg ihn an.
+- Dateien: Jede geschickte Datei ist bereits sicher gespeichert, bevor du davon erfährst. Eine Nachricht, die mit "[Datei-Eingang" beginnt, kommt vom System und beschreibt, was angekommen ist. Lege die Dateien mit dateien_ablegen ab, sobald klar ist, wohin sie gehören: durch die Bildunterschrift, durch das bisherige Gespräch oder durch einen im Dokument erkannten Namen, zu dem kunden_suchen genau einen passenden Kunden liefert. Sonst frag nach und sag dazu, dass die Dateien gespeichert sind. Früher geschickte, noch nicht abgelegte Dateien findest du mit unzugeordnete_dateien.
+- Meldet dateien_ablegen ein mögliches Duplikat, frag den Mitarbeiter, ob du überschreiben, als Kopie ablegen oder weglassen sollst.
+- Kunden löschen: nur auf ausdrücklichen Wunsch und erst nach Bestätigung in einer eigenen Nachricht.
+- Für Fragen quer über alle Kunden oder Objekte ("was steht heute an", "wer sucht ...") nutze firmenueberblick.
+
+Ton und Form:
+- Deutsch, per Du, knapp und konkret wie ein guter Kollege. Keine Floskeln, keine englischen Begriffe.
+- Reiner Text ohne Markdown: keine Sternchen, keine Rauten, keine Tabellen. Aufzählungen als einfache Zeilen mit "- ".
+- Nenne bei jeder Änderung, bei welchem Kunden du was genau getan hast. Nenne keine internen IDs oder Dateipfade, außer der Mitarbeiter fragt danach.`
+
+// deno-lint-ignore no-explicit-any
+async function claude(system: unknown[], messages: unknown[]): Promise<any> {
+  if (!ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY ist nicht gesetzt.')
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+    body: JSON.stringify({ model: AGENT_MODEL, max_tokens: 2000, system, tools: TOOLS, messages }),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(`KI-Dienst antwortet mit ${res.status}: ${data?.error?.message ?? 'unbekannter Fehler'}`)
+  return data
 }
 
-Deno.serve(async (req: Request) => {
-  if (req.method !== 'POST') return new Response('Method not allowed', { status: 405 })
-  if (WEBHOOK_SECRET && req.headers.get('x-telegram-bot-api-secret-token') !== WEBHOOK_SECRET) {
-    return new Response('Unauthorized', { status: 401 })
-  }
+// Ein Gesprächszug: bekommt die neue Nachricht (oder einen Datei-Eingang), arbeitet mit Werkzeugen,
+// bis eine Antwort feststeht, und schreibt Verlauf und Aktionsprotokoll in den übergebenen Zustand.
+export async function agentAntwort(supabase: Supa, mitarbeiter: Mitarbeiter, state: AgentState, eingang: string): Promise<string> {
+  const ctx: ToolKontext = { supabase, mitarbeiter, state, vorherigeLoeschAnfrage: state.loesch_anfrage }
+  state.loesch_anfrage = undefined // gilt nur für die direkt folgende Nachricht
 
-  const update = await req.json().catch(() => null)
+  const neu: Nachricht[] = [{ role: 'user', content: eingang }]
+  const messages = (): Nachricht[] => [...state.zuege.flatMap((zug) => zug.msgs), ...neu]
+
+  const wochentag = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', weekday: 'long' }).format(new Date())
+  const system = [
+    { type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } },
+    {
+      type: 'text',
+      text: [
+        `Heute ist ${wochentag}, der ${deDatum(heuteBerlin())} (${heuteBerlin()}).`,
+        `Du schreibst mit ${mitarbeiter.name}${mitarbeiter.rolle === 'geschaeftsfuehrung' ? ' (Geschäftsführung)' : ''}.`,
+        state.aktionen.length > 0
+          ? `Was du in diesem Chat zuletzt im CRM getan hast (älteste zuerst):\n${state.aktionen.slice(-10).map((a) => `- ${a.text}`).join('\n')}`
+          : 'Du hast in diesem Chat bisher noch nichts im CRM verändert.',
+      ].join('\n'),
+    },
+  ]
+
+  let antwort = ''
+  for (let schritt = 0; schritt < 12; schritt++) {
+    const data = await claude(system, messages())
+    // deno-lint-ignore no-explicit-any
+    const bloecke: any[] = data.content ?? []
+    if (data.stop_reason !== 'tool_use') {
+      antwort = bloecke.filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim()
+      break
+    }
+    neu.push({ role: 'assistant', content: bloecke })
+    const ergebnisse = []
+    for (const b of bloecke.filter((x) => x.type === 'tool_use')) {
+      let ergebnis: string
+      try {
+        ergebnis = await fuehreWerkzeugAus(b.name, b.input ?? {}, ctx)
+      } catch (err) {
+        console.error(`Werkzeug ${b.name} fehlgeschlagen:`, err)
+        ergebnis = `Fehler im Werkzeug: ${err instanceof Error ? err.message : String(err)}`
+      }
+      ergebnisse.push({ type: 'tool_result', tool_use_id: b.id, content: ergebnis })
+    }
+    neu.push({ role: 'user', content: ergebnisse })
+  }
+  if (!antwort) antwort = 'Ich bin damit nicht fertig geworden. Sag mir bitte noch einmal in einem Satz, was ich tun soll.'
+
+  neu.push({ role: 'assistant', content: antwort })
+  state.zuege = [...state.zuege, { z: new Date().toISOString(), msgs: fuerVerlauf(neu) }].slice(-10)
+  while (state.zuege.length > 1 && JSON.stringify(state.zuege).length > 60000) state.zuege.shift()
+  state.aktionen = state.aktionen.slice(-12)
+  return antwort
+}
+
+// deno-lint-ignore no-explicit-any
+async function verarbeiteUpdate(update: any): Promise<void> {
   const message = update?.message
-  if (!message?.chat?.id) return new Response('ok')
-
+  if (!message?.chat?.id) return
   const chatId: number = message.chat.id
   const text: string | undefined = message.text?.trim()
   const supabase = supa()
@@ -477,593 +1069,71 @@ Deno.serve(async (req: Request) => {
   if (text?.startsWith('/start')) {
     const code = text.split(/\s+/)[1]?.trim()
     if (!code) {
-      await sendTelegramMessage(chatId, 'Willkommen beim Mayer Holding CRM-Assistenten! Bitte nutze den Verknüpfungs-Link aus "Mein Profil" im CRM, um deinen Account zu verbinden.')
-      return new Response('ok')
+      await sendTelegramMessage(chatId, 'Willkommen beim Assistenten der Mayer Holding! Bitte nutze den Verknüpfungs-Link aus "Mein Profil" im CRM, um deinen Zugang zu verbinden.')
+      return
     }
-    const { data: kandidat } = await supabase
-      .from('mitarbeiter')
-      .select('id, name')
-      .eq('telegram_link_code', code)
-      .eq('aktiv', true)
-      .maybeSingle()
+    const { data: kandidat } = await supabase.from('mitarbeiter').select('id, name').eq('telegram_link_code', code).eq('aktiv', true).maybeSingle()
     if (!kandidat) {
       await sendTelegramMessage(chatId, 'Dieser Verknüpfungs-Code ist ungültig oder abgelaufen. Erzeug dir in "Mein Profil" im CRM einen neuen Link.')
-      return new Response('ok')
+      return
     }
     await supabase.from('mitarbeiter').update({ telegram_chat_id: chatId, telegram_link_code: null }).eq('id', kandidat.id)
-    await sendTelegramMessage(chatId, `Verbunden! Du bist jetzt als ${kandidat.name} mit dem Mayer Holding CRM verknüpft. Schreib mir einfach wie im Web-Chat auch — Notizen, Aufgaben, Fragen zu Kunden.`)
-    return new Response('ok')
+    await sendTelegramMessage(chatId, `Verbunden! Du bist jetzt als ${kandidat.name} mit dem CRM verknüpft. Schreib mir einfach, was du brauchst: Fragen zu Kunden, Akten anlegen oder ändern, Notizen, Aufgaben. Dateien und Scans kannst du mir direkt schicken, ich lege sie in die richtige Akte.`)
+    return
   }
 
-  // --- Mitarbeiter anhand des verknüpften Chats finden ---
   const { data: mitarbeiter } = await supabase
     .from('mitarbeiter')
-    .select('id, name, aktiv, rolle, ist_admin, telegram_last_kunde_id, telegram_last_kunde_bereich, telegram_pending')
+    .select('id, name, aktiv, rolle, ist_admin, telegram_pending')
     .eq('telegram_chat_id', chatId)
     .maybeSingle()
   if (!mitarbeiter || !mitarbeiter.aktiv) {
-    await sendTelegramMessage(chatId, 'Dieser Chat ist noch nicht mit einem CRM-Account verknüpft. Geh in "Mein Profil" im CRM und folge dem Verknüpfungs-Link.')
-    return new Response('ok')
+    await sendTelegramMessage(chatId, 'Dieser Chat ist noch nicht mit einem CRM-Zugang verknüpft. Geh in "Mein Profil" im CRM und folge dem Verknüpfungs-Link.')
+    return
   }
 
-  // --- Sprachnachrichten: noch nicht unterstützt (bewusst ehrlich statt stillschweigend ignorieren) ---
   if (message.voice) {
-    await sendTelegramMessage(chatId, 'Sprachnachrichten kann ich hier noch nicht verarbeiten — bitte vorerst als Text schreiben. Das kommt als Nächstes.')
-    return new Response('ok')
+    await sendTelegramMessage(chatId, 'Sprachnachrichten kann ich hier noch nicht verarbeiten — bitte vorerst als Text schreiben.')
+    return
   }
 
-  // --- Fotos/Dokumente: herunterladen, per KI-Inhaltsanalyse (nicht mehr zwingend per
-  // Bildunterschrift) dem richtigen Kunden zuordnen. Vorher musste jede Datei eine Bildunterschrift
-  // mit dem Kundennamen tragen, sonst passierte gar nichts — in der Praxis (z.B. Hasan schickt
-  // schnell mehrere Scans ohne Unterschrift) blieb die Funktion dadurch faktisch ungenutzt. Die KI
-  // liest jetzt den Inhalt selbst (Name/Firma im Dokument), die Bildunterschrift zählt weiterhin
-  // zusätzlich mit, falls vorhanden. Gibt es keinen passenden Kunden, wird einer vorgeschlagen statt
-  // die Datei kommentarlos zu verwerfen — die Datei wird in jedem Fall sofort gesichert.
-  const photo = message.photo?.at(-1) // höchste Auflösung ist der letzte Eintrag
-  const document = message.document
-  if (photo || document) {
-    const fileId = document?.file_id ?? photo.file_id
-    const datei = await telegramDateiHerunterladen(fileId)
-    if (!datei) {
-      await sendTelegramMessage(chatId, 'Die Datei konnte nicht heruntergeladen werden.')
-      return new Response('ok')
-    }
-
-    // Mehrseitiger PDF-Sammel-Scan (z.B. ein ganzer Aktenordner auf einmal gescannt) — eigener Ablauf
-    // mit Aufteilung in Einzeldokumente + Duplikat-Prüfung, siehe handleMehrseitigerScan. Einzelne
-    // Fotos/Dokumente (1 Seite) laufen unverändert über den bestehenden Ablauf unten weiter.
-    if (document?.mime_type === 'application/pdf') {
-      const seiten = await pdfSeitenzahl(datei.bytes)
-      if (seiten && seiten > 1) {
-        await handleMehrseitigerScan(
-          supabase,
-          mitarbeiter,
-          chatId,
-          datei.bytes,
-          document.file_name ?? `scan_${Date.now()}.pdf`,
-          seiten,
-          message.caption?.trim() ?? '',
-        )
-        return new Response('ok')
-      }
-    }
-
-    const caption: string = message.caption?.trim() ?? ''
-    const dateiname = document?.file_name ?? `foto_${Date.now()}.jpg`
-    const contentType = document?.mime_type ?? 'image/jpeg'
-
-    let klassifikation: { erkannter_name?: string; erkannte_firma?: string; kategorie: string } | null = null
-    try {
-      const base64 = bytesZuBase64(datei.bytes)
-      const result = await callEmailGateway('classify_kunden_dokument', { datei_base64: base64, media_type: contentType, dateiname })
-      klassifikation = result.klassifikation
-    } catch (err) {
-      console.error('classify_kunden_dokument fehlgeschlagen:', err)
-    }
-
-    const { data: kundenRows } = await supabase
-      .from('kunden')
-      .select('id, bereich, firma, ansprechpartner, email, telefon, status, follow_up, activities, dokumente')
-    const alleKundenFuerDatei = (kundenRows ?? []) as KundeRow[]
-    const suchtext = [caption, klassifikation?.erkannter_name, klassifikation?.erkannte_firma].filter(Boolean).join(' ')
-    const kandidaten = suchtext ? matchKandidaten(alleKundenFuerDatei, suchtext) : []
-    const erkanntText = klassifikation
-      ? ` (erkannt: ${[klassifikation.erkannte_firma, klassifikation.erkannter_name, klassifikation.kategorie].filter(Boolean).join(', ')})`
-      : ''
-
-    // Datei immer sofort sichern — unabhängig vom Treffer, sonst ist sie bei der nächsten Nachricht
-    // (z.B. Antwort auf die Rückfrage) verloren.
-    const pfad = `telegram/${Date.now()}_${sicheresPfadsegment(dateiname)}`
-    const { error: uploadError } = await supabase.storage.from('email-anhaenge').upload(pfad, datei.bytes, { contentType, upsert: true })
-    if (uploadError) {
-      await sendTelegramMessage(chatId, 'Die Datei konnte nicht gespeichert werden.')
-      return new Response('ok')
-    }
-    const { data: urlData } = supabase.storage.from('email-anhaenge').getPublicUrl(pfad)
-    const heute = new Date().toISOString().slice(0, 10)
-    const neuesDokument = { id: crypto.randomUUID(), name: dateiname, typ: contentType, datum: heute, groesse: formatGroesse(datei.bytes.length), url: urlData.publicUrl }
-
-    if (kandidaten.length === 1) {
-      const kunde = kandidaten[0].kunde
-      const neueActivity = {
-        id: crypto.randomUUID(),
-        date: heute,
-        text: `Datei per Telegram von ${mitarbeiter.name} automatisch abgelegt: „${dateiname}"${klassifikation ? ` — ${klassifikation.kategorie}` : ''}`,
-        user: mitarbeiter.name,
-      }
-      await supabase
-        .from('kunden')
-        .update({ dokumente: [neuesDokument, ...(kunde.dokumente ?? [])], activities: [neueActivity, ...(kunde.activities ?? [])] })
-        .eq('id', kunde.id)
-      await supabase.from('mitarbeiter').update({ telegram_last_kunde_id: kunde.id, telegram_last_kunde_bereich: kunde.bereich }).eq('id', mitarbeiter.id)
-      await sendTelegramMessage(chatId, `Automatisch abgelegt bei ${kunde.firma} (${kunde.ansprechpartner}): „${dateiname}"${erkanntText}`)
-      return new Response('ok')
-    }
-
-    if (kandidaten.length > 1) {
-      await sendTelegramMessage(
-        chatId,
-        `Dazu habe ich mehrere passende Kunden gefunden: ${kandidaten.map((k) => `${k.kunde.firma} (${k.kunde.ansprechpartner})`).join(', ')}. Die Datei ist gespeichert${erkanntText} — schick sie bitte nochmal mit dem genauen Kundennamen als Bildunterschrift, dann lege ich sie richtig ab.`,
-      )
-      return new Response('ok')
-    }
-
-    // Kein Treffer: neuen Kunden vorschlagen statt die Datei kommentarlos zu verwerfen.
-    await supabase
-      .from('mitarbeiter')
-      .update({
-        telegram_pending: {
-          text: '',
-          klass: null,
-          kandidaten_ids: [],
-          erstellt_am: new Date().toISOString(),
-          aktion_feld: 'neuer_kunde_bestaetigen',
-          neuer_kunde_dokument: neuesDokument,
-          neuer_kunde_name: klassifikation?.erkannter_name ?? '',
-          neuer_kunde_firma: klassifikation?.erkannte_firma ?? caption ?? '',
-        },
-      })
-      .eq('id', mitarbeiter.id)
-    await sendTelegramMessage(
-      chatId,
-      `Dazu habe ich keinen passenden Kunden/Mandanten gefunden.${erkanntText || ' Im Dokument war nichts Eindeutiges erkennbar.'} Die Datei ist gespeichert. Soll ich dafür einen neuen Kunden anlegen? Antworte mit dem Bereich (z.B. "finanzierungen", "erben", "beratung", "betriebsuebergabe", "betriebsformen" oder "akademie") oder "nein".`,
-    )
-    return new Response('ok')
-  }
-
-  if (!text) {
-    await sendTelegramMessage(chatId, 'Ich kann aktuell Text, Fotos und Dokumente verarbeiten.')
-    return new Response('ok')
-  }
-
-  const { data: kundenRows } = await supabase
-    .from('kunden')
-    .select('id, bereich, firma, ansprechpartner, email, telefon, status, follow_up, activities, dokumente')
-  const alleKunden = (kundenRows ?? []) as KundeRow[]
-
-  // --- Offene Rückfrage auflösen (z.B. vorige Nachricht: "mehrere Kunden gefunden, wen meinst du?")
-  // — ohne das landet eine kurze Antwort wie nur der Vorname als neue, kontextlose Nachricht und wird
-  // falsch interpretiert (siehe echter Fehlgriff beim Testen: "Renate" löste nichts auf, die
-  // Folgenachricht "Renate Mayer" landete dann fälschlich als sinnlose Notiz in ihrer Akte).
-  let klass: { typ: string; erkannter_name?: string; titel?: string; faelligkeitsdatum?: string; frage?: string } | null = null
-  let match: KundeRow | null = null
-  const pending = mitarbeiter.telegram_pending as
-    | {
-        text: string
-        klass: any
-        kandidaten_ids: string[]
-        erstellt_am: string
-        aktion_feld?:
-          | 'bereich'
-          | 'firma'
-          | 'loeschen_bestaetigen'
-          | 'neuer_kunde_bestaetigen'
-          | 'neuer_kunde_scan_bestaetigen'
-          | 'scan_mehrdeutig'
-          | 'duplikat_entscheidung'
-        loeschen_id?: string
-        loeschen_name?: string
-        neuer_kunde_dokument?: TelegramDokument
-        neuer_kunde_name?: string
-        neuer_kunde_firma?: string
-        neuer_kunde_scan_dokumente?: TelegramDokument[]
-        scan_teildokumente_meta?: { id: string; kategorie: string; erkanntesDatum?: string }[]
-        duplikat_bereich?: string
-        duplikat_kunde_id?: string
-        duplikat_warteschlange?: { dokument: TelegramDokument; bestehendesId: string; bestehenderName: string }[]
-      }
-    | null
-  if (pending && Date.now() - new Date(pending.erstellt_am).getTime() < 10 * 60 * 1000) {
-    await supabase.from('mitarbeiter').update({ telegram_pending: null }).eq('id', mitarbeiter.id)
-    if (pending.aktion_feld === 'loeschen_bestaetigen') {
-      const bestaetigt = /^ja\b/i.test(text.trim())
-      if (bestaetigt && pending.loeschen_id) {
-        const { error: deleteError } = await supabase.from('kunden').delete().eq('id', pending.loeschen_id)
-        await sendTelegramMessage(chatId, deleteError ? `Löschen fehlgeschlagen: ${deleteError.message}` : `Gelöscht: ${pending.loeschen_name}`)
-      } else {
-        await sendTelegramMessage(chatId, 'Abgebrochen, nichts gelöscht.')
-      }
-      return new Response('ok')
-    }
-    if (pending.aktion_feld === 'neuer_kunde_bestaetigen') {
-      const BEREICHE_NEUANLAGE = ['beratung', 'erben', 'betriebsuebergabe', 'betriebsformen', 'akademie', 'finanzierungen']
-      const genannterBereich = BEREICHE_NEUANLAGE.find((b) => text.toLowerCase().includes(b))
-      if (!genannterBereich) {
-        await sendTelegramMessage(chatId, 'Ok, nichts angelegt. Die Datei bleibt gespeichert, du kannst sie manuell im CRM zuordnen.')
-        return new Response('ok')
-      }
-      const heute = new Date().toISOString().slice(0, 10)
-      const firma = pending.neuer_kunde_firma || pending.neuer_kunde_name || 'Unbekannt (Telegram)'
-      const neueId = `k_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`
-      const DEFAULT_STATUS: Record<string, string> = {
-        beratung: 'lead', erben: 'erstkontakt', betriebsuebergabe: 'erstkontakt',
-        betriebsformen: 'erstkontakt', akademie: 'interessent', finanzierungen: 'interessent',
-      }
-      const { error: insertError } = await supabase.from('kunden').insert({
-        id: neueId,
-        bereich: genannterBereich,
-        firma,
-        ansprechpartner: pending.neuer_kunde_name || '',
-        email: '',
-        telefon: null,
-        prioritaet: 'Mittel',
-        status: DEFAULT_STATUS[genannterBereich],
-        follow_up: { date: heute, note: 'Von Telegram automatisch angelegt — Erstkontakt vereinbaren', done: false },
-        verantwortlich: mitarbeiter.name,
-        letzte_aktivitaet: heute,
-        activities: [{ id: crypto.randomUUID(), date: heute, text: `Per Telegram von ${mitarbeiter.name} angelegt (Datei automatisch erkannt, kein passender Kunde gefunden).`, user: mitarbeiter.name }],
-        dokumente: pending.neuer_kunde_dokument ? [pending.neuer_kunde_dokument] : [],
-      })
-      if (insertError) {
-        await sendTelegramMessage(chatId, `Anlegen fehlgeschlagen: ${insertError.message}`)
-        return new Response('ok')
-      }
-      await supabase.from('mitarbeiter').update({ telegram_last_kunde_id: neueId, telegram_last_kunde_bereich: genannterBereich }).eq('id', mitarbeiter.id)
-      await sendTelegramMessage(chatId, `Neu angelegt: ${firma} (Bereich ${genannterBereich}) — Datei ist dort abgelegt.`)
-      return new Response('ok')
-    }
-    if (pending.aktion_feld === 'neuer_kunde_scan_bestaetigen') {
-      const BEREICHE_NEUANLAGE = ['beratung', 'erben', 'betriebsuebergabe', 'betriebsformen', 'akademie', 'finanzierungen']
-      const genannterBereich = BEREICHE_NEUANLAGE.find((b) => text.toLowerCase().includes(b))
-      if (!genannterBereich) {
-        await sendTelegramMessage(chatId, 'Ok, nichts angelegt. Die Dokumente bleiben gespeichert, du kannst sie manuell im CRM zuordnen.')
-        return new Response('ok')
-      }
-      const heute = new Date().toISOString().slice(0, 10)
-      const firma = pending.neuer_kunde_firma || pending.neuer_kunde_name || 'Unbekannt (Telegram-Scan)'
-      const neueId = `k_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`
-      const scanDokumente = pending.neuer_kunde_scan_dokumente ?? []
-      const DEFAULT_STATUS: Record<string, string> = {
-        beratung: 'lead', erben: 'erstkontakt', betriebsuebergabe: 'erstkontakt',
-        betriebsformen: 'erstkontakt', akademie: 'interessent', finanzierungen: 'interessent',
-      }
-      const { error: insertError } = await supabase.from('kunden').insert({
-        id: neueId,
-        bereich: genannterBereich,
-        firma,
-        ansprechpartner: pending.neuer_kunde_name || '',
-        email: '',
-        telefon: null,
-        prioritaet: 'Mittel',
-        status: DEFAULT_STATUS[genannterBereich],
-        follow_up: { date: heute, note: 'Von Telegram automatisch angelegt — Erstkontakt vereinbaren', done: false },
-        verantwortlich: mitarbeiter.name,
-        letzte_aktivitaet: heute,
-        activities: [{
-          id: crypto.randomUUID(),
-          date: heute,
-          text: `Per Telegram von ${mitarbeiter.name} angelegt (Sammel-Scan automatisch erkannt, kein passender Kunde gefunden) — ${scanDokumente.length} Dokument(e) abgelegt.`,
-          user: mitarbeiter.name,
-        }],
-        dokumente: scanDokumente,
-      })
-      if (insertError) {
-        await sendTelegramMessage(chatId, `Anlegen fehlgeschlagen: ${insertError.message}`)
-        return new Response('ok')
-      }
-      await supabase.from('mitarbeiter').update({ telegram_last_kunde_id: neueId, telegram_last_kunde_bereich: genannterBereich }).eq('id', mitarbeiter.id)
-      await sendTelegramMessage(
-        chatId,
-        `Neu angelegt: ${firma} (Bereich ${genannterBereich}) — ${scanDokumente.length} Dokument(e) aus dem Sammel-Scan sind dort abgelegt.`,
-      )
-      return new Response('ok')
-    }
-    if (pending.aktion_feld === 'scan_mehrdeutig') {
-      const textWoerter = new Set(woerter(text))
-      const treffer = alleKunden.filter(
-        (k) => pending.kandidaten_ids.includes(k.id) && [...woerter(k.firma), ...woerter(k.ansprechpartner)].some((w) => textWoerter.has(w)),
-      )
-      if (treffer.length !== 1) {
-        // Wieder unklar/kein Treffer: Rückfrage-Zustand erhalten bleiben lassen, statt stillschweigend
-        // im allgemeinen Text-Chat zu landen (genau das war der ursprüngliche Fehler).
-        await supabase.from('mitarbeiter').update({ telegram_pending: pending }).eq('id', mitarbeiter.id)
-        await sendTelegramMessage(chatId, 'Das war nicht eindeutig genug — bitte nenne den Firmen- oder Ansprechpartner-Namen genau wie oben aufgelistet.')
-        return new Response('ok')
-      }
-      const kundeRowRaw = treffer[0]
-      const dokumente = pending.neuer_kunde_scan_dokumente ?? []
-      const meta = pending.scan_teildokumente_meta ?? []
-      const teildokumente = dokumente.map((dokument) => {
-        const m = meta.find((x) => x.id === dokument.id)
-        return { dokument, kategorie: m?.kategorie ?? 'Sonstiges', erkanntesDatum: m?.erkanntesDatum }
-      })
-      await legeTeildokumenteBeiKundeAb(supabase, mitarbeiter, chatId, kundeRowRaw, teildokumente)
-      return new Response('ok')
-    }
-    if (pending.aktion_feld === 'duplikat_entscheidung') {
-      const warteschlange = pending.duplikat_warteschlange ?? []
-      const aktuelles = warteschlange[0]
-      if (!aktuelles || !pending.duplikat_kunde_id || !pending.duplikat_bereich) return new Response('ok')
-
-      const { data: kundeRow } = await supabase
-        .from('kunden')
-        .select('id, bereich, firma, ansprechpartner, dokumente, activities')
-        .eq('id', pending.duplikat_kunde_id)
-        .eq('bereich', pending.duplikat_bereich)
-        .maybeSingle()
-      if (!kundeRow) {
-        await sendTelegramMessage(chatId, 'Der zugehörige Kunde wurde nicht mehr gefunden.')
-        return new Response('ok')
-      }
-
-      const antwort = text.trim().toLowerCase()
-      let dokumente = (kundeRow.dokumente ?? []) as TelegramDokument[]
-      let aktionsText = ''
-      if (antwort.startsWith('über') || antwort.startsWith('uber')) {
-        dokumente = dokumente.map((d) => (d.id === aktuelles.bestehendesId ? { ...aktuelles.dokument, id: d.id } : d))
-        aktionsText = `„${aktuelles.bestehenderName}" durch „${aktuelles.dokument.name}" überschrieben`
-      } else if (antwort.startsWith('kopie')) {
-        dokumente = [aktuelles.dokument, ...dokumente]
-        aktionsText = `„${aktuelles.dokument.name}" als weitere Kopie abgelegt`
-      } else if (antwort.startsWith('prüf') || antwort.startsWith('pruf')) {
-        dokumente = [aktuelles.dokument, ...dokumente]
-        aktionsText = `„${aktuelles.dokument.name}" abgelegt, als möglicherweise doppelt markiert — bitte im CRM prüfen`
-      } else if (antwort.startsWith('ignor')) {
-        aktionsText = `„${aktuelles.dokument.name}" verworfen, „${aktuelles.bestehenderName}" bleibt unverändert`
-      } else {
-        // Nicht verstanden: Pending unverändert wieder zurückschreiben (wurde oben bereits gelöscht) und erneut nachfragen.
-        await supabase.from('mitarbeiter').update({ telegram_pending: pending }).eq('id', mitarbeiter.id)
-        await sendTelegramMessage(chatId, 'Das habe ich nicht verstanden — bitte antworte mit "überschreiben", "kopie", "ignorieren" oder "prüfen".')
-        return new Response('ok')
-      }
-
-      const heute = new Date().toISOString().slice(0, 10)
-      const activities = [
-        { id: crypto.randomUUID(), date: heute, text: `Duplikat-Entscheidung per Telegram von ${mitarbeiter.name}: ${aktionsText}`, user: mitarbeiter.name },
-        ...((kundeRow.activities ?? []) as { id: string; date: string; text: string; user: string }[]),
-      ]
-      await supabase.from('kunden').update({ dokumente, activities }).eq('id', kundeRow.id)
-
-      const rest = warteschlange.slice(1)
-      if (rest.length === 0) {
-        await sendTelegramMessage(chatId, `Erledigt: ${aktionsText}. Alle Rückfragen zum Sammel-Scan sind abgearbeitet.`)
-        return new Response('ok')
-      }
-      await supabase
-        .from('mitarbeiter')
-        .update({ telegram_pending: { ...pending, duplikat_warteschlange: rest, erstellt_am: new Date().toISOString() } })
-        .eq('id', mitarbeiter.id)
-      const naechstes = rest[0]
-      await sendTelegramMessage(
-        chatId,
-        `${aktionsText}. Nächste Rückfrage: Für „${naechstes.dokument.name}" gibt es möglicherweise schon „${naechstes.bestehenderName}". Was soll ich tun — "überschreiben", "kopie", "ignorieren" oder "prüfen"?`,
-      )
-      return new Response('ok')
-    }
-    if (pending.aktion_feld === 'bereich') {
-      const BEREICHE = ['beratung', 'erben', 'betriebsuebergabe', 'betriebsformen', 'akademie', 'finanzierungen']
-      const genannt = BEREICHE.find((b) => text.toLowerCase().includes(b))
-      klass = genannt ? { ...pending.klass, aktion_bereich: genannt } : pending.klass
-    } else if (pending.aktion_feld === 'firma') {
-      klass = { ...pending.klass, aktion_firma: text.trim() }
-    } else {
-      const textWoerter = new Set(woerter(text))
-      const treffer = alleKunden.filter(
-        (k) => pending.kandidaten_ids.includes(k.id) && [...woerter(k.firma), ...woerter(k.ansprechpartner)].some((w) => textWoerter.has(w)),
-      )
-      if (treffer.length === 1) {
-        match = treffer[0]
-        klass = pending.klass
-      }
-    }
-  }
-
-  // --- Normale Klassifizierung + Kunden-Zuordnung, falls keine Rückfrage aufgelöst wurde ---
-  if (!klass) {
-    try {
-      const result = await callEmailGateway('assistant_classify', { transcript: text, heute: new Date().toISOString().slice(0, 10) })
-      klass = result.klassifikation
-    } catch {
-      await sendTelegramMessage(chatId, 'Da ist leider etwas schiefgelaufen. Versuch es nochmal.')
-      return new Response('ok')
-    }
-
-    const kandidatenNachId = new Map<string, KundeMatch>()
-    for (const k of [...(klass.erkannter_name ? matchKandidaten(alleKunden, klass.erkannter_name) : []), ...matchKandidaten(alleKunden, text)]) {
-      const vorhanden = kandidatenNachId.get(k.kunde.id)
-      if (!vorhanden || k.score > vorhanden.score) kandidatenNachId.set(k.kunde.id, k)
-    }
-    const alleKandidaten = [...kandidatenNachId.values()]
-    const topScore = alleKandidaten.length > 0 ? Math.max(...alleKandidaten.map((k) => k.score)) : 0
-    const kandidaten = alleKandidaten.filter((k) => k.score === topScore)
-
-    if (kandidaten.length > 1) {
-      await supabase
-        .from('mitarbeiter')
-        .update({ telegram_pending: { text, klass, kandidaten_ids: kandidaten.map((k) => k.kunde.id), erstellt_am: new Date().toISOString() } })
-        .eq('id', mitarbeiter.id)
-      await sendTelegramMessage(chatId, `Dazu habe ich mehrere passende Kunden/Mandanten gefunden: ${kandidaten.map((k) => `${k.kunde.firma} (${k.kunde.ansprechpartner})`).join(', ')}. Wen genau meinst du?`)
-      return new Response('ok')
-    }
-
-    match = kandidaten[0]?.kunde ?? null
-    if (!match && mitarbeiter.telegram_last_kunde_id) {
-      match = alleKunden.find((k) => k.id === mitarbeiter.telegram_last_kunde_id) ?? null
-    }
-  }
-  if (match) await supabase.from('mitarbeiter').update({ telegram_last_kunde_id: match.id, telegram_last_kunde_bereich: match.bereich }).eq('id', mitarbeiter.id)
-  if (!klass) return new Response('ok') // kann hier nicht mehr eintreten, beruhigt nur die Typprüfung
-
-  if (klass.typ === 'frage') {
-    const frageText = klass.frage ?? text
-    if (!match) {
-      // Kein konkreter Kunde erkannt/gemeint — trotzdem beantworten, auf Basis des gesamten
-      // Firmenwissens (alle Kunden/Objekte), statt stillschweigend abzubrechen. Deckt z.B.
-      // bereichsübergreifende Fragen ab ("Welche Käufer suchen Objekte über 5 Mio?").
-      try {
-        const kontext = await buildFirmenwissenKontextServer(supabase)
-        const result = await callEmailGateway('firmenwissen_answer', { frage: frageText, kontext })
-        await sendTelegramMessage(chatId, result.antwort)
-      } catch {
-        await sendTelegramMessage(chatId, 'Antwort konnte nicht abgerufen werden.')
-      }
-      return new Response('ok')
-    }
-    const { data: protokolleRows } = await supabase
-      .from('protokolle')
-      .select('datum, betreff, teilnehmer, text, kernthemen, vereinbarungen, offene_punkte, ki_zusammenfassung')
-      .eq('bereich', match.bereich)
-      .eq('kunde_id', match.id)
-      .order('datum', { ascending: false })
-      .limit(10)
-    const kontext = [
-      `Kunde/Mandant: ${match.firma} (${match.ansprechpartner})`,
-      `Status: ${match.status ?? 'unbekannt'}`,
-      match.follow_up ? `Follow-up: ${match.follow_up.date} — ${match.follow_up.note}${match.follow_up.done ? ' (erledigt)' : ''}` : 'Follow-up: keines',
-      '',
-      'Aktivitäten (neueste zuerst):',
-      ...(match.activities ?? []).slice(0, 20).map((a) => `- ${a.date}: ${a.text}`),
-      '',
-      'Gesprächsprotokolle (neueste zuerst):',
-      ...((protokolleRows ?? []).length > 0
-        ? (protokolleRows ?? []).flatMap((p: any) => [
-            `- ${p.datum} "${p.betreff}" (Teilnehmer: ${p.teilnehmer}):`,
-            `  Zusammenfassung: ${p.ki_zusammenfassung ?? p.text}`,
-          ])
-        : ['(keine)']),
-      '',
-      'Vorhandene Dokumente:',
-      ...((match.dokumente ?? []).length > 0 ? (match.dokumente ?? []).map((d) => `- ${d.name}`) : ['(keine)']),
-    ].join('\n')
-    try {
-      const result = await callEmailGateway('assistant_answer', { frage: frageText, kontext })
-      await sendTelegramMessage(chatId, result.antwort)
-    } catch {
-      await sendTelegramMessage(chatId, 'Antwort konnte nicht abgerufen werden.')
-    }
-    return new Response('ok')
-  }
-
-  if (klass.typ === 'uebersicht') {
-    const heute = new Date().toISOString().slice(0, 10)
-    const eigeneFaelligeKunden = alleKunden
-      .filter((k) => k.verantwortlich === mitarbeiter.name && k.follow_up && !(k.follow_up as any).done && (k.follow_up as any).date <= heute)
-      .sort((a, b) => ((a.follow_up as any).date as string).localeCompare((b.follow_up as any).date as string))
-    const faelligkeitenAbschnitt = [
-      `Heutiges Datum: ${heute}`,
-      '',
-      `Für ${mitarbeiter.name} fällige/überfällige Follow-ups (eigene Kunden/Mandanten, unabhängig vom Bereich):`,
-      ...(eigeneFaelligeKunden.length > 0
-        ? eigeneFaelligeKunden.map((k) => `- ${k.firma} (${k.ansprechpartner}), Bereich ${k.bereich}: ${(k.follow_up as any).note} — fällig ${(k.follow_up as any).date}`)
-        : ['(keine fälligen Follow-ups)']),
-    ].join('\n')
-    try {
-      const firmenwissen = await buildFirmenwissenKontextServer(supabase)
-      const kontext = `${faelligkeitenAbschnitt}\n\n${firmenwissen}`
-      const result = await callEmailGateway('firmenwissen_answer', { frage: text, kontext })
-      await sendTelegramMessage(chatId, result.antwort)
-    } catch {
-      await sendTelegramMessage(chatId, 'Antwort konnte nicht abgerufen werden.')
-    }
-    return new Response('ok')
-  }
-
-  if (klass.typ === 'aktion_lead_anlegen') {
-    const BEREICHE = ['beratung', 'erben', 'betriebsuebergabe', 'betriebsformen', 'akademie', 'finanzierungen']
-    const bereich = (klass as any).aktion_bereich as string | undefined
-    const firma = ((klass as any).aktion_firma as string | undefined) ?? klass.erkannter_name
-    if (!bereich || !BEREICHE.includes(bereich)) {
-      await supabase
-        .from('mitarbeiter')
-        .update({ telegram_pending: { text, klass, kandidaten_ids: [], erstellt_am: new Date().toISOString(), aktion_feld: 'bereich' } })
-        .eq('id', mitarbeiter.id)
-      await sendTelegramMessage(chatId, `In welchem Bereich soll der Lead angelegt werden? (${BEREICHE.join(', ')})`)
-      return new Response('ok')
-    }
-    if (!firma) {
-      await supabase
-        .from('mitarbeiter')
-        .update({ telegram_pending: { text, klass: { ...klass, aktion_bereich: bereich }, kandidaten_ids: [], erstellt_am: new Date().toISOString(), aktion_feld: 'firma' } })
-        .eq('id', mitarbeiter.id)
-      await sendTelegramMessage(chatId, 'Wie soll der Lead/die Firma heißen?')
-      return new Response('ok')
-    }
-    const heute = new Date().toISOString().slice(0, 10)
-    const inZweiTagen = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
-    const { error: insertError } = await supabase.from('kunden').insert({
-      id: crypto.randomUUID(),
-      bereich,
-      firma,
-      ansprechpartner: firma,
-      email: '',
-      telefon: '',
-      prioritaet: 'Mittel',
-      status: 'lead',
-      follow_up: { date: inZweiTagen, note: 'Erstkontakt aufnehmen', done: false },
-      verantwortlich: mitarbeiter.name,
-      letzte_aktivitaet: heute,
-      activities: [{ id: crypto.randomUUID(), date: heute, text: `Per Telegram von ${mitarbeiter.name} angelegt.`, user: mitarbeiter.name }],
-    })
-    if (insertError) {
-      await sendTelegramMessage(chatId, `Anlegen fehlgeschlagen: ${insertError.message}`)
-    } else {
-      await sendTelegramMessage(chatId, `Erledigt — "${firma}" als neuer Lead bei ${bereich} angelegt, dir zugeordnet.`)
-    }
-    return new Response('ok')
-  }
-
-  if (klass.typ === 'aktion_lead_loeschen') {
-    const berechtigt = mitarbeiter.rolle === 'geschaeftsfuehrung' || !!mitarbeiter.ist_admin
-    if (!berechtigt) {
-      await sendTelegramMessage(chatId, 'Kunden/Leads löschen darf nur Geschäftsführung/Admin.')
-      return new Response('ok')
-    }
-    if (!match) {
-      await sendTelegramMessage(chatId, 'Welchen Kunden/Lead genau soll ich löschen? Nenn mir bitte den Namen etwas genauer.')
-      return new Response('ok')
-    }
-    const name = `${match.firma} (${match.ansprechpartner}) bei ${match.bereich}`
-    await supabase
-      .from('mitarbeiter')
-      .update({ telegram_pending: { aktion_feld: 'loeschen_bestaetigen', loeschen_id: match.id, loeschen_name: name, erstellt_am: new Date().toISOString(), kandidaten_ids: [], klass: null, text: '' } })
-      .eq('id', mitarbeiter.id)
-    await sendTelegramMessage(chatId, `Soll ich "${name}" wirklich unwiderruflich löschen? Antworte mit "ja" zum Bestätigen, sonst passiert nichts.`)
-    return new Response('ok')
-  }
-
-  if (klass.typ === 'aufnahme') {
-    await sendTelegramMessage(chatId, 'Gespräche live aufzeichnen geht aktuell nur über den "Gespräch aufzeichnen"-Button im CRM selbst, noch nicht über Telegram.')
-    return new Response('ok')
-  }
-
-  // notiz / aufgabe
-  const titel = klass.titel ?? text.slice(0, 80)
-  const faelligkeitsdatum = klass.faelligkeitsdatum || new Date().toISOString().slice(0, 10)
-  const art = klass.typ === 'aufgabe' ? 'Aufgabe' : 'Notiz'
-  if (match) {
-    const heute = new Date().toISOString().slice(0, 10)
-    const neueActivity = { id: crypto.randomUUID(), date: heute, text: `${art} per Telegram von ${mitarbeiter.name} erfasst: „${titel}"`, user: mitarbeiter.name }
-    await supabase
-      .from('kunden')
-      .update({
-        activities: [neueActivity, ...(match.activities ?? [])],
-        ...(klass.typ === 'aufgabe' ? { follow_up: { date: faelligkeitsdatum, note: titel, done: false } } : {}),
-      })
-      .eq('id', match.id)
-    const falligHinweis = klass.typ === 'aufgabe' ? ` (fällig ${faelligkeitsdatum})` : ''
-    await sendTelegramMessage(chatId, `Erledigt — ${art}${falligHinweis} bei ${match.firma} (${match.ansprechpartner}) gespeichert: „${titel}"`)
+  await sendeTippen(chatId)
+  let eingang: string
+  if (message.photo || message.document) {
+    eingang = await verarbeiteDateiEingang(supabase, message)
+  } else if (text) {
+    eingang = text
   } else {
-    await sendTelegramMessage(chatId, `Ich hab keinen passenden Kunden gefunden — magst du mir noch sagen, zu welchem Kunden das gehört? Sonst leg ich es gerade nirgends ab.`)
+    await sendTelegramMessage(chatId, 'Ich kann Text, Fotos und Dokumente verarbeiten.')
+    return
   }
+
+  const state = ladeState(mitarbeiter.telegram_pending)
+  let antwort: string
+  try {
+    antwort = await agentAntwort(supabase, mitarbeiter, state, eingang)
+  } catch (err) {
+    console.error('Assistent fehlgeschlagen:', err)
+    const dateiHinweis = message.photo || message.document ? ' Deine Datei ist trotzdem gespeichert.' : ''
+    await sendTelegramMessage(chatId, `Da ist gerade etwas schiefgelaufen (${err instanceof Error ? err.message : 'unbekannter Fehler'}).${dateiHinweis} Versuch es bitte gleich noch einmal.`)
+    return
+  }
+  await supabase.from('mitarbeiter').update({ telegram_pending: state }).eq('id', mitarbeiter.id)
+  await sendTelegramMessage(chatId, antwort)
+}
+
+Deno.serve(async (req: Request) => {
+  if (req.method !== 'POST') return new Response('Method not allowed', { status: 405 })
+  if (WEBHOOK_SECRET && req.headers.get('x-telegram-bot-api-secret-token') !== WEBHOOK_SECRET) {
+    return new Response('Unauthorized', { status: 401 })
+  }
+  const update = await req.json().catch(() => null)
+  const arbeit = verarbeiteUpdate(update).catch((err) => console.error('Update-Verarbeitung fehlgeschlagen:', err))
+  // Sofort antworten und im Hintergrund weiterarbeiten: Telegram wiederholt einen Webhook, der zu
+  // lange braucht (Sammel-Scans, mehrere Werkzeug-Schritte) — das hätte doppelte Ablagen zur Folge.
+  // deno-lint-ignore no-explicit-any
+  const runtime = (globalThis as any).EdgeRuntime
+  if (runtime?.waitUntil) runtime.waitUntil(arbeit)
+  else await arbeit
   return new Response('ok')
 })
