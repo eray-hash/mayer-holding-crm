@@ -230,7 +230,11 @@ export function PotenzialAnalyseSection({ bereich, kundeId, kundeName }: { berei
               ? 'Von Dokumenten kannte sie bei dieser älteren Analyse nur den Dateinamen.'
               : `Von den Dokumenten lagen ${analyse.dokumenteMitInhalt} mit ihrem Inhalt vor${
                   analyse.dokumenteInArbeit ? `; ${analyse.dokumenteInArbeit} wurden gerade erst eingelesen — in ein paar Minuten erneut analysieren, dann fließen auch sie ein` : ''
-                }. Von den übrigen kannte sie nur den Dateinamen.`}{' '}
+                }.${
+                  analyse.dokumenteMitInhalt < analyse.quellen.filter((q) => q.art === 'Dokument').length
+                    ? ' Von den übrigen kannte sie nur den Dateinamen.'
+                    : ''
+                }`}{' '}
             {analyse.webRecherche === 'ok'
               ? `Zusätzlich wurde öffentlich im Internet nach weiteren Firmen, Funktionen und Beteiligungen gesucht (${zahl('Internet-Recherche', 'Fund', 'Funde')}).`
               : analyse.webRecherche === 'fehlgeschlagen'

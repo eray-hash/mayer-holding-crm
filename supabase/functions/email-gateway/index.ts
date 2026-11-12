@@ -1206,8 +1206,11 @@ async function leseDokument(ref: DokumentRef, teil: number, umleitungen: number)
     if (art === 'buero') {
       const text = bueroDateiText(ref.name, ref.typ, bytes, 200_000) ?? ''
       const zusammenfassung = await callClaudeResearch(
-        `Fasse in zwei bis drei Sätzen zusammen, was für ein Dokument das ist (Art, von wem, an wen oder worüber, Datum bzw. Zeitraum, Kernaussage und wichtigste Zahlen). Nur die Zusammenfassung, kein Vorspann.\n\nDateiname: ${ref.name}\n\n${text.slice(0, 12_000)}`,
-        { model: 'claude-haiku-4-5-20251001', maxSearches: 0, maxTokens: 400, timeoutMs },
+        // Sonnet statt Haiku: Haiku hat hier Eigenschaften dazuerfunden ("anwaltliche" Analyse) und
+        // Begriffe verdreht ("Steuernachlass" statt "Steuer auf den Gewinn") — die Kurzfassung fließt
+        // aber ungeprüft in Analysen und Bot-Antworten ein.
+        `Fasse in zwei bis drei Sätzen zusammen, was für ein Dokument das ist (Art, von wem, an wen oder worüber, Datum bzw. Zeitraum, Kernaussage und wichtigste Zahlen). Verwende nur, was im Text steht: keine Eigenschaften oder Einordnungen, die dort nicht ausdrücklich genannt sind (z. B. nicht "anwaltlich", wenn kein Anwalt genannt ist), und bei Zahlen die Bezeichnung aus dem Text übernehmen (z. B. "Steuer auf den Gewinn" nicht in "Steuernachlass" umdeuten). Nur die Zusammenfassung, kein Vorspann.\n\nDateiname: ${ref.name}\n\n${text.slice(0, 12_000)}`,
+        { model: 'claude-sonnet-5-5', maxSearches: 0, maxTokens: 600, timeoutMs, ohneNachdenken: true },
       ).catch(() => '')
       await admin.from('dokument_inhalte').update({ status: 'gelesen', inhalt: text, zusammenfassung: zusammenfassung.trim(), aktualisiert_am: jetztIso() }).eq('schluessel', schluessel)
       return
