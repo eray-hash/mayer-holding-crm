@@ -96,7 +96,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setPasswortFestlegen(false)
     },
     async signOut() {
-      await supabase?.auth.signOut()
+      // Nur dieses Gerät abmelden. Ohne die Angabe meldet Supabase ALLE Geräte ab: Wer sich am
+      // Laptop abmeldete, musste danach auch am Handy das Passwort neu eingeben.
+      await supabase?.auth.signOut({ scope: 'local' })
     },
   }
 
