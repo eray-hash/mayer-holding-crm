@@ -4,6 +4,7 @@ import { CheckCircle2, Loader2, Printer } from 'lucide-react'
 import { Card, Field, inputClass, PrimaryButton, SecondaryButton } from '../../components/ui'
 import { SignaturePad } from '../../components/SignaturePad'
 import { holePublicKunde, sendePublicFormular, type PublicKunde } from '../../lib/emailGateway'
+import { ALLGEMEINE_VOLLMACHT, KANZLEI_ANSCHRIFT } from '../../data/originalTexte'
 
 export function PublicVollmachtErben() {
   const { mandantId } = useParams()
@@ -11,6 +12,7 @@ export function PublicVollmachtErben() {
   const [submitted, setSubmitted] = useState(false)
   const [senden, setSenden] = useState(false)
 
+  const [vollmachtgeberWohnhaft, setVollmachtgeberWohnhaft] = useState('')
   const [bevollmaechtigterName, setBevollmaechtigterName] = useState('')
   const [bevollmaechtigterWohnhaft, setBevollmaechtigterWohnhaft] = useState('')
   const [rechtsgeschaeft, setRechtsgeschaeft] = useState('')
@@ -45,8 +47,8 @@ export function PublicVollmachtErben() {
   }
 
   async function submit() {
-    if (!bevollmaechtigterName.trim() || !rechtsgeschaeft.trim()) {
-      setError('Bitte bevollmächtigte Person und Rechtsgeschäft ausfüllen.')
+    if (!vollmachtgeberWohnhaft.trim() || !bevollmaechtigterName.trim() || !rechtsgeschaeft.trim()) {
+      setError('Bitte eigene Anschrift, bevollmächtigte Person und Rechtsgeschäft ausfüllen.')
       return
     }
     if (!signatur) {
@@ -56,7 +58,7 @@ export function PublicVollmachtErben() {
     setError('')
     setSenden(true)
 
-    const aktivitaetText = `Allgemeine Vollmacht digital ausgefüllt und unterschrieben in ${ort || 'Ulm'}. Bevollmächtigt: ${bevollmaechtigterName}${bevollmaechtigterWohnhaft ? ' (' + bevollmaechtigterWohnhaft + ')' : ''}. Rechtsgeschäft: ${rechtsgeschaeft}.`
+    const aktivitaetText = `Allgemeine Vollmacht digital ausgefüllt und unterschrieben in ${ort || 'Ulm'}. Vollmachtgeber wohnhaft: ${vollmachtgeberWohnhaft || '–'}. Bevollmächtigt: ${bevollmaechtigterName}${bevollmaechtigterWohnhaft ? ' (' + bevollmaechtigterWohnhaft + ')' : ''}. Rechtsgeschäft: ${rechtsgeschaeft}.`
 
     try {
       await sendePublicFormular({
@@ -92,7 +94,7 @@ export function PublicVollmachtErben() {
     <div className="min-h-screen bg-slate-50 px-4 py-10">
       <div className="mx-auto max-w-xl">
         <div className="mb-6 text-center">
-          <p className="text-xs font-medium uppercase tracking-wide text-accent-600">Andreas Mayer Holding · Schwabstrasse 3, 89075 Ulm</p>
+          <p className="text-xs font-medium uppercase tracking-wide text-accent-600">Andreas Mayer Holding · {KANZLEI_ANSCHRIFT}</p>
           <h1 className="mt-1 text-xl font-bold text-slate-800">Allgemeine Vollmacht</h1>
         </div>
 
@@ -103,34 +105,29 @@ export function PublicVollmachtErben() {
         </div>
 
         <Card className="p-6">
-          <p className="mb-4 text-sm text-slate-500">
-            Diese Vollmacht wird für <strong>{mandant.ansprechpartner}</strong> ({mandant.firma}) erstellt. Bitte prüfen Sie die
-            Angaben und tragen Sie die bevollmächtigte Person sowie das Rechtsgeschäft ein.
-          </p>
-
-          <div className="mb-4 rounded-lg bg-slate-50 p-3 text-xs text-slate-500">
-            <div className="mb-1 font-medium text-slate-600">Vollmachtgeber</div>
-            {mandant.ansprechpartner} · {mandant.email}
+          <div className="text-sm leading-relaxed text-slate-700">
+            <p className="mb-2">
+              Herrn/Frau/Firma <strong>{mandant.ansprechpartner}</strong>,
+            </p>
+            <Field label="wohnhaft *">
+              <input className={inputClass} value={vollmachtgeberWohnhaft} onChange={(e) => setVollmachtgeberWohnhaft(e.target.value)} />
+            </Field>
+            <p className="mb-2">bevollmächtigt hiermit</p>
+            <Field label="Herrn/Frau *">
+              <input className={inputClass} value={bevollmaechtigterName} onChange={(e) => setBevollmaechtigterName(e.target.value)} />
+            </Field>
+            <Field label="wohnhaft">
+              <input className={inputClass} value={bevollmaechtigterWohnhaft} onChange={(e) => setBevollmaechtigterWohnhaft(e.target.value)} />
+            </Field>
+            <Field label="zu folgendem Rechtsgeschäft: *">
+              <textarea className={inputClass} rows={3} value={rechtsgeschaeft} onChange={(e) => setRechtsgeschaeft(e.target.value)} />
+            </Field>
+            <p className="mb-3">{ALLGEMEINE_VOLLMACHT.befugnis}</p>
+            <p className="mb-4">{ALLGEMEINE_VOLLMACHT.fortgeltung}</p>
+            <Field label="Ort">
+              <input className={inputClass} value={ort} onChange={(e) => setOrt(e.target.value)} />
+            </Field>
           </div>
-
-          <Field label="Bevollmächtigte Person (Name) *">
-            <input className={inputClass} value={bevollmaechtigterName} onChange={(e) => setBevollmaechtigterName(e.target.value)} />
-          </Field>
-          <Field label="Wohnhaft (Adresse der bevollmächtigten Person)">
-            <input className={inputClass} value={bevollmaechtigterWohnhaft} onChange={(e) => setBevollmaechtigterWohnhaft(e.target.value)} />
-          </Field>
-          <Field label="Zu folgendem Rechtsgeschäft *">
-            <textarea className={inputClass} rows={3} value={rechtsgeschaeft} onChange={(e) => setRechtsgeschaeft(e.target.value)} />
-          </Field>
-          <Field label="Ort">
-            <input className={inputClass} value={ort} onChange={(e) => setOrt(e.target.value)} />
-          </Field>
-
-          <p className="mb-4 rounded-lg bg-slate-50 p-3 text-xs leading-relaxed text-slate-500">
-            Der Bevollmächtigte ist befugt, den Vollmachtgeber in allen Angelegenheiten vor Behörden und Privatpersonen zu
-            vertreten. Diese Vollmacht erlischt nicht mit dem Tode des Vollmachtgebers, sondern besteht darüber hinaus fort. Sie
-            kann nur durch den Vollmachtgeber selbst oder — nach dessen Tod — durch die Erben widerrufen werden.
-          </p>
 
           <div className="print:hidden">
             <Field label="Unterschrift Vollmachtgeber *">

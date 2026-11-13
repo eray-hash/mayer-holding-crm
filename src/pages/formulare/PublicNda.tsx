@@ -6,31 +6,9 @@ import { Card, PrimaryButton, SecondaryButton } from '../../components/ui'
 import { SignaturePad } from '../../components/SignaturePad'
 import { holePublicKunde, sendePublicFormular, type PublicKunde } from '../../lib/emailGateway'
 import type { KundeBereich } from '../../types'
+import { GEHEIMHALTUNG, KANZLEI_ANSCHRIFT } from '../../data/originalTexte'
 
-// Dieselbe Geheimhaltungs- und Quellenschutzvereinbarung wie die bestehende interne Vorlage
-// (src/data/seedBeratung.ts, "geheimhaltungsvereinbarung") — hier als öffentliches, signierbares
-// Formular statt nur als Text-Vorlage im CRM.
-const NDA_TEXT_TEILE = [
-  '§ 1 Gegenstand des Vertrages',
-  'Die Parteien bestätigen unwiderruflich und rechtsverbindlich vollen Quellen-, Kunden-, Objekt- und Courtageschutz für alle im Rahmen der Geschäftstätigkeit erschlossenen Quellen, Firmen und Personen. Der Schutz gilt auch dann, wenn es aus welchem Grund auch immer nicht zum angestrebten Geschäftsabschluss kommen sollte.',
-  '§ 2 Nichtoffenbarung',
-  'Jede Partei verpflichtet sich, die ihr von der anderen Seite bekannt gegebenen Adressen streng vertraulich zu behandeln und nicht ohne Zustimmung der anderen Partei zur Verwertung anzubieten. Ferner verpflichtet man sich, keine Geschäfte über vorgeschobene Dritte – gleichgültig ob nahestehende oder juristische Personen – mit den zu Objekten, Kunden/Aufträgen zur Verfügung gestellten Informationen abzuwickeln.',
-  '§ 3 Verschwiegenheit beteiligter Personen',
-  'Jede Vertragspartei zeichnet für die Verschwiegenheit und Einhaltungspflicht der für sie tätigen Angestellten, freiberuflichen Mitarbeiter sowie weiterer Vertragspersonen (Dritte) verantwortlich. Die Verschwiegenheitspflicht wirkt über die Vertragsdauer hinaus.',
-  '§ 4 Direkte Kontaktaufnahme',
-  'Direkte Kontaktaufnahme ist nur über die Firma zulässig. Sollte bereits ein Kontakt zum Geschäftspartner der anderen Seite bestehen, muss dies nach Bekanntgabe unverzüglich mitgeteilt werden. Dies entbindet nicht vom Kunden-/Objektschutz.',
-  '§ 5 Schriftformerfordernis',
-  'Über jegliche im Sinne dieses Vertrages sich anbahnenden Geschäfte unterrichtet der Geschäftspartner unverzüglich und unaufgefordert.',
-  '§ 6 Konventionalstrafe',
-  'Bei fahrlässigem Verstoß oder vorsätzlicher Zuwiderhandlung gegen diese Vereinbarung unterliegt die verstoßende Partei einer Konventionalstrafe in doppelter Höhe des jeweils erzielten Geschäftsvolumens, mindestens jedoch 20.000,00 €.',
-  '§ 7 Weiterbeauftragung',
-  'Unterbeauftragte dürfen nur in Abstimmung mit der anderen Partei beauftragt werden. Rechte und Pflichten aus dieser Vereinbarung sind entsprechend an Unterbeauftragte weiterzugeben und zu überwachen.',
-  '§ 8 Vertragsdauer',
-  'Diese Vereinbarung gilt zunächst für fünf Jahre ab Vertragsdatum und verlängert sich automatisch um jeweils ein Jahr, sofern sie nicht mit einer Frist von 3 Monaten zum jeweiligen Vertragsende gekündigt wird. Das Recht zur Kündigung aus wichtigem Grund bleibt unberührt.',
-  '§ 9 Salvatorische Klausel',
-  'Sollten einzelne Bestimmungen dieses Vertrages ganz oder teilweise unwirksam sein oder werden, bleibt die Wirksamkeit der übrigen Bestimmungen unberührt.',
-]
-
+// Wortlaut exakt wie im Original der Kanzlei (data/originalTexte.ts), als öffentliches, signierbares Formular.
 export function PublicNda() {
   const { bereich: bereichParam, kundeId } = useParams()
   const [kunde, setKunde] = useState<PublicKunde | null | undefined>(undefined)
@@ -117,8 +95,8 @@ export function PublicNda() {
     <div className="min-h-screen bg-slate-50 px-4 py-10">
       <div className="mx-auto max-w-xl">
         <div className="mb-6 text-center">
-          <p className="text-xs font-medium uppercase tracking-wide text-accent-600">Andreas Mayer Holding · Schwabstrasse 3, 89075 Ulm</p>
-          <h1 className="mt-1 text-xl font-bold text-slate-800">Geheimhaltungs- und Quellenschutzvereinbarung</h1>
+          <p className="text-xs font-medium uppercase tracking-wide text-accent-600">Andreas Mayer Holding · {KANZLEI_ANSCHRIFT}</p>
+          <h1 className="mt-1 text-xl font-bold text-slate-800">{GEHEIMHALTUNG.titel}</h1>
         </div>
 
         <div className="mb-3 flex justify-end print:hidden">
@@ -128,28 +106,36 @@ export function PublicNda() {
         </div>
 
         <Card className="p-6">
-          <p className="mb-4 text-sm text-slate-500">
-            zwischen <strong>Andreas Mayer Holding</strong>, Schwabstrasse 3, 89075 Ulm (nachfolgend "Auftraggeber" genannt) und{' '}
-            <strong>{kunde.ansprechpartner}</strong> ({kunde.firma}) (nachfolgend "Partei" genannt).
-          </p>
+          <div className="mb-4 text-sm leading-relaxed text-slate-700">
+            <p className="mb-2">zwischen</p>
+            <p className="font-semibold">{kunde.firma}</p>
+            {kunde.ansprechpartner && kunde.ansprechpartner !== kunde.firma && <p>vertreten durch {kunde.ansprechpartner}</p>}
+            <p className="mb-3 text-slate-500">{GEHEIMHALTUNG.parteiBezeichnung}</p>
+            <p className="mb-2">und</p>
+            <p className="font-semibold">Andreas Mayer Holding UG</p>
+            <p>{KANZLEI_ANSCHRIFT}</p>
+            <p className="mb-3 text-slate-500">{GEHEIMHALTUNG.auftraggeberBezeichnung}</p>
+            <p>{GEHEIMHALTUNG.ueberleitung}</p>
+          </div>
 
-          <div className="mb-4 space-y-3 rounded-lg bg-slate-50 p-4 text-xs leading-relaxed text-slate-500">
-            {NDA_TEXT_TEILE.map((teil, i) =>
-              teil.startsWith('§') ? (
-                <p key={i} className="font-semibold text-slate-600">{teil}</p>
-              ) : (
-                <p key={i}>{teil}</p>
-              ),
-            )}
+          <div className="mb-4 space-y-3 rounded-lg bg-slate-50 p-4 text-xs leading-relaxed text-slate-600">
+            {GEHEIMHALTUNG.paragraphen.map((par) => (
+              <div key={par.titel}>
+                <p className="font-semibold text-slate-700">{par.titel}</p>
+                <p>{par.text}</p>
+              </div>
+            ))}
+            <p>{GEHEIMHALTUNG.schluss}</p>
           </div>
 
           <div className="print:hidden">
-            <label className="mb-1.5 block text-sm font-medium text-slate-600">Unterschrift *</label>
+            <label className="mb-1.5 block text-sm font-medium text-slate-600">Unterschrift Auftragnehmer/Dienstleister *</label>
             <SignaturePad onChange={setSignatur} />
           </div>
           <div className="hidden print:block print:mt-8">
             <p className="text-sm text-slate-700">Ort, Datum: ________________________</p>
-            <p className="mt-8 text-sm text-slate-700">Unterschrift: ________________________________</p>
+            <p className="mt-8 text-sm text-slate-700">Auftraggeber: ________________________________</p>
+            <p className="mt-8 text-sm text-slate-700">Auftragnehmer/Dienstleister: ________________________________</p>
           </div>
 
           {error && <p className="mb-3 mt-3 text-sm font-medium text-rose-600">{error}</p>}

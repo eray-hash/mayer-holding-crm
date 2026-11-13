@@ -157,54 +157,5 @@ export const seedVorlagenErben: Vorlage[] = [
 ]
 
 // Checkliste aus dem echten Mandantenfragebogen (Vermögens-, Familien- und Nachfolgeplanung)
-export const ERBEN_CHECKLISTE: { kategorie: string; punkte: string[] }[] = [
-  {
-    kategorie: '1. Persönliche Angaben',
-    punkte: [
-      'Vollständiger Name, Geburtsname, Geburtsdatum und -ort',
-      'Aktuelle Wohnanschrift und gewöhnlicher Aufenthalt',
-      'Staatsangehörigkeit(en)',
-      'Familienstand',
-      'Güterstand / Ehevertrag',
-    ],
-  },
-  {
-    kategorie: '2. Familie und mögliche Erben',
-    punkte: [
-      'Ehegatte bzw. eingetragener Lebenspartner',
-      'Kinder einschließlich Adoptiv-, Stief- und Pflegekinder',
-      'Enkelkinder und weitere Abkömmlinge',
-      'Gewünschte Erben oder Begünstigte',
-      'Personen, die bewusst nicht bedacht werden sollen',
-    ],
-  },
-  {
-    kategorie: '3. Testamente und Vorsorge',
-    punkte: [
-      'Eigenhändiges oder notarielles Testament vorhanden',
-      'Vorsorgevollmacht',
-      'Patientenverfügung',
-      'Betreuungsverfügung',
-    ],
-  },
-  {
-    kategorie: '4. Vermögensübersicht',
-    punkte: [
-      'Immobilien und Grundbuchauszüge',
-      'Unternehmens-/Gesellschaftsbeteiligungen',
-      'Bankguthaben, Wertpapierdepots',
-      'Lebens- und Rentenversicherungen',
-    ],
-  },
-  {
-    kategorie: '5. Frühere Übertragungen und Steuerdaten',
-    punkte: [
-      'Schenkungen der vergangenen zehn Jahre',
-      'Steuerbescheide zur Schenkung-/Erbschaftsteuer',
-    ],
-  },
-  {
-    kategorie: '6. Ziele und offene Fragen',
-    punkte: ['Wichtigste Ziele und Prioritäten für die geplante Nachfolgegestaltung'],
-  },
-]
+// Der vollständige Wortlaut steht in originalTexte.ts (aus dem Original-Fragebogen der Kanzlei).
+export { ERBEN_CHECKLISTE } from './originalTexte'

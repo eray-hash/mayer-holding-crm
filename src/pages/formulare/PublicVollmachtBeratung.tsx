@@ -6,26 +6,50 @@ import { SignaturePad } from '../../components/SignaturePad'
 import { holePublicKunde, sendePublicFormular, type PublicKunde } from '../../lib/emailGateway'
 import { generateDokumentPdf } from '../../lib/generateDokumentPdf'
 import { today } from '../../lib/dates'
+import { KANZLEI_ANSCHRIFT, VOLLMACHT_BANK, VOLLMACHT_FINANZAMT } from '../../data/originalTexte'
 
 type VollmachtTyp = 'finanzamt' | 'bank'
 
 const TITEL: Record<VollmachtTyp, string> = {
-  finanzamt: 'Vollmacht für das Finanzamt',
-  bank: 'Vollmacht Bank – Kreditverhandlungen',
+  finanzamt: VOLLMACHT_FINANZAMT.titel,
+  bank: VOLLMACHT_BANK.titel,
 }
 
-const ERLAEUTERUNG: Record<VollmachtTyp, string> = {
-  finanzamt:
-    'Hiermit bevollmächtigen Sie die Unternehmensberatung Andreas Mayer sowie deren Mitarbeiter, Schwabstrasse 3, ' +
-    '89075 Ulm, Sie in allen steuerlichen Angelegenheiten gegenüber dem Finanzamt zu vertreten — insbesondere zur Einsichtnahme in ' +
-    'Ihre Steuerakten, zur Entgegennahme und Abgabe von Steuerbescheiden und Schriftstücken, zur Stellung und Entgegennahme von ' +
-    'Anträgen, zur Teilnahme an Besprechungen und Verhandlungen sowie zur Einlegung und Rücknahme von Rechtsbehelfen. Die Vollmacht ' +
-    'gilt ab dem Tag der Unterzeichnung und ist bis auf Widerruf gültig, mindestens 2 Monate.',
-  bank:
-    'Hiermit erteilen Sie der Unternehmensberatung Andreas Mayer Consulting, Schwabstrasse 3, 89075 Ulm, die Vollmacht, in Ihrem ' +
-    'Namen und für Ihre Rechnung Verhandlungen über die Aufnahme von Krediten und Darlehen bei der Bank zu führen — einschließlich ' +
-    'Prüfung und Verhandlung von Kreditangeboten, Unterzeichnung von Kreditverträgen und aller notwendigen Dokumente im ' +
-    'Zusammenhang mit der Kreditaufnahme. Diese Vollmacht gilt ab sofort und bleibt gültig, bis sie schriftlich widerrufen wird.',
+// Der vollständige Wortlaut mit den eingesetzten Angaben — für das PDF an die Behörde. Derselbe Text
+// steht im Formular auf dem Bildschirm (Wortlaut aus dem Original der Kanzlei, siehe data/originalTexte.ts).
+function wortlaut(typ: VollmachtTyp, a: { name: string; geburtsdatum: string; adresse: string; steuernummer: string; bank: string }): string {
+  if (typ === 'finanzamt') {
+    const v = VOLLMACHT_FINANZAMT
+    return [
+      `${v.einleitung} ${a.name}`,
+      `Geburtsdatum: ${a.geburtsdatum}`,
+      `Adresse: ${a.adresse}`,
+      `Steuernummer: ${a.steuernummer}`,
+      '',
+      ...v.bevollmaechtigter,
+      '',
+      v.auftrag,
+      '',
+      v.rechteEinleitung,
+      ...v.rechte.map((r) => `• ${r}`),
+      '',
+      v.geltung,
+    ].join('\n')
+  }
+  const v = VOLLMACHT_BANK
+  return [
+    `Vollmachtgeber: ${a.name}`,
+    `wohnhaft: ${a.adresse}`,
+    '',
+    ...v.bevollmaechtigter,
+    '',
+    v.erteilung.replace('{name}', a.name).replace('{bank}', a.bank),
+    '',
+    v.rechteEinleitung,
+    ...v.rechte.map((r) => `• ${r}`),
+    '',
+    v.geltung,
+  ].join('\n')
 }
 
 export function PublicVollmachtBeratung() {
@@ -42,6 +66,7 @@ export function PublicVollmachtBeratung() {
   const [geburtsdatum, setGeburtsdatum] = useState('')
   const [adresse, setAdresse] = useState('')
   const [steuernummer, setSteuernummer] = useState('')
+  const [bank, setBank] = useState('')
   const [signatur, setSignatur] = useState<string | null>(null)
   const [error, setError] = useState('')
 
@@ -72,7 +97,7 @@ export function PublicVollmachtBeratung() {
   }
 
   async function submit() {
-    if (!adresse.trim() || (gueltigerTyp === 'finanzamt' && (!geburtsdatum.trim() || !steuernummer.trim()))) {
+    if (!adresse.trim() || (gueltigerTyp === 'finanzamt' && (!geburtsdatum.trim() || !steuernummer.trim())) || (gueltigerTyp === 'bank' && !bank.trim())) {
       setError('Bitte alle Felder ausfüllen.')
       return
     }
@@ -86,7 +111,7 @@ export function PublicVollmachtBeratung() {
     const details =
       gueltigerTyp === 'finanzamt'
         ? `Geburtsdatum: ${geburtsdatum}, Adresse: ${adresse}, Steuernummer: ${steuernummer}.`
-        : `Wohnhaft: ${adresse}.`
+        : `Wohnhaft: ${adresse}, Bank: ${bank}.`
 
     try {
       let behoerde: { email: string; name?: string; pdfBase64?: string; pdfFilename?: string } | undefined
@@ -98,13 +123,13 @@ export function PublicVollmachtBeratung() {
         if (gueltigerTyp === 'finanzamt') {
           felder.push({ label: 'Geburtsdatum', value: geburtsdatum }, { label: 'Steuernummer', value: steuernummer }, { label: 'Adresse', value: adresse })
         } else {
-          felder.push({ label: 'Wohnhaft', value: adresse })
+          felder.push({ label: 'Wohnhaft', value: adresse }, { label: 'Bank', value: bank })
         }
         const pdf = generateDokumentPdf({
           titel: TITEL[gueltigerTyp],
           absatzVorFeldern: `Diese Vollmacht wird für ${kunde!.ansprechpartner} (${kunde!.firma}) erstellt.`,
           felder,
-          erlaeuterung: ERLAEUTERUNG[gueltigerTyp],
+          erlaeuterung: wortlaut(gueltigerTyp, { name: kunde!.ansprechpartner, geburtsdatum, adresse, steuernummer, bank }),
           signaturDataUrl: signatur,
           ort: 'Ulm',
           datum: today(),
@@ -144,7 +169,7 @@ export function PublicVollmachtBeratung() {
     <div className="min-h-screen bg-slate-50 px-4 py-10">
       <div className="mx-auto max-w-xl">
         <div className="mb-6 text-center">
-          <p className="text-xs font-medium uppercase tracking-wide text-accent-600">Andreas Mayer Holding · Schwabstrasse 3, 89075 Ulm</p>
+          <p className="text-xs font-medium uppercase tracking-wide text-accent-600">Andreas Mayer Holding · {KANZLEI_ANSCHRIFT}</p>
           <h1 className="mt-1 text-xl font-bold text-slate-800">{TITEL[gueltigerTyp]}</h1>
         </div>
 
@@ -155,30 +180,62 @@ export function PublicVollmachtBeratung() {
         </div>
 
         <Card className="p-6">
-          <p className="mb-4 text-sm text-slate-500">
-            Diese Vollmacht wird für <strong>{kunde.ansprechpartner}</strong> ({kunde.firma}) erstellt.
-          </p>
-
-          <div className="mb-4 rounded-lg bg-slate-50 p-3 text-xs text-slate-500">
-            <div className="mb-1 font-medium text-slate-600">Vollmachtgeber</div>
-            {kunde.ansprechpartner} · {kunde.email}
-          </div>
-
-          {gueltigerTyp === 'finanzamt' && (
-            <>
+          {gueltigerTyp === 'finanzamt' ? (
+            <div className="text-sm leading-relaxed text-slate-700">
+              <p className="mb-3">
+                {VOLLMACHT_FINANZAMT.einleitung} <strong>{kunde.ansprechpartner}</strong>
+              </p>
               <Field label="Geburtsdatum *">
                 <input type="date" className={inputClass} value={geburtsdatum} onChange={(e) => setGeburtsdatum(e.target.value)} />
+              </Field>
+              <Field label="Adresse *">
+                <input className={inputClass} value={adresse} onChange={(e) => setAdresse(e.target.value)} />
               </Field>
               <Field label="Steuernummer *">
                 <input className={inputClass} value={steuernummer} onChange={(e) => setSteuernummer(e.target.value)} />
               </Field>
-            </>
+              <div className="mb-3 rounded-lg bg-slate-50 p-3">
+                {VOLLMACHT_FINANZAMT.bevollmaechtigter.map((z) => (
+                  <div key={z}>{z}</div>
+                ))}
+              </div>
+              <p className="mb-3">{VOLLMACHT_FINANZAMT.auftrag}</p>
+              <p className="mb-1">{VOLLMACHT_FINANZAMT.rechteEinleitung}</p>
+              <ul className="mb-3 list-disc space-y-0.5 pl-5">
+                {VOLLMACHT_FINANZAMT.rechte.map((r) => (
+                  <li key={r}>{r}</li>
+                ))}
+              </ul>
+              <p className="mb-4">{VOLLMACHT_FINANZAMT.geltung}</p>
+            </div>
+          ) : (
+            <div className="text-sm leading-relaxed text-slate-700">
+              <p className="mb-3">
+                Vollmachtgeber: <strong>{kunde.ansprechpartner}</strong>
+              </p>
+              <Field label="wohnhaft *">
+                <input className={inputClass} value={adresse} onChange={(e) => setAdresse(e.target.value)} />
+              </Field>
+              <div className="mb-3 rounded-lg bg-slate-50 p-3">
+                {VOLLMACHT_BANK.bevollmaechtigter.map((z) => (
+                  <div key={z}>{z}</div>
+                ))}
+              </div>
+              <Field label="Bank *">
+                <input className={inputClass} value={bank} onChange={(e) => setBank(e.target.value)} placeholder="Name der Bank" />
+              </Field>
+              <p className="mb-3">
+                {VOLLMACHT_BANK.erteilung.replace('{name}', kunde.ansprechpartner).replace('{bank}', bank.trim() || '______________')}
+              </p>
+              <p className="mb-1">{VOLLMACHT_BANK.rechteEinleitung}</p>
+              <ul className="mb-3 list-disc space-y-0.5 pl-5">
+                {VOLLMACHT_BANK.rechte.map((r) => (
+                  <li key={r}>{r}</li>
+                ))}
+              </ul>
+              <p className="mb-4">{VOLLMACHT_BANK.geltung}</p>
+            </div>
           )}
-          <Field label={gueltigerTyp === 'finanzamt' ? 'Adresse *' : 'Wohnhaft *'}>
-            <input className={inputClass} value={adresse} onChange={(e) => setAdresse(e.target.value)} />
-          </Field>
-
-          <p className="mb-4 rounded-lg bg-slate-50 p-3 text-xs leading-relaxed text-slate-500">{ERLAEUTERUNG[gueltigerTyp]}</p>
 
           <div className="print:hidden">
             <Field label="Unterschrift Vollmachtgeber *">
@@ -188,6 +245,7 @@ export function PublicVollmachtBeratung() {
           <div className="hidden print:block print:mt-8">
             <p className="text-sm text-slate-700">Ort, Datum: ________________________</p>
             <p className="mt-8 text-sm text-slate-700">Unterschrift Vollmachtgeber: ________________________________</p>
+            {gueltigerTyp === 'bank' && <p className="mt-8 text-sm text-slate-700">Unterschrift bevollmächtigte Person: ________________________________</p>}
           </div>
 
           {error && <p className="mb-3 text-sm font-medium text-rose-600">{error}</p>}

@@ -2,44 +2,45 @@ import { useState } from 'react'
 import { CheckCircle2, Printer } from 'lucide-react'
 import { Card, Field, inputClass, PrimaryButton, SecondaryButton } from '../../components/ui'
 import { SignaturePad } from '../../components/SignaturePad'
-import { addDays, today } from '../../lib/dates'
+import { addDays, fmtDate, today } from '../../lib/dates'
 import { erstellePublicLead } from '../../lib/emailGateway'
 import type { Prioritaet } from '../../types'
+import { FEEDBACKBOGEN as F } from '../../data/originalTexte'
 
-const FEEDBACK_KRITERIEN = [
-  'Verständlichkeit der Inhalte',
-  'Praxisrelevanz für meine Situation',
-  'Ist es Ihnen bewusst, wie viel Geld Sie in der Vergangenheit verschenkt haben?',
-  'Nutzen für meine persönliche Planung',
-]
+// Wortlaut und Aufbau wie im Original-Feedbackbogen der Kanzlei (data/originalTexte.ts).
+type JaNein = 'ja' | 'nein' | ''
 
 export function PublicFeedbackbogen() {
   const [submitted, setSubmitted] = useState(false)
   const [senden, setSenden] = useState(false)
 
   const [veranstaltung, setVeranstaltung] = useState('Vermögensschutz in unsicheren Zeiten')
-  const [anrede, setAnrede] = useState('Herr')
+  const [datum, setDatum] = useState(today())
+  const [anrede, setAnrede] = useState('')
   const [name, setName] = useState('')
   const [telefon, setTelefon] = useState('')
   const [email, setEmail] = useState('')
-  const [feedback, setFeedback] = useState<Record<string, boolean>>({})
+  const [feedback, setFeedback] = useState<Record<string, JaNein>>({})
+  // Tabelle "Kriterien (unternehmerisch)": je Zeile Anzahl und ungefährer Wert.
+  const [unternehmerisch, setUnternehmerisch] = useState<Record<string, { anzahl: string; wert: string }>>({})
   const [offenesFeedback, setOffenesFeedback] = useState('')
   const [familienstand, setFamilienstand] = useState('')
   const [kinder, setKinder] = useState('')
-  const [ehevertrag, setEhevertrag] = useState<'ja' | 'nein' | ''>('')
-  const [nachfolgeGeregelt, setNachfolgeGeregelt] = useState<'ja' | 'nein' | ''>('')
-  const [terminWunsch, setTerminWunsch] = useState<'ja' | 'nein' | ''>('')
+  const [ehevertrag, setEhevertrag] = useState<JaNein>('')
+  const [nachfolgeGeregelt, setNachfolgeGeregelt] = useState<JaNein>('')
+  const [terminWunsch, setTerminWunsch] = useState<JaNein>('')
   const [einverstanden, setEinverstanden] = useState(false)
   const [signatur, setSignatur] = useState<string | null>(null)
   const [error, setError] = useState('')
 
-  function toggleFeedback(k: string) {
-    setFeedback((f) => ({ ...f, [k]: !f[k] }))
+  function setzeUnternehmerisch(zeile: string, feld: 'anzahl' | 'wert', wert: string) {
+    setUnternehmerisch((u) => ({ ...u, [zeile]: { anzahl: u[zeile]?.anzahl ?? '', wert: u[zeile]?.wert ?? '', [feld]: wert } }))
   }
 
   async function submit() {
-    if (!name.trim() || !email.trim()) {
-      setError('Bitte Name und E-Mail ausfüllen.')
+    // Pflichtfelder wie im Original mit Stern gekennzeichnet.
+    if (!veranstaltung.trim() || !datum || !anrede || !name.trim() || !telefon.trim() || !email.trim()) {
+      setError('Bitte alle Felder mit Stern ausfüllen: Veranstaltung, Datum, Anrede, Name, Telefon und E-Mail.')
       return
     }
     if (!einverstanden) {
@@ -53,15 +54,19 @@ export function PublicFeedbackbogen() {
     setError('')
     setSenden(true)
 
-    const angekreuzt = FEEDBACK_KRITERIEN.filter((k) => feedback[k])
+    const bewertet = F.kriterien.filter((k) => feedback[k]).map((k) => `${k}: ${feedback[k] === 'ja' ? 'JA' : 'NEIN'}`)
+    const unternehmen = F.unternehmerisch.zeilen
+      .filter((z) => unternehmerisch[z]?.anzahl || unternehmerisch[z]?.wert)
+      .map((z) => `${z}: Anzahl ${unternehmerisch[z]?.anzahl || '–'}, ca. Wert ${unternehmerisch[z]?.wert || '–'}`)
     const prioritaet: Prioritaet = terminWunsch === 'ja' ? 'Hoch' : 'Niedrig'
 
     const activityLines = [
-      `Feedbackbogen "${veranstaltung}" digital ausgefüllt und unterschrieben.`,
-      angekreuzt.length > 0 ? `Feedback: ${angekreuzt.join('; ')}.` : '',
+      `Feedbackbogen "${veranstaltung}" vom ${fmtDate(datum)} digital ausgefüllt und unterschrieben (${anrede} ${name}).`,
+      bewertet.length > 0 ? `Feedback: ${bewertet.join('; ')}.` : '',
+      unternehmen.length > 0 ? `Aufstellung unternehmerisch: ${unternehmen.join('; ')}.` : '',
       offenesFeedback ? `Größte Erkenntnis: „${offenesFeedback}"` : '',
       familienstand || kinder || ehevertrag || nachfolgeGeregelt
-        ? `Aufstellung: Familienstand ${familienstand || '–'}, Kinder ${kinder || '–'}, Ehevertrag ${ehevertrag || '–'}, Nachfolge geregelt ${nachfolgeGeregelt || '–'}.`
+        ? `Aufstellung persönlich: Familienstand ${familienstand || '–'}, Kinder ${kinder || '–'}, Ehevertrag ${ehevertrag || '–'}, Nachfolge geregelt ${nachfolgeGeregelt || '–'}.`
         : '',
       `Beratungsgespräch (3.250 € zzgl. USt für Sichtung/Erstbewertung) gewünscht: ${terminWunsch === 'ja' ? 'Ja' : 'Nein'}.`,
     ].filter(Boolean)
@@ -112,7 +117,7 @@ export function PublicFeedbackbogen() {
       <div className="mx-auto max-w-xl">
         <div className="mb-6 text-center">
           <p className="text-xs font-medium uppercase tracking-wide text-accent-600">Mayer Consulting</p>
-          <h1 className="mt-1 text-xl font-bold text-slate-800">Feedbackbogen – {veranstaltung}</h1>
+          <h1 className="mt-1 text-xl font-bold text-slate-800">{F.titel}</h1>
         </div>
 
         <div className="mb-3 flex justify-end print:hidden">
@@ -122,79 +127,121 @@ export function PublicFeedbackbogen() {
         </div>
 
         <Card className="p-6">
-          <Field label="Veranstaltung">
-            <input className={inputClass} value={veranstaltung} onChange={(e) => setVeranstaltung(e.target.value)} />
-          </Field>
-
+          <div className="grid grid-cols-1 gap-x-3 sm:grid-cols-2">
+            <Field label="Veranstaltung*">
+              <input className={inputClass} value={veranstaltung} onChange={(e) => setVeranstaltung(e.target.value)} />
+            </Field>
+            <Field label="Datum*">
+              <input type="date" className={inputClass} value={datum} onChange={(e) => setDatum(e.target.value)} />
+            </Field>
+          </div>
           <div className="grid grid-cols-3 gap-3">
-            <Field label="Anrede">
+            <Field label="Anrede*">
               <select className={inputClass} value={anrede} onChange={(e) => setAnrede(e.target.value)}>
+                <option value="">– bitte wählen –</option>
                 <option>Herr</option>
                 <option>Frau</option>
                 <option>Divers</option>
               </select>
             </Field>
             <div className="col-span-2">
-              <Field label="Name *">
+              <Field label="Name*">
                 <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} />
               </Field>
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Telefon / Mobil">
+          <div className="grid grid-cols-1 gap-x-3 sm:grid-cols-2">
+            <Field label="Telefon/ mobil*">
               <input className={inputClass} value={telefon} onChange={(e) => setTelefon(e.target.value)} />
             </Field>
-            <Field label="E-Mail *">
+            <Field label="E-Mail*">
               <input type="email" className={inputClass} value={email} onChange={(e) => setEmail(e.target.value)} />
             </Field>
           </div>
+          <p className="mb-4 text-xs text-slate-400">{F.pflichtHinweis}</p>
 
-          <h3 className="mb-2 mt-5 text-sm font-semibold text-slate-700">1. Allgemeines Feedback zum Vortrag</h3>
-          <div className="mb-4 space-y-1.5">
-            {FEEDBACK_KRITERIEN.map((k) => (
-              <label key={k} className="flex items-start gap-2 text-sm text-slate-600">
-                <input type="checkbox" checked={!!feedback[k]} onChange={() => toggleFeedback(k)} className="mt-0.5 rounded" />
-                {k}
-              </label>
-            ))}
-          </div>
+          <h3 className="mb-2 mt-5 text-sm font-semibold text-slate-700">{F.abschnitt1}</h3>
+          <table className="mb-1 w-full text-sm">
+            <thead>
+              <tr className="border-b border-slate-200 text-left text-xs font-medium uppercase tracking-wide text-slate-400">
+                <th className="py-1.5 pr-2">Kriterium</th>
+                <th className="w-12 py-1.5 text-center">JA</th>
+                <th className="w-12 py-1.5 text-center">NEIN</th>
+              </tr>
+            </thead>
+            <tbody>
+              {F.kriterien.map((k) => (
+                <tr key={k} className="border-b border-slate-100 last:border-0">
+                  <td className="py-1.5 pr-2 text-slate-700">{k}</td>
+                  {(['ja', 'nein'] as const).map((wert) => (
+                    <td key={wert} className="py-1.5 text-center">
+                      <input
+                        type="radio"
+                        name={`kriterium-${k}`}
+                        aria-label={`${k}: ${wert === 'ja' ? 'JA' : 'NEIN'}`}
+                        checked={feedback[k] === wert}
+                        onChange={() => setFeedback((f) => ({ ...f, [k]: wert }))}
+                      />
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="mb-4 text-xs text-slate-400">{F.bewertungsHinweis}</p>
 
-          <Field label="2. Offenes Feedback — Welcher Impuls hat Ihnen die größte Erkenntnis gebracht?">
-            <textarea
-              className={inputClass}
-              rows={3}
-              value={offenesFeedback}
-              onChange={(e) => setOffenesFeedback(e.target.value)}
-            />
+          <h3 className="mb-2 mt-4 text-sm font-semibold text-slate-700">{F.abschnitt2}</h3>
+          <Field label={F.frageErkenntnis}>
+            <textarea className={inputClass} rows={3} value={offenesFeedback} onChange={(e) => setOffenesFeedback(e.target.value)} />
           </Field>
 
-          <h3 className="mb-2 mt-4 text-sm font-semibold text-slate-700">3. Ihre momentane Aufstellung</h3>
-          <div className="mb-4 grid grid-cols-2 gap-3">
-            <Field label="Familienstand">
+          <h3 className="mb-1 mt-4 text-sm font-semibold text-slate-700">{F.abschnitt3}</h3>
+          <p className="mb-3 text-xs text-slate-500">{F.aufstellungHinweis}</p>
+          <table className="mb-4 w-full text-sm">
+            <thead>
+              <tr className="border-b border-slate-200 text-left text-xs font-medium text-slate-500">
+                <th className="py-1.5 pr-2">{F.unternehmerisch.kopf[0]}</th>
+                <th className="w-24 py-1.5">{F.unternehmerisch.kopf[1]}</th>
+                <th className="w-40 py-1.5">{F.unternehmerisch.kopf[2]}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {F.unternehmerisch.zeilen.map((z) => (
+                <tr key={z} className="border-b border-slate-100 last:border-0">
+                  <td className="py-1.5 pr-2 text-slate-700">{z}</td>
+                  <td className="py-1 pr-2">
+                    <input className={inputClass} aria-label={`${z}: Anzahl`} value={unternehmerisch[z]?.anzahl ?? ''} onChange={(e) => setzeUnternehmerisch(z, 'anzahl', e.target.value)} />
+                  </td>
+                  <td className="py-1">
+                    <input className={inputClass} aria-label={`${z}: ca. Wert`} value={unternehmerisch[z]?.wert ?? ''} onChange={(e) => setzeUnternehmerisch(z, 'wert', e.target.value)} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="mb-2 text-xs font-medium text-slate-500">{F.persoenlich.kopf}</p>
+          <div className="mb-4 grid grid-cols-1 gap-x-3 sm:grid-cols-2">
+            <Field label={F.persoenlich.zeilen[0]}>
               <select className={inputClass} value={familienstand} onChange={(e) => setFamilienstand(e.target.value)}>
                 <option value="">– bitte wählen –</option>
-                <option value="verheiratet">Verheiratet</option>
-                <option value="geschieden">Geschieden</option>
-                <option value="verwitwet">Verwitwet</option>
-                <option value="ledig">Ledig</option>
+                <option value="verheiratet">verheiratet</option>
+                <option value="geschieden">geschieden</option>
+                <option value="verwitwet">verwitwet</option>
+                <option value="ledig">ledig</option>
               </select>
             </Field>
-            <Field label="Kinder (Anzahl/Alter)">
+            <Field label={F.persoenlich.zeilen[1]}>
               <input className={inputClass} value={kinder} onChange={(e) => setKinder(e.target.value)} />
             </Field>
-            <Field label="Ehevertrag vorhanden?">
-              <select className={inputClass} value={ehevertrag} onChange={(e) => setEhevertrag(e.target.value as 'ja' | 'nein' | '')}>
+            <Field label={F.persoenlich.zeilen[2]}>
+              <select className={inputClass} value={ehevertrag} onChange={(e) => setEhevertrag(e.target.value as JaNein)}>
                 <option value="">– bitte wählen –</option>
                 <option value="ja">Ja</option>
                 <option value="nein">Nein</option>
               </select>
             </Field>
-            <Field label="Unternehmensnachfolge geregelt?">
-              <select
-                className={inputClass}
-                value={nachfolgeGeregelt}
-                onChange={(e) => setNachfolgeGeregelt(e.target.value as 'ja' | 'nein' | '')}
-              >
+            <Field label={F.persoenlich.zeilen[3]}>
+              <select className={inputClass} value={nachfolgeGeregelt} onChange={(e) => setNachfolgeGeregelt(e.target.value as JaNein)}>
                 <option value="">– bitte wählen –</option>
                 <option value="ja">Ja</option>
                 <option value="nein">Nein</option>
@@ -202,35 +249,34 @@ export function PublicFeedbackbogen() {
             </Field>
           </div>
 
-          <h3 className="mb-2 mt-4 text-sm font-semibold text-slate-700">4. Beratungsgespräch / Kosten</h3>
-          <p className="mb-3 rounded-lg bg-slate-50 p-3 text-xs leading-relaxed text-slate-500">
-            Für die Sichtung Ihrer Unterlagen und eine Erstbewertung erheben wir eine Aufwandsentschädigung in Höhe von{' '}
-            <strong>3.250 € zzgl. gesetzlicher Mehrwertsteuer</strong>. Bei Umsetzung und Auftragserteilung wird diese vollständig
-            verrechnet.
-          </p>
-          <div className="mb-4 flex gap-4 text-sm">
-            <label className="flex items-center gap-1.5">
-              <input type="radio" name="termin" checked={terminWunsch === 'ja'} onChange={() => setTerminWunsch('ja')} />
-              Ja, ich möchte einen Termin vereinbaren
+          <h3 className="mb-2 mt-4 text-sm font-semibold text-slate-700">{F.abschnitt4}</h3>
+          <p className="mb-2 text-sm text-slate-600">{F.anspruch}</p>
+          <div className="mb-3 rounded-lg bg-slate-50 p-3 text-sm leading-relaxed text-slate-600">
+            <p>
+              {F.kosten} <strong>{F.betrag}</strong>
+            </p>
+            <p>{F.verrechnung}</p>
+          </div>
+          <div className="mb-4 space-y-1.5 text-sm text-slate-700">
+            <label className="flex items-start gap-2">
+              <input type="radio" name="termin" className="mt-1" checked={terminWunsch === 'ja'} onChange={() => setTerminWunsch('ja')} />
+              {F.ja}
             </label>
-            <label className="flex items-center gap-1.5">
-              <input type="radio" name="termin" checked={terminWunsch === 'nein'} onChange={() => setTerminWunsch('nein')} />
-              Nein, aktuell kein Interesse
+            <label className="flex items-start gap-2">
+              <input type="radio" name="termin" className="mt-1" checked={terminWunsch === 'nein'} onChange={() => setTerminWunsch('nein')} />
+              {F.nein}
             </label>
           </div>
 
-          <h3 className="mb-2 mt-4 text-sm font-semibold text-slate-700">5. Einverständnis &amp; Datenschutz</h3>
-          <label className="mb-4 flex items-start gap-2 text-sm text-slate-600">
+          <h3 className="mb-2 mt-4 text-sm font-semibold text-slate-700">{F.abschnitt5}</h3>
+          <label className="mb-3 flex items-start gap-2 text-sm text-slate-700">
             <input type="checkbox" checked={einverstanden} onChange={(e) => setEinverstanden(e.target.checked)} className="mt-0.5 rounded" />
-            Ich bin damit einverstanden, dass meine Angaben zur Kontaktaufnahme genutzt werden. *
+            {F.einverstaendnis} *
           </label>
-          <p className="mb-4 text-xs text-slate-400">
-            Ihre Daten werden ausschließlich zum Zweck der Kontaktaufnahme und zur Vereinbarung eines Beratungsgesprächs
-            gespeichert und verarbeitet. Eine Weitergabe an Dritte erfolgt nicht.
-          </p>
+          <p className="mb-4 text-xs leading-relaxed text-slate-500">{F.datenschutz}</p>
 
           <div className="print:hidden">
-            <Field label="Unterschrift *">
+            <Field label={`${F.unterschrift} *`}>
               <SignaturePad onChange={setSignatur} />
             </Field>
           </div>

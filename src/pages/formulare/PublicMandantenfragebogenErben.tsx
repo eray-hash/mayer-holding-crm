@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { CheckCircle2, Loader2 } from 'lucide-react'
 import { Card, Field, inputClass, PrimaryButton } from '../../components/ui'
-import { ERBEN_CHECKLISTE } from '../../data/seedErben'
+import { ERBEN_CHECKLISTE, KANZLEI_ANSCHRIFT, MANDANTENFRAGEBOGEN_ERBEN as F } from '../../data/originalTexte'
 import { holePublicKunde, sendePublicFormular, type PublicKunde } from '../../lib/emailGateway'
 
 export function PublicMandantenfragebogenErben() {
@@ -12,6 +12,8 @@ export function PublicMandantenfragebogenErben() {
   const [senden, setSenden] = useState(false)
   const [checkliste, setCheckliste] = useState<Record<string, boolean>>({})
   const [anmerkungen, setAnmerkungen] = useState('')
+  const [vermoegen, setVermoegen] = useState('')
+  const [ziele, setZiele] = useState('')
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -53,9 +55,14 @@ export function PublicMandantenfragebogenErben() {
   async function submit() {
     setError('')
     setSenden(true)
-    const activityText = `Mandantenfragebogen digital ausgefüllt (${erledigtCount}/${alleItems.length} Punkte vorhanden).${
-      anmerkungen ? ` Anmerkung: ${anmerkungen}` : ''
-    }`
+    const activityText = [
+      `Mandantenfragebogen digital ausgefüllt (${erledigtCount}/${alleItems.length} Punkte vorhanden).`,
+      vermoegen.trim() ? `Vermögensübersicht: ${vermoegen.trim()}` : '',
+      ziele.trim() ? `Ziele und offene Fragen: ${ziele.trim()}` : '',
+      anmerkungen.trim() ? `Bemerkung: ${anmerkungen.trim()}` : '',
+    ]
+      .filter(Boolean)
+      .join(' ')
     try {
       await sendePublicFormular({
         bereich: 'erben',
@@ -91,15 +98,26 @@ export function PublicMandantenfragebogenErben() {
     <div className="min-h-screen bg-slate-50 px-4 py-10">
       <div className="mx-auto max-w-xl">
         <div className="mb-6 text-center">
-          <p className="text-xs font-medium uppercase tracking-wide text-accent-600">Andreas Mayer Holding · Schwabstrasse 3, 89075 Ulm</p>
-          <h1 className="mt-1 text-xl font-bold text-slate-800">Mandantenfragebogen</h1>
-          <p className="text-sm text-slate-500">Vermögens-, Familien- und Nachfolgeplanung</p>
+          <p className="text-xs font-medium uppercase tracking-wide text-accent-600">Andreas Mayer Holding · {KANZLEI_ANSCHRIFT}</p>
+          <h1 className="mt-1 text-xl font-bold text-slate-800">{F.titel}</h1>
+          <p className="text-sm text-slate-500">{F.untertitel}</p>
         </div>
 
         <Card className="p-6">
-          <p className="mb-4 text-sm text-slate-500">
-            Für <strong>{mandant.ansprechpartner}</strong> ({mandant.firma}). Bitte kreuzen Sie an, welche Angaben bzw.
-            Unterlagen bei Ihnen bereits vorliegen — {erledigtCount} von {alleItems.length} bereits erfasst.
+          <p className="mb-4 text-sm leading-relaxed text-slate-600">{F.einleitung}</p>
+          <div className="mb-4 rounded-lg bg-slate-50 p-3 text-xs leading-relaxed text-slate-600">
+            <p className="mb-1 font-semibold text-slate-700">{F.umfangTitel}</p>
+            <p className="mb-3">{F.umfang}</p>
+            <p className="mb-1 font-semibold text-slate-700">{F.datenschutzTitel}</p>
+            {F.datenschutz.map((absatz) => (
+              <p key={absatz.slice(0, 30)} className="mb-2 last:mb-0">
+                {absatz}
+              </p>
+            ))}
+          </div>
+          <p className="mb-2 text-sm text-slate-500">
+            Für <strong>{mandant.ansprechpartner}</strong> ({mandant.firma}). Bitte kreuzen Sie an, was vorliegt — {erledigtCount} von{' '}
+            {alleItems.length} angekreuzt.
           </p>
 
           <div className="mb-4 h-2 overflow-hidden rounded-full bg-slate-100">
@@ -123,9 +141,22 @@ export function PublicMandantenfragebogenErben() {
           </div>
 
           <div className="mt-5 border-t border-slate-100 pt-5">
-            <Field label="Anmerkungen (optional)">
-              <textarea className={inputClass} rows={3} value={anmerkungen} onChange={(e) => setAnmerkungen(e.target.value)} />
-            </Field>
+            <h4 className="mb-1 text-sm font-semibold text-slate-700">{F.vermoegenTitel}</h4>
+            <p className="mb-2 text-sm text-slate-600">{F.vermoegenEinleitung}</p>
+            <textarea className={inputClass} rows={5} value={vermoegen} onChange={(e) => setVermoegen(e.target.value)} />
+            <p className="mb-4 mt-1 text-xs text-slate-500">{F.vermoegenBereiche}</p>
+
+            <h4 className="mb-1 text-sm font-semibold text-slate-700">{F.zieleTitel}</h4>
+            <p className="mb-2 text-sm text-slate-600">{F.zieleFrage}</p>
+            <textarea className={inputClass} rows={4} value={ziele} onChange={(e) => setZiele(e.target.value)} />
+
+            <div className="mt-4">
+              <Field label="Bemerkung (z. B. „Nicht vorhanden“, „Wird nachgereicht bis …“)">
+                <textarea className={inputClass} rows={3} value={anmerkungen} onChange={(e) => setAnmerkungen(e.target.value)} />
+              </Field>
+            </div>
+            <p className="text-xs text-slate-500">{F.schlussHinweis}</p>
+            <p className="mt-2 text-xs font-medium text-slate-400">{F.fusszeile}</p>
           </div>
 
           {error && <p className="mb-3 text-sm font-medium text-rose-600">{error}</p>}
