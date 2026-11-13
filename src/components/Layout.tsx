@@ -332,14 +332,14 @@ export function Layout({ children }: { children: ReactNode }) {
       {drawerOpen && (
         <div className="fixed inset-0 z-50 flex">
           <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-[1px]" onClick={() => setDrawerOpen(false)} />
-          <div className="relative z-10 flex h-full w-full max-w-md flex-col bg-white shadow-2xl">
-            <div className="flex flex-shrink-0 items-center justify-between p-6 pb-0">
-              <h2 className="text-lg font-semibold text-slate-800">Bereich wählen</h2>
+          <div className="relative z-10 flex h-full w-full max-w-xs flex-col bg-white shadow-2xl">
+            <div className="flex flex-shrink-0 items-center justify-between px-4 pt-4">
+              <h2 className="text-base font-semibold text-slate-800">Bereich wählen</h2>
               <button onClick={() => setDrawerOpen(false)} className="rounded-md p-1.5 text-slate-400 hover:bg-slate-100">
                 <X size={20} />
               </button>
             </div>
-            <div className="min-h-0 flex-1 overflow-y-auto p-6">
+            <div className="min-h-0 flex-1 overflow-y-auto p-4">
               {/* Navigation des aktuellen Bereichs — nur auf Mobile sichtbar, da dort die feste
                   Sidebar (siehe oben, ab md) keinen Platz hat. */}
               <div
@@ -353,24 +353,30 @@ export function Layout({ children }: { children: ReactNode }) {
                 <aktuellerBereich.Sidebar collapsed={false} onToggle={() => setDrawerOpen(false)} />
               </div>
 
-              <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-400">Bereich wechseln</h3>
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                {sichtbareBereiche.map((b) => (
-                  <button
-                    key={b.id}
-                    onClick={() => chooseBereich(b.id)}
-                    className={`group flex flex-col items-center gap-3 rounded-2xl border p-8 text-center transition ${
-                      state.bereich === b.id
-                        ? 'border-accent-400 bg-accent-50 ring-2 ring-accent-200'
-                        : 'border-slate-200 hover:border-accent-300 hover:bg-slate-50'
-                    }`}
-                  >
-                    <b.icon size={36} className="text-accent-600" />
-                    <span className="text-base font-semibold text-slate-800">{b.label}</span>
-                    <span className="text-xs text-slate-500">{b.beschreibung}</span>
-                  </button>
-                ))}
-              </div>
+              <h3 className="mb-2 px-3 text-xs font-semibold uppercase tracking-wide text-slate-400 md:hidden">Bereich wechseln</h3>
+              {/* Schlichte Liste statt großer Kacheln (Wunsch vom 13.11.2026): alle Bereiche auf einen
+                  Blick untereinander, ohne Scrollen. */}
+              <ul className="space-y-0.5">
+                {sichtbareBereiche.map((b) => {
+                  const aktiv = state.bereich === b.id
+                  return (
+                    <li key={b.id}>
+                      <button
+                        onClick={() => chooseBereich(b.id)}
+                        aria-current={aktiv ? 'page' : undefined}
+                        title={b.beschreibung}
+                        className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm font-medium transition ${
+                          aktiv ? 'bg-accent-50 text-accent-700' : 'text-slate-700 hover:bg-slate-50'
+                        }`}
+                      >
+                        <b.icon size={17} className={aktiv ? 'text-accent-600' : 'text-slate-400'} />
+                        <span className="flex-1">{b.label}</span>
+                        {aktiv && <span className="h-1.5 w-1.5 rounded-full bg-accent-600" />}
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
             </div>
           </div>
         </div>
