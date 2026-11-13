@@ -9,12 +9,16 @@ export function Modal({
   title,
   children,
   width = 'max-w-lg',
+  aktionen,
 }: {
   open: boolean
   onClose: () => void
   title: string
   children: ReactNode
   width?: string
+  // Knöpfe wie "Speichern", die oben in der Kopfzeile stehen sollen. Dort bleiben sie sichtbar,
+  // auch wenn der Inhalt des Fensters gescrollt wird.
+  aktionen?: ReactNode
 }) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -28,15 +32,18 @@ export function Modal({
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-900/40 p-4 pt-16 backdrop-blur-[1px]">
       <div className={`w-full ${width} rounded-xl bg-white shadow-xl ring-1 ring-slate-200`}>
-        <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
-          <h2 className="text-base font-semibold text-slate-800">{title}</h2>
-          <button
-            onClick={onClose}
-            className="rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
-            aria-label="Schließen"
-          >
-            <X size={18} />
-          </button>
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-slate-100 px-5 py-4">
+          <h2 className="min-w-0 flex-1 text-base font-semibold text-slate-800">{title}</h2>
+          <div className="flex items-center gap-2">
+            {aktionen}
+            <button
+              onClick={onClose}
+              className="rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+              aria-label="Schließen"
+            >
+              <X size={18} />
+            </button>
+          </div>
         </div>
         <div className="max-h-[70vh] overflow-y-auto px-5 py-4">{children}</div>
       </div>

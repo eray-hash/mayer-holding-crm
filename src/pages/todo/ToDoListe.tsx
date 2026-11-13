@@ -598,7 +598,19 @@ function ToDoModal({
   }
 
   return (
-    <Modal open onClose={onClose} title={titel} width="max-w-2xl">
+    <Modal
+      open
+      onClose={onClose}
+      title={titel}
+      width="max-w-2xl"
+      aktionen={
+        // Oben statt unten (Wunsch vom 13.11.2026): Speichern ist erreichbar, ohne das Formular bis ans Ende zu scrollen.
+        <>
+          <SecondaryButton onClick={onClose}>{readOnly ? 'Schließen' : 'Abbrechen'}</SecondaryButton>
+          {!readOnly && <PrimaryButton onClick={submit} disabled={!aufgabe.trim()}>Speichern</PrimaryButton>}
+        </>
+      }
+    >
       <fieldset disabled={readOnly} className="disabled:opacity-60">
         <div className="grid grid-cols-1 gap-x-4 sm:grid-cols-3">
           <Field label="Start (frei, z.B. 18.08)"><input className={inputClass} value={startDatum} onChange={(e) => setStartDatum(e.target.value)} /></Field>
@@ -621,10 +633,6 @@ function ToDoModal({
         </div>
         <Field label="Geplante Wiedervorlage"><input type="date" className={inputClass} value={geplanteWiedervorlage} onChange={(e) => setGeplanteWiedervorlage(e.target.value)} /></Field>
       </fieldset>
-      <div className="mt-4 flex justify-end gap-2">
-        <SecondaryButton onClick={onClose}>{readOnly ? 'Schließen' : 'Abbrechen'}</SecondaryButton>
-        {!readOnly && <PrimaryButton onClick={submit} disabled={!aufgabe.trim()}>Speichern</PrimaryButton>}
-      </div>
     </Modal>
   )
 }
