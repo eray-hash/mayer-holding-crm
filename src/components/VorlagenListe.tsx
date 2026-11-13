@@ -1,13 +1,14 @@
 import { useState } from 'react'
-import { Eye, FileText } from 'lucide-react'
+import { FileText, PenLine } from 'lucide-react'
 import type { Vorlage } from '../types'
 import { fmtDate } from '../lib/dates'
-import { Modal, Card } from './ui'
+import { Card } from './ui'
 import { VORLAGEN_KATEGORIEN } from '../data/constants'
 import { FormularLinkButtons } from './FormularLink'
+import { VorlageAusfuellenModal } from './VorlageAusfuellenModal'
 
 export function VorlagenListe({ kategorie, vorlagen }: { kategorie: string; vorlagen: Vorlage[] }) {
-  const [preview, setPreview] = useState<Vorlage | null>(null)
+  const [offen, setOffen] = useState<Vorlage | null>(null)
   const label = VORLAGEN_KATEGORIEN.find((k) => k.id === kategorie)?.label ?? kategorie
   const list = vorlagen.filter((v) => v.kategorie === kategorie)
 
@@ -16,7 +17,13 @@ export function VorlagenListe({ kategorie, vorlagen }: { kategorie: string; vorl
       <h1 className="mb-1 text-xl font-semibold text-slate-800">Vorlagen – {label}</h1>
       <p className="mb-5 text-sm text-slate-500">{list.length} Vorlagen in dieser Kategorie</p>
 
-      <Card className="overflow-hidden">
+      {list.length === 0 && (
+        <Card className="p-6 text-sm text-slate-500">
+          Für diese Kategorie liegt in diesem Bereich noch keine Vorlage vor. Die allgemeinen Vorlagen der Kanzlei (Vollmachten,
+          Geheimhaltungsvereinbarung, Gesprächsprotokoll, Anschreiben) stehen unter Unternehmensberatung → Vorlagen.
+        </Card>
+      )}
+      <Card className={list.length === 0 ? 'hidden' : 'overflow-hidden'}>
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-slate-100 bg-slate-50 text-left text-xs font-medium uppercase tracking-wide text-slate-400">
@@ -40,10 +47,11 @@ export function VorlagenListe({ kategorie, vorlagen }: { kategorie: string; vorl
                 <td className="px-4 py-3">
                   <div className="flex items-center justify-end gap-2">
                     <button
-                      onClick={() => setPreview(v)}
+                      onClick={() => setOffen(v)}
                       className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                      title="Vorlage ansehen, mit den Daten eines Kunden ausfüllen und als PDF erzeugen"
                     >
-                      <Eye size={13} /> Vorschau
+                      <PenLine size={13} /> Ausfüllen
                     </button>
                     {v.formularPfad && <FormularLinkButtons pfad={v.formularPfad} />}
                   </div>
@@ -54,17 +62,7 @@ export function VorlagenListe({ kategorie, vorlagen }: { kategorie: string; vorl
         </table>
       </Card>
 
-      <Modal open={!!preview} onClose={() => setPreview(null)} title={preview?.name ?? ''}>
-        {preview && (
-          <div className="space-y-3 text-sm text-slate-600">
-            <div className="flex gap-4 text-xs text-slate-400">
-              <span>Typ: {preview.typ}</span>
-              <span>Zuletzt geändert: {fmtDate(preview.zuletztGeaendert)}</span>
-            </div>
-            <div className="whitespace-pre-line rounded-lg border border-slate-100 bg-slate-50 p-4 leading-relaxed">{preview.text}</div>
-          </div>
-        )}
-      </Modal>
+      {offen && <VorlageAusfuellenModal key={offen.id} vorlage={offen} onClose={() => setOffen(null)} />}
     </div>
   )
 }

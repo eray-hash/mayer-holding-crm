@@ -311,7 +311,7 @@ const beratungsvereinbarungText = `BERATUNGSVEREINBARUNG
 
 zwischen
 Andreas Mayer Holding UG / Unternehmensberatung Andreas Mayer
-Schwabstrasse 3, 89075 Ulm — Steuernummer 71504682835
+Schwabstrasse 3, 89075 Ulm
 - nachfolgend "Berater" -
 
 und dem nachfolgend benannten Auftraggeber
@@ -441,6 +441,10 @@ Konkrete, nach Szenario gestaffelte Empfehlungen.
 5. Offene Punkte für das Mandantengespräch
 Nummerierte Liste offener Fragen, die im nächsten Gespräch mit dem Mandanten zu klären sind — diese Liste sollte automatisch das nächste Gesprächsprotokoll bzw. die nächsten Aufgaben speisen.`
 
+// Nur für den Vorführmodus ohne Datenbank. Im echten CRM kommen die Vorlagen aus der Tabelle
+// "vorlagen"; dort stehen die wortgetreuen, befüllbaren Fassungen aus den Original-Scans. Die Texte
+// hier sind gekürzte Fassungen vom September 2026 und enthalten bewusst keine Bank- oder Steuerdaten
+// (öffentliches Repository).
 export const seedVorlagen: Vorlage[] = [
   { id: uid('vl'), kategorie: 'vollmacht', name: 'Vollmacht für das Finanzamt', typ: 'Vollmacht', zuletztGeaendert: rel(-4), text: vollmachtFinanzamt },
   { id: uid('vl'), kategorie: 'vollmacht', name: 'Vollmacht Bank – Kreditverhandlungen', typ: 'Vollmacht', zuletztGeaendert: rel(-4), text: vollmachtBankKredit },

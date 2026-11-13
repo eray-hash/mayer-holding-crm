@@ -334,7 +334,8 @@ export type PotenzialAnalyse = {
 
 export type Vorlage = {
   id: string
-  kategorie: 'vollmacht' | 'schreiben' | 'vertraege'
+  // 'briefkopf' ist kein Schriftstück, sondern die eine Zeile mit den Briefkopf-Angaben (siehe data/briefkopf.ts).
+  kategorie: 'vollmacht' | 'schreiben' | 'vertraege' | 'briefkopf'
   name: string
   typ: string
   zuletztGeaendert: string
