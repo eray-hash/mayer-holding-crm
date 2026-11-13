@@ -24,3 +24,11 @@ body {
 ::-webkit-scrollbar-track {
   @apply bg-transparent;
 }
+
+/* Reiterleiste der Akten: bewegt wird sie mit Pfeilen, Mausrad oder Wischen — der Rollbalken selbst bleibt unsichtbar. */
+.reiterleiste {
+  scrollbar-width: none;
+}
+.reiterleiste::-webkit-scrollbar {
+  display: none;
+}

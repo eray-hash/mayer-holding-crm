@@ -20,6 +20,7 @@ import { NdaSection } from '../../components/NdaSection'
 import { DokumenteSection } from '../../components/DokumenteSection'
 import { KommunikationSection } from '../../components/KommunikationSection'
 import { LoeschenKundeButton } from '../../components/LoeschenKundeButton'
+import { AktenReiter } from '../../components/AktenReiter'
 import type { Prioritaet } from '../../types'
 
 const TABS = [
@@ -111,19 +112,7 @@ export function ImmobilienKundenDetail() {
         </div>
       </Card>
 
-      <div className="mb-4 flex gap-1 border-b border-slate-200">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            onClick={() => setParams({ tab: t.id })}
-            className={`whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium ${
-              tab === t.id ? 'border-accent-600 text-accent-700' : 'border-transparent text-slate-500 hover:text-slate-700'
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
+      <AktenReiter reiter={TABS} aktiv={tab} onWaehle={(id) => setParams({ tab: id })} />
 
       {tab === 'uebersicht' && (
         <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
