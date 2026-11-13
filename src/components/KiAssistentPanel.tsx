@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Mic, Square, Sparkles, AlertTriangle, Send, X, Volume2, VolumeX, Bot, ImagePlus, Phone, Wrench, Check, BookOpen } from 'lucide-react'
 import { useApp } from '../context/AppContext'
+import { frageAssistent, istServerAssistentVerfuegbar, mailStatus } from '../lib/assistentServer'
 import { useAuth } from '../context/AuthContext'
 import { isSupabaseConfigured } from '../lib/supabaseClient'
 import { useSpeechRecognition } from '../lib/useSpeechRecognition'
@@ -65,7 +66,7 @@ type PflegeVorschlag = { beschreibung: string } & (
 // Schließen des Tabs/der Seite übersteht. Antworten werden zusätzlich per Sprachausgabe
 // vorgelesen (abschaltbar).
 export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: () => void }) {
-  const { state, dispatch } = useApp()
+  const { state, dispatch, neuLaden } = useApp()
   const { session, mitarbeiter } = useAuth()
   const { supported, recording, transcript, interim, error: recError, start, stop, setTranscript, setInterim } = useSpeechRecognition()
   // Im Demo-Modus (ohne Supabase) gibt es keine echten Mitarbeiter-Rollen — dort greift wie überall
@@ -78,7 +79,7 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
   const [messages, setMessages] = useState<ChatMessage[]>(
     () =>
       ladeKiChatNachrichten(mitarbeiter?.id) ?? [
-        { id: uid('msg'), role: 'assistant', text: 'Hallo! Sag oder tipp mir eine Notiz, eine Aufgabe oder stell mir eine Frage zu einem Kunden.' },
+        { id: uid('msg'), role: 'assistant', text: 'Hallo! Sag oder tipp mir, was du brauchst: Fragen zu Kunden, Notizen, Aufgaben, eine neue Akte oder eine E-Mail an einen oder alle Kunden.' },
       ],
   )
   const [verarbeiten, setVerarbeiten] = useState(false)
@@ -409,6 +410,30 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
     reader.readAsDataURL(file)
   }
 
+  // Ein freigegebener E-Mail-Versand läuft auf dem Server im Hintergrund. Hier wird alle paar
+  // Sekunden nachgefragt, bis die Abschlussmeldung da ist (höchstens 20 Minuten lang).
+  function warteAufVersand(auftragId: string) {
+    let versuche = 0
+    const timer = window.setInterval(async () => {
+      versuche++
+      try {
+        const st = await mailStatus()
+        if (st.ergebnis?.id === auftragId) {
+          window.clearInterval(timer)
+          addMessage('assistant', st.ergebnis.text)
+          await neuLaden().catch(() => undefined)
+          return
+        }
+      } catch {
+        // Verbindung kurz weg — einfach beim nächsten Mal wieder fragen.
+      }
+      if (versuche >= 240) {
+        window.clearInterval(timer)
+        addMessage('assistant', 'Zum E-Mail-Versand habe ich noch keine Abschlussmeldung. Frag mich später, ob alles raus ist.')
+      }
+    }, 5000)
+  }
+
   async function senden() {
     const text = (interim ? `${transcript} ${interim}` : transcript).trim()
     if (!text && !pastedImage) return
@@ -494,6 +519,26 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
       }
       // Nicht eindeutig aufgelöst (z.B. User ignoriert die Rückfrage und fragt etwas anderes) ->
       // ganz normal weiterverarbeiten, nicht in der Rückfrage hängen bleiben.
+    }
+
+    // Regelfall: der Assistent auf dem Server (derselbe wie in Telegram). Er schlägt nach, ändert
+    // Akten und bereitet E-Mails vor; gesendet wird erst nach ausdrücklicher Freigabe im Gespräch.
+    // Nur der Wunsch, ein Gespräch aufzunehmen, bleibt hier im Fenster, weil das Mikrofon hier sitzt.
+    const willAufnehmen = /\baufnahme\b|\baufzeichn|\bmitschneid|\b(nimm|nehm|zeichne)\b.*\bauf\b/i.test(text)
+    if (istServerAssistentVerfuegbar && session && !willAufnehmen) {
+      addMessage('user', text)
+      setVerarbeiten(true)
+      try {
+        const r = await frageAssistent(text)
+        addMessage('assistant', r.antwort, sprechen)
+        if (r.geaendert) await neuLaden().catch(() => undefined)
+        if (r.mailStart) warteAufVersand(r.mailStart)
+      } catch (err) {
+        addMessage('assistant', err instanceof Error ? err.message : 'Der Assistent ist gerade nicht erreichbar.', sprechen)
+      } finally {
+        setVerarbeiten(false)
+      }
+      return
     }
 
     addMessage('user', text)

@@ -1138,6 +1138,10 @@ type Ctx = {
    * Supabase-Konfiguration sofort true (reiner Demo-/Lokalmodus wie bisher). */
   hydrated: boolean
   hydrateError: string | null
+  /** Lädt den gesamten Stand neu aus der Datenbank — nötig, nachdem der Server (Assistent) selbst
+   * etwas geändert hat. Ohne das würde dieses Fenster beim nächsten Speichern einer Akte den alten
+   * Stand zurückschreiben. */
+  neuLaden: () => Promise<void>
 }
 
 const AppContext = createContext<Ctx | null>(null)
@@ -1222,7 +1226,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mitarbeiter?.id, mitarbeiter?.telefon, mitarbeiter?.signatur_html, mitarbeiter?.foto_data_url, mitarbeiter?.buchungslink])
 
-  const value = useMemo(() => ({ state, dispatch, hydrated, hydrateError }), [state, hydrated, hydrateError])
+  const neuLaden = useCallback(async () => {
+    if (!isSupabaseConfigured) return
+    const data = await hydrateFromSupabase()
+    if (data) dispatch({ type: 'HYDRATE_SUPABASE', data })
+  }, [dispatch])
+
+  const value = useMemo(() => ({ state, dispatch, hydrated, hydrateError, neuLaden }), [state, dispatch, hydrated, hydrateError, neuLaden])
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>
 }

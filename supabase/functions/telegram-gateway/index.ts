@@ -524,6 +524,8 @@ type AgentState = {
   mail_auftrag?: MailEntwurf & { gestartet: string }
   // Nur während eines Gesprächszugs gesetzt: Auftrag, dessen Versand nach dem Speichern des Zugs startet.
   mail_start?: string
+  // Abschlussmeldung des letzten Versands — das CRM-Fenster fragt sie ab, Telegram bekommt sie zugestellt.
+  mail_ergebnis?: { id: string; text: string; z: string }
 }
 
 type MailEmpfaenger = { kunde_id: string; bereich: string; name: string; firma: string; email: string; status: string }
@@ -549,6 +551,7 @@ export function ladeState(raw: unknown): AgentState {
     loesch_anfrage: r?.loesch_anfrage,
     mail_anfrage: r?.mail_anfrage,
     mail_auftrag: r?.mail_auftrag,
+    mail_ergebnis: r?.mail_ergebnis,
   }
 }
 
@@ -1443,6 +1446,7 @@ export async function fuehreMailSchrittAus(mitarbeiterId: string, auftragId: str
     const zustand = { ...((frisch?.telegram_pending as any) ?? {}) }
     if (zustand.mail_auftrag?.id === auftragId) {
       delete zustand.mail_auftrag
+      zustand.mail_ergebnis = { id: auftragId, text: zeilen.join('\n'), z: new Date().toISOString() }
       zustand.aktionen = [...(zustand.aktionen ?? []), { z: new Date().toISOString(), text: zeilen[0] }].slice(-12)
       await supabase.from('mitarbeiter').update({ telegram_pending: zustand }).eq('id', mitarbeiterId)
     }
@@ -1531,7 +1535,7 @@ async function claude(system: unknown[], messages: unknown[]): Promise<any> {
 
 // Ein Gesprächszug: bekommt die neue Nachricht (oder einen Datei-Eingang), arbeitet mit Werkzeugen,
 // bis eine Antwort feststeht, und schreibt Verlauf und Aktionsprotokoll in den übergebenen Zustand.
-export async function agentAntwort(supabase: Supa, mitarbeiter: Mitarbeiter, state: AgentState, eingang: string): Promise<string> {
+export async function agentAntwort(supabase: Supa, mitarbeiter: Mitarbeiter, state: AgentState, eingang: string, kanal: 'telegram' | 'web' = 'telegram'): Promise<string> {
   const ctx: ToolKontext = { supabase, mitarbeiter, state, vorherigeLoeschAnfrage: state.loesch_anfrage, vorherigeMailAnfrage: state.mail_anfrage }
   state.loesch_anfrage = undefined // gilt nur für die direkt folgende Nachricht
   state.mail_anfrage = undefined // ebenso: freigeben kann man nur die gerade gezeigte Fassung
@@ -1548,10 +1552,15 @@ export async function agentAntwort(supabase: Supa, mitarbeiter: Mitarbeiter, sta
       text: [
         `Heute ist ${wochentag}, der ${deDatum(heuteBerlin())} (${heuteBerlin()}).`,
         `Du schreibst mit ${mitarbeiter.name}${mitarbeiter.rolle === 'geschaeftsfuehrung' ? ' (Geschäftsführung)' : ''}.`,
+        kanal === 'web'
+          ? 'Dieses Gespräch läuft im Assistenten-Fenster des CRM, nicht in Telegram. Dateien kann der Mitarbeiter dir hier nicht schicken; dafür nutzt er Telegram oder lädt sie in der Akte hoch. Die Abschlussmeldung eines E-Mail-Versands erscheint hier im Fenster.'
+          : '',
         state.aktionen.length > 0
           ? `Was du in diesem Chat zuletzt im CRM getan hast (älteste zuerst):\n${state.aktionen.slice(-10).map((a) => `- ${a.text}`).join('\n')}`
           : 'Du hast in diesem Chat bisher noch nichts im CRM verändert.',
-      ].join('\n'),
+      ]
+        .filter(Boolean)
+        .join('\n'),
     },
   ]
 
@@ -1585,6 +1594,74 @@ export async function agentAntwort(supabase: Supa, mitarbeiter: Mitarbeiter, sta
   while (state.zuege.length > 1 && JSON.stringify(state.zuege).length > 60000) state.zuege.shift()
   state.aktionen = state.aktionen.slice(-12)
   return antwort
+}
+
+// Speichert den Gesprächszustand nach einem Zug. Liest vorher den aktuellen Stand, weil ein
+// E-Mail-Versand inzwischen fertig geworden sein kann: Sein Auftrag darf dann nicht aus dem beim
+// Zugbeginn geladenen Stand wieder auferstehen, und seine Abschlussmeldung darf nicht verloren gehen.
+// Liefert die Kennung eines in diesem Zug freigegebenen Versands, der jetzt zu starten ist.
+async function speichereZustand(supabase: Supa, mitarbeiterId: string, state: AgentState): Promise<string | undefined> {
+  const mailStart = state.mail_start
+  state.mail_start = undefined
+  const { data: frisch } = await supabase.from('mitarbeiter').select('telegram_pending').eq('id', mitarbeiterId).maybeSingle()
+  // deno-lint-ignore no-explicit-any
+  const f = (frisch?.telegram_pending as any) ?? null
+  if (f) {
+    if (state.mail_auftrag && state.mail_auftrag.id !== mailStart && f.mail_auftrag?.id !== state.mail_auftrag.id) state.mail_auftrag = undefined
+    if (f.mail_ergebnis && (!state.mail_ergebnis || String(f.mail_ergebnis.z) > state.mail_ergebnis.z)) state.mail_ergebnis = f.mail_ergebnis
+  }
+  await supabase.from('mitarbeiter').update({ telegram_pending: state }).eq('id', mitarbeiterId)
+  return mailStart
+}
+
+const WEB_ORIGINS = ['https://eray-hash.github.io', 'http://localhost:5173', 'http://localhost:5174']
+function webHeaders(origin: string | null): Record<string, string> {
+  return {
+    'Access-Control-Allow-Origin': origin && WEB_ORIGINS.includes(origin) ? origin : WEB_ORIGINS[0],
+    'Access-Control-Allow-Headers': 'content-type, authorization',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Content-Type': 'application/json',
+  }
+}
+
+// Derselbe Assistent für das Assistenten-Fenster im CRM. Zugang nur mit dem eigenen Login des
+// Mitarbeiters (kein gemeinsames Geheimnis — das stünde im öffentlich ausgelieferten Programm).
+// Gesprächsverlauf und Aktionsprotokoll teilt er sich mit dem Telegram-Chat desselben Mitarbeiters.
+// deno-lint-ignore no-explicit-any
+async function webAnfrage(req: Request, body: any, headers: Record<string, string>): Promise<Response> {
+  const json = (inhalt: unknown, status = 200) => new Response(JSON.stringify(inhalt), { status, headers })
+  const token = (req.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '').trim()
+  if (!token) return json({ error: 'Nicht angemeldet.' }, 401)
+  const supabase = supa()
+  const { data: nutzer, error: nutzerFehler } = await supabase.auth.getUser(token)
+  if (nutzerFehler || !nutzer.user?.email) return json({ error: 'Anmeldung ungültig oder abgelaufen. Bitte neu anmelden.' }, 401)
+  const { data: mitarbeiter } = await supabase
+    .from('mitarbeiter')
+    .select('id, name, aktiv, rolle, ist_admin, bereiche, telegram_pending')
+    .eq('email', nutzer.user.email)
+    .maybeSingle()
+  if (!mitarbeiter || !mitarbeiter.aktiv) return json({ error: 'Kein aktiver Mitarbeiter-Zugang.' }, 403)
+
+  if (body.web === 'mail_status') {
+    // deno-lint-ignore no-explicit-any
+    const z = (mitarbeiter.telegram_pending as any) ?? {}
+    return json({ laeuft: !!z.mail_auftrag, ergebnis: z.mail_ergebnis ?? null })
+  }
+  if (body.web !== 'chat' || typeof body.text !== 'string' || !body.text.trim()) return json({ error: 'Unbekannte Anfrage.' }, 400)
+
+  const state = ladeState(mitarbeiter.telegram_pending)
+  const letzteAktion = state.aktionen.length > 0 ? state.aktionen[state.aktionen.length - 1].z : ''
+  let antwort: string
+  try {
+    antwort = await agentAntwort(supabase, mitarbeiter, state, body.text.trim().slice(0, 4000), 'web')
+  } catch (err) {
+    console.error('Assistent (CRM-Fenster) fehlgeschlagen:', err)
+    return json({ error: `Da ist gerade etwas schiefgelaufen (${err instanceof Error ? err.message : 'unbekannter Fehler'}). Versuch es bitte gleich noch einmal.` }, 502)
+  }
+  const geaendert = (state.aktionen.length > 0 ? state.aktionen[state.aktionen.length - 1].z : '') !== letzteAktion
+  const mailStart = await speichereZustand(supabase, mitarbeiter.id, state)
+  if (mailStart) await stosseMailSchrittAn(mitarbeiter.id, mailStart, {}, 0)
+  return json({ antwort, geaendert, mailStart: mailStart ?? null })
 }
 
 // deno-lint-ignore no-explicit-any
@@ -1650,37 +1727,42 @@ async function verarbeiteUpdate(update: any): Promise<void> {
   }
   // Der Versand startet erst, nachdem der Zustand mit dem Auftrag gespeichert ist — der erste
   // Versandschritt liest ihn von dort.
-  const mailStart = state.mail_start
-  state.mail_start = undefined
-  await supabase.from('mitarbeiter').update({ telegram_pending: state }).eq('id', mitarbeiter.id)
+  const mailStart = await speichereZustand(supabase, mitarbeiter.id, state)
   await sendTelegramMessage(chatId, antwort)
   if (mailStart) await stosseMailSchrittAn(mitarbeiter.id, mailStart, {}, 0)
 }
 
 Deno.serve(async (req: Request) => {
+  const origin = req.headers.get('origin')
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: webHeaders(origin) })
   if (req.method !== 'POST') return new Response('Method not allowed', { status: 405 })
+  const body = await req.json().catch(() => null)
   // deno-lint-ignore no-explicit-any
-  const runtime0 = (globalThis as any).EdgeRuntime
-  // Interner Aufruf (Versandschritt einer E-Mail an viele Empfänger): nur mit dem gemeinsamen Geheimnis.
-  if (CRM_SHARED_SECRET && req.headers.get('x-crm-secret') === CRM_SHARED_SECRET) {
-    const b = await req.json().catch(() => null)
-    if (b?.intern !== 'mail_schritt' || typeof b.mitarbeiterId !== 'string' || typeof b.auftragId !== 'string') return new Response('Bad request', { status: 400 })
-    const schritt = fuehreMailSchrittAus(b.mitarbeiterId, b.auftragId, b.fehlversuche && typeof b.fehlversuche === 'object' ? b.fehlversuche : {}, Number(b.runde) || 0).catch((err) =>
+  const runtime = (globalThis as any).EdgeRuntime
+
+  // 1) Assistenten-Fenster im CRM: eigener Login des Mitarbeiters.
+  if (body && typeof body === 'object' && typeof body.web === 'string') return await webAnfrage(req, body, webHeaders(origin))
+
+  // 2) Interner Aufruf (Versandschritt einer E-Mail an viele Empfänger): nur mit dem gemeinsamen
+  //    Geheimnis. Er kann nichts Neues auslösen, nur einen schon freigegebenen Versand fortsetzen.
+  if (body?.intern === 'mail_schritt') {
+    if (!CRM_SHARED_SECRET || req.headers.get('x-crm-secret') !== CRM_SHARED_SECRET) return new Response('Unauthorized', { status: 401 })
+    if (typeof body.mitarbeiterId !== 'string' || typeof body.auftragId !== 'string') return new Response('Bad request', { status: 400 })
+    const schritt = fuehreMailSchrittAus(body.mitarbeiterId, body.auftragId, body.fehlversuche && typeof body.fehlversuche === 'object' ? body.fehlversuche : {}, Number(body.runde) || 0).catch((err) =>
       console.error('Mail-Schritt fehlgeschlagen:', err),
     )
-    if (runtime0?.waitUntil) runtime0.waitUntil(schritt)
+    if (runtime?.waitUntil) runtime.waitUntil(schritt)
     else await schritt
     return new Response('ok')
   }
+
+  // 3) Telegram.
   if (WEBHOOK_SECRET && req.headers.get('x-telegram-bot-api-secret-token') !== WEBHOOK_SECRET) {
     return new Response('Unauthorized', { status: 401 })
   }
-  const update = await req.json().catch(() => null)
-  const arbeit = verarbeiteUpdate(update).catch((err) => console.error('Update-Verarbeitung fehlgeschlagen:', err))
+  const arbeit = verarbeiteUpdate(body).catch((err) => console.error('Update-Verarbeitung fehlgeschlagen:', err))
   // Sofort antworten und im Hintergrund weiterarbeiten: Telegram wiederholt einen Webhook, der zu
   // lange braucht (Sammel-Scans, mehrere Werkzeug-Schritte) — das hätte doppelte Ablagen zur Folge.
-  // deno-lint-ignore no-explicit-any
-  const runtime = (globalThis as any).EdgeRuntime
   if (runtime?.waitUntil) runtime.waitUntil(arbeit)
   else await arbeit
   return new Response('ok')
