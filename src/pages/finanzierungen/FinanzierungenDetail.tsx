@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { ArrowLeft } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { StatusWidget } from '../../components/StatusWidget'
@@ -21,11 +21,26 @@ import { NdaSection } from '../../components/NdaSection'
 import { DokumenteSection } from '../../components/DokumenteSection'
 import { KommunikationSection } from '../../components/KommunikationSection'
 import { LoeschenKundeButton } from '../../components/LoeschenKundeButton'
+import { AktenReiter, type Reiter } from '../../components/AktenReiter'
 import type { Prioritaet } from '../../types'
+
+const REITER: Reiter[] = [
+  { id: 'uebersicht', label: 'Übersicht' },
+  { id: 'protokolle', label: 'Gesprächsprotokolle' },
+  { id: 'potenzial', label: 'Potenzial-Analyse' },
+  { id: 'kaeuferprofil', label: 'Käuferprofil' },
+  { id: 'bewertung', label: 'Unternehmensbewertung' },
+  { id: 'selbstauskunft', label: 'Selbstauskunft' },
+  { id: 'nda', label: 'NDA' },
+  { id: 'dokumente', label: 'Dokumente' },
+  { id: 'kommunikation', label: 'Kommunikation' },
+]
 
 export function FinanzierungenDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
+  const [params, setParams] = useSearchParams()
+  const tab = params.get('tab') ?? 'uebersicht'
   const { state, dispatch } = useApp()
   const [editFollowUp, setEditFollowUp] = useState(false)
 
@@ -93,62 +108,35 @@ export function FinanzierungenDetail() {
         </div>
       </Card>
 
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
-        <Card className="p-5 lg:col-span-1">
-          <h3 className="mb-3 text-sm font-semibold text-slate-700">Stammdaten</h3>
-          <StammdatenKarte bereich="finanzierungen" kunde={mandant} labels={{ firma: 'Name' }} />
-          <div className="mt-4 rounded-lg bg-slate-50 p-3">
-            <div className="text-xs font-medium text-slate-400">Nächste Follow-up-Aufgabe</div>
-            <div className={`text-sm ${overdue ? 'font-medium text-rose-600' : 'text-slate-700'}`}>{fmtDate(mandant.followUp.date)} — {mandant.followUp.note}</div>
-          </div>
-        </Card>
-        <Card className="p-5 lg:col-span-2">
-          <h3 className="mb-3 text-sm font-semibold text-slate-700">Aktivitäten-Timeline</h3>
-          <AktivitaetenTimeline bereich="finanzierungen" kunde={mandant} />
-        </Card>
+      <AktenReiter reiter={REITER} aktiv={tab} onWaehle={(id) => setParams({ tab: id })} />
 
-        <ZugewieseneObjekte bereich="finanzierungen" kundeId={mandant.id} />
+      {tab === 'uebersicht' && (
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
+          <Card className="p-5 lg:col-span-1">
+            <h3 className="mb-3 text-sm font-semibold text-slate-700">Stammdaten</h3>
+            <StammdatenKarte bereich="finanzierungen" kunde={mandant} labels={{ firma: 'Name' }} />
+            <div className="mt-4 rounded-lg bg-slate-50 p-3">
+              <div className="text-xs font-medium text-slate-400">Nächste Follow-up-Aufgabe</div>
+              <div className={`text-sm ${overdue ? 'font-medium text-rose-600' : 'text-slate-700'}`}>{fmtDate(mandant.followUp.date)} — {mandant.followUp.note}</div>
+            </div>
+          </Card>
+          <Card className="p-5 lg:col-span-2">
+            <h3 className="mb-3 text-sm font-semibold text-slate-700">Aktivitäten-Timeline</h3>
+            <AktivitaetenTimeline bereich="finanzierungen" kunde={mandant} />
+          </Card>
 
-        <Card className="p-5 lg:col-span-3">
-          <h3 className="mb-3 text-sm font-semibold text-slate-700">Gesprächsprotokolle</h3>
-          <GespraechsprotokolleSection bereich="finanzierungen" kundeId={mandant.id} kundeName={mandant.ansprechpartner || mandant.firma} />
-        </Card>
+          <ZugewieseneObjekte bereich="finanzierungen" kundeId={mandant.id} />
+        </div>
+      )}
 
-        <Card className="p-5 lg:col-span-3">
-          <h3 className="mb-3 text-sm font-semibold text-slate-700">Potenzial-Analyse</h3>
-          <PotenzialAnalyseSection bereich="finanzierungen" kundeId={mandant.id} kundeName={mandant.ansprechpartner || mandant.firma} />
-        </Card>
-
-        <Card className="p-5 lg:col-span-3">
-          <h3 className="mb-3 text-sm font-semibold text-slate-700">Käuferprofil</h3>
-          <KaeuferprofilSection bereich="finanzierungen" kundeId={mandant.id} kundeName={mandant.ansprechpartner || mandant.firma} />
-        </Card>
-
-        <Card className="p-5 lg:col-span-3">
-          <h3 className="mb-3 text-sm font-semibold text-slate-700">Unternehmensbewertung</h3>
-          <UnternehmensbewertungSection bereich="finanzierungen" kundeId={mandant.id} />
-        </Card>
-
-        <Card className="p-5 lg:col-span-3">
-          <h3 className="mb-3 text-sm font-semibold text-slate-700">Selbstauskunft</h3>
-          <SelbstauskunftSection bereich="finanzierungen" kundeId={mandant.id} kundeName={mandant.ansprechpartner || mandant.firma} />
-        </Card>
-
-        <Card className="p-5 lg:col-span-3">
-          <h3 className="mb-3 text-sm font-semibold text-slate-700">NDA</h3>
-          <NdaSection bereich="finanzierungen" kundeId={mandant.id} />
-        </Card>
-
-        <Card className="p-5 lg:col-span-3">
-          <h3 className="mb-3 text-sm font-semibold text-slate-700">Dokumente</h3>
-          <DokumenteSection bereich="finanzierungen" kundeId={mandant.id} />
-        </Card>
-
-        <Card className="p-5 lg:col-span-3">
-          <h3 className="mb-3 text-sm font-semibold text-slate-700">Kommunikation</h3>
-          <KommunikationSection kundeId={mandant.id} />
-        </Card>
-      </div>
+      {tab === 'protokolle' && <GespraechsprotokolleSection bereich="finanzierungen" kundeId={mandant.id} kundeName={mandant.ansprechpartner || mandant.firma} />}
+      {tab === 'potenzial' && <PotenzialAnalyseSection bereich="finanzierungen" kundeId={mandant.id} kundeName={mandant.ansprechpartner || mandant.firma} />}
+      {tab === 'kaeuferprofil' && <KaeuferprofilSection bereich="finanzierungen" kundeId={mandant.id} kundeName={mandant.ansprechpartner || mandant.firma} />}
+      {tab === 'bewertung' && <UnternehmensbewertungSection bereich="finanzierungen" kundeId={mandant.id} />}
+      {tab === 'selbstauskunft' && <SelbstauskunftSection bereich="finanzierungen" kundeId={mandant.id} kundeName={mandant.ansprechpartner || mandant.firma} />}
+      {tab === 'nda' && <NdaSection bereich="finanzierungen" kundeId={mandant.id} />}
+      {tab === 'dokumente' && <DokumenteSection bereich="finanzierungen" kundeId={mandant.id} />}
+      {tab === 'kommunikation' && <KommunikationSection kundeId={mandant.id} />}
 
       <Modal open={editFollowUp} onClose={() => setEditFollowUp(false)} title="Follow-up bearbeiten">
         <FollowUpForm
