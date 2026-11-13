@@ -21,7 +21,9 @@ export function CallRecorder({
   onCancel: () => void
   saveLabel?: string
 }) {
-  const { supported, recording, transcript, interim, error, dauerSekunden, start, stop, setTranscript } = useSpeechRecognition()
+  const { supported, recording, transcript, interim, error, dauerSekunden, start, stop, setTranscript, modus, beschaeftigt } = useSpeechRecognition()
+  // Ein Gespräch darf nur mit Wissen und Zustimmung aller Beteiligten aufgenommen werden — vor jeder Aufnahme bestätigen.
+  const [einverstanden, setEinverstanden] = useState(false)
 
   const [summarizing, setSummarizing] = useState(false)
   const [summaryError, setSummaryError] = useState('')
@@ -49,7 +51,7 @@ export function CallRecorder({
     <div>
       <div className="mb-4 flex items-center gap-3 rounded-lg bg-slate-50 p-4">
         {!recording ? (
-          <PrimaryButton onClick={start}>
+          <PrimaryButton onClick={start} disabled={!einverstanden}>
             <Mic size={15} /> Aufnahme starten
           </PrimaryButton>
         ) : (
@@ -65,10 +67,21 @@ export function CallRecorder({
         {!recording && dauerSekunden > 0 && (
           <span className="text-xs font-medium text-slate-500">Dauer: {fmtDauer(dauerSekunden)}</span>
         )}
+        {!recording && beschaeftigt && <span className="text-xs font-medium text-accent-700">Der letzte Abschnitt wird noch abgeschrieben …</span>}
         {!supported && !recording && (
           <span className="text-xs text-slate-400">Live-Transkription evtl. nicht verfügbar — Text unten manuell eintippen geht immer.</span>
         )}
       </div>
+
+      {!recording && (
+        <label className="mb-4 flex items-start gap-2 text-xs text-slate-600">
+          <input type="checkbox" checked={einverstanden} onChange={(e) => setEinverstanden(e.target.checked)} className="mt-0.5 rounded" />
+          <span>
+            Alle Gesprächsteilnehmer wissen, dass aufgenommen wird, und sind einverstanden. Ohne diese Zustimmung darf ein Gespräch nicht
+            aufgenommen werden.
+          </span>
+        </label>
+      )}
 
       {error && (
         <div className="mb-4 flex items-start gap-2 rounded-lg bg-amber-50 p-3 text-xs text-amber-700">
@@ -76,7 +89,11 @@ export function CallRecorder({
         </div>
       )}
 
-      <label className="mb-1.5 block text-xs font-medium text-slate-500">Transkript (live editierbar)</label>
+      <label className="mb-1.5 block text-xs font-medium text-slate-500">
+        {modus === 'abschrift'
+          ? 'Abschrift (kommt abschnittsweise, etwa jede Minute, und nach dem Stoppen; editierbar)'
+          : 'Transkript (live editierbar)'}
+      </label>
       <textarea
         className={`${inputClass} font-mono`}
         rows={10}
@@ -87,7 +104,7 @@ export function CallRecorder({
 
       {isEmailGatewayConfigured && (
         <div className="mt-3">
-          <SecondaryButton onClick={summarize} disabled={!transcript.trim() || summarizing}>
+          <SecondaryButton onClick={summarize} disabled={!transcript.trim() || summarizing || recording || beschaeftigt}>
             <Sparkles size={13} className={summarizing ? 'animate-pulse' : ''} />
             {summarizing ? 'Fasst zusammen …' : summary ? 'Erneut zusammenfassen' : 'Mit KI zusammenfassen'}
           </SecondaryButton>
@@ -143,7 +160,7 @@ export function CallRecorder({
 
       <div className="mt-4 flex justify-end gap-2">
         <SecondaryButton onClick={onCancel}>Abbrechen</SecondaryButton>
-        <PrimaryButton onClick={() => onSave({ transcript: transcript.trim(), summary: summary ?? undefined, dauerSekunden: dauerSekunden || undefined })} disabled={!transcript.trim()}>
+        <PrimaryButton onClick={() => onSave({ transcript: transcript.trim(), summary: summary ?? undefined, dauerSekunden: dauerSekunden || undefined })} disabled={!transcript.trim() || beschaeftigt}>
           {saveLabel}
         </PrimaryButton>
       </div>

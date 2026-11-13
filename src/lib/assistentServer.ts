@@ -39,3 +39,34 @@ export function frageAssistent(text: string): Promise<AssistentAntwort> {
 export function mailStatus(): Promise<{ laeuft: boolean; ergebnis: { id: string; text: string; z: string } | null }> {
   return anfrage({ web: 'mail_status' })
 }
+
+// ---------- Abschrift von Aufnahmen (Whisper auf dem Server) ----------
+
+let abhoerenAnfrage: Promise<boolean> | null = null
+
+/** Ob der Server Aufnahmen abschreiben kann (Schlüssel hinterlegt). Wird je Sitzung einmal gefragt. */
+export function abhoerenVerfuegbar(): Promise<boolean> {
+  if (!istServerAssistentVerfuegbar) return Promise.resolve(false)
+  abhoerenAnfrage ??= anfrage<{ abhoeren: boolean }>({ web: 'faehigkeiten' })
+    .then((r) => r.abhoeren === true)
+    .catch(() => {
+      abhoerenAnfrage = null // beim nächsten Mal neu fragen (z. B. noch nicht angemeldet)
+      return false
+    })
+  return abhoerenAnfrage
+}
+
+function alsBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const leser = new FileReader()
+    leser.onload = () => resolve(String(leser.result).split(',')[1] ?? '')
+    leser.onerror = () => reject(new Error('Die Aufnahme konnte nicht gelesen werden.'))
+    leser.readAsDataURL(blob)
+  })
+}
+
+/** Schreibt einen Abschnitt einer Aufnahme ab. `hinweis`: das zuletzt Gesprochene, für den Anschluss. */
+export async function schreibeAb(aufnahme: Blob, hinweis = ''): Promise<string> {
+  const r = await anfrage<{ text: string }>({ web: 'transkribiere', audio_base64: await alsBase64(aufnahme), mime: aufnahme.type, hinweis })
+  return r.text ?? ''
+}

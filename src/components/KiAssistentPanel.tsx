@@ -68,7 +68,7 @@ type PflegeVorschlag = { beschreibung: string } & (
 export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: () => void }) {
   const { state, dispatch, neuLaden } = useApp()
   const { session, mitarbeiter } = useAuth()
-  const { supported, recording, transcript, interim, error: recError, start, stop, setTranscript, setInterim } = useSpeechRecognition()
+  const { supported, recording, transcript, interim, error: recError, start, stop, setTranscript, setInterim, beschaeftigt: schreibtAb } = useSpeechRecognition()
   // Im Demo-Modus (ohne Supabase) gibt es keine echten Mitarbeiter-Rollen — dort greift wie überall
   // sonst in der App state.rolle als Ersatz (siehe Layout.tsx resetData-Gate).
   const pflegeErlaubt = isSupabaseConfigured
@@ -820,7 +820,11 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
                 }
               }}
               placeholder={
-                pastedImage
+                schreibtAb
+                  ? 'Wird abgeschrieben …'
+                  : recording
+                    ? 'Ich höre zu … zum Beenden auf das Quadrat klicken'
+                    : pastedImage
                   ? 'Frage zum Bild (optional) …'
                   : pflegeModus
                     ? 'z.B. „X ist kein Kunde" oder „verschiebe X zu Erben" …'
@@ -832,7 +836,7 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
             />
             <button
               onClick={senden}
-              disabled={!isEmailGatewayConfigured || verarbeiten || (!liveText.trim() && !pastedImage)}
+              disabled={!isEmailGatewayConfigured || verarbeiten || schreibtAb || (!liveText.trim() && !pastedImage)}
               className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-accent-600 text-white hover:bg-accent-700 disabled:opacity-50"
               title="Senden"
             >
