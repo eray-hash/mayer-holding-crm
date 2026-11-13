@@ -518,7 +518,16 @@ type AgentState = {
   zuege: { z: string; msgs: Nachricht[] }[]
   aktionen: { z: string; text: string }[]
   loesch_anfrage?: { kunde_id: string; name: string; z: string }
+  // Vorbereitete, noch nicht bestätigte E-Mail: gilt nur für die direkt folgende Nachricht.
+  mail_anfrage?: MailEntwurf
+  // Bestätigte E-Mail, die gerade verschickt wird (siehe fuehreMailSchrittAus).
+  mail_auftrag?: MailEntwurf & { gestartet: string }
+  // Nur während eines Gesprächszugs gesetzt: Auftrag, dessen Versand nach dem Speichern des Zugs startet.
+  mail_start?: string
 }
+
+type MailEmpfaenger = { kunde_id: string; bereich: string; name: string; firma: string; email: string; status: string }
+type MailEntwurf = { id: string; betreff: string; text: string; empfaenger: MailEmpfaenger[]; z: string }
 
 // Liest ältere Zustände tolerant (ohne "zuege") — die werden einfach verworfen.
 export function ladeState(raw: unknown): AgentState {
@@ -538,6 +547,8 @@ export function ladeState(raw: unknown): AgentState {
     zuege,
     aktionen: Array.isArray(r?.aktionen) ? r.aktionen.slice(-12) : [],
     loesch_anfrage: r?.loesch_anfrage,
+    mail_anfrage: r?.mail_anfrage,
+    mail_auftrag: r?.mail_auftrag,
   }
 }
 
@@ -571,12 +582,13 @@ function fuerVerlauf(msgs: Nachricht[]): Nachricht[] {
 
 // ---------- Werkzeuge des Assistenten ----------
 
-type Mitarbeiter = { id: string; name: string; rolle?: string | null; ist_admin?: boolean | null }
+type Mitarbeiter = { id: string; name: string; rolle?: string | null; ist_admin?: boolean | null; bereiche?: string[] | null }
 type ToolKontext = {
   supabase: Supa
   mitarbeiter: Mitarbeiter
   state: AgentState
   vorherigeLoeschAnfrage: AgentState['loesch_anfrage']
+  vorherigeMailAnfrage: AgentState['mail_anfrage']
 }
 
 const STATUS_HINWEIS = Object.entries(STATUS_JE_BEREICH)
@@ -759,6 +771,34 @@ const TOOLS = [
       properties: { kunde_id: { type: 'string' }, dokument_id: { type: 'string' } },
       required: ['kunde_id', 'dokument_id'],
     },
+  },
+  {
+    name: 'mail_vorbereiten',
+    description:
+      'Bereitet eine E-Mail an einen, mehrere oder alle Kunden vor, OHNE sie zu senden. Du schreibst Betreff und Text selbst aus dem, was der Mitarbeiter als Inhalt nennt. Das Werkzeug ermittelt die Empfänger, setzt die persönliche Anrede und den Gruß mit Namen des Mitarbeiters ein und liefert die fertige Fassung zur Freigabe. Gesendet wird erst mit mail_senden, nachdem der Mitarbeiter in einer eigenen Nachricht zugestimmt hat.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        betreff: { type: 'string', description: 'Betreffzeile, kurz und konkret.' },
+        text: {
+          type: 'string',
+          description:
+            'Der vollständige Mailtext in der Sie-Form. Er beginnt mit der Zeile "{{anrede}}," (wird je Empfänger ersetzt, z. B. "Guten Tag Max Mustermann,"). Weitere Platzhalter: {{ansprechpartner}}, {{firma}}. KEINE Grußformel und KEINE Unterschrift am Ende; beides wird automatisch angefügt.',
+        },
+        alle_kunden: { type: 'boolean', description: 'true = alle Kunden mit E-Mail-Adresse (ohne private Kontakte).' },
+        bereiche: { type: 'array', items: { type: 'string', enum: NEUANLAGE_BEREICHE }, description: 'Nur Kunden dieser Bereiche (beratung = Unternehmensberatung, immobilienkunden = Immobilien).' },
+        status: { type: 'array', items: { type: 'string' }, description: 'Nur Kunden mit einem dieser Status (IDs wie lead, interessent, erstkontakt).' },
+        kunden_ids: { type: 'array', items: { type: 'string' }, description: 'Genau diese Kunden (IDs aus kunden_suchen), z. B. für eine Mail an einen einzelnen Kunden.' },
+        ohne_kunden_ids: { type: 'array', items: { type: 'string' }, description: 'Diese Kunden auslassen.' },
+      },
+      required: ['betreff', 'text'],
+    },
+  },
+  {
+    name: 'mail_senden',
+    description:
+      'Sendet die zuletzt mit mail_vorbereiten vorbereitete E-Mail. Nur aufrufen, wenn der Mitarbeiter die gezeigte Fassung in seiner letzten Nachricht ausdrücklich freigegeben hat. Der Versand läuft im Hintergrund; der Mitarbeiter bekommt am Ende eine eigene Nachricht mit dem Ergebnis.',
+    input_schema: { type: 'object', properties: {} },
   },
   {
     name: 'firmenueberblick',
@@ -1252,7 +1292,199 @@ async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKontext): Pr
     return kuerze(zeilen.join('\n'), 40000)
   }
 
+  if (name === 'mail_vorbereiten') {
+    const betreff = String(input.betreff ?? '').trim()
+    let text = String(input.text ?? '').trim()
+    if (!betreff || !text) return 'Fehler: Betreff und Text sind Pflicht.'
+    const unbekannt = [...text.matchAll(/\{\{\s*([^{}]+?)\s*\}\}/g)].map((m) => m[1]).filter((n) => !['anrede', 'ansprechpartner', 'firma'].includes(n))
+    if (unbekannt.length > 0) return `Fehler: unbekannte Platzhalter im Text: ${unbekannt.join(', ')}. Erlaubt sind nur {{anrede}}, {{ansprechpartner}} und {{firma}}.`
+    if (!/\{\{\s*anrede\s*\}\}/.test(text)) text = `{{anrede}},\n\n${text}`
+
+    const istGf = mitarbeiter.rolle === 'geschaeftsfuehrung' || mitarbeiter.ist_admin === true
+    const erlaubt = istGf ? NEUANLAGE_BEREICHE : NEUANLAGE_BEREICHE.filter((b) => (mitarbeiter.bereiche ?? []).includes(b === 'immobilienkunden' ? 'immobilien' : b))
+    const ids: string[] = Array.isArray(input.kunden_ids) ? input.kunden_ids.map(String) : []
+    const ohne = new Set<string>(Array.isArray(input.ohne_kunden_ids) ? input.ohne_kunden_ids.map(String) : [])
+    const bereiche: string[] = Array.isArray(input.bereiche) ? input.bereiche.map(String) : []
+    const status: string[] = Array.isArray(input.status) ? input.status.map(String) : []
+    if (ids.length === 0 && bereiche.length === 0 && status.length === 0 && input.alle_kunden !== true) {
+      return 'Fehler: Es ist nicht festgelegt, an wen die Mail gehen soll. Frag nach (alle Kunden, ein Bereich, ein Status oder bestimmte Kunden).'
+    }
+
+    const { data } = await supabase.from('kunden').select('id, bereich, firma, ansprechpartner, email, status')
+    // deno-lint-ignore no-explicit-any
+    const alle = ((data ?? []) as any[]).filter((k) => NEUANLAGE_BEREICHE.includes(k.bereich))
+    const gewaehlt = alle.filter((k) => {
+      if (ohne.has(k.id)) return false
+      if (ids.length > 0) return ids.includes(k.id)
+      if (bereiche.length > 0 && !bereiche.includes(k.bereich)) return false
+      if (status.length > 0 && !status.includes(k.status ?? '')) return false
+      return true
+    })
+    const nichtErlaubt = gewaehlt.filter((k) => !erlaubt.includes(k.bereich))
+    const gueltig = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
+    const eigene = (Deno.env.get('SMTP_USER') ?? '').toLowerCase()
+    const gesehen = new Set<string>()
+    const empfaenger: MailEmpfaenger[] = []
+    const ohneAdresse: string[] = []
+    const doppelt: string[] = []
+    for (const k of gewaehlt.filter((x) => erlaubt.includes(x.bereich))) {
+      const mail = String(k.email ?? '').trim().toLowerCase()
+      const anzeige = kundeName(k)
+      // Sammeladressen, an die niemand antwortet oder die niemand liest, zählen nicht als Adresse.
+      if (!gueltig.test(mail) || mail === eigene || /^(no-?reply|noreply|do-?not-?reply|mailer-daemon|postmaster)@/.test(mail)) {
+        ohneAdresse.push(anzeige)
+        continue
+      }
+      if (gesehen.has(mail)) {
+        doppelt.push(anzeige)
+        continue
+      }
+      gesehen.add(mail)
+      empfaenger.push({ kunde_id: k.id, bereich: k.bereich, name: String(k.ansprechpartner ?? '').trim(), firma: String(k.firma ?? '').trim(), email: mail, status: k.status ?? '' })
+    }
+    // Wer unter gleichem Namen ein zweites Mal mit Adresse geführt wird, ist nicht "ausgelassen".
+    const dabei = new Set(empfaenger.map((e) => norm(e.name || e.firma)))
+    for (let i = ohneAdresse.length - 1; i >= 0; i--) if (dabei.has(norm(ohneAdresse[i]))) ohneAdresse.splice(i, 1)
+    if (empfaenger.length === 0) return `Kein Empfänger mit gültiger E-Mail-Adresse gefunden. ${ohneAdresse.length > 0 ? `Ohne Adresse: ${ohneAdresse.slice(0, 10).join(', ')}.` : ''}${nichtErlaubt.length > 0 ? ` ${nichtErlaubt.length} Kunden liegen in Bereichen, für die ${mitarbeiter.name} keine Berechtigung hat.` : ''}`
+    if (empfaenger.length > 300) return `Fehler: ${empfaenger.length} Empfänger sind zu viele für einen Versand (höchstens 300). Bitte nach Bereich oder Status eingrenzen.`
+
+    const entwurf: MailEntwurf = { id: crypto.randomUUID().slice(0, 8), betreff, text, empfaenger, z: new Date().toISOString() }
+    state.mail_anfrage = entwurf
+    const jeBereich = new Map<string, number>()
+    for (const e of empfaenger) jeBereich.set(e.bereich, (jeBereich.get(e.bereich) ?? 0) + 1)
+    const nurLead = empfaenger.filter((e) => e.status === 'lead').length
+    return [
+      'NOCH NICHT GESENDET. Zeige dem Mitarbeiter jetzt die Fassung unten vollständig und unverändert (Betreff und Text) und nenne die Empfänger. Frag dann, ob du so senden sollst. Sende erst, wenn er in seiner nächsten Nachricht klar zustimmt.',
+      '',
+      `Empfänger: ${empfaenger.length} (${[...jeBereich.entries()].map(([b, n]) => `${BEREICH_LABEL[b] ?? b}: ${n}`).join(', ')})`,
+      empfaenger.length <= 15
+        ? empfaenger.map((e) => `- ${e.name || e.firma} <${e.email}>`).join('\n')
+        : `${empfaenger.slice(0, 10).map((e) => `- ${e.name || e.firma} <${e.email}>`).join('\n')}\n- und ${empfaenger.length - 10} weitere`,
+      nurLead > 0 && empfaenger.length > 1 ? `Hinweis für den Mitarbeiter: ${nurLead} davon sind bisher nur als Lead geführt (noch keine Kunden).` : '',
+      ohneAdresse.length > 0 ? `Ausgelassen, weil keine gültige E-Mail-Adresse hinterlegt ist (${ohneAdresse.length}): ${ohneAdresse.slice(0, 12).join(', ')}${ohneAdresse.length > 12 ? ' …' : ''}` : '',
+      doppelt.length > 0 ? `Ausgelassen, weil dieselbe Adresse schon dabei ist (${doppelt.length}): ${doppelt.slice(0, 8).join(', ')}` : '',
+      nichtErlaubt.length > 0 ? `Ausgelassen, weil ${mitarbeiter.name} für den Bereich nicht berechtigt ist: ${nichtErlaubt.length}` : '',
+      `Absender ist das Postfach der Holding; Antworten kommen dort an und erscheinen im CRM-Postfach.`,
+      '',
+      `Betreff: ${betreff}`,
+      '',
+      `So sieht die Mail für den ersten Empfänger aus (${empfaenger[0].name || empfaenger[0].firma}):`,
+      '-----',
+      mailText(entwurf, empfaenger[0], mitarbeiter.name),
+      '-----',
+    ]
+      .filter((z) => z !== '')
+      .join('\n')
+  }
+
+  if (name === 'mail_senden') {
+    const anfrage = ctx.vorherigeMailAnfrage
+    if (!anfrage || Date.now() - new Date(anfrage.z).getTime() > 30 * 60 * 1000) {
+      return 'Nichts gesendet: Es liegt keine vorbereitete Mail vor, die der Mitarbeiter gerade freigegeben hat. Bereite sie mit mail_vorbereiten vor, zeige sie und warte auf seine Zustimmung in einer eigenen Nachricht.'
+    }
+    const laufend = state.mail_auftrag
+    if (laufend && Date.now() - new Date(laufend.gestartet).getTime() < 20 * 60 * 1000) {
+      return `Nichts gesendet: Der Versand „${laufend.betreff}" läuft noch. Bitte warten, bis die Abschlussmeldung da ist.`
+    }
+    state.mail_auftrag = { ...anfrage, gestartet: new Date().toISOString() }
+    state.mail_start = anfrage.id
+    protokolliere(`E-Mail „${anfrage.betreff}" an ${anfrage.empfaenger.length} Empfänger in den Versand gegeben`)
+    return `Versand gestartet: „${anfrage.betreff}" an ${anfrage.empfaenger.length} Empfänger. Er läuft im Hintergrund${anfrage.empfaenger.length > 10 ? ' und dauert ein paar Minuten' : ''}. Der Mitarbeiter bekommt eine eigene Nachricht, sobald alles raus ist, mit der Zahl der gesendeten und der fehlgeschlagenen Mails. Sag ihm das so; behaupte nicht, es sei schon alles zugestellt.`
+  }
+
   return `Fehler: unbekanntes Werkzeug ${name}.`
+}
+
+// ---------- E-Mail-Versand an viele Empfänger ----------
+// Der Versand läuft in Schritten, jeder als eigener Aufruf dieser Funktion: Ein Edge-Worker lebt
+// höchstens 150 s, 75 Mails am Stück passen da nicht sicher hinein. Der Fortschritt steht nicht im
+// Gesprächszustand (den überschreibt jeder Gesprächszug), sondern ergibt sich aus der Tabelle
+// gesendete_emails: Was dort mit diesem Betreff seit dem Start steht, ist raus. Dadurch wird auch
+// bei einem abgebrochenen Schritt nichts doppelt verschickt.
+
+function mailText(entwurf: { text: string }, e: MailEmpfaenger, absender: string): string {
+  const anrede = e.name ? `Guten Tag ${e.name}` : 'Sehr geehrte Damen und Herren'
+  const text = entwurf.text
+    .replace(/\{\{\s*anrede\s*\}\}/g, anrede)
+    .replace(/\{\{\s*ansprechpartner\s*\}\}/g, e.name || e.firma)
+    .replace(/\{\{\s*firma\s*\}\}/g, e.firma || e.name)
+    .trim()
+  if (/freundlichen Gr(ü|ue)(ß|ss)en/i.test(text)) return text
+  return `${text}\n\nMit freundlichen Grüßen\n${absender}\nAndreas Mayer Holding\nSchwabstraße 3, 89075 Ulm`
+}
+
+async function stosseMailSchrittAn(mitarbeiterId: string, auftragId: string, fehlversuche: Record<string, number>, runde: number): Promise<void> {
+  await fetch(`${SUPABASE_URL}/functions/v1/telegram-gateway`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...(CRM_SHARED_SECRET ? { 'x-crm-secret': CRM_SHARED_SECRET } : {}) },
+    body: JSON.stringify({ intern: 'mail_schritt', mitarbeiterId, auftragId, fehlversuche, runde }),
+  }).catch((err) => console.error('Mail-Schritt konnte nicht angestoßen werden:', err))
+}
+
+export async function fuehreMailSchrittAus(mitarbeiterId: string, auftragId: string, fehlversuche: Record<string, number>, runde: number, selbstWeiter = true): Promise<'fertig' | 'weiter' | 'kein_auftrag'> {
+  const supabase = supa()
+  const { data: m } = await supabase.from('mitarbeiter').select('id, name, telegram_chat_id, telegram_pending').eq('id', mitarbeiterId).maybeSingle()
+  // deno-lint-ignore no-explicit-any
+  const auftrag = (m?.telegram_pending as any)?.mail_auftrag as AgentState['mail_auftrag']
+  if (!m || !auftrag || auftrag.id !== auftragId) return 'kein_auftrag'
+
+  const { data: schonRaus } = await supabase.from('gesendete_emails').select('an').eq('betreff', auftrag.betreff).gte('gesendet_am', auftrag.gestartet)
+  const raus = new Set(((schonRaus ?? []) as { an: string }[]).map((r) => String(r.an).toLowerCase()))
+  const offen = auftrag.empfaenger.filter((e) => !raus.has(e.email) && (fehlversuche[e.email] ?? 0) < 2)
+
+  if (offen.length === 0 || runde > 60) {
+    const gescheitert = auftrag.empfaenger.filter((e) => !raus.has(e.email))
+    const zeilen = [`E-Mail „${auftrag.betreff}": ${auftrag.empfaenger.length - gescheitert.length} von ${auftrag.empfaenger.length} gesendet.`]
+    if (gescheitert.length > 0) zeilen.push(`Nicht zugestellt (${gescheitert.length}): ${gescheitert.slice(0, 15).map((e) => `${e.name || e.firma} <${e.email}>`).join(', ')}${gescheitert.length > 15 ? ' …' : ''}`)
+    else zeilen.push('Bei jedem Empfänger steht der Versand als Eintrag in der Akte.')
+    // Auftrag aus dem frisch gelesenen Zustand nehmen, damit ein inzwischen geführtes Gespräch erhalten bleibt.
+    const { data: frisch } = await supabase.from('mitarbeiter').select('telegram_pending').eq('id', mitarbeiterId).maybeSingle()
+    // deno-lint-ignore no-explicit-any
+    const zustand = { ...((frisch?.telegram_pending as any) ?? {}) }
+    if (zustand.mail_auftrag?.id === auftragId) {
+      delete zustand.mail_auftrag
+      zustand.aktionen = [...(zustand.aktionen ?? []), { z: new Date().toISOString(), text: zeilen[0] }].slice(-12)
+      await supabase.from('mitarbeiter').update({ telegram_pending: zustand }).eq('id', mitarbeiterId)
+    }
+    if (m.telegram_chat_id) await sendTelegramMessage(m.telegram_chat_id, zeilen.join('\n'))
+    else console.log(zeilen.join('\n'))
+    return 'fertig'
+  }
+
+  const start = Date.now()
+  const heute = heuteBerlin()
+  for (const e of offen) {
+    if (Date.now() - start > 35_000) break
+    try {
+      await callEmailGateway('send', {
+        to: e.email,
+        toName: e.name || e.firma,
+        subject: auftrag.betreff,
+        text: mailText(auftrag, e, m.name),
+        kundeBereich: e.bereich,
+        kundeId: e.kunde_id,
+        kundeName: e.name || e.firma,
+        ohneRechnungsErkennung: true,
+      })
+      const { data: k } = await supabase.from('kunden').select('activities').eq('id', e.kunde_id).maybeSingle()
+      if (k) {
+        await supabase
+          .from('kunden')
+          .update({
+            // deno-lint-ignore no-explicit-any
+            activities: [{ id: crypto.randomUUID(), date: heute, text: `E-Mail gesendet: „${auftrag.betreff}"`, user: m.name }, ...(((k as any).activities ?? []) as unknown[])],
+            letzte_aktivitaet: heute,
+          })
+          .eq('id', e.kunde_id)
+      }
+    } catch (err) {
+      console.error(`Mail an ${e.email} fehlgeschlagen:`, err)
+      fehlversuche[e.email] = (fehlversuche[e.email] ?? 0) + 1
+    }
+    await new Promise((r) => setTimeout(r, 400))
+  }
+  if (selbstWeiter) await stosseMailSchrittAn(mitarbeiterId, auftragId, fehlversuche, runde + 1)
+  return 'weiter'
 }
 
 // ---------- Der Assistent ----------
@@ -1275,6 +1507,7 @@ So arbeitest du:
 - Meldet dateien_ablegen ein mögliches Duplikat, frag den Mitarbeiter, ob du überschreiben, als Kopie ablegen oder weglassen sollst.
 - Rechnungen: Meldet ein Datei-Eingang "Rechnung erkannt" und ist der Aussteller die Holding selbst (Andreas Mayer Holding, Mayer Consulting, Ulmer Wirtschaftskanzlei oder ein anderer Name aus dem eigenen Haus), ist das eine Ausgangsrechnung an den Kunden. Dann legst du die Datei ab UND erfasst sie mit rechnung_erfassen. Status ist Versendet (offen), außer der Mitarbeiter hat gesagt, dass sie bezahlt ist. Nenne danach Nummer, Datum, Netto und Brutto, damit er die gelesenen Werte prüfen kann, und sag, dass sie als offen geführt wird. Fehlen Nummer oder Bruttobetrag oder sind sie unklar, frag nach, statt zu raten. Rechnungen, die jemand anderes ausgestellt hat (Lieferanten, Handwerker, Unterlagen des Kunden), sind nur Dokumente und werden nicht erfasst.
 - Kunden löschen: nur auf ausdrücklichen Wunsch und erst nach Bestätigung in einer eigenen Nachricht.
+- E-Mails: Du kannst E-Mails an einen Kunden, an mehrere oder an alle schicken. Nennt der Mitarbeiter nur den Inhalt, schreibst du daraus selbst die fertige Mail: passender Betreff, höflicher Text in der Sie-Form, klar und ohne Floskeln, ohne englische Begriffe, nichts dazuerfinden (keine Termine, Preise oder Zusagen, die er nicht genannt hat). Dann rufst du mail_vorbereiten auf. Ist nicht klar, an wen die Mail gehen soll, frag vorher nach. Zeige ihm danach den Betreff und den vollständigen Text so, wie das Werkzeug ihn liefert, nenne die Zahl der Empfänger und wer ausgelassen wird, und frag, ob du so senden sollst. Erst wenn er in seiner nächsten Nachricht klar zustimmt, rufst du mail_senden auf. Will er etwas ändern, bereitest du neu vor, zeigst die neue Fassung und fragst erneut. Ohne seine Zustimmung wird nie gesendet. Der Inhalt geht als normaler Mailtext hinaus, ohne Anhang. Briefe für den Postversand kannst du noch nicht erstellen, weil in den Akten keine Anschriften stehen.
 - Für Fragen quer über alle Kunden oder Objekte ("was steht heute an", "wer sucht ...") nutze firmenueberblick.
 
 Ton und Form:
@@ -1299,8 +1532,10 @@ async function claude(system: unknown[], messages: unknown[]): Promise<any> {
 // Ein Gesprächszug: bekommt die neue Nachricht (oder einen Datei-Eingang), arbeitet mit Werkzeugen,
 // bis eine Antwort feststeht, und schreibt Verlauf und Aktionsprotokoll in den übergebenen Zustand.
 export async function agentAntwort(supabase: Supa, mitarbeiter: Mitarbeiter, state: AgentState, eingang: string): Promise<string> {
-  const ctx: ToolKontext = { supabase, mitarbeiter, state, vorherigeLoeschAnfrage: state.loesch_anfrage }
+  const ctx: ToolKontext = { supabase, mitarbeiter, state, vorherigeLoeschAnfrage: state.loesch_anfrage, vorherigeMailAnfrage: state.mail_anfrage }
   state.loesch_anfrage = undefined // gilt nur für die direkt folgende Nachricht
+  state.mail_anfrage = undefined // ebenso: freigeben kann man nur die gerade gezeigte Fassung
+  state.mail_start = undefined
 
   const neu: Nachricht[] = [{ role: 'user', content: eingang }]
   const messages = (): Nachricht[] => [...state.zuege.flatMap((zug) => zug.msgs), ...neu]
@@ -1379,7 +1614,7 @@ async function verarbeiteUpdate(update: any): Promise<void> {
 
   const { data: mitarbeiter } = await supabase
     .from('mitarbeiter')
-    .select('id, name, aktiv, rolle, ist_admin, telegram_pending')
+    .select('id, name, aktiv, rolle, ist_admin, bereiche, telegram_pending')
     .eq('telegram_chat_id', chatId)
     .maybeSingle()
   if (!mitarbeiter || !mitarbeiter.aktiv) {
@@ -1413,12 +1648,30 @@ async function verarbeiteUpdate(update: any): Promise<void> {
     await sendTelegramMessage(chatId, `Da ist gerade etwas schiefgelaufen (${err instanceof Error ? err.message : 'unbekannter Fehler'}).${dateiHinweis} Versuch es bitte gleich noch einmal.`)
     return
   }
+  // Der Versand startet erst, nachdem der Zustand mit dem Auftrag gespeichert ist — der erste
+  // Versandschritt liest ihn von dort.
+  const mailStart = state.mail_start
+  state.mail_start = undefined
   await supabase.from('mitarbeiter').update({ telegram_pending: state }).eq('id', mitarbeiter.id)
   await sendTelegramMessage(chatId, antwort)
+  if (mailStart) await stosseMailSchrittAn(mitarbeiter.id, mailStart, {}, 0)
 }
 
 Deno.serve(async (req: Request) => {
   if (req.method !== 'POST') return new Response('Method not allowed', { status: 405 })
+  // deno-lint-ignore no-explicit-any
+  const runtime0 = (globalThis as any).EdgeRuntime
+  // Interner Aufruf (Versandschritt einer E-Mail an viele Empfänger): nur mit dem gemeinsamen Geheimnis.
+  if (CRM_SHARED_SECRET && req.headers.get('x-crm-secret') === CRM_SHARED_SECRET) {
+    const b = await req.json().catch(() => null)
+    if (b?.intern !== 'mail_schritt' || typeof b.mitarbeiterId !== 'string' || typeof b.auftragId !== 'string') return new Response('Bad request', { status: 400 })
+    const schritt = fuehreMailSchrittAus(b.mitarbeiterId, b.auftragId, b.fehlversuche && typeof b.fehlversuche === 'object' ? b.fehlversuche : {}, Number(b.runde) || 0).catch((err) =>
+      console.error('Mail-Schritt fehlgeschlagen:', err),
+    )
+    if (runtime0?.waitUntil) runtime0.waitUntil(schritt)
+    else await schritt
+    return new Response('ok')
+  }
   if (WEBHOOK_SECRET && req.headers.get('x-telegram-bot-api-secret-token') !== WEBHOOK_SECRET) {
     return new Response('Unauthorized', { status: 401 })
   }

@@ -2339,7 +2339,7 @@ Deno.serve(async (req: Request) => {
     }
 
     if (body.action === 'send') {
-      const { to, toName, subject, text, html, kundeBereich, kundeId, kundeName, attachments } = body
+      const { to, toName, subject, text, html, kundeBereich, kundeId, kundeName, attachments, ohneRechnungsErkennung } = body
       if (!to || !subject || !text) {
         return new Response(JSON.stringify({ error: 'to, subject und text sind Pflichtfelder' }), { status: 400, headers })
       }
@@ -2366,7 +2366,8 @@ Deno.serve(async (req: Request) => {
       // direkt im CRM ab (Nutzer-Entscheidung 2026-11-06) — bisher wurden per Mail gestellte
       // Rechnungen nirgends im CRM erfasst, nur die manuell über "Neue Rechnung" angelegten. Best
       // effort: ein Fehler hier darf den bereits erfolgreich versendeten Mailversand nicht stören.
-      if (kundeId) {
+      // Bei einer Mail an viele Empfänger (Telegram-Assistent) wäre das ein KI-Aufruf je Empfänger — abschaltbar.
+      if (kundeId && ohneRechnungsErkennung !== true) {
         try {
           await erkenneRechnungUndLegeAn(kundeId, subject, text)
         } catch (err) {
