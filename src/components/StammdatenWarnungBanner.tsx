@@ -1,10 +1,12 @@
 import { AlertTriangle } from 'lucide-react'
 import type { Kunde } from '../types'
+import { istSammelakte } from '../data/sammelakten'
 
 // Explizite Warnung bei fehlenden Stammdaten direkt in der Kundenakte (Punkt 11 der Bugfix-Liste,
 // Ergänzung zur Benachrichtigungs-Glocke in Layout.tsx) — fällt sofort auf, sobald man den Kunden
 // öffnet, statt nur in einer Liste irgendwo anders aufzutauchen.
 export function StammdatenWarnungBanner({ kunde }: { kunde: Kunde }) {
+  if (istSammelakte(kunde.id)) return null
   const fehlt: string[] = []
   if (!kunde.telefon?.trim()) fehlt.push('Telefonnummer')
   if (!kunde.email?.trim()) fehlt.push('E-Mail-Adresse')

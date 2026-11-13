@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Bot, PhoneCall, Flame, CalendarClock, StickyNote, Trash2, Check, Clock3, Users, Plane } from 'lucide-react'
+import { Bot, PhoneCall, Flame, CalendarClock, StickyNote, Trash2, Check, Clock3, Users, Plane, Inbox } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { useAuth } from '../../context/AuthContext'
 import { isSupabaseConfigured } from '../../lib/supabaseClient'
@@ -11,6 +11,7 @@ import { PROJEKT_BEREICH_LABEL } from '../../types/project'
 import { Card } from '../../components/ui'
 import { fmtDate, addDays, today } from '../../lib/dates'
 import type { FollowUp } from '../../types'
+import { AKTE_UNGEKLAERT, PFAD_UNGEKLAERT } from '../../data/sammelakten'
 
 function weekdayGerman(): string {
   return new Date().toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long' })
@@ -105,8 +106,33 @@ export function HeuteScreen() {
     dispatchFollowUp(dispatch, entry.bereich, entry.id, { date: addDays(today(), tage), note: entry.note, done: false })
   }
 
+  const ungeklaert = state.kunden.find((k) => k.id === AKTE_UNGEKLAERT)
+  const ungeklaertDokumente = ungeklaert?.dokumente ?? []
+
   return (
     <div className="mx-auto max-w-3xl">
+      {ungeklaertDokumente.length > 0 && (
+        <Card className="mb-5 border-amber-200 bg-amber-50/40 p-5">
+          <h2 className="mb-1 flex items-center gap-1.5 text-sm font-semibold text-amber-800">
+            <Inbox size={14} /> Ungeklärte Eingänge ({ungeklaertDokumente.length})
+          </h2>
+          <p className="mb-3 text-xs text-amber-700/80">
+            Per Telegram geschickt, aber niemandem zuzuordnen. Die Dateien sind gespeichert und liegen in einer eigenen Akte. Sag dem
+            Assistenten in einem Satz, wohin etwas gehört, dann verschiebt er es.
+          </p>
+          <ul className="mb-3 space-y-1 text-sm text-slate-700">
+            {ungeklaertDokumente.slice(0, 5).map((d) => (
+              <li key={d.id} className="truncate">
+                {d.name} <span className="text-xs text-slate-400">· {fmtDate(d.datum)}</span>
+              </li>
+            ))}
+            {ungeklaertDokumente.length > 5 && <li className="text-xs text-slate-400">und {ungeklaertDokumente.length - 5} weitere</li>}
+          </ul>
+          <button onClick={() => navigate(`${PFAD_UNGEKLAERT}?tab=dokumente`)} className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700">
+            Zur Akte „Ungeklärte Eingänge"
+          </button>
+        </Card>
+      )}
       {vertretungen.some((v) => v.followUps.length > 0 || v.aufgaben.length > 0) && (
         <Card className="mb-5 border-amber-200 bg-amber-50/40 p-5">
           <h2 className="mb-1 flex items-center gap-1.5 text-sm font-semibold text-amber-800">
