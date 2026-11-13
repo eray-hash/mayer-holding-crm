@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { useApp } from '../context/AppContext'
-import { AKTE_UNGEKLAERT, PFAD_UNGEKLAERT } from '../data/sammelakten'
-import { Users, Inbox, FileText, AlertTriangle, Receipt, Euro, ChevronDown, ChevronLeft, ChevronRight, ScrollText, Sun, LayoutGrid, UserCog, ListTodo, Wallet } from 'lucide-react'
+import { PFAD_UNGEKLAERT } from '../data/sammelakten'
+import { UngeklaertSideLink } from './UngeklaertSideLink'
+import { Users, FileText, AlertTriangle, Receipt, Euro, ChevronDown, ChevronLeft, ChevronRight, ScrollText, Sun, LayoutGrid, UserCog, ListTodo, Wallet } from 'lucide-react'
 
 const VORLAGEN_LINKS = [
   { kind: 'vollmacht', label: 'Vollmacht' },
@@ -15,11 +15,6 @@ export function SidebarBeratung({ collapsed, onToggle }: { collapsed: boolean; o
   const [vorlagenOpen, setVorlagenOpen] = useState(location.pathname.includes('/vorlagen'))
 
   const isActive = (path: string) => location.pathname === path || location.pathname.startsWith(path + '/')
-  // Was per Telegram kam und niemandem zuzuordnen war, liegt in einer Sammelakte. Der Eintrag steht
-  // immer hier, damit man ihn nicht in der Kundenliste suchen muss; die Zahl zeigt, wie viel wartet.
-  const { state } = useApp()
-  const ungeklaert = state.kunden.find((k) => k.id === AKTE_UNGEKLAERT)
-  const ungeklaertAnzahl = ungeklaert?.dokumente?.length ?? 0
 
   return (
     <nav className="flex h-full flex-col justify-between py-4">
@@ -27,13 +22,7 @@ export function SidebarBeratung({ collapsed, onToggle }: { collapsed: boolean; o
         <SideLink to="/heute" icon={<Sun size={17} />} label="Heute" collapsed={collapsed} active={isActive('/heute')} />
         <SideLink to="/beratung/projekte" icon={<LayoutGrid size={17} />} label="Projekte" collapsed={collapsed} active={isActive('/beratung/projekte')} />
         <SideLink to="/beratung" icon={<Users size={17} />} label="Kunden" collapsed={collapsed} active={isActive('/beratung') && !location.pathname.includes('mahnwesen') && !location.pathname.includes('rechnungen') && !location.pathname.includes('verbindlichkeiten') && !location.pathname.includes('vorlagen') && !location.pathname.includes('projekte') && !location.pathname.includes('todo') && location.pathname !== PFAD_UNGEKLAERT} />
-        <SideLink
-          to={PFAD_UNGEKLAERT}
-          icon={<Inbox size={17} />}
-          label={`Ungeklärte Eingänge${ungeklaertAnzahl > 0 ? ` (${ungeklaertAnzahl})` : ''}`}
-          collapsed={collapsed}
-          active={location.pathname === PFAD_UNGEKLAERT}
-        />
+        <UngeklaertSideLink collapsed={collapsed} />
         <SideLink to="/beratung/todo" icon={<ListTodo size={17} />} label="To-Do-Liste" collapsed={collapsed} active={isActive('/beratung/todo')} />
 
         <div>

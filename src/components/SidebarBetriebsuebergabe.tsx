@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { Users, FileText, ChevronDown, ChevronLeft, ChevronRight, Handshake, Sun, LayoutGrid, UserCog, ListTodo } from 'lucide-react'
+import { UngeklaertSideLink } from './UngeklaertSideLink'
 
 const VORLAGEN_LINKS = [
   { kind: 'vollmacht', label: 'Vollmacht' },
@@ -32,6 +33,7 @@ export function SidebarBetriebsuebergabe({ collapsed, onToggle }: { collapsed: b
           collapsed={collapsed}
           active={isActive('/betriebsuebergabe') && !location.pathname.includes('vorlagen') && !location.pathname.includes('projekte') && !location.pathname.includes('todo')}
         />
+        <UngeklaertSideLink collapsed={collapsed} />
         <SideLink to="/betriebsuebergabe/todo" icon={<ListTodo size={17} />} label="To-Do-Liste" collapsed={collapsed} active={isActive('/betriebsuebergabe/todo')} />
 
         <div>

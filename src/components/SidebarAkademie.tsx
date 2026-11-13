@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { Users, FileText, ChevronDown, ChevronLeft, ChevronRight, GraduationCap, Sun, LayoutGrid, UserCog, ListTodo } from 'lucide-react'
+import { UngeklaertSideLink } from './UngeklaertSideLink'
 
 const VORLAGEN_LINKS = [
   { kind: 'vollmacht', label: 'Vollmacht' },
@@ -32,6 +33,7 @@ export function SidebarAkademie({ collapsed, onToggle }: { collapsed: boolean; o
           collapsed={collapsed}
           active={isActive('/akademie') && !location.pathname.includes('vorlagen') && !location.pathname.includes('projekte') && !location.pathname.includes('todo')}
         />
+        <UngeklaertSideLink collapsed={collapsed} />
         <SideLink to="/akademie/todo" icon={<ListTodo size={17} />} label="To-Do-Liste" collapsed={collapsed} active={isActive('/akademie/todo')} />
 
         <div>

@@ -1,5 +1,6 @@
 import { Link, useLocation } from 'react-router-dom'
 import { Users, ChevronLeft, ChevronRight, Lock, Sun, UserCog, ListTodo } from 'lucide-react'
+import { UngeklaertSideLink } from './UngeklaertSideLink'
 
 export function SidebarPrivat({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
   const location = useLocation()
@@ -16,6 +17,7 @@ export function SidebarPrivat({ collapsed, onToggle }: { collapsed: boolean; onT
           collapsed={collapsed}
           active={isActive('/privat') && !isActive('/privat/todo')}
         />
+        <UngeklaertSideLink collapsed={collapsed} />
         <SideLink to="/privat/todo" icon={<ListTodo size={17} />} label="To-Do-Liste" collapsed={collapsed} active={isActive('/privat/todo')} />
       </div>
 
