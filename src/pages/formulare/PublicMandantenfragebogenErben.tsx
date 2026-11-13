@@ -124,8 +124,28 @@ export function PublicMandantenfragebogenErben() {
             <div className="h-full bg-accent-500 transition-all" style={{ width: `${(erledigtCount / alleItems.length) * 100}%` }} />
           </div>
 
+          {/* Reihenfolge wie im Original: Abschnitte 1–3, dann die Vermögensübersicht (4), dann 5–6, zuletzt 7. */}
           <div className="space-y-5">
-            {ERBEN_CHECKLISTE.map((gruppe) => (
+            {ERBEN_CHECKLISTE.slice(0, 3).map((gruppe) => (
+              <div key={gruppe.kategorie}>
+                <h4 className="mb-2 text-sm font-semibold text-slate-700">{gruppe.kategorie}</h4>
+                <div className="space-y-1.5">
+                  {gruppe.punkte.map((punkt) => (
+                    <label key={punkt} className="flex items-start gap-2 text-sm text-slate-600">
+                      <input type="checkbox" checked={!!checkliste[punkt]} onChange={() => toggle(punkt)} className="mt-0.5 rounded" />
+                      <span className={checkliste[punkt] ? 'text-slate-400 line-through' : ''}>{punkt}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ))}
+            <div>
+              <h4 className="mb-1 text-sm font-semibold text-slate-700">{F.vermoegenTitel}</h4>
+              <p className="mb-2 text-sm text-slate-600">{F.vermoegenEinleitung}</p>
+              <textarea className={inputClass} rows={5} value={vermoegen} onChange={(e) => setVermoegen(e.target.value)} />
+              <p className="mb-4 mt-1 text-xs text-slate-500">{F.vermoegenBereiche}</p>
+            </div>
+            {ERBEN_CHECKLISTE.slice(3).map((gruppe) => (
               <div key={gruppe.kategorie}>
                 <h4 className="mb-2 text-sm font-semibold text-slate-700">{gruppe.kategorie}</h4>
                 <div className="space-y-1.5">
@@ -141,11 +161,6 @@ export function PublicMandantenfragebogenErben() {
           </div>
 
           <div className="mt-5 border-t border-slate-100 pt-5">
-            <h4 className="mb-1 text-sm font-semibold text-slate-700">{F.vermoegenTitel}</h4>
-            <p className="mb-2 text-sm text-slate-600">{F.vermoegenEinleitung}</p>
-            <textarea className={inputClass} rows={5} value={vermoegen} onChange={(e) => setVermoegen(e.target.value)} />
-            <p className="mb-4 mt-1 text-xs text-slate-500">{F.vermoegenBereiche}</p>
-
             <h4 className="mb-1 text-sm font-semibold text-slate-700">{F.zieleTitel}</h4>
             <p className="mb-2 text-sm text-slate-600">{F.zieleFrage}</p>
             <textarea className={inputClass} rows={4} value={ziele} onChange={(e) => setZiele(e.target.value)} />
