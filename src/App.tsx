@@ -5,6 +5,7 @@ import { AuthProvider, useAuth } from './context/AuthContext'
 import { PortalAuthProvider, usePortalAuth } from './context/PortalAuthContext'
 import { RollenAuswahl } from './pages/auth/RollenAuswahl'
 import { LoginScreen } from './pages/auth/LoginScreen'
+import { PasswortFestlegen } from './pages/auth/PasswortFestlegen'
 import { isSupabaseConfigured } from './lib/supabaseClient'
 import { Layout } from './components/Layout'
 import { PortalLayout } from './components/PortalLayout'
@@ -167,7 +168,7 @@ function ZugangGesperrt({ email, onSignOut }: { email: string; onSignOut: () => 
 // als Demo-Modus aktiv, damit lokales Arbeiten ohne echte Zugangsdaten weiter funktioniert.
 function AdminRoutes() {
   const { state, hydrated, hydrateError } = useApp()
-  const { ready, session, mitarbeiter, signOut } = useAuth()
+  const { ready, session, mitarbeiter, passwortFestlegen, signOut } = useAuth()
 
   if (!isSupabaseConfigured) {
     if (!state.rolle) return <RollenAuswahl />
@@ -177,6 +178,7 @@ function AdminRoutes() {
   if (!ready) return <LadeBildschirm text="Lädt …" />
   if (!session) return <LoginScreen />
   if (!mitarbeiter || !mitarbeiter.aktiv) return <ZugangGesperrt email={session.user.email ?? ''} onSignOut={signOut} />
+  if (passwortFestlegen) return <PasswortFestlegen />
   if (!hydrated) return <LadeBildschirm text="Daten werden geladen …" />
   if (hydrateError) {
     return (

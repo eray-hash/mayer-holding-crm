@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import type { Session, User } from '@supabase/supabase-js'
-import { supabase, isSupabaseConfigured } from '../lib/supabaseClient'
+import { supabase, isSupabaseConfigured, passwortFestlegenNoetig, setzePasswortFestlegenNoetig } from '../lib/supabaseClient'
 import { setCurrentUser } from '../data/constants'
 
 export type Mitarbeiter = {
@@ -22,6 +22,10 @@ type AuthState = {
   session: Session | null
   user: User | null
   mitarbeiter: Mitarbeiter | null
+  // true, solange jemand über einen Einladungs-/Login-/Passwort-Link angemeldet ist und noch kein
+  // Passwort festgelegt hat — die App zeigt dann nur den Schritt "Passwort festlegen".
+  passwortFestlegen: boolean
+  passwortFestgelegt: () => void
   signOut: () => Promise<void>
 }
 
@@ -31,6 +35,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(!isSupabaseConfigured)
   const [session, setSession] = useState<Session | null>(null)
   const [mitarbeiter, setMitarbeiter] = useState<Mitarbeiter | null>(null)
+  const [passwortFestlegen, setPasswortFestlegen] = useState(passwortFestlegenNoetig)
 
   useEffect(() => {
     if (!supabase) return
@@ -40,7 +45,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setReady(true)
     })
 
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, newSession) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((event, newSession) => {
+      if (event === 'PASSWORD_RECOVERY') {
+        setzePasswortFestlegenNoetig(true)
+        setPasswortFestlegen(true)
+      }
+      if (event === 'SIGNED_OUT') {
+        setzePasswortFestlegenNoetig(false)
+        setPasswortFestlegen(false)
+      }
       setSession(newSession)
     })
 
@@ -77,6 +90,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     session,
     user: session?.user ?? null,
     mitarbeiter,
+    passwortFestlegen,
+    passwortFestgelegt() {
+      setzePasswortFestlegenNoetig(false)
+      setPasswortFestlegen(false)
+    },
     async signOut() {
       await supabase?.auth.signOut()
     },

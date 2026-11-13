@@ -338,6 +338,28 @@ async function sendMail(to: string, subject: string, text: string, html?: string
   })
 }
 
+// Schickt einen Link zum Festlegen des Passworts über das eigene Postfach (nicht über Supabases
+// Mailversand, der bei manchen Empfängern nie ankommt). Liefert false, wenn Link oder Versand scheitern.
+// deno-lint-ignore no-explicit-any
+async function schickePasswortLink(admin: any, email: string): Promise<boolean> {
+  const { data, error: linkError } = await admin.auth.admin.generateLink({ type: 'recovery', email })
+  if (linkError || !data?.properties?.action_link) {
+    console.error('Passwort-Link konnte nicht erzeugt werden:', linkError)
+    return false
+  }
+  try {
+    await sendMail(
+      email,
+      'Mayer Holding CRM — Passwort festlegen',
+      `Hallo,\n\nüber den folgenden Link kannst du dein Passwort im Mayer Holding CRM festlegen:\n\n${data.properties.action_link}\n\nNach dem Öffnen wirst du direkt gebeten, ein Passwort einzugeben. Der Link funktioniert nur einmal. Wenn du das nicht angefordert hast, kannst du diese E-Mail ignorieren.`,
+    )
+    return true
+  } catch (mailErr) {
+    console.error('Passwort-Link-Mail fehlgeschlagen:', mailErr)
+    return false
+  }
+}
+
 type RechnungsErkennung = {
   ist_rechnung: boolean
   rechnungsnummer: string | null
@@ -2513,20 +2535,7 @@ Deno.serve(async (req: Request) => {
       const normalisiert = email.trim().toLowerCase()
       const { data: mitarbeiterRows } = await admin.from('mitarbeiter').select('email').eq('aktiv', true)
       const treffer = (mitarbeiterRows ?? []).find((m: { email: string }) => m.email?.trim().toLowerCase() === normalisiert)
-      if (treffer) {
-        const { data, error: linkError } = await admin.auth.admin.generateLink({ type: 'recovery', email: treffer.email })
-        if (!linkError && data.properties?.action_link) {
-          try {
-            await sendMail(
-              treffer.email,
-              'Mayer Holding CRM — Passwort zurücksetzen',
-              `Hallo,\n\nüber den folgenden Link kannst du dein Passwort im Mayer Holding CRM neu setzen:\n\n${data.properties.action_link}\n\nDer Link ist 24 Stunden gültig. Wenn du das nicht angefordert hast, kannst du diese E-Mail ignorieren.`,
-            )
-          } catch (mailErr) {
-            console.error('Passwort-Reset-Mail fehlgeschlagen:', mailErr)
-          }
-        }
-      }
+      if (treffer) await schickePasswortLink(admin, treffer.email)
       // Immer dieselbe Antwort, egal ob die E-Mail zu einem echten Mitarbeiter gehört oder nicht.
       return new Response(JSON.stringify({ ok: true }), { headers })
     }
@@ -2554,17 +2563,24 @@ Deno.serve(async (req: Request) => {
         return new Response(JSON.stringify({ error: listError.message }), { status: 400, headers })
       }
       const bestehenderUser = userList.users.find((u) => u.email?.trim().toLowerCase() === normalisiert)
-      // Sicherheitsgrenze: Registrieren setzt nur das ALLERERSTE Passwort. Wer schon mal eingeloggt
-      // war, hat bereits ein Passwort — sonst könnte jeder, der die (oft erratbare) Firmen-E-Mail
-      // eines Kollegen kennt, dessen Account einfach übernehmen, ohne je Zugriff auf dessen Postfach
-      // gehabt zu haben.
+      // Sicherheitsgrenze: Registrieren setzt ein Passwort nur für einen Zugang, der noch nie geöffnet
+      // wurde. Sonst könnte jeder, der die (oft erratbare) Firmen-E-Mail eines Kollegen kennt, dessen
+      // Zugang übernehmen, ohne je in dessen Postfach gewesen zu sein.
+      // "Schon geöffnet" heißt aber NICHT "hat ein Passwort": Wer nur den Einladungs-Link angeklickt
+      // hat, gilt als angemeldet und hat trotzdem keins (so bei Andreas Mayer am 12.11.2026 — die alte
+      // Meldung "bereits ein Passwort gesetzt" war falsch und ließ ihn ohne Ausweg stehen). Deshalb
+      // geht in diesem Fall ein Link an das Postfach: Wer es lesen kann, legt dort sein Passwort fest.
       if (bestehenderUser?.last_sign_in_at) {
-        return new Response(
-          JSON.stringify({
-            error: 'Für diesen Account wurde bereits ein Passwort gesetzt. Bitte „Passwort vergessen" nutzen oder einen Admin um einen Login-Link bitten.',
-          }),
-          { status: 409, headers },
-        )
+        const geschickt = await schickePasswortLink(admin, treffer.email)
+        if (!geschickt) {
+          return new Response(
+            JSON.stringify({
+              error: 'Dieser Zugang wurde schon einmal geöffnet. Der Link zum Festlegen des Passworts konnte gerade nicht verschickt werden — bitte Eray oder Hasan um einen Login-Link bitten.',
+            }),
+            { status: 502, headers },
+          )
+        }
+        return new Response(JSON.stringify({ ok: true, linkGeschickt: true }), { headers })
       }
       if (bestehenderUser) {
         const { error: updateErr } = await admin.auth.admin.updateUserById(bestehenderUser.id, {

@@ -188,9 +188,12 @@ export async function requestPasswordReset(email: string): Promise<void> {
 }
 
 // Setzt das allererste Passwort für eine hinterlegte Mitarbeiter-E-Mail, ganz ohne Mailversand —
-// nur möglich, solange für diesen Account noch nie ein Login stattgefunden hat (serverseitig geprüft).
-export async function selbstRegistrieren(email: string, passwort: string): Promise<void> {
-  await call({ action: 'self_register', email, passwort })
+// aber nur, solange der Zugang noch nie geöffnet wurde. Wurde er schon einmal geöffnet (z. B. über
+// den Einladungs-Link, der anmeldet, ohne ein Passwort zu vergeben), setzt der Server das Passwort
+// NICHT, sondern schickt einen Link an das Postfach; dann kommt linkGeschickt zurück.
+export async function selbstRegistrieren(email: string, passwort: string): Promise<{ linkGeschickt: boolean }> {
+  const data = await call({ action: 'self_register', email, passwort })
+  return { linkGeschickt: data?.linkGeschickt === true }
 }
 
 export type LeadKlassifizierungsErgebnis = { geprueft: number; vorgeschlagen: number; uebersprungen: number }

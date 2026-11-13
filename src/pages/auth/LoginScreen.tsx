@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { supabase } from '../../lib/supabaseClient'
 import { isEmailGatewayConfigured, requestPasswordReset, selbstRegistrieren } from '../../lib/emailGateway'
 import { PasswortInput } from '../../components/ui'
+import { useAuth } from '../../context/AuthContext'
 
 const inputCls =
   'rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-accent-400 focus:ring-2 focus:ring-accent-100'
@@ -30,8 +31,8 @@ function PasswortVergessenForm({ onZurueck }: { onZurueck: () => void }) {
     return (
       <div className="flex flex-col gap-3">
         <p className="text-sm text-slate-700">
-          Falls <strong>{email}</strong> bei uns als Mitarbeiter-Zugang hinterlegt ist, wurde gerade ein Link zum
-          Passwort-Zurücksetzen dorthin verschickt. Der Link ist 24 Stunden gültig.
+          Falls <strong>{email}</strong> bei uns als Mitarbeiter-Zugang hinterlegt ist, wurde gerade ein Link dorthin
+          verschickt. Öffne ihn und lege dein Passwort fest. Der Link funktioniert nur einmal.
         </p>
         <button type="button" onClick={onZurueck} className="text-sm font-medium text-accent-600 hover:underline">
           Zurück zum Login
@@ -73,6 +74,7 @@ function RegistrierenForm({ onZurueck }: { onZurueck: () => void }) {
   const [passwortWiederholen, setPasswortWiederholen] = useState('')
   const [loading, setLoading] = useState(false)
   const [erledigt, setErledigt] = useState(false)
+  const [linkGeschickt, setLinkGeschickt] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   async function handleSubmit(e: FormEvent) {
@@ -88,13 +90,29 @@ function RegistrierenForm({ onZurueck }: { onZurueck: () => void }) {
     }
     setLoading(true)
     try {
-      await selbstRegistrieren(email, passwort)
+      const ergebnis = await selbstRegistrieren(email, passwort)
+      setLinkGeschickt(ergebnis.linkGeschickt)
       setErledigt(true)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Registrierung fehlgeschlagen.')
     } finally {
       setLoading(false)
     }
+  }
+
+  if (erledigt && linkGeschickt) {
+    return (
+      <div className="flex flex-col gap-3">
+        <p className="text-sm text-slate-700">
+          Der Zugang für <strong>{email}</strong> wurde schon einmal geöffnet. Zur Sicherheit haben wir deshalb gerade einen
+          Link an diese Adresse geschickt. Öffne ihn im Postfach und lege dort dein Passwort fest. Das eben eingegebene
+          Passwort wurde nicht gespeichert.
+        </p>
+        <button type="button" onClick={onZurueck} className="text-sm font-medium text-accent-600 hover:underline">
+          Zum Login
+        </button>
+      </div>
+    )
   }
 
   if (erledigt) {
@@ -113,7 +131,8 @@ function RegistrierenForm({ onZurueck }: { onZurueck: () => void }) {
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-3">
       <p className="text-sm text-slate-500">
-        Nur möglich, wenn deine E-Mail bereits als Mitarbeiter hinterlegt ist und du noch nie eingeloggt warst.
+        Für den allerersten Zugang. Deine E-Mail muss als Mitarbeiter hinterlegt sein. Wurde der Zugang schon einmal
+        geöffnet, bekommst du stattdessen einen Link per E-Mail.
       </p>
       <input
         type="email"
@@ -156,6 +175,7 @@ function RegistrierenForm({ onZurueck }: { onZurueck: () => void }) {
 }
 
 export function LoginScreen() {
+  const { passwortFestgelegt } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -169,7 +189,9 @@ export function LoginScreen() {
     setLoading(true)
     setError(null)
     const { error } = await supabase.auth.signInWithPassword({ email, password })
-    if (error) setError(error.message)
+    if (error) setError(error.message === 'Invalid login credentials' ? 'E-Mail oder Passwort stimmt nicht. Noch kein Passwort? Dann unten „Erster Login?" wählen.' : error.message)
+    // Wer sich mit Passwort anmeldet, hat eins — ein liegengebliebener Merker aus einem alten Link entfällt.
+    else passwortFestgelegt()
     setLoading(false)
   }
 

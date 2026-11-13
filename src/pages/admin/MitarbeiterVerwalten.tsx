@@ -106,7 +106,7 @@ export function MitarbeiterVerwalten() {
       if (insertError) throw new Error(insertError.message)
       await inviteMitarbeiter(email.trim())
       setErfolg(
-        `${name.trim()} wurde angelegt, Einladungs-Mail an ${email.trim()} verschickt. Falls sie nicht ankommt (z.B. bei Hotmail-Adressen), unten „Login-Link" nutzen oder ${name.trim()} auf „Passwort vergessen?" beim Login verweisen.`,
+        `${name.trim()} wurde angelegt, Einladungs-Mail an ${email.trim()} verschickt. Nach dem Öffnen des Links legt ${name.trim()} zuerst ein Passwort fest. Falls die Mail nicht ankommt (z.B. bei Hotmail-Adressen), unten „Login-Link" nutzen oder ${name.trim()} auf „Erster Login?" beim Login verweisen.`,
       )
       setName('')
       setEmail('')
