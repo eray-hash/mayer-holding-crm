@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { NavLink, useNavigate } from 'react-router-dom'
+import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import {
   Menu,
   X,
@@ -78,6 +78,16 @@ export function Layout({ children }: { children: ReactNode }) {
   const [benachrichtigungenOpen, setBenachrichtigungenOpen] = useState(false)
   const [neueLeadsCount, setNeueLeadsCount] = useState(0)
   const navigate = useNavigate()
+
+  // Der gewählte Bereich folgt der Adresse: Führt ein Link in einen anderen Bereich (Follow-up auf
+  // "Heute", Suche, "Ungeklärte Eingänge"), wechseln Seitenleiste und Bereichs-Anzeige mit. Vorher
+  // blieb beides auf dem alten Bereich stehen, während schon die Akte eines anderen offen war.
+  const location = useLocation()
+  useEffect(() => {
+    const ziel = BEREICHE.find((b) => location.pathname === b.pfad || location.pathname.startsWith(`${b.pfad}/`))
+    if (ziel && ziel.id !== state.bereich) dispatch({ type: 'SET_BEREICH', bereich: ziel.id })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname])
 
   const aktuellerBereich = BEREICHE.find((b) => b.id === state.bereich) ?? BEREICHE[0]
   // Rollenbasierte Bereichs-Einschränkung (Beschluss 2026-11-02): Geschäftsführung und Admins sehen
