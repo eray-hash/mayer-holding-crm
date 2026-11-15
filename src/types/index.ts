@@ -497,6 +497,7 @@ export type EingegangeneEmail = {
   vorschlag?: { bereich: KundeBereich; kundeId: string; kundeName: string }
   zugewiesen?: { bereich: KundeBereich; kundeId: string; kundeName: string }
   ignoriert?: boolean
+  postfachId?: string
 }
 
 // Textvorlage für den E-Mail-Versand (Postfach/Kundenakte) mit Platzhaltern wie {{firma}} und
@@ -610,6 +611,9 @@ export type GesendeteEmail = {
   kundeBereich?: KundeBereich
   kundeId?: string
   kundeName?: string
+  /** Absender-Adresse (ab 2026-11-15 mitgeschrieben). */
+  von?: string
+  postfachId?: string
 }
 
 // ---------- Investorenportal (Investitionsfonds) ----------

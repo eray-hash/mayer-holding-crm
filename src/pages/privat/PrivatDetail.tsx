@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, ArrowRightLeft } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { StatusWidget } from '../../components/StatusWidget'
 import { Card, Modal, EmptyState } from '../../components/ui'
@@ -21,7 +21,10 @@ import { DokumenteSection } from '../../components/DokumenteSection'
 import { KommunikationSection } from '../../components/KommunikationSection'
 import { LoeschenKundeButton } from '../../components/LoeschenKundeButton'
 import { AktenReiter, type Reiter } from '../../components/AktenReiter'
-import type { Prioritaet } from '../../types'
+import { KUNDEN_BEREICHE, kundeDetailPfad } from '../../data/kundenBereiche'
+import { getHauptpfad } from '../../data/statusNetworks'
+import { uid, today } from '../../lib/dates'
+import type { KundeBereich, Prioritaet } from '../../types'
 
 const REITER: Reiter[] = [
   { id: 'uebersicht', label: 'Übersicht' },
@@ -42,6 +45,8 @@ export function PrivatDetail() {
   const tab = params.get('tab') ?? 'uebersicht'
   const { state, dispatch } = useApp()
   const [editFollowUp, setEditFollowUp] = useState(false)
+  const [uebernehmen, setUebernehmen] = useState(false)
+  const [zielBereich, setZielBereich] = useState<KundeBereich>('beratung')
 
   const kontakt = state.privatKunden.find((k) => k.id === id)
 
@@ -80,6 +85,12 @@ export function PrivatDetail() {
             >
               {PRIORITAETEN.map((p) => <option key={p} value={p}>{p}</option>)}
             </select>
+            <button
+              onClick={() => setUebernehmen(true)}
+              className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
+            >
+              <ArrowRightLeft size={13} /> In öffentlichen Bereich übernehmen
+            </button>
             <LoeschenKundeButton bereich="privat" kundeId={kontakt.id} kundeName={kontakt.firma} listePfad="/privat" />
           </div>
         </div>
@@ -130,6 +141,40 @@ export function PrivatDetail() {
       {tab === 'nda' && <NdaSection bereich="privat" kundeId={kontakt.id} />}
       {tab === 'dokumente' && <DokumenteSection bereich="privat" kundeId={kontakt.id} />}
       {tab === 'kommunikation' && <KommunikationSection kundeId={kontakt.id} />}
+
+      <Modal open={uebernehmen} onClose={() => setUebernehmen(false)} title="In den öffentlichen Bereich übernehmen" width="max-w-md">
+        <p className="mb-3 text-sm text-slate-600">
+          <strong>{kontakt.firma}</strong> wird mit allem, was in dieser Akte liegt (Notizen, Protokolle, Dokumente, Rechnungen), in den gewählten Bereich verschoben. Danach sehen ihn alle Mitarbeiter dieses Bereichs.
+        </p>
+        <select className="mb-4 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" value={zielBereich} onChange={(e) => setZielBereich(e.target.value as KundeBereich)}>
+          {KUNDEN_BEREICHE.filter((b) => b.id !== 'privat').map((b) => (
+            <option key={b.id} value={b.id}>{b.label}</option>
+          ))}
+        </select>
+        <div className="flex justify-end gap-2">
+          <button onClick={() => setUebernehmen(false)} className="rounded-lg px-3 py-2 text-sm text-slate-500 hover:bg-slate-50">Abbrechen</button>
+          <button
+            onClick={() => {
+              dispatch({
+                type: 'MOVE_KUNDE_BEREICH',
+                von: 'privat',
+                nach: zielBereich,
+                id: kontakt.id,
+                patch: {
+                  status: getHauptpfad(zielBereich)[0],
+                  verantwortlichEmail: undefined,
+                  letzteAktivitaet: today(),
+                  activities: [{ id: uid('act'), date: today(), text: 'Aus dem privaten Bereich in den öffentlichen Bereich übernommen', user: kontakt.verantwortlich }, ...kontakt.activities],
+                },
+              })
+              navigate(kundeDetailPfad(zielBereich, kontakt.id))
+            }}
+            className="rounded-lg bg-accent-600 px-3 py-2 text-sm font-medium text-white hover:bg-accent-700"
+          >
+            Übernehmen
+          </button>
+        </div>
+      </Modal>
 
       <Modal open={editFollowUp} onClose={() => setEditFollowUp(false)} title="Follow-up bearbeiten">
         <FollowUpForm

@@ -23,6 +23,8 @@ export type EingegangeneMail = {
   // scripts/auto-assign-emails.mjs) — kein manuelles Zuordnen im Postfach mehr nötig.
   zugewiesen?: { bereich: import('../types').KundeBereich; kundeId: string; kundeName: string }
   ignoriert?: boolean
+  /** In welchem Postfach die Mail angekommen ist (leer bei älteren Mails). */
+  postfachId?: string
 }
 
 async function call(body: Record<string, unknown>): Promise<any> {
@@ -76,6 +78,30 @@ export type SendEmailKundeKontext = {
 
 export type MailAnhang = { filename: string; contentBase64?: string; url?: string; contentType?: string }
 
+// Schickt den eigenen Login mit, wenn es einen gibt — nötig, sobald von einem persönlichen Postfach
+// oder aus dem privaten Bereich gesendet wird (das geteilte Secret allein beweist nicht, wer fragt).
+async function callMitLogin(body: Record<string, unknown>): Promise<any> {
+  if (!FUNCTION_URL) throw new Error('E-Mail-Postfach ist noch nicht konfiguriert (VITE_EMAIL_GATEWAY_URL fehlt).')
+  const { data: sessionData } = (await supabase?.auth.getSession()) ?? { data: { session: null } }
+  const token = sessionData.session?.access_token
+  const res = await fetch(FUNCTION_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(SHARED_SECRET ? { 'x-crm-secret': SHARED_SECRET } : {}),
+    },
+    body: JSON.stringify(body),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data?.error ?? `Fehler beim Abruf (${res.status})`)
+  return data
+}
+
+/** `postfachId`: von welchem Postfach gesendet wird (ohne Angabe das gemeinsame Hauptpostfach).
+ *  `privat`: aus dem privaten Postfach geschrieben — die Mail bleibt nur für den Absender sichtbar. */
+export type SendeOptionen = { postfachId?: string; privat?: boolean }
+
 export async function sendEmail(
   to: string,
   subject: string,
@@ -83,8 +109,59 @@ export async function sendEmail(
   html?: string,
   kontext?: SendEmailKundeKontext,
   attachments?: MailAnhang[],
+  optionen?: SendeOptionen,
 ): Promise<void> {
-  await call({ action: 'send', to, subject, text, html, attachments, ...kontext })
+  await callMitLogin({ action: 'send', to, subject, text, html, attachments, ...kontext, ...optionen })
+}
+
+// ---------- Postfächer ----------
+
+export type PostfachInfo = {
+  id: string
+  adresse: string
+  anzeigeName: string
+  /** Gemeinsames Postfach (für alle) — sonst gehört es einem Mitarbeiter. */
+  gemeinsam: boolean
+  eigenes: boolean
+  besitzer: string | null
+  /** Zugang hinterlegt, es kann gesendet werden. */
+  bereit: boolean
+  /** Wird regelmäßig abgeholt (persönliche Postfächer). */
+  holtAb: boolean
+  letzterAbruf: string | null
+  letzterFehler: string | null
+}
+
+export async function ladePostfaecher(alle = false): Promise<PostfachInfo[]> {
+  const data = await callAuthenticated({ action: 'postfaecher_liste', alle })
+  return data.postfaecher ?? []
+}
+
+export async function verbindePostfach(eingabe: { adresse?: string; passwort: string; gemeinsam?: boolean; anzeigeName?: string }): Promise<{ id: string; adresse: string }> {
+  return callAuthenticated({ action: 'postfach_verbinden', ...eingabe })
+}
+
+export async function trennePostfach(postfachId: string): Promise<void> {
+  await callAuthenticated({ action: 'postfach_trennen', postfachId })
+}
+
+export async function rufePostfachAb(postfachId: string): Promise<number> {
+  const data = await callAuthenticated({ action: 'postfach_abruf', postfachId })
+  return data.neu ?? 0
+}
+
+export async function holeMailInOeffentlich(
+  art: 'eingang' | 'gesendet',
+  id: string,
+  kunde?: { bereich: string; id: string; name: string },
+): Promise<void> {
+  await callAuthenticated({ action: 'mail_freigeben', art, id, kunde })
+}
+
+/** Anhänge persönlicher Postfächer liegen nicht öffentlich — der Link wird erst beim Öffnen geholt. */
+export async function holeAnhangUrl(verweis: string): Promise<string> {
+  const data = await callAuthenticated({ action: 'mail_anhang_url', verweis })
+  return data.url
 }
 
 export type Gespraechszusammenfassung = {

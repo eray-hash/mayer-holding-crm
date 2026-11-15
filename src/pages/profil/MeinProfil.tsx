@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { MeinPostfachAbschnitt } from '../../components/PostfachEinstellungen'
 import { AlertTriangle, Camera, CheckCircle2, Lock, Plane, Send, Trash2, User } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { useAuth } from '../../context/AuthContext'
@@ -391,6 +392,8 @@ export function MeinProfil() {
           </span>
         )}
       </div>
+
+      {isSupabaseConfigured && <MeinPostfachAbschnitt />}
     </div>
   )
 }

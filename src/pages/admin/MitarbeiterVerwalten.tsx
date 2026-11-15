@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { PostfaecherVerwaltung } from '../../components/PostfachEinstellungen'
 import { Mail, Plus, UserCheck, UserX, Pencil, Save, XCircle, ShieldCheck, Link2, Copy, Check, AtSign } from 'lucide-react'
 import { supabase, isSupabaseConfigured } from '../../lib/supabaseClient'
 import { inviteMitarbeiter, generateLoginLink, updateMitarbeiterEmail } from '../../lib/emailGateway'
@@ -221,6 +222,8 @@ export function MitarbeiterVerwalten() {
     <div className="mx-auto max-w-3xl">
       <h1 className="mb-1 text-xl font-semibold text-slate-800">Mitarbeiter verwalten</h1>
       <p className="mb-5 text-sm text-slate-500">Neue Mitarbeiter anlegen, Bereiche zuweisen, Zugänge sperren/entsperren.</p>
+
+      <PostfaecherVerwaltung />
 
       <Card className="mb-6 p-5">
         <h3 className="mb-3 text-sm font-semibold text-slate-700">Neuer Mitarbeiter</h3>

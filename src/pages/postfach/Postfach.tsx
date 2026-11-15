@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Inbox, Send, RefreshCw, UserPlus, Check, X, AlertTriangle, Plus, Reply, ListPlus, Search, Sparkles, Megaphone, Paperclip } from 'lucide-react'
+import { Inbox, Send, RefreshCw, UserPlus, Check, X, AlertTriangle, Plus, Reply, ListPlus, Search, Sparkles, Megaphone } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { useAuth } from '../../context/AuthContext'
 import { isEmailInboxDbConfigured, fetchStoredEmails, searchStoredEmails, assignMail, ignoreMail } from '../../lib/emailInboxDb'
@@ -14,16 +14,11 @@ import { uid, today, addDays, fmtDateTime } from '../../lib/dates'
 import { MITARBEITER } from '../../data/constants'
 import { SendEmailModal } from '../../components/SendEmailModal'
 import { MailVorlagenModal } from '../../components/MailVorlagenModal'
+import { MailAnhangLink } from '../../components/MailAnhangLink'
 import { PrimaryButton, SecondaryButton, EmptyState, inputClass } from '../../components/ui'
 import type { EingegangeneEmail, GesendeteEmail, KundeBereich, VorgeschlagenerLead } from '../../types'
 
 type Ordner = 'posteingang' | 'gesendet' | 'leads'
-
-function fmtGroesse(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}
 
 function neuerKunde(lead: VorgeschlagenerLead, bereich: KundeBereich) {
   return {
@@ -75,7 +70,7 @@ export function Postfach() {
 
   const [composeOpen, setComposeOpen] = useState(false)
   const [vorlagenOpen, setVorlagenOpen] = useState(false)
-  const [antwortAn, setAntwortAn] = useState<{ to: string; subject: string } | null>(null)
+  const [antwortAn, setAntwortAn] = useState<{ to: string; subject: string; postfachId?: string } | null>(null)
 
   const [bereichWahl, setBereichWahl] = useState<Record<string, KundeBereich>>({})
   const [kundeWahl, setKundeWahl] = useState<Record<string, string>>({})
@@ -457,7 +452,7 @@ export function Postfach() {
                       Von: {selectedMail.vonName} ({selectedMail.von}) · {fmtDateTime(selectedMail.datum)}
                     </p>
                   </div>
-                  <SecondaryButton onClick={() => { setAntwortAn({ to: selectedMail.von, subject: `Re: ${selectedMail.betreff}` }); setComposeOpen(true) }} className="flex-shrink-0 text-xs">
+                  <SecondaryButton onClick={() => { setAntwortAn({ to: selectedMail.von, subject: `Re: ${selectedMail.betreff}`, postfachId: selectedMail.postfachId }); setComposeOpen(true) }} className="flex-shrink-0 text-xs">
                     <Reply size={13} /> Antworten
                   </SecondaryButton>
                 </div>
@@ -468,15 +463,7 @@ export function Postfach() {
                   <div className="mb-6 space-y-1.5">
                     <p className="text-xs font-semibold text-slate-500">Anhänge</p>
                     {selectedMail.anhaenge.map((a) => (
-                      <a
-                        key={a.url}
-                        href={a.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="flex items-center gap-1.5 text-sm text-accent-600 hover:underline"
-                      >
-                        <Paperclip size={13} /> {a.filename} <span className="text-xs text-slate-400">({fmtGroesse(a.size)})</span>
-                      </a>
+                      <MailAnhangLink key={a.url} anhang={a} />
                     ))}
                   </div>
                 )}
@@ -509,6 +496,7 @@ export function Postfach() {
                   <h2 className="text-base font-semibold text-slate-800">{selectedGesendet.betreff}</h2>
                   <p className="mt-1 text-xs text-slate-500">
                     An: {selectedGesendet.anName} ({selectedGesendet.an}) · {fmtDateTime(selectedGesendet.gesendetAm)}
+                    {selectedGesendet.von && <> · Von: {selectedGesendet.von}</>}
                   </p>
                   {selectedGesendet.kundeName && <p className="mt-1 text-xs text-slate-400">Zugeordnet: {selectedGesendet.kundeName}</p>}
                 </div>
@@ -536,6 +524,7 @@ export function Postfach() {
         onClose={() => setComposeOpen(false)}
         to={antwortAn?.to}
         defaultSubject={antwortAn?.subject ?? ''}
+        vonPostfachId={antwortAn?.postfachId}
         onSent={() => {
           if (ordner === 'gesendet') ladeGesendet(gesendetLimit)
         }}

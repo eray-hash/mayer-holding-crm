@@ -26,10 +26,11 @@ type Row = {
   zugewiesener_bereich: string | null
   zugewiesener_kunde_name: string | null
   ignoriert: boolean | null
+  postfach_id: string | null
 }
 
 const SELECT_SPALTEN =
-  'id, message_id, von, von_name, betreff, mail_datum, ausschnitt, anhaenge, zugewiesener_kunde_id, zugewiesener_bereich, zugewiesener_kunde_name, ignoriert'
+  'id, message_id, von, von_name, betreff, mail_datum, ausschnitt, anhaenge, zugewiesener_kunde_id, zugewiesener_bereich, zugewiesener_kunde_name, ignoriert, postfach_id'
 
 function toMail(row: Row): EingegangeneMail {
   return {
@@ -45,6 +46,7 @@ function toMail(row: Row): EingegangeneMail {
         ? { bereich: row.zugewiesener_bereich as KundeBereich, kundeId: row.zugewiesener_kunde_id, kundeName: row.zugewiesener_kunde_name }
         : undefined,
     ignoriert: row.ignoriert ?? undefined,
+    postfachId: row.postfach_id ?? undefined,
   }
 }
 
@@ -59,11 +61,25 @@ function sanitizeSearchTerm(query: string): string {
 // importierten Mails NULL und soll trotzdem sichtbar bleiben, daher explizit "oder NULL".
 const NUR_RELEVANTE_MAILS = 'relevanz.is.null,relevanz.neq.nicht_relevant'
 
+// Das private Postfach: nur Mails mit dem eigenen Besitzer-Eintrag. Die Datenbank liefert einem
+// Mitarbeiter öffentliche UND eigene Mails — getrennt wird in den Abfragen ausdrücklich, damit private
+// Mails nie im gemeinsamen Postfach auftauchen (dort überall `.is('besitzer_email', null)`).
+export async function fetchPrivateEmails(eigeneEmail: string, limit = 30, suche = ''): Promise<EingegangeneMail[]> {
+  if (!client) throw new Error('E-Mail-Datenbank ist noch nicht konfiguriert.')
+  const term = sanitizeSearchTerm(suche)
+  let abfrage = client.from('eingegangene_emails').select(SELECT_SPALTEN).eq('besitzer_email', eigeneEmail.toLowerCase())
+  if (term) abfrage = abfrage.or(`betreff.ilike.%${term}%,von.ilike.%${term}%,von_name.ilike.%${term}%,ausschnitt.ilike.%${term}%`)
+  const { data, error } = await abfrage.order('mail_datum', { ascending: false }).limit(limit)
+  if (error) throw new Error(error.message)
+  return (data ?? []).map(toMail)
+}
+
 export async function fetchStoredEmails(limit = 20): Promise<EingegangeneMail[]> {
   if (!client) throw new Error('E-Mail-Datenbank ist noch nicht konfiguriert (VITE_SUPABASE_EMAIL_URL fehlt).')
   const { data, error } = await client
     .from('eingegangene_emails')
     .select(SELECT_SPALTEN)
+    .is('besitzer_email', null)
     .or(NUR_RELEVANTE_MAILS)
     .order('mail_datum', { ascending: false })
     .limit(limit)
@@ -96,6 +112,7 @@ export async function fetchEmailsForKunde(kundeId: string): Promise<Eingegangene
     .from('eingegangene_emails')
     .select(SELECT_SPALTEN)
     .eq('zugewiesener_kunde_id', kundeId)
+    .is('besitzer_email', null)
     .order('mail_datum', { ascending: false })
   if (error) throw new Error(error.message)
   return (data ?? []).map(toMail)
@@ -110,6 +127,7 @@ export async function searchStoredEmails(query: string, limit = 50): Promise<Ein
   const { data, error } = await client
     .from('eingegangene_emails')
     .select(SELECT_SPALTEN)
+    .is('besitzer_email', null)
     .or(`betreff.ilike.%${term}%,von.ilike.%${term}%,von_name.ilike.%${term}%,ausschnitt.ilike.%${term}%`)
     .or(NUR_RELEVANTE_MAILS)
     .order('mail_datum', { ascending: false })

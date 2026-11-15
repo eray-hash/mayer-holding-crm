@@ -18,7 +18,11 @@ type Row = {
   kunde_bereich: string | null
   kunde_id: string | null
   kunde_name: string | null
+  von: string | null
+  postfach_id: string | null
 }
+
+const SPALTEN = 'id, an, an_name, betreff, text, gesendet_am, kunde_bereich, kunde_id, kunde_name, von, postfach_id'
 
 function toMail(row: Row): GesendeteEmail {
   return {
@@ -31,6 +35,8 @@ function toMail(row: Row): GesendeteEmail {
     kundeBereich: (row.kunde_bereich as KundeBereich | null) ?? undefined,
     kundeId: row.kunde_id ?? undefined,
     kundeName: row.kunde_name ?? undefined,
+    von: row.von ?? undefined,
+    postfachId: row.postfach_id ?? undefined,
   }
 }
 
@@ -42,7 +48,8 @@ export async function fetchSentEmails(limit = 20): Promise<GesendeteEmail[]> {
   if (!client) throw new Error('E-Mail-Datenbank ist noch nicht konfiguriert (VITE_SUPABASE_EMAIL_URL fehlt).')
   const { data, error } = await client
     .from('gesendete_emails')
-    .select('id, an, an_name, betreff, text, gesendet_am, kunde_bereich, kunde_id, kunde_name')
+    .select(SPALTEN)
+    .is('besitzer_email', null)
     .order('gesendet_am', { ascending: false })
     .limit(limit)
   if (error) throw new Error(error.message)
@@ -54,8 +61,9 @@ export async function fetchSentEmailsForKunde(kundeId: string): Promise<Gesendet
   if (!client) throw new Error('E-Mail-Datenbank ist noch nicht konfiguriert (VITE_SUPABASE_EMAIL_URL fehlt).')
   const { data, error } = await client
     .from('gesendete_emails')
-    .select('id, an, an_name, betreff, text, gesendet_am, kunde_bereich, kunde_id, kunde_name')
+    .select(SPALTEN)
     .eq('kunde_id', kundeId)
+    .is('besitzer_email', null)
     .order('gesendet_am', { ascending: false })
   if (error) throw new Error(error.message)
   return (data ?? []).map(toMail)
@@ -68,10 +76,22 @@ export async function searchSentEmails(query: string, limit = 50): Promise<Gesen
   if (!term) return fetchSentEmails(limit)
   const { data, error } = await client
     .from('gesendete_emails')
-    .select('id, an, an_name, betreff, text, gesendet_am, kunde_bereich, kunde_id, kunde_name')
+    .select(SPALTEN)
+    .is('besitzer_email', null)
     .or(`betreff.ilike.%${term}%,an.ilike.%${term}%,an_name.ilike.%${term}%,text.ilike.%${term}%`)
     .order('gesendet_am', { ascending: false })
     .limit(limit)
+  if (error) throw new Error(error.message)
+  return (data ?? []).map(toMail)
+}
+
+// Aus dem privaten Postfach gesendete Mails (nur für den Absender sichtbar).
+export async function fetchPrivateSentEmails(eigeneEmail: string, limit = 30, suche = ''): Promise<GesendeteEmail[]> {
+  if (!client) throw new Error('E-Mail-Datenbank ist noch nicht konfiguriert.')
+  const term = sanitizeSearchTerm(suche)
+  let abfrage = client.from('gesendete_emails').select(SPALTEN).eq('besitzer_email', eigeneEmail.toLowerCase())
+  if (term) abfrage = abfrage.or(`betreff.ilike.%${term}%,an.ilike.%${term}%,an_name.ilike.%${term}%,text.ilike.%${term}%`)
+  const { data, error } = await abfrage.order('gesendet_am', { ascending: false }).limit(limit)
   if (error) throw new Error(error.message)
   return (data ?? []).map(toMail)
 }

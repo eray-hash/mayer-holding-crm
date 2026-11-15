@@ -206,6 +206,20 @@ import nodemailer from 'npm:nodemailer@6'
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { unzipSync, strFromU8 } from 'npm:fflate@0.8.2'
 import { PDFDocument } from 'npm:pdf-lib@1.17.1'
+import {
+  STANDARD_ID,
+  absenderVon,
+  anhangUrl,
+  darfNutzen,
+  ermittleAufrufer,
+  holeInOeffentlich,
+  ladePostfach,
+  listePostfaecher,
+  rufeAlleAb,
+  rufePostfachAb,
+  trennePostfach,
+  verbindePostfach,
+} from './postfach.ts'
 
 const ALLOWED_ORIGINS = [
   'https://eray-hash.github.io',
@@ -317,15 +331,18 @@ async function syncInbox(limit: number) {
 // nativ. Für die Behörden-Automatisierung (signiertes Dokument mitschicken) gebraucht.
 type MailAnhang = { filename: string; contentBase64?: string; url?: string; contentType?: string }
 
-async function sendMail(to: string, subject: string, text: string, html?: string, attachments?: MailAnhang[]) {
+type MailAbsender = { adresse: string; anzeigeName?: string; host: string; port: number; benutzer: string; passwort: string }
+
+async function sendMail(to: string, subject: string, text: string, html?: string, attachments?: MailAnhang[], absender?: MailAbsender) {
+  const port = absender?.port ?? Number(Deno.env.get('SMTP_PORT') ?? '587')
   const transporter = nodemailer.createTransport({
-    host: Deno.env.get('SMTP_HOST') ?? 'smtp.ionos.de',
-    port: Number(Deno.env.get('SMTP_PORT') ?? '587'),
-    secure: false, // STARTTLS auf Port 587
-    auth: { user: env('SMTP_USER'), pass: env('SMTP_PASSWORD') },
+    host: absender?.host ?? Deno.env.get('SMTP_HOST') ?? 'smtp.ionos.de',
+    port,
+    secure: port === 465, // sonst STARTTLS (Port 587)
+    auth: absender ? { user: absender.benutzer, pass: absender.passwort } : { user: env('SMTP_USER'), pass: env('SMTP_PASSWORD') },
   })
   await transporter.sendMail({
-    from: Deno.env.get('SMTP_USER'),
+    from: absender ? (absender.anzeigeName ? { name: absender.anzeigeName, address: absender.adresse } : absender.adresse) : Deno.env.get('SMTP_USER'),
     to,
     subject,
     text,
@@ -2032,6 +2049,8 @@ async function fetchAlleEingegangeneEmails(supabase: ReturnType<typeof createCli
     const { data, error } = await supabase
       .from('eingegangene_emails')
       .select('von, von_name, betreff, ausschnitt, mail_datum')
+      // Mails aus persönlichen Postfächern sind privat — daraus werden keine Leads abgeleitet.
+      .is('besitzer_email', null)
       .order('mail_datum', { ascending: false })
       .range(from, from + pageSize - 1)
     if (error) throw new Error(error.message)
@@ -2343,13 +2362,35 @@ Deno.serve(async (req: Request) => {
       if (!to || !subject || !text) {
         return new Response(JSON.stringify({ error: 'to, subject und text sind Pflichtfelder' }), { status: 400, headers })
       }
-      await sendMail(to, subject, text, html, attachments)
+      const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+
+      // Absender: ohne Angabe das gemeinsame Hauptpostfach (wie bisher). Ein persönliches Postfach
+      // darf nur sein Besitzer benutzen — dafür zählt der eigene Login, nicht das geteilte Secret.
+      const aufrufer = await ermittleAufrufer(req, supabase, body)
+      const privat = body.privat === true
+      if (privat && !aufrufer) {
+        return new Response(JSON.stringify({ error: 'Für das private Postfach ist ein Login nötig.' }), { status: 401, headers })
+      }
+      let absender: MailAbsender | undefined
+      let postfachId = STANDARD_ID
+      if (body.postfachId && body.postfachId !== STANDARD_ID) {
+        const fach = await ladePostfach(supabase, String(body.postfachId))
+        if (!fach || !fach.aktiv) {
+          return new Response(JSON.stringify({ error: 'Dieses Absender-Postfach gibt es nicht (mehr).' }), { status: 400, headers })
+        }
+        if (!darfNutzen(fach, aufrufer)) {
+          return new Response(JSON.stringify({ error: 'Von diesem Postfach darf nur sein Besitzer senden.' }), { status: 403, headers })
+        }
+        absender = await absenderVon(supabase, fach)
+        postfachId = fach.id
+      }
+      await sendMail(to, subject, text, html, attachments, absender)
 
       // Für den "Gesendet"-Ordner im Postfach mitschreiben — best effort, ein Fehler hier darf den
-      // bereits erfolgreich versendeten Mailversand nicht als fehlgeschlagen melden.
+      // bereits erfolgreich versendeten Mailversand nicht als fehlgeschlagen melden. Aus dem privaten
+      // Postfach geschriebene Mails bleiben beim Besitzer, bis er sie in den öffentlichen Bereich holt.
       try {
-        const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
-        await supabase.from('gesendete_emails').insert({
+        const { error: logFehler } = await supabase.from('gesendete_emails').insert({
           an: to,
           an_name: toName ?? to,
           betreff: subject,
@@ -2357,7 +2398,11 @@ Deno.serve(async (req: Request) => {
           kunde_bereich: kundeBereich ?? null,
           kunde_id: kundeId ?? null,
           kunde_name: kundeName ?? null,
+          postfach_id: postfachId,
+          besitzer_email: privat ? aufrufer!.email : null,
+          von: absender?.adresse ?? Deno.env.get('SMTP_USER') ?? null,
         })
+        if (logFehler) console.error('Konnte gesendete Mail nicht protokollieren:', logFehler.message)
       } catch (logErr) {
         console.error('Konnte gesendete Mail nicht protokollieren:', logErr)
       }
@@ -2367,7 +2412,7 @@ Deno.serve(async (req: Request) => {
       // Rechnungen nirgends im CRM erfasst, nur die manuell über "Neue Rechnung" angelegten. Best
       // effort: ein Fehler hier darf den bereits erfolgreich versendeten Mailversand nicht stören.
       // Bei einer Mail an viele Empfänger (Telegram-Assistent) wäre das ein KI-Aufruf je Empfänger — abschaltbar.
-      if (kundeId && ohneRechnungsErkennung !== true) {
+      if (kundeId && ohneRechnungsErkennung !== true && !privat) {
         try {
           await erkenneRechnungUndLegeAn(kundeId, subject, text)
         } catch (err) {
@@ -2376,6 +2421,75 @@ Deno.serve(async (req: Request) => {
       }
 
       return new Response(JSON.stringify({ ok: true }), { headers })
+    }
+
+    // ---------- Postfächer (siehe postfach.ts) ----------
+    if (
+      body.action === 'postfaecher_liste' ||
+      body.action === 'postfach_verbinden' ||
+      body.action === 'postfach_trennen' ||
+      body.action === 'postfach_abruf' ||
+      body.action === 'mail_freigeben' ||
+      body.action === 'mail_anhang_url'
+    ) {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const aufrufer = await ermittleAufrufer(req, admin, body)
+
+      // Der Zeitplan ruft ohne Login auf: holt alle persönlichen Postfächer ab, gibt nur Zahlen zurück.
+      if (body.action === 'postfach_abruf' && !body.postfachId) {
+        // Sofort antworten und im Hintergrund abholen — der Zeitplan wartet nur wenige Sekunden.
+        const lauf = rufeAlleAb(admin).then((ergebnis) => {
+          if (ergebnis.fehler.length > 0) console.error('Postfach-Abruf mit Fehlern:', ergebnis.fehler.join(' | '))
+          return ergebnis
+        })
+        if (body.warten === true) {
+          const ergebnis = await lauf
+          return new Response(JSON.stringify({ ok: true, postfaecher: ergebnis.postfaecher, neu: ergebnis.neu, fehler: ergebnis.fehler.length }), { headers })
+        }
+        // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
+        EdgeRuntime.waitUntil(lauf)
+        return new Response(JSON.stringify({ ok: true, gestartet: true }), { headers })
+      }
+      if (!aufrufer) {
+        return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
+      }
+
+      if (body.action === 'postfaecher_liste') {
+        return new Response(JSON.stringify({ postfaecher: await listePostfaecher(admin, aufrufer, body.alle === true), ich: aufrufer.email }), { headers })
+      }
+      if (body.action === 'postfach_verbinden') {
+        const ergebnis = await verbindePostfach(admin, aufrufer, body)
+        if (!ergebnis.ok) return new Response(JSON.stringify({ error: ergebnis.fehler }), { status: 400, headers })
+        const fach = await ladePostfach(admin, ergebnis.id)
+        if (fach?.besitzer_email) {
+          // Die ersten Mails gleich im Hintergrund holen, damit das Postfach nicht leer startet.
+          // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
+          EdgeRuntime.waitUntil(rufePostfachAb(admin, fach, 30, 100000))
+        }
+        return new Response(JSON.stringify({ ok: true, id: ergebnis.id, adresse: ergebnis.adresse }), { headers })
+      }
+      if (body.action === 'postfach_trennen') {
+        const ergebnis = await trennePostfach(admin, aufrufer, String(body.postfachId ?? ''))
+        if (!ergebnis.ok) return new Response(JSON.stringify({ error: ergebnis.fehler }), { status: 400, headers })
+        return new Response(JSON.stringify({ ok: true }), { headers })
+      }
+      if (body.action === 'postfach_abruf') {
+        const fach = await ladePostfach(admin, String(body.postfachId))
+        if (!fach || !fach.besitzer_email || !darfNutzen(fach, aufrufer)) {
+          return new Response(JSON.stringify({ error: 'Dieses Postfach kannst du nicht abrufen.' }), { status: 403, headers })
+        }
+        const ergebnis = await rufePostfachAb(admin, fach, 25, 90000)
+        if (ergebnis.fehler) return new Response(JSON.stringify({ error: ergebnis.fehler }), { status: 502, headers })
+        return new Response(JSON.stringify({ ok: true, neu: ergebnis.neu }), { headers })
+      }
+      if (body.action === 'mail_freigeben') {
+        const ergebnis = await holeInOeffentlich(admin, aufrufer, body)
+        if (!ergebnis.ok) return new Response(JSON.stringify({ error: ergebnis.fehler }), { status: 400, headers })
+        return new Response(JSON.stringify({ ok: true, betreff: ergebnis.betreff }), { headers })
+      }
+      const url = await anhangUrl(admin, aufrufer, String(body.verweis ?? ''))
+      if (!url) return new Response(JSON.stringify({ error: 'Dieser Anhang ist für dich nicht zugänglich.' }), { status: 403, headers })
+      return new Response(JSON.stringify({ url }), { headers })
     }
 
     if (body.action === 'summarize') {
@@ -3041,7 +3155,7 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ ok: true }), { headers })
     }
 
-    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "bewertung_recherche_start", "bewertung_recherche_schritt", "kunden_umfeld_recherche", "steuer_analyse_start", "steuer_analyse_schritt", "dokument_lesen", "dokument_inhalte" oder "firmenwissen_answer"' }), { status: 400, headers })
+    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "bewertung_recherche_start", "bewertung_recherche_schritt", "kunden_umfeld_recherche", "steuer_analyse_start", "steuer_analyse_schritt", "dokument_lesen", "dokument_inhalte", "postfaecher_liste", "postfach_verbinden", "postfach_trennen", "postfach_abruf", "mail_freigeben", "mail_anhang_url" oder "firmenwissen_answer"' }), { status: 400, headers })
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }

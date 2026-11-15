@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
+import { vergissPostfaecher } from '../lib/postfaecher'
 import type { Session, User } from '@supabase/supabase-js'
 import { supabase, isSupabaseConfigured, passwortFestlegenNoetig, setzePasswortFestlegenNoetig } from '../lib/supabaseClient'
 import { setCurrentUser } from '../data/constants'
@@ -98,6 +99,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     async signOut() {
       // Nur dieses Gerät abmelden. Ohne die Angabe meldet Supabase ALLE Geräte ab: Wer sich am
       // Laptop abmeldete, musste danach auch am Handy das Passwort neu eingeben.
+      vergissPostfaecher()
       await supabase?.auth.signOut({ scope: 'local' })
     },
   }

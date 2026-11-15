@@ -39,6 +39,8 @@ import { FinanzierungenDetail } from './pages/finanzierungen/FinanzierungenDetai
 import { VorlagenPageFinanzierungen } from './pages/finanzierungen/VorlagenPageFinanzierungen'
 import { PrivatListe } from './pages/privat/PrivatListe'
 import { PrivatDetail } from './pages/privat/PrivatDetail'
+import { PrivatPostfach } from './pages/privat/PrivatPostfach'
+import { PostfachEinrichtenHinweis } from './components/PostfachEinstellungen'
 import { ToDoListe, BereichToDoListe } from './pages/todo/ToDoListe'
 import { HeuteScreen } from './pages/heute/HeuteScreen'
 import { Postfach } from './pages/postfach/Postfach'
@@ -82,6 +84,7 @@ function AdminRoutesContent() {
             Sichtbarkeit wird stattdessen über RLS in Supabase erzwungen (siehe crmSync.ts). */}
         <Route path="/privat" element={<PrivatListe />} />
         <Route path="/privat/kontakte/:id" element={<PrivatDetail />} />
+        <Route path="/privat/postfach" element={<PrivatPostfach />} />
         <Route path="/privat/todo" element={<ToDoListe />} />
 
         <Route path="/beratung" element={<RequireBereich bereich="beratung"><KundenListe /></RequireBereich>} />
@@ -189,7 +192,12 @@ function AdminRoutes() {
       </div>
     )
   }
-  return <AdminRoutesContent />
+  return (
+    <>
+      <AdminRoutesContent />
+      <PostfachEinrichtenHinweis />
+    </>
+  )
 }
 
 // Setzt mitarbeiter.bereiche/ist_admin tatsächlich am Routing durch (Beschluss 2026-11-02) — bis

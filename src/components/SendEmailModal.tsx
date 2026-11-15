@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Send, AlertTriangle, CheckCircle2, Paperclip, FileText, X } from 'lucide-react'
 import { isEmailGatewayConfigured, sendEmail, type MailAnhang } from '../lib/emailGateway'
 import { applyMailVorlage } from '../lib/mailVorlagen'
@@ -8,6 +8,7 @@ import { Modal, Field, inputClass, PrimaryButton, SecondaryButton } from './ui'
 import { leseAlsBase64 } from '../lib/objektDokumenteStorage'
 import { erzeugeKundenDownloadUrl } from '../lib/kundenDokumenteStorage'
 import { uid } from '../lib/dates'
+import { usePostfaecher, postfachBezeichnung, gemerkterAbsender, merkeAbsender } from '../lib/postfaecher'
 import type { Dokument, KundeBereich } from '../types'
 
 type Anhang = MailAnhang & { id: string; groesseLabel: string }
@@ -32,6 +33,8 @@ export function SendEmailModal({
   to,
   defaultSubject = '',
   kunde,
+  privat = false,
+  vonPostfachId,
   onSent,
 }: {
   open: boolean
@@ -41,6 +44,10 @@ export function SendEmailModal({
   defaultSubject?: string
   /** Optionaler Kunden-Kontext: füllt Platzhalter in Mailvorlagen und verknüpft die gesendete Mail im "Gesendet"-Ordner. */
   kunde?: SendEmailKundeKontext
+  /** Aus dem privaten Postfach geschrieben: die Mail bleibt nur für den Absender sichtbar. */
+  privat?: boolean
+  /** Vorbelegung des Absenders (z. B. das Postfach, in dem die beantwortete Mail ankam). */
+  vonPostfachId?: string
   onSent: (data: { to: string; subject: string; text: string }) => void
 }) {
   const { state } = useApp()
@@ -53,6 +60,19 @@ export function SendEmailModal({
   const [sent, setSent] = useState(false)
   const [anhaenge, setAnhaenge] = useState<Anhang[]>([])
   const [aktenAuswahlOffen, setAktenAuswahlOffen] = useState(false)
+
+  // Absender: alle Postfächer, die dieser Mitarbeiter benutzen darf. Vorbelegt wird — in dieser
+  // Reihenfolge — die ausdrückliche Vorgabe, im privaten Bereich das eigene Postfach, sonst das
+  // zuletzt gewählte, sonst das gemeinsame Hauptpostfach.
+  const { postfaecher } = usePostfaecher()
+  const absenderListe = postfaecher.filter((p) => p.bereit)
+  const [vonId, setVonId] = useState('')
+  useEffect(() => {
+    if (!open) return
+    const erlaubt = (id?: string | null) => (id && absenderListe.some((p) => p.id === id) ? id : undefined)
+    setVonId(erlaubt(vonPostfachId) ?? (privat ? erlaubt(absenderListe.find((p) => p.eigenes)?.id) : erlaubt(gemerkterAbsender())) ?? absenderListe.find((p) => p.gemeinsam)?.id ?? absenderListe[0]?.id ?? '')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, vonPostfachId, privat, absenderListe.length])
 
   const vollerKunde = kunde ? KUNDEN_BEREICHE.find((b) => b.id === kunde.bereich)?.get(state).find((k) => k.id === kunde.id) : undefined
   const aktenDokumente = vollerKunde?.dokumente ?? []
@@ -139,7 +159,9 @@ export function SendEmailModal({
           kundeName: kunde?.name,
         },
         anhaenge.map(({ filename, contentBase64, url, contentType }) => ({ filename, contentBase64, url, contentType })),
+        { postfachId: vonId || undefined, privat: privat || undefined },
       )
+      if (vonId && !privat) merkeAbsender(vonId)
       onSent({ to: toInput.trim(), subject: subject.trim(), text: text.trim() })
       setSent(true)
     } catch (err) {
@@ -168,6 +190,20 @@ export function SendEmailModal({
         </div>
       ) : (
         <div>
+          {absenderListe.length > 1 ? (
+            <Field label="Von">
+              <select className={inputClass} value={vonId} onChange={(e) => setVonId(e.target.value)}>
+                {absenderListe.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {postfachBezeichnung(p)}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          ) : (
+            absenderListe.length === 1 && <p className="mb-3 text-xs text-slate-500">Von: {postfachBezeichnung(absenderListe[0])}</p>
+          )}
+          {privat && <p className="mb-3 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">Privat — diese Mail erscheint nur in deinem privaten Postfach, bis du sie in den öffentlichen Bereich holst.</p>}
           <Field label="An">
             <input className={inputClass} value={toInput} disabled={Boolean(to)} onChange={(e) => setToInput(e.target.value)} placeholder="empfaenger@beispiel.de" />
           </Field>
