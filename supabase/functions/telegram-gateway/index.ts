@@ -281,7 +281,10 @@ function sucheKunden(kunden: KundeRow[], begriff: string): KundeRow[] {
 
 async function ladeKunde(supabase: Supa, id: unknown): Promise<KundeRow | null> {
   if (typeof id !== 'string' || !id) return null
-  const { data } = await supabase.from('kunden').select(KUNDE_SPALTEN).eq('id', id).maybeSingle()
+  // Private Kontakte ("Privat — nur für dich sichtbar") sind für den Assistenten tabu: Er arbeitet
+  // mit vollen Datenbankrechten und würde sie sonst jedem Mitarbeiter zeigen. Bis es einen eigenen,
+  // nach Besitzer getrennten Zugriff gibt, sieht er sie gar nicht.
+  const { data } = await supabase.from('kunden').select(KUNDE_SPALTEN).eq('id', id).neq('bereich', 'privat').maybeSingle()
   return (data as KundeRow | null) ?? null
 }
 
@@ -1051,7 +1054,7 @@ async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKontext): Pr
   const protokolliere = (text: string) => state.aktionen.push({ z: new Date().toISOString(), text })
 
   if (name === 'kunden_suchen') {
-    const { data } = await supabase.from('kunden').select(KUNDE_SPALTEN)
+    const { data } = await supabase.from('kunden').select(KUNDE_SPALTEN).neq('bereich', 'privat')
     const treffer = sucheKunden((data ?? []) as KundeRow[], String(input.suchbegriff ?? ''))
     if (treffer.length === 0) return 'Keine Treffer. Es gibt im CRM keinen Kunden, der dazu passt.'
     return JSON.stringify(
@@ -1216,7 +1219,7 @@ async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKontext): Pr
     const firma = String(input.name ?? '').trim()
     if (!NEUANLAGE_BEREICHE.includes(bereich)) return `Fehler: ungültiger Bereich. Erlaubt: ${NEUANLAGE_BEREICHE.join(', ')}.`
     if (!firma) return 'Fehler: name fehlt.'
-    const { data: alle } = await supabase.from('kunden').select(KUNDE_SPALTEN)
+    const { data: alle } = await supabase.from('kunden').select(KUNDE_SPALTEN).neq('bereich', 'privat')
     const email = String(input.email ?? '').trim()
     const automatisch = input.automatisch === true
     const begruendung = String(input.begruendung ?? '').trim().replace(/\.$/, '')
@@ -1521,7 +1524,7 @@ async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKontext): Pr
 
   if (name === 'firmenueberblick') {
     const [{ data: kunden }, { data: objekte }] = await Promise.all([
-      supabase.from('kunden').select('bereich, firma, ansprechpartner, status, verantwortlich, letzte_aktivitaet, follow_up, kaeuferprofil'),
+      supabase.from('kunden').select('bereich, firma, ansprechpartner, status, verantwortlich, letzte_aktivitaet, follow_up, kaeuferprofil').neq('bereich', 'privat'),
       supabase.from('objekte').select('bezeichnung, adresse, typ, status, verantwortlich, eigentuemer'),
     ])
     const zeilen: string[] = [`Heute: ${deDatum(heute)}`, '', 'FÄLLIGE UND ÜBERFÄLLIGE FOLLOW-UPS:']
