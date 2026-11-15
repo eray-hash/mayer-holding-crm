@@ -36,6 +36,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(!isSupabaseConfigured)
   const [session, setSession] = useState<Session | null>(null)
   const [mitarbeiter, setMitarbeiter] = useState<Mitarbeiter | null>(null)
+  // Für welche Login-Adresse die Mitarbeiter-Zeile fertig geladen ist. Solange das nicht die aktuelle
+  // ist, gilt die Anmeldung als "lädt noch" — sonst blitzt beim Neuladen kurz "Zugang noch nicht
+  // freigeschaltet" auf, obwohl der Zugang in Ordnung ist.
+  const [mitarbeiterFuer, setMitarbeiterFuer] = useState<string | null>(null)
   const [passwortFestlegen, setPasswortFestlegen] = useState(passwortFestlegenNoetig)
 
   // Für wen die zwischengespeicherte Postfach-Liste gilt — wechselt der Nutzer, wird sie verworfen.
@@ -81,7 +85,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .eq('email', session.user.email)
       .maybeSingle()
       .then(({ data }) => {
-        if (!cancelled) setMitarbeiter(data as Mitarbeiter | null)
+        if (cancelled) return
+        setMitarbeiter(data as Mitarbeiter | null)
+        setMitarbeiterFuer(session.user.email ?? null)
       })
     return () => {
       cancelled = true
@@ -95,7 +101,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [mitarbeiter?.name])
 
   const value: AuthState = {
-    ready,
+    ready: ready && (!session?.user?.email || mitarbeiterFuer === session.user.email),
     session,
     user: session?.user ?? null,
     mitarbeiter,
