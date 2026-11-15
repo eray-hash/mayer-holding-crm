@@ -33,6 +33,7 @@ export type Postfach = {
   letzte_uid: number | null
   uid_gueltigkeit: number | null
   in_arbeit_uid?: number | null
+  abruf_laeuft_seit?: string | null
 }
 
 export type Aufrufer = { email: string; name: string; istGf: boolean }
@@ -331,7 +332,7 @@ async function pruefeSmtp(host: string, benutzer: string, passwort: string): Pro
 // ---------- Verbinden / Trennen ----------
 
 function postfachId(adresse: string): string {
-  return `pf_${adresse.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')}`
+  return `pf_${adresse.toLowerCase().replace(/[^a-z0-9]/g, (z) => `-${z.charCodeAt(0).toString(16)}-`)}`
 }
 
 export type VerbindenEingabe = { adresse?: string; passwort?: string; gemeinsam?: boolean; anzeigeName?: string; imapHost?: string; smtpHost?: string }
@@ -447,6 +448,11 @@ function textAusHtml(html: string): string {
     .trim()
 }
 
+function sicheresDatum(wert: unknown): string {
+  const d = wert instanceof Date ? wert : new Date(typeof wert === 'string' || typeof wert === 'number' ? wert : Date.now())
+  return Number.isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString()
+}
+
 const ERSTER_ABRUF = 30
 const ZU_GROSS = 30 * 1024 * 1024
 const ANHANG_HOECHSTENS = 20 * 1024 * 1024
@@ -527,6 +533,25 @@ export async function rufePostfachAb(
   let neu = 0
   let gesehen = 0
   let erledigt = 0
+
+  // Nie zwei Läufe gleichzeitig auf demselben Postfach (Zeitplan, "Jetzt abholen", erster Abruf nach
+  // dem Verbinden): Wer anfängt, trägt sich ein; ein anderer Lauf kehrt sofort um. Stirbt ein Lauf,
+  // verfällt der Eintrag nach drei Minuten (länger lebt kein Aufruf). `letzter_abruf` wird schon hier
+  // gesetzt, damit ein Postfach, an dem der Lauf stirbt, nicht bei jedem Zeitplan-Lauf wieder vorn steht.
+  if (!nurPruefen) {
+    const jetzt = new Date()
+    const { data: belegt, error: sperrFehler } = await admin
+      .from('postfaecher')
+      .update({ abruf_laeuft_seit: jetzt.toISOString(), letzter_abruf: jetzt.toISOString() })
+      .eq('id', p.id)
+      .or(`abruf_laeuft_seit.is.null,abruf_laeuft_seit.lt.${new Date(jetzt.getTime() - 180000).toISOString()}`)
+      .select('letzte_uid, uid_gueltigkeit, in_arbeit_uid')
+    if (sperrFehler) return { neu: 0, gesehen: 0, offen: 0, fehler: sperrFehler.message }
+    if (!belegt || belegt.length === 0) return { neu: 0, gesehen: 0, offen: 0 }
+    // Mit dem frisch gelesenen Stand arbeiten, nicht mit dem, den der Aufrufer vorher geladen hat.
+    p = { ...p, ...belegt[0] }
+  }
+
   let hoechsteUid = p.letzte_uid ?? 0
   let gueltigkeit = p.uid_gueltigkeit
   const abgebrochenBei = Number(p.in_arbeit_uid ?? 0)
@@ -548,16 +573,19 @@ export async function rufePostfachAb(
       const liste: { uid: number; size: number; envelope: any; bodyStructure: Teil }[] = []
       if (anzahl > 0) {
         const felder = { uid: true, size: true, envelope: true, bodyStructure: true }
-        if (neuStart) {
-          hoechsteUid = 0
-          const ab = Math.max(1, anzahl - ERSTER_ABRUF + 1)
-          for await (const n of client.fetch(`${ab}:*`, felder)) liste.push({ uid: Number(n.uid), size: Number(n.size ?? 0), envelope: n.envelope, bodyStructure: n.bodyStructure })
-        } else {
-          for await (const n of client.fetch(`${hoechsteUid + 1}:*`, felder, { uid: true })) {
-            // "n:*" liefert laut IMAP immer mindestens die letzte Nachricht — auch wenn sie älter ist.
-            if (Number(n.uid) > hoechsteUid) liste.push({ uid: Number(n.uid), size: Number(n.size ?? 0), envelope: n.envelope, bodyStructure: n.bodyStructure })
+        const auflisten = async () => {
+          if (neuStart) {
+            hoechsteUid = 0
+            const ab = Math.max(1, anzahl - ERSTER_ABRUF + 1)
+            for await (const n of client.fetch(`${ab}:*`, felder)) liste.push({ uid: Number(n.uid), size: Number(n.size ?? 0), envelope: n.envelope, bodyStructure: n.bodyStructure })
+          } else {
+            for await (const n of client.fetch(`${hoechsteUid + 1}:*`, felder, { uid: true })) {
+              // "n:*" liefert laut IMAP immer mindestens die letzte Nachricht — auch wenn sie älter ist.
+              if (Number(n.uid) > hoechsteUid) liste.push({ uid: Number(n.uid), size: Number(n.size ?? 0), envelope: n.envelope, bodyStructure: n.bodyStructure })
+            }
           }
         }
+        await zeitlimit(auflisten(), 40000, 'Der Mail-Server hat die Liste der neuen Mails nicht rechtzeitig geliefert.')
       }
       liste.sort((x, y) => x.uid - y.uid)
       gesehen = liste.length
@@ -591,7 +619,7 @@ export async function rufePostfachAb(
             von: String(von?.address ?? 'unbekannt').toLowerCase(),
             von_name: von?.name || von?.address || 'Unbekannt',
             betreff: umschlag.subject ?? '(ohne Betreff)',
-            mail_datum: new Date(umschlag.date ?? Date.now()).toISOString(),
+            mail_datum: sicheresDatum(umschlag.date),
             rohdaten: { quelle: 'imap', uid: n.uid, an: adressen(umschlag.to), cc: adressen(umschlag.cc) },
             postfach_id: p.id,
             besitzer_email: p.besitzer_email,
@@ -601,13 +629,13 @@ export async function rufePostfachAb(
               n.uid === abgebrochenBei
                 ? '(Der Inhalt dieser Mail ließ sich nicht ins CRM übernehmen. Bitte im Mail-Programm öffnen.)'
                 : `(Diese Mail ist mit ${(n.size / 1024 / 1024).toFixed(0)} MB zu groß für das CRM. Inhalt und Anhänge bitte im Mail-Programm öffnen.)`
-          } else {
+          } else try {
             await admin.from('postfaecher').update({ in_arbeit_uid: n.uid, ...(hoechsteUid ? { letzte_uid: hoechsteUid, uid_gueltigkeit: gueltigkeit } : {}) }).eq('id', p.id)
             const { text: textTeil, html: htmlTeil, anhaenge: anhangTeile } = gliedere(n.bodyStructure)
             let text = ''
             const quelle = textTeil ?? htmlTeil
             if (quelle) {
-              const geladen = await ladeTeil(client, n.uid, quelle, 300000)
+              const geladen = await zeitlimit(ladeTeil(client, n.uid, quelle, 300000), 30000, 'Der Mail-Server hat den Text der Mail nicht rechtzeitig geliefert.')
               if (geladen) {
                 const roh = alsText(geladen.bytes, geladen.meta?.charset ?? quelle.parameters?.charset)
                 text = quelle === textTeil ? roh.trim() : textAusHtml(roh)
@@ -616,13 +644,14 @@ export async function rufePostfachAb(
             const anhaenge: { filename: string; size: number; contentType: string; url: string }[] = []
             for (const teil of anhangTeile) {
               if (Number(teil.size ?? 0) > ANHANG_HOECHSTENS * 1.4) continue
-              const geladen = await ladeTeil(client, n.uid, teil)
+              const geladen = await zeitlimit(ladeTeil(client, n.uid, teil), 50000, 'Der Mail-Server hat einen Anhang nicht rechtzeitig geliefert.')
               if (!geladen || geladen.bytes.length === 0 || geladen.bytes.length > ANHANG_HOECHSTENS) continue
               const anzeige = String(geladen.meta?.filename ?? teil.dispositionParameters?.filename ?? teil.parameters?.name ?? 'anhang')
               const inhaltsart = String(teil.type ?? geladen.meta?.contentType ?? 'application/octet-stream')
               const pfad = `${p.id}/${n.uid}/${anhaenge.length + 1}_${sicherername(anzeige)}`
               const ablage = gemeinsam ? OEFFENTLICHE_ABLAGE : ANHANG_ABLAGE
-              const ablagePfad = gemeinsam ? `postfach/${pfad}` : pfad
+              // Öffentliche Ablage: Pfad mit Zufallsanteil, damit sich Adressen nicht erraten lassen.
+              const ablagePfad = gemeinsam ? `postfach/${crypto.randomUUID()}/${anhaenge.length + 1}_${sicherername(anzeige)}` : pfad
               const { error: ladeFehler } = await admin.storage.from(ablage).upload(ablagePfad, geladen.bytes, { contentType: inhaltsart, upsert: true })
               if (ladeFehler) {
                 console.error('Anhang konnte nicht abgelegt werden', pfad, ladeFehler.message)
@@ -633,10 +662,20 @@ export async function rufePostfachAb(
             }
             zeile.ausschnitt = text.slice(0, 20000)
             zeile.anhaenge = anhaenge.length > 0 ? anhaenge : null
+          } catch (mailFehler) {
+            // Verbindung weg oder Zeitgrenze: nichts speichern, der nächste Lauf versucht dieselbe Mail
+            // noch einmal vollständig. Liegt es an der Mail selbst, bleibt wenigstens die Kurzfassung.
+            // deno-lint-ignore no-explicit-any
+            const m = mailFehler as any
+            if (!client?.usable || /rechtzeitig|Zeitüberschreitung/.test(String(m?.message ?? ''))) throw mailFehler
+            console.error('Mail-Inhalt nicht übernehmbar', p.id, n.uid, m?.message)
+            zeile.ausschnitt = '(Der Inhalt dieser Mail ließ sich nicht ins CRM übernehmen. Bitte im Mail-Programm öffnen.)'
+            zeile.anhaenge = null
           }
           const { error } = await admin.from('eingegangene_emails').insert(zeile)
-          if (error) throw new Error(`Mail konnte nicht gespeichert werden: ${error.message}`)
-          neu++
+          // 23505 = dieselbe Mail wurde gerade von einem gleichzeitigen Lauf gespeichert — kein Fehler.
+          if (error && error.code !== '23505') throw new Error(`Mail konnte nicht gespeichert werden: ${error.message}`)
+          if (!error) neu++
         }
         hoechsteUid = n.uid
         erledigt++
@@ -648,7 +687,7 @@ export async function rufePostfachAb(
     client = null
     await admin
       .from('postfaecher')
-      .update({ letzte_uid: hoechsteUid || null, uid_gueltigkeit: gueltigkeit, in_arbeit_uid: null, letzter_abruf: new Date().toISOString(), letzter_fehler: null })
+      .update({ letzte_uid: hoechsteUid || null, uid_gueltigkeit: gueltigkeit, in_arbeit_uid: null, abruf_laeuft_seit: null, letzter_abruf: new Date().toISOString(), letzter_fehler: null })
       .eq('id', p.id)
     return { neu, gesehen, offen: Math.max(0, gesehen - erledigt) }
   } catch (err) {
@@ -663,7 +702,7 @@ export async function rufePostfachAb(
     if (!nurPruefen) {
       await admin
         .from('postfaecher')
-        .update({ ...(hoechsteUid ? { letzte_uid: hoechsteUid, uid_gueltigkeit: gueltigkeit } : {}), letzter_abruf: new Date().toISOString(), letzter_fehler: String(meldung).slice(0, 500) })
+        .update({ ...(hoechsteUid ? { letzte_uid: hoechsteUid, uid_gueltigkeit: gueltigkeit } : {}), in_arbeit_uid: null, abruf_laeuft_seit: null, letzter_abruf: new Date().toISOString(), letzter_fehler: String(meldung).slice(0, 500) })
         .eq('id', p.id)
     }
     return { neu, gesehen, offen: Math.max(0, gesehen - erledigt), fehler: String(meldung) }
@@ -674,10 +713,14 @@ export async function rufePostfachAb(
 export async function rufeAlleAb(admin: Db, budgetMs = 110000): Promise<{ postfaecher: number; neu: number; fehler: string[] }> {
   const beginn = Date.now()
   const { data } = await admin.from('postfaecher').select('*').eq('aktiv', true).order('letzter_abruf', { ascending: true, nullsFirst: true })
+  // Persönliche Postfächer nur, solange ihr Besitzer ein aktiver Mitarbeiter ist.
+  const { data: team } = await admin.from('mitarbeiter').select('email').eq('aktiv', true)
+  const aktive = new Set(((team ?? []) as { email: string }[]).map((m) => String(m.email).toLowerCase()))
   let neu = 0
   let anzahl = 0
   const fehler: string[] = []
   for (const p of (data ?? []) as Postfach[]) {
+    if (p.besitzer_email && !aktive.has(p.besitzer_email.toLowerCase())) continue
     const rest = budgetMs - (Date.now() - beginn)
     if (rest < 25000) break
     const ergebnis = await rufePostfachAb(admin, p, 8, Math.min(rest - 15000, 45000))
@@ -722,6 +765,20 @@ export async function holeInOeffentlich(admin: Db, a: Aufrufer, eingabe: Freigab
   return { ok: true, betreff: data.betreff ?? '' }
 }
 
+// Wechselt ein Mitarbeiter seine Login-Adresse, zieht alles Private mit um — sonst wäre sein privater
+// Bereich leer, und wer die alte Adresse später bekommt, würde ihn erben.
+export async function zieheBesitzUm(admin: Db, alt: string, neu: string): Promise<void> {
+  const von = alt.trim().toLowerCase()
+  const nach = neu.trim().toLowerCase()
+  if (!von || !nach || von === nach) return
+  for (const tabelle of ['postfaecher', 'eingegangene_emails', 'gesendete_emails']) {
+    const { error } = await admin.from(tabelle).update({ besitzer_email: nach }).eq('besitzer_email', von)
+    if (error) console.error('Besitz-Umzug fehlgeschlagen', tabelle, error.message)
+  }
+  const { error } = await admin.from('kunden').update({ verantwortlich_email: nach }).eq('bereich', 'privat').eq('verantwortlich_email', von)
+  if (error) console.error('Besitz-Umzug fehlgeschlagen', 'kunden', error.message)
+}
+
 // Zieht die Anhänge einer Mail aus der privaten Ablage in die der öffentlichen Mails um, damit sie
 // danach wie jeder andere Mail-Anhang funktionieren (Akte, Einlesen, Assistent).
 // deno-lint-ignore no-explicit-any
@@ -735,7 +792,7 @@ export async function veroeffentlicheAnhaenge(admin: Db, anhaenge: any): Promise
       continue
     }
     const pfad = verweis.slice(ANHANG_VORSATZ.length)
-    const ziel = `postfach/${pfad}`
+    const ziel = `postfach/${crypto.randomUUID()}/${pfad.split('/').pop()}`
     const { data: datei, error: leseFehler } = await admin.storage.from(ANHANG_ABLAGE).download(pfad)
     if (leseFehler || !datei) {
       console.error('Anhang konnte nicht umgezogen werden', pfad, leseFehler?.message)

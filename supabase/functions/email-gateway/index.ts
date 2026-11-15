@@ -219,6 +219,7 @@ import {
   rufePostfachAb,
   trennePostfach,
   verbindePostfach,
+  zieheBesitzUm,
 } from './postfach.ts'
 
 const ALLOWED_ORIGINS = [
@@ -2383,6 +2384,12 @@ Deno.serve(async (req: Request) => {
         }
         absender = await absenderVon(supabase, fach)
         postfachId = fach.id
+        if (privat && !fach.besitzer_email) {
+          return new Response(JSON.stringify({ error: 'Aus dem privaten Postfach kannst du nur von deinem eigenen Postfach senden.' }), { status: 400, headers })
+        }
+      } else if (privat) {
+        // Sonst ginge eine "private" Mail unter der Firmenadresse raus und niemand im Haus sähe sie.
+        return new Response(JSON.stringify({ error: 'Aus dem privaten Postfach kannst du nur von deinem eigenen Postfach senden — bitte erst dein Postfach verbinden.' }), { status: 400, headers })
       }
       await sendMail(to, subject, text, html, attachments, absender)
 
@@ -2625,6 +2632,7 @@ Deno.serve(async (req: Request) => {
       if (updateTableError) {
         return new Response(JSON.stringify({ error: updateTableError.message }), { status: 400, headers })
       }
+      await zieheBesitzUm(admin, String(mRow.email ?? ''), String(neueEmail))
       return new Response(JSON.stringify({ ok: true }), { headers })
     }
 

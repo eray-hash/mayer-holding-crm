@@ -67,7 +67,7 @@ const NUR_RELEVANTE_MAILS = 'relevanz.is.null,relevanz.neq.nicht_relevant'
 export async function fetchPrivateEmails(eigeneEmail: string, limit = 30, suche = ''): Promise<EingegangeneMail[]> {
   if (!client) throw new Error('E-Mail-Datenbank ist noch nicht konfiguriert.')
   const term = sanitizeSearchTerm(suche)
-  let abfrage = client.from('eingegangene_emails').select(SELECT_SPALTEN).eq('besitzer_email', eigeneEmail.toLowerCase())
+  let abfrage = client.from('eingegangene_emails').select(SELECT_SPALTEN).eq('besitzer_email', eigeneEmail.toLowerCase()).or('ignoriert.is.null,ignoriert.eq.false')
   if (term) abfrage = abfrage.or(`betreff.ilike.%${term}%,von.ilike.%${term}%,von_name.ilike.%${term}%,ausschnitt.ilike.%${term}%`)
   const { data, error } = await abfrage.order('mail_datum', { ascending: false }).limit(limit)
   if (error) throw new Error(error.message)

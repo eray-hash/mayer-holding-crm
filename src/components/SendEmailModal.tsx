@@ -65,12 +65,14 @@ export function SendEmailModal({
   // Reihenfolge — die ausdrückliche Vorgabe, im privaten Bereich das eigene Postfach, sonst das
   // zuletzt gewählte, sonst das gemeinsame Hauptpostfach.
   const { postfaecher } = usePostfaecher()
-  const absenderListe = postfaecher.filter((p) => p.bereit)
+  // Privat geschrieben wird ausschließlich vom eigenen Postfach — sonst ginge eine Mail unter der
+  // Firmenadresse raus, die im Haus niemand sieht.
+  const absenderListe = postfaecher.filter((p) => p.bereit && (!privat || p.eigenes))
   const [vonId, setVonId] = useState('')
   useEffect(() => {
     if (!open) return
     const erlaubt = (id?: string | null) => (id && absenderListe.some((p) => p.id === id) ? id : undefined)
-    setVonId(erlaubt(vonPostfachId) ?? (privat ? erlaubt(absenderListe.find((p) => p.eigenes)?.id) : erlaubt(gemerkterAbsender())) ?? absenderListe.find((p) => p.gemeinsam)?.id ?? absenderListe[0]?.id ?? '')
+    setVonId(erlaubt(vonPostfachId) ?? (privat ? undefined : erlaubt(gemerkterAbsender())) ?? absenderListe.find((p) => p.gemeinsam)?.id ?? absenderListe[0]?.id ?? '')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, vonPostfachId, privat, absenderListe.length])
 
@@ -203,6 +205,9 @@ export function SendEmailModal({
           ) : (
             absenderListe.length === 1 && <p className="mb-3 text-xs text-slate-500">Von: {postfachBezeichnung(absenderListe[0])}</p>
           )}
+          {privat && absenderListe.length === 0 && (
+            <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">Zum privaten Schreiben muss dein eigenes Postfach verbunden sein (Mein Profil → Mein Postfach).</p>
+          )}
           {privat && <p className="mb-3 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">Privat — diese Mail erscheint nur in deinem privaten Postfach, bis du sie in den öffentlichen Bereich holst.</p>}
           <Field label="An">
             <input className={inputClass} value={toInput} disabled={Boolean(to)} onChange={(e) => setToInput(e.target.value)} placeholder="empfaenger@beispiel.de" />
@@ -287,7 +292,7 @@ export function SendEmailModal({
 
           <div className="mt-2 flex justify-end gap-2">
             <SecondaryButton onClick={handleClose}>Abbrechen</SecondaryButton>
-            <PrimaryButton onClick={send} disabled={sending || !toInput.trim() || !subject.trim() || !text.trim()}>
+            <PrimaryButton onClick={send} disabled={sending || !toInput.trim() || !subject.trim() || !text.trim() || (privat && !vonId)}>
               <Send size={14} /> {sending ? 'Wird gesendet …' : 'Senden'}
             </PrimaryButton>
           </div>

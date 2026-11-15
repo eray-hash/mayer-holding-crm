@@ -67,6 +67,7 @@ async function main() {
     .from('eingegangene_emails')
     .select('id, von, von_name, betreff, anhaenge, zugewiesener_kunde_id')
     .is('zugewiesener_kunde_id', null)
+    .is('besitzer_email', null) // private Postfächer bleiben unberührt
     .or('relevanz.is.null,relevanz.neq.nicht_relevant')
     .order('mail_datum', { ascending: true })
   if (mailsError) {

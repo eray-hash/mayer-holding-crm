@@ -12,7 +12,10 @@ const SPAETER = 'mh_postfach_spaeter_'
 /** "Mein Profil": das eigene Postfach verbinden, Zustand sehen, wieder trennen. */
 export function MeinPostfachAbschnitt() {
   const { session } = useAuth()
-  const { eigenes, geladen, fehler } = usePostfaecher()
+  const { postfaecher, eigenes, geladen, fehler } = usePostfaecher()
+  const loginAdresse = (session?.user.email ?? '').toLowerCase()
+  // Wer sich mit der Adresse des gemeinsamen Postfachs anmeldet, hat kein "eigenes" zu verbinden.
+  const loginIstGemeinsam = postfaecher.some((p) => p.gemeinsam && p.adresse.toLowerCase() === loginAdresse)
   const [trennt, setTrennt] = useState(false)
   const [meldung, setMeldung] = useState('')
 
@@ -23,6 +26,11 @@ export function MeinPostfachAbschnitt() {
     setMeldung('')
     try {
       await trennePostfach(eigenes.id)
+      try {
+        localStorage.setItem(SPAETER + loginAdresse, '1')
+      } catch {
+        // dann erscheint der Hinweis eben noch einmal
+      }
       await ladePostfaecherNeu()
     } catch (err) {
       setMeldung(err instanceof Error ? err.message : 'Trennen hat nicht geklappt.')
@@ -62,7 +70,12 @@ export function MeinPostfachAbschnitt() {
       )}
       {geladen && !eigenes && (
         <div className="max-w-md">
-          <PostfachVerbinden adresse={session?.user.email ?? ''} />
+          {loginIstGemeinsam && (
+            <p className="mb-3 rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
+              Du meldest dich mit {loginAdresse} an — das ist das gemeinsame Postfach und bereits verbunden. Hier kannst du zusätzlich eine eigene, persönliche Adresse verbinden.
+            </p>
+          )}
+          <PostfachVerbinden adresse={loginIstGemeinsam ? '' : loginAdresse} />
         </div>
       )}
       {meldung && <p className="mt-2 text-xs text-rose-600">{meldung}</p>}
@@ -74,7 +87,7 @@ export function MeinPostfachAbschnitt() {
 export function PostfachEinrichtenHinweis() {
   const { session } = useAuth()
   const email = (session?.user.email ?? '').toLowerCase()
-  const { eigenes, geladen } = usePostfaecher()
+  const { postfaecher, eigenes, geladen } = usePostfaecher()
   const [zu, setZu] = useState(false)
   const [verbunden, setVerbunden] = useState(false)
 
@@ -84,7 +97,11 @@ export function PostfachEinrichtenHinweis() {
   } catch {
     spaeter = false
   }
-  if (!email || !geladen || zu || spaeter || (eigenes && !verbunden)) return null
+  // Kein Hinweis für jemanden, dessen Login-Adresse selbst das gemeinsame Postfach ist.
+  const loginIstGemeinsam = postfaecher.some((p) => p.gemeinsam && p.adresse.toLowerCase() === email)
+  // Auch nicht für Adressen bei Microsoft oder Google — die lassen sich mit Passwort nicht anbinden.
+  const nichtAnbindbar = /@(outlook|hotmail|live|msn|gmail|googlemail)\./.test(email)
+  if (!email || !geladen || zu || spaeter || nichtAnbindbar || (loginIstGemeinsam && !verbunden) || (eigenes && !verbunden)) return null
 
   function schliessen() {
     try {

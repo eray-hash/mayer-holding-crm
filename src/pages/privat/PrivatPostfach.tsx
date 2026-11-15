@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Inbox, Send, RefreshCw, Plus, Reply, Search, AlertTriangle, Lock, Check, X, UserPlus, ArrowRightLeft } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { useAuth } from '../../context/AuthContext'
 import { fetchPrivateEmails, ignoreMail } from '../../lib/emailInboxDb'
 import { fetchPrivateSentEmails } from '../../lib/sentEmailsDb'
 import { holeMailInOeffentlich, rufePostfachAb, type EingegangeneMail } from '../../lib/emailGateway'
-import { usePostfaecher } from '../../lib/postfaecher'
+import { usePostfaecher, ladePostfaecherNeu } from '../../lib/postfaecher'
 import { matchKundeByEmail } from '../../lib/matchKunde'
 import { KUNDEN_BEREICHE, kundeBereichLabel } from '../../data/kundenBereiche'
 import { getHauptpfad } from '../../data/statusNetworks'
@@ -28,7 +28,8 @@ export function PrivatPostfach() {
   const { state, dispatch } = useApp()
   const { session, mitarbeiter } = useAuth()
   const ich = (session?.user.email ?? '').toLowerCase()
-  const { eigenes, geladen, fehler: postfachFehler } = usePostfaecher()
+  const { postfaecher, eigenes, geladen, fehler: postfachFehler } = usePostfaecher()
+  const loginIstGemeinsam = postfaecher.some((p) => p.gemeinsam && p.adresse.toLowerCase() === ich)
 
   const [ordner, setOrdner] = useState<Ordner>('posteingang')
   const [mails, setMails] = useState<EingegangeneMail[]>([])
@@ -47,7 +48,7 @@ export function PrivatPostfach() {
     setFehler('')
     try {
       const [ein, aus] = await Promise.all([fetchPrivateEmails(ich, l, suche), fetchPrivateSentEmails(ich, l, suche)])
-      setMails(ein.filter((m) => !m.ignoriert))
+      setMails(ein)
       setGesendet(aus)
     } catch (err) {
       setFehler(err instanceof Error ? err.message : 'Postfach konnte nicht geladen werden.')
@@ -66,6 +67,7 @@ export function PrivatPostfach() {
           if (neu > 0) lade()
         })
         .catch((err) => setFehler(err instanceof Error ? err.message : 'Abruf fehlgeschlagen.'))
+        .finally(() => ladePostfaecherNeu().catch(() => {}))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ich, eigenes?.id])
@@ -87,6 +89,7 @@ export function PrivatPostfach() {
       } catch (err) {
         setFehler(err instanceof Error ? err.message : 'Abruf fehlgeschlagen.')
       }
+      ladePostfaecherNeu().catch(() => {})
     }
     await lade()
   }
@@ -123,13 +126,13 @@ export function PrivatPostfach() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-7.5rem)] flex-col gap-4 lg:flex-row">
+    <div className="flex flex-col gap-4 md:h-[calc(100vh-7.5rem)] lg:flex-row">
       <div className="flex-shrink-0 lg:w-48">
         <h1 className="mb-1 text-lg font-semibold text-slate-800">Mein Postfach</h1>
         <p className="mb-3 flex items-center gap-1.5 text-xs text-slate-400">
           <Lock size={12} /> nur für dich sichtbar
         </p>
-        <PrimaryButton onClick={() => setCompose({})} className="mb-4 w-full justify-center">
+        <PrimaryButton onClick={() => setCompose({})} disabled={!eigenes} className="mb-4 w-full justify-center">
           <Plus size={14} /> Neue E-Mail
         </PrimaryButton>
         <nav className="flex gap-1 lg:block lg:space-y-1">
@@ -165,7 +168,7 @@ export function PrivatPostfach() {
               Einmal das Passwort deines Mail-Postfachs eingeben — danach kommen deine Mails von selbst hier an, und du kannst unter deiner eigenen Adresse schreiben.
             </p>
             <div className="max-w-md">
-              <PostfachVerbinden adresse={ich} onVerbunden={() => setTimeout(() => lade(), 8000)} />
+              <PostfachVerbinden adresse={loginIstGemeinsam ? '' : ich} onVerbunden={() => setTimeout(() => lade(), 8000)} />
             </div>
           </div>
         )}
@@ -248,7 +251,7 @@ export function PrivatPostfach() {
             )}
           </div>
 
-          <div className="min-h-0 min-w-0 flex-1 overflow-y-auto rounded-xl border border-slate-200 bg-white p-5">
+          <div className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white p-5 md:min-h-0 md:overflow-y-auto">
             {selectedMail && (
               <div>
                 <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
@@ -273,7 +276,8 @@ export function PrivatPostfach() {
                   absenderEmail={selectedMail.von}
                   absenderName={selectedMail.vonName}
                   betreff={selectedMail.betreff}
-                  onHolen={async (kunde) => {
+                  onHolen={async (kunde, vorher) => {
+                    vorher?.()
                     await holeMailInOeffentlich('eingang', selectedMail.messageId, kunde)
                     setMails((ms) => ms.filter((m) => m.messageId !== selectedMail.messageId))
                     setSelectedId(null)
@@ -309,7 +313,8 @@ export function PrivatPostfach() {
                   absenderEmail={selectedGesendet.an}
                   absenderName={selectedGesendet.anName}
                   betreff={selectedGesendet.betreff}
-                  onHolen={async (kunde) => {
+                  onHolen={async (kunde, vorher) => {
+                    vorher?.()
                     await holeMailInOeffentlich('gesendet', selectedGesendet.id, kunde)
                     setGesendet((ms) => ms.filter((m) => m.id !== selectedGesendet.id))
                     setSelectedId(null)
@@ -351,7 +356,8 @@ function RueberholenKasten({
   absenderEmail: string
   absenderName: string
   betreff: string
-  onHolen: (kunde?: ZielKunde) => Promise<void>
+  /** `vorher` läuft unmittelbar vor dem Server-Aufruf (legt z. B. die neue Akte an). */
+  onHolen: (kunde?: ZielKunde, vorher?: () => void) => Promise<void>
   onPrivaterKontakt?: () => void
 }) {
   const { state, dispatch } = useApp()
@@ -364,7 +370,18 @@ function RueberholenKasten({
   const [kundeId, setKundeId] = useState(oeffentlicherTreffer?.kundeId ?? '')
   const [laeuft, setLaeuft] = useState(false)
   const [fehler, setFehler] = useState('')
+  // Eine Kennung je Kasten: Wird nach einem Fehler erneut geklickt, entsteht kein zweiter Kunde.
+  const [neueKundenId] = useState(() => uid('k'))
+  const angelegt = useRef(false)
+  // Nur Bereiche, für die der Mitarbeiter freigeschaltet ist (Geschäftsführung: alle).
+  const darfAlles = !mitarbeiter || mitarbeiter.rolle === 'geschaeftsfuehrung' || mitarbeiter.ist_admin
+  const bereiche = OEFFENTLICHE_BEREICHE.filter((b) => darfAlles || mitarbeiter.bereiche.includes(b.id === 'immobilienkunden' ? 'immobilien' : b.id))
   const kundenListe = OEFFENTLICHE_BEREICHE.find((b) => b.id === bereich)?.get(state) ?? []
+  const ersterErlaubter = bereiche[0]?.id
+  useEffect(() => {
+    if (ersterErlaubter && !bereiche.some((b) => b.id === bereich)) setBereich(ersterErlaubter)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ersterErlaubter])
 
   async function holen() {
     setLaeuft(true)
@@ -377,8 +394,11 @@ function RueberholenKasten({
         if (!kunde) throw new Error('Bitte eine Akte auswählen.')
         await onHolen({ bereich, id: kunde.id, name: `${kunde.firma} (${kunde.ansprechpartner})` })
       } else {
-        const id = uid('k')
-        dispatch({
+        const id = neueKundenId
+        await onHolen({ bereich, id, name: `${absenderName} (${absenderName})` }, () => {
+          if (angelegt.current) return
+          angelegt.current = true
+          dispatch({
           type: 'ADD_KUNDE_IN_BEREICH',
           bereich,
           kunde: {
@@ -395,7 +415,7 @@ function RueberholenKasten({
             activities: [{ id: uid('act'), date: today(), text: `Aus dem privaten Postfach übernommen: „${betreff}"`, user: mitarbeiter?.name ?? 'Privates Postfach' }],
           },
         })
-        await onHolen({ bereich, id, name: `${absenderName} (${absenderName})` })
+        })
       }
     } catch (err) {
       setFehler(err instanceof Error ? err.message : 'Das hat nicht geklappt.')
@@ -441,7 +461,7 @@ function RueberholenKasten({
       {ziel !== 'postfach' && (
         <div className="mt-2 flex flex-wrap gap-2">
           <select className={`${inputClass} w-auto`} value={bereich} onChange={(e) => { setBereich(e.target.value as KundeBereich); setKundeId('') }}>
-            {OEFFENTLICHE_BEREICHE.map((b) => (
+            {bereiche.map((b) => (
               <option key={b.id} value={b.id}>{b.label}</option>
             ))}
           </select>

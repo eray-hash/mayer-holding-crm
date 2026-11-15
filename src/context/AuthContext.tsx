@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import { vergissPostfaecher } from '../lib/postfaecher'
 import type { Session, User } from '@supabase/supabase-js'
 import { supabase, isSupabaseConfigured, passwortFestlegenNoetig, setzePasswortFestlegenNoetig } from '../lib/supabaseClient'
@@ -38,6 +38,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [mitarbeiter, setMitarbeiter] = useState<Mitarbeiter | null>(null)
   const [passwortFestlegen, setPasswortFestlegen] = useState(passwortFestlegenNoetig)
 
+  // Für wen die zwischengespeicherte Postfach-Liste gilt — wechselt der Nutzer, wird sie verworfen.
+  const letzteAdresse = useRef<string | null | undefined>(undefined)
+
   useEffect(() => {
     if (!supabase) return
 
@@ -54,6 +57,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (event === 'SIGNED_OUT') {
         setzePasswortFestlegenNoetig(false)
         setPasswortFestlegen(false)
+      }
+      const neueAdresse = newSession?.user.email ?? null
+      if (neueAdresse !== letzteAdresse.current) {
+        letzteAdresse.current = neueAdresse
+        vergissPostfaecher()
       }
       setSession(newSession)
     })

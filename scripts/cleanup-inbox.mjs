@@ -132,6 +132,7 @@ async function fetchAllEmails() {
     const { data, error } = await supabase
       .from('eingegangene_emails')
       .select('id, von, von_name, betreff, ausschnitt')
+      .is('besitzer_email', null) // private Postfächer bleiben unberührt
       .order('mail_datum', { ascending: false })
       .range(from, from + pageSize - 1)
     if (error) throw new Error(error.message)
