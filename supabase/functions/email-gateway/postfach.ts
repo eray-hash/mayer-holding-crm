@@ -11,7 +11,6 @@
 // - Anhänge persönlicher Mails liegen in einem nicht öffentlichen Ablageort; einen Link gibt es nur
 //   über `anhangUrl`, das vorher prüft, ob der Fragende die Mail sehen darf.
 import { ImapFlow } from 'npm:imapflow@1'
-import { simpleParser } from 'npm:mailparser@3'
 import nodemailer from 'npm:nodemailer@6'
 
 // deno-lint-ignore no-explicit-any
@@ -33,6 +32,7 @@ export type Postfach = {
   letzter_fehler: string | null
   letzte_uid: number | null
   uid_gueltigkeit: number | null
+  in_arbeit_uid?: number | null
 }
 
 export type Aufrufer = { email: string; name: string; istGf: boolean }
@@ -41,6 +41,14 @@ export type MailAbsender = { adresse: string; anzeigeName?: string; host: string
 export const STANDARD_ID = 'standard'
 const ANHANG_ABLAGE = 'postfach-anhaenge'
 const ANHANG_VORSATZ = 'privat:'
+// Anhänge öffentlicher Mails liegen dort, wo sie der Rest des CRM erwartet (Zuordnung zur Akte,
+// Einlesen von Dokumenten): im selben Ablageort wie die per Weiterleitung eingegangenen Mails.
+const OEFFENTLICHE_ABLAGE = 'email-anhaenge'
+// Der Weiterleitungsdienst des gemeinsamen Postfachs lehnt Mails über 512 KB ab ("552 Message size
+// exceeds the allowed size", gesehen am 11. und 13.11.2026) — sie kamen bisher nie im CRM an. Aus
+// gemeinsamen Postfächern holt der Abruf deshalb genau diese großen Mails; die kleinen kommen
+// weiterhin über die Weiterleitung (mit Einordnung und Zuordnung).
+const WEITERLEITUNGS_GRENZE = 450 * 1024
 
 function zeitlimit<T>(versprechen: Promise<T>, ms: number, meldung: string): Promise<T> {
   let uhr: ReturnType<typeof setTimeout> | undefined
@@ -440,103 +448,205 @@ function textAusHtml(html: string): string {
 }
 
 const ERSTER_ABRUF = 30
+const ZU_GROSS = 30 * 1024 * 1024
+const ANHANG_HOECHSTENS = 20 * 1024 * 1024
+const BYTES_JE_LAUF = 10 * 1024 * 1024
+
+// deno-lint-ignore no-explicit-any
+type Teil = any
+
+// Läuft die Gliederung der Mail ab und sammelt Textteil(e) und Anhänge ein.
+function gliedere(wurzel: Teil): { text?: Teil; html?: Teil; anhaenge: Teil[] } {
+  const ergebnis: { text?: Teil; html?: Teil; anhaenge: Teil[] } = { anhaenge: [] }
+  const gehe = (knoten: Teil) => {
+    if (!knoten) return
+    if (Array.isArray(knoten.childNodes) && knoten.childNodes.length > 0) {
+      knoten.childNodes.forEach(gehe)
+      return
+    }
+    const art = String(knoten.type ?? '').toLowerCase()
+    const name = knoten.dispositionParameters?.filename ?? knoten.parameters?.name
+    const alsAnhang = String(knoten.disposition ?? '').toLowerCase() === 'attachment' || (!!name && !art.startsWith('text/'))
+    if (alsAnhang) ergebnis.anhaenge.push(knoten)
+    else if (art === 'text/plain' && !ergebnis.text) ergebnis.text = knoten
+    else if (art === 'text/html' && !ergebnis.html) ergebnis.html = knoten
+    // Eingebettete Bilder ohne Dateinamen (Logos in Signaturen) werden nicht als Anhang geführt.
+  }
+  gehe(wurzel)
+  return ergebnis
+}
+
+// Lädt genau einen Teil der Mail, vom Server bereits dekodiert — die Mail wird nie als Ganzes im
+// Speicher zerlegt (das hat bei großen Mails die Rechenzeit-Grenze gesprengt).
+// deno-lint-ignore no-explicit-any
+async function ladeTeil(client: any, uid: number, teil: Teil, hoechstens?: number): Promise<{ bytes: Uint8Array; meta: any } | null> {
+  const antwort = await client.download(String(uid), teil.part ?? '1', { uid: true, ...(hoechstens ? { maxBytes: hoechstens } : {}) })
+  if (!antwort?.content) return null
+  const stuecke: Uint8Array[] = []
+  let laenge = 0
+  for await (const stueck of antwort.content) {
+    const b = stueck instanceof Uint8Array ? stueck : new TextEncoder().encode(String(stueck))
+    stuecke.push(b)
+    laenge += b.length
+  }
+  const bytes = new Uint8Array(laenge)
+  let stelle = 0
+  for (const b of stuecke) {
+    bytes.set(b, stelle)
+    stelle += b.length
+  }
+  return { bytes, meta: antwort.meta ?? {} }
+}
+
+function alsText(bytes: Uint8Array, zeichensatz?: string): string {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+  } catch {
+    try {
+      return new TextDecoder(zeichensatz || 'windows-1252').decode(bytes)
+    } catch {
+      return new TextDecoder('windows-1252').decode(bytes)
+    }
+  }
+}
 
 // Holt neue Mails eines Postfachs ab. `nurPruefen` liest nur, schreibt nichts (für Tests).
+//
+// Bewusst in kleinen Portionen: Rechenzeit und Speicher je Aufruf sind begrenzt, der Zeitplan kommt
+// alle paar Minuten wieder. Vor jeder Mail wird vermerkt, an welcher gerade gearbeitet wird — bricht
+// der Lauf genau dort ab, wird diese eine Mail beim nächsten Mal nur mit Absender und Betreff
+// übernommen, statt das Postfach für immer zu blockieren.
 export async function rufePostfachAb(
   admin: Db,
   p: Postfach,
-  hoechstens = 25,
-  budgetMs = 90000,
+  hoechstens = 8,
+  budgetMs = 60000,
   nurPruefen = false,
-): Promise<{ neu: number; gesehen: number; fehler?: string }> {
+): Promise<{ neu: number; gesehen: number; offen: number; fehler?: string }> {
   const beginn = Date.now()
   let neu = 0
   let gesehen = 0
+  let erledigt = 0
   let hoechsteUid = p.letzte_uid ?? 0
   let gueltigkeit = p.uid_gueltigkeit
-  let client: InstanceType<typeof ImapFlow> | null = null
+  const abgebrochenBei = Number(p.in_arbeit_uid ?? 0)
+  const gemeinsam = !p.besitzer_email
+  // deno-lint-ignore no-explicit-any
+  let client: any = null
   try {
     client = new ImapFlow({ host: p.imap_host, port: p.imap_port, secure: p.imap_port === 993, auth: { user: p.benutzer || p.adresse, pass: await passwortVon(admin, p) }, logger: false })
     client.on('error', () => {})
     await zeitlimit(client.connect(), 20000, 'Der Mail-Server hat nach 20 Sekunden nicht geantwortet.')
     const sperre = await client.getMailboxLock('INBOX')
     try {
-      // deno-lint-ignore no-explicit-any
-      const fach = client.mailbox as any
+      const fach = client.mailbox
       const aktuelleGueltigkeit = Number(fach?.uidValidity ?? 0)
       const anzahl = Number(fach?.exists ?? 0)
       const neuStart = !p.letzte_uid || (gueltigkeit != null && aktuelleGueltigkeit !== Number(gueltigkeit))
       gueltigkeit = aktuelleGueltigkeit
-      let uids: number[] = []
+      // deno-lint-ignore no-explicit-any
+      const liste: { uid: number; size: number; envelope: any; bodyStructure: Teil }[] = []
       if (anzahl > 0) {
+        const felder = { uid: true, size: true, envelope: true, bodyStructure: true }
         if (neuStart) {
           hoechsteUid = 0
           const ab = Math.max(1, anzahl - ERSTER_ABRUF + 1)
-          for await (const n of client.fetch(`${ab}:*`, { uid: true })) uids.push(Number(n.uid))
+          for await (const n of client.fetch(`${ab}:*`, felder)) liste.push({ uid: Number(n.uid), size: Number(n.size ?? 0), envelope: n.envelope, bodyStructure: n.bodyStructure })
         } else {
-          const gefunden = await client.search({ uid: `${hoechsteUid + 1}:*` }, { uid: true })
-          uids = (gefunden || []).map(Number).filter((u: number) => u > hoechsteUid)
+          for await (const n of client.fetch(`${hoechsteUid + 1}:*`, felder, { uid: true })) {
+            // "n:*" liefert laut IMAP immer mindestens die letzte Nachricht — auch wenn sie älter ist.
+            if (Number(n.uid) > hoechsteUid) liste.push({ uid: Number(n.uid), size: Number(n.size ?? 0), envelope: n.envelope, bodyStructure: n.bodyStructure })
+          }
         }
       }
-      uids.sort((x, y) => x - y)
-      gesehen = uids.length
-      if (nurPruefen) return { neu: 0, gesehen }
-      if (uids.length > 0) await stelleAblageSicher(admin)
-      for (const uid of uids.slice(0, hoechstens)) {
+      liste.sort((x, y) => x.uid - y.uid)
+      gesehen = liste.length
+      if (nurPruefen) return { neu: 0, gesehen, offen: gesehen }
+      if (liste.length > 0) await stelleAblageSicher(admin)
+
+      let bytes = 0
+      for (const n of liste.slice(0, hoechstens)) {
         if (Date.now() - beginn > budgetMs) break
-        const nachricht = await client.fetchOne(String(uid), { source: true }, { uid: true })
-        // deno-lint-ignore no-explicit-any
-        const quelle = (nachricht as any)?.source
-        if (!quelle) {
-          hoechsteUid = uid
+        if (erledigt > 0 && bytes + n.size > BYTES_JE_LAUF) break
+        bytes += n.size
+        const umschlag = n.envelope ?? {}
+        if (gemeinsam && n.size <= WEITERLEITUNGS_GRENZE) {
+          hoechsteUid = n.uid
+          erledigt++
           continue
         }
-        const mail = await simpleParser(quelle)
-        const absender = mail.from?.value?.[0]
-        const kennung = `${p.id}:${mail.messageId ?? uid}`
-        const { data: schonDa } = await admin.from('eingegangene_emails').select('id').eq('message_id', kennung).maybeSingle()
+        // Gemeinsam: dieselbe Kennung wie bei der Weiterleitung, damit nichts doppelt erscheint.
+        const kennung = gemeinsam && umschlag.messageId ? String(umschlag.messageId) : `${p.id}:${umschlag.messageId ?? n.uid}`
+        const { data: schonDa } = await admin.from('eingegangene_emails').select('id').eq('message_id', kennung).limit(1).maybeSingle()
         if (!schonDa) {
-          const anhaenge: { filename: string; size: number; contentType: string; url: string }[] = []
-          for (const anhang of mail.attachments ?? []) {
-            if (!anhang.content || anhang.size > 25 * 1024 * 1024) continue
-            const name = sicherername(anhang.filename ?? 'anhang')
-            const pfad = `${p.id}/${uid}/${name}`
-            const { error: ladeFehler } = await admin.storage.from(ANHANG_ABLAGE).upload(pfad, anhang.content, { contentType: anhang.contentType || 'application/octet-stream', upsert: true })
-            if (ladeFehler) {
-              console.error('Anhang konnte nicht abgelegt werden', pfad, ladeFehler.message)
-              continue
-            }
-            anhaenge.push({ filename: anhang.filename ?? name, size: anhang.size, contentType: anhang.contentType || 'application/octet-stream', url: `${ANHANG_VORSATZ}${pfad}` })
-          }
-          const text = (mail.text ?? '').trim() || (typeof mail.html === 'string' ? textAusHtml(mail.html) : '')
+          const von = umschlag.from?.[0]
           // deno-lint-ignore no-explicit-any
-          const an = (mail.to as any)?.text ?? ''
-          // deno-lint-ignore no-explicit-any
-          const cc = (mail.cc as any)?.text ?? ''
-          const { error } = await admin.from('eingegangene_emails').insert({
+          const adressen = (wer: any) => (Array.isArray(wer) ? wer.map((x: any) => x?.address).filter(Boolean).join(', ') : '')
+          const zeile: Record<string, unknown> = {
             message_id: kennung,
-            von: (absender?.address ?? 'unbekannt').toLowerCase(),
-            von_name: absender?.name || absender?.address || 'Unbekannt',
-            betreff: mail.subject ?? '(ohne Betreff)',
-            mail_datum: (mail.date ?? new Date()).toISOString(),
-            ausschnitt: text.slice(0, 20000),
-            rohdaten: { quelle: 'imap', uid, an, cc },
-            anhaenge: anhaenge.length > 0 ? anhaenge : null,
+            von: String(von?.address ?? 'unbekannt').toLowerCase(),
+            von_name: von?.name || von?.address || 'Unbekannt',
+            betreff: umschlag.subject ?? '(ohne Betreff)',
+            mail_datum: new Date(umschlag.date ?? Date.now()).toISOString(),
+            rohdaten: { quelle: 'imap', uid: n.uid, an: adressen(umschlag.to), cc: adressen(umschlag.cc) },
             postfach_id: p.id,
             besitzer_email: p.besitzer_email,
-          })
+          }
+          if (n.size > ZU_GROSS || n.uid === abgebrochenBei) {
+            zeile.ausschnitt =
+              n.uid === abgebrochenBei
+                ? '(Der Inhalt dieser Mail ließ sich nicht ins CRM übernehmen. Bitte im Mail-Programm öffnen.)'
+                : `(Diese Mail ist mit ${(n.size / 1024 / 1024).toFixed(0)} MB zu groß für das CRM. Inhalt und Anhänge bitte im Mail-Programm öffnen.)`
+          } else {
+            await admin.from('postfaecher').update({ in_arbeit_uid: n.uid, ...(hoechsteUid ? { letzte_uid: hoechsteUid, uid_gueltigkeit: gueltigkeit } : {}) }).eq('id', p.id)
+            const { text: textTeil, html: htmlTeil, anhaenge: anhangTeile } = gliedere(n.bodyStructure)
+            let text = ''
+            const quelle = textTeil ?? htmlTeil
+            if (quelle) {
+              const geladen = await ladeTeil(client, n.uid, quelle, 300000)
+              if (geladen) {
+                const roh = alsText(geladen.bytes, geladen.meta?.charset ?? quelle.parameters?.charset)
+                text = quelle === textTeil ? roh.trim() : textAusHtml(roh)
+              }
+            }
+            const anhaenge: { filename: string; size: number; contentType: string; url: string }[] = []
+            for (const teil of anhangTeile) {
+              if (Number(teil.size ?? 0) > ANHANG_HOECHSTENS * 1.4) continue
+              const geladen = await ladeTeil(client, n.uid, teil)
+              if (!geladen || geladen.bytes.length === 0 || geladen.bytes.length > ANHANG_HOECHSTENS) continue
+              const anzeige = String(geladen.meta?.filename ?? teil.dispositionParameters?.filename ?? teil.parameters?.name ?? 'anhang')
+              const inhaltsart = String(teil.type ?? geladen.meta?.contentType ?? 'application/octet-stream')
+              const pfad = `${p.id}/${n.uid}/${anhaenge.length + 1}_${sicherername(anzeige)}`
+              const ablage = gemeinsam ? OEFFENTLICHE_ABLAGE : ANHANG_ABLAGE
+              const ablagePfad = gemeinsam ? `postfach/${pfad}` : pfad
+              const { error: ladeFehler } = await admin.storage.from(ablage).upload(ablagePfad, geladen.bytes, { contentType: inhaltsart, upsert: true })
+              if (ladeFehler) {
+                console.error('Anhang konnte nicht abgelegt werden', pfad, ladeFehler.message)
+                continue
+              }
+              const url = gemeinsam ? admin.storage.from(ablage).getPublicUrl(ablagePfad).data.publicUrl : `${ANHANG_VORSATZ}${pfad}`
+              anhaenge.push({ filename: anzeige, size: geladen.bytes.length, contentType: inhaltsart, url })
+            }
+            zeile.ausschnitt = text.slice(0, 20000)
+            zeile.anhaenge = anhaenge.length > 0 ? anhaenge : null
+          }
+          const { error } = await admin.from('eingegangene_emails').insert(zeile)
           if (error) throw new Error(`Mail konnte nicht gespeichert werden: ${error.message}`)
           neu++
         }
-        hoechsteUid = uid
+        hoechsteUid = n.uid
+        erledigt++
       }
     } finally {
       sperre.release()
     }
     await client.logout().catch(() => {})
     client = null
-    await admin.from('postfaecher').update({ letzte_uid: hoechsteUid || null, uid_gueltigkeit: gueltigkeit, letzter_abruf: new Date().toISOString(), letzter_fehler: null }).eq('id', p.id)
-    return { neu, gesehen }
+    await admin
+      .from('postfaecher')
+      .update({ letzte_uid: hoechsteUid || null, uid_gueltigkeit: gueltigkeit, in_arbeit_uid: null, letzter_abruf: new Date().toISOString(), letzter_fehler: null })
+      .eq('id', p.id)
+    return { neu, gesehen, offen: Math.max(0, gesehen - erledigt) }
   } catch (err) {
     // deno-lint-ignore no-explicit-any
     const e = err as any
@@ -552,21 +662,21 @@ export async function rufePostfachAb(
         .update({ ...(hoechsteUid ? { letzte_uid: hoechsteUid, uid_gueltigkeit: gueltigkeit } : {}), letzter_abruf: new Date().toISOString(), letzter_fehler: String(meldung).slice(0, 500) })
         .eq('id', p.id)
     }
-    return { neu, gesehen, fehler: String(meldung) }
+    return { neu, gesehen, offen: Math.max(0, gesehen - erledigt), fehler: String(meldung) }
   }
 }
 
-// Alle persönlichen Postfächer der Reihe nach, das am längsten nicht abgerufene zuerst.
+// Alle Postfächer der Reihe nach, das am längsten nicht abgerufene zuerst (gemeinsame: nur große Mails).
 export async function rufeAlleAb(admin: Db, budgetMs = 110000): Promise<{ postfaecher: number; neu: number; fehler: string[] }> {
   const beginn = Date.now()
-  const { data } = await admin.from('postfaecher').select('*').eq('aktiv', true).not('besitzer_email', 'is', null).order('letzter_abruf', { ascending: true, nullsFirst: true })
+  const { data } = await admin.from('postfaecher').select('*').eq('aktiv', true).order('letzter_abruf', { ascending: true, nullsFirst: true })
   let neu = 0
   let anzahl = 0
   const fehler: string[] = []
   for (const p of (data ?? []) as Postfach[]) {
     const rest = budgetMs - (Date.now() - beginn)
     if (rest < 25000) break
-    const ergebnis = await rufePostfachAb(admin, p, 25, Math.min(rest - 15000, 60000))
+    const ergebnis = await rufePostfachAb(admin, p, 8, Math.min(rest - 15000, 45000))
     anzahl++
     neu += ergebnis.neu
     if (ergebnis.fehler) fehler.push(`${p.adresse}: ${ergebnis.fehler}`)
@@ -592,18 +702,52 @@ export async function holeInOeffentlich(admin: Db, a: Aufrufer, eingabe: Freigab
     if (error) return { ok: false, fehler: error.message }
     return { ok: true, betreff: data.betreff ?? '' }
   }
-  const { data } = await admin.from('eingegangene_emails').select('id, betreff, besitzer_email').eq('message_id', id).maybeSingle()
+  const { data } = await admin.from('eingegangene_emails').select('id, betreff, besitzer_email, anhaenge').eq('message_id', id).maybeSingle()
   if (!data || String(data.besitzer_email ?? '').toLowerCase() !== a.email) return { ok: false, fehler: 'Diese Mail liegt nicht in deinem privaten Postfach.' }
+  const anhaenge = await veroeffentlicheAnhaenge(admin, data.anhaenge)
   const { error } = await admin
     .from('eingegangene_emails')
     .update({
       besitzer_email: null,
       ignoriert: false,
+      anhaenge,
       ...(kunde ? { zugewiesener_bereich: kunde.bereich, zugewiesener_kunde_id: kunde.id, zugewiesener_kunde_name: kunde.name ?? null } : {}),
     })
     .eq('id', data.id)
   if (error) return { ok: false, fehler: error.message }
   return { ok: true, betreff: data.betreff ?? '' }
+}
+
+// Zieht die Anhänge einer Mail aus der privaten Ablage in die der öffentlichen Mails um, damit sie
+// danach wie jeder andere Mail-Anhang funktionieren (Akte, Einlesen, Assistent).
+// deno-lint-ignore no-explicit-any
+export async function veroeffentlicheAnhaenge(admin: Db, anhaenge: any): Promise<any> {
+  if (!Array.isArray(anhaenge) || anhaenge.length === 0) return anhaenge ?? null
+  const ergebnis = []
+  for (const anhang of anhaenge) {
+    const verweis = String(anhang?.url ?? '')
+    if (!verweis.startsWith(ANHANG_VORSATZ)) {
+      ergebnis.push(anhang)
+      continue
+    }
+    const pfad = verweis.slice(ANHANG_VORSATZ.length)
+    const ziel = `postfach/${pfad}`
+    const { data: datei, error: leseFehler } = await admin.storage.from(ANHANG_ABLAGE).download(pfad)
+    if (leseFehler || !datei) {
+      console.error('Anhang konnte nicht umgezogen werden', pfad, leseFehler?.message)
+      ergebnis.push(anhang)
+      continue
+    }
+    const { error: schreibFehler } = await admin.storage.from(OEFFENTLICHE_ABLAGE).upload(ziel, datei, { contentType: anhang.contentType || 'application/octet-stream', upsert: true })
+    if (schreibFehler) {
+      console.error('Anhang konnte nicht umgezogen werden', pfad, schreibFehler.message)
+      ergebnis.push(anhang)
+      continue
+    }
+    await admin.storage.from(ANHANG_ABLAGE).remove([pfad])
+    ergebnis.push({ ...anhang, url: admin.storage.from(OEFFENTLICHE_ABLAGE).getPublicUrl(ziel).data.publicUrl })
+  }
+  return ergebnis
 }
 
 // Zeitlich begrenzter Link auf einen Anhang — nur wenn der Fragende die zugehörige Mail sehen darf.

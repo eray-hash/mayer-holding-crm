@@ -346,6 +346,11 @@ Deno.serve(async (req: Request) => {
 
   const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
 
+  // Dieselbe Mail kann zusätzlich über den Postfach-Abruf hereinkommen (er holt die großen Mails, die
+  // der Weiterleitungsdienst ablehnt). Was schon im öffentlichen Postfach liegt, nicht doppelt anlegen.
+  const { data: schonDa } = await supabase.from('eingegangene_emails').select('id').eq('message_id', messageId).is('besitzer_email', null).limit(1).maybeSingle()
+  if (schonDa) return new Response(JSON.stringify({ ok: true, doppelt: true }), { status: 200 })
+
   // Gefundene Anhänge in den Storage-Bucket "email-anhaenge" hochladen (öffentlich lesbar, wie der
   // Rest dieses Projekts bewusst als internes Tool ohne zusätzliche Zugriffsprüfung behandelt) —
   // ein fehlgeschlagener Upload darf das Einsortieren der E-Mail selbst nicht verhindern.

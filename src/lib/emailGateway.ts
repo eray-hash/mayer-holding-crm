@@ -145,9 +145,16 @@ export async function trennePostfach(postfachId: string): Promise<void> {
   await callAuthenticated({ action: 'postfach_trennen', postfachId })
 }
 
+/** Holt neue Mails ab. Je Aufruf nur wenige (Rechenzeit-Grenze des Servers) — liegt noch mehr an,
+ *  wird ein paar Mal nachgefasst; den Rest holt ohnehin der Zeitplan alle paar Minuten. */
 export async function rufePostfachAb(postfachId: string): Promise<number> {
-  const data = await callAuthenticated({ action: 'postfach_abruf', postfachId })
-  return data.neu ?? 0
+  let neu = 0
+  for (let runde = 0; runde < 4; runde++) {
+    const data = await callAuthenticated({ action: 'postfach_abruf', postfachId, sofort: runde > 0 })
+    neu += data.neu ?? 0
+    if (!data.offen) break
+  }
+  return neu
 }
 
 export async function holeMailInOeffentlich(

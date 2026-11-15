@@ -1152,11 +1152,16 @@ async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKontext): Pr
     }
     const { data: m } = await supabase.from('eingegangene_emails').select('id, betreff').eq('message_id', kennung).eq('besitzer_email', ich).maybeSingle()
     if (!m) return 'Fehler: Diese Mail liegt nicht im privaten Postfach dieses Mitarbeiters.'
-    const { error } = await supabase
-      .from('eingegangene_emails')
-      .update({ besitzer_email: null, ignoriert: false, ...(ziel ? { zugewiesener_bereich: ziel.bereich, zugewiesener_kunde_id: ziel.id, zugewiesener_kunde_name: kundeName(ziel) } : {}) })
-      .eq('id', m.id)
-    if (error) return `Fehler: ${error.message}`
+    // Über die Mail-Funktion, damit auch die Anhänge in die öffentliche Ablage umziehen.
+    const antwort = await fetch(`${SUPABASE_URL}/functions/v1/email-gateway`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`, ...(CRM_SHARED_SECRET ? { 'x-crm-secret': CRM_SHARED_SECRET } : {}) },
+      body: JSON.stringify({ action: 'mail_freigeben', art: 'eingang', id: kennung, imAuftragVon: ich, kunde: ziel ? { bereich: ziel.bereich, id: ziel.id, name: kundeName(ziel) } : undefined }),
+    })
+    if (!antwort.ok) {
+      const daten = await antwort.json().catch(() => ({}))
+      return `Fehler: ${daten?.error ?? `Rüberholen fehlgeschlagen (${antwort.status})`}`
+    }
     protokolliere(`Private Mail „${m.betreff}" in den öffentlichen Bereich geholt${ziel ? ` (Akte ${kundeName(ziel)})` : ''}`)
     return `Erledigt: „${m.betreff}" liegt jetzt im gemeinsamen Postfach${ziel ? ` und ist ${kundeName(ziel)} zugeordnet` : ''}.`
   }

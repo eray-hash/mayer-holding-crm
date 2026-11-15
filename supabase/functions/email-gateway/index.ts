@@ -2464,7 +2464,7 @@ Deno.serve(async (req: Request) => {
         if (fach?.besitzer_email) {
           // Die ersten Mails gleich im Hintergrund holen, damit das Postfach nicht leer startet.
           // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
-          EdgeRuntime.waitUntil(rufePostfachAb(admin, fach, 30, 100000))
+          EdgeRuntime.waitUntil(rufePostfachAb(admin, fach))
         }
         return new Response(JSON.stringify({ ok: true, id: ergebnis.id, adresse: ergebnis.adresse }), { headers })
       }
@@ -2478,9 +2478,13 @@ Deno.serve(async (req: Request) => {
         if (!fach || !fach.besitzer_email || !darfNutzen(fach, aufrufer)) {
           return new Response(JSON.stringify({ error: 'Dieses Postfach kannst du nicht abrufen.' }), { status: 403, headers })
         }
-        const ergebnis = await rufePostfachAb(admin, fach, 25, 90000)
+        // Gerade erst abgeholt (Zeitplan oder ein anderer Aufruf)? Dann nicht doppelt arbeiten.
+        if (fach.letzter_abruf && !fach.letzter_fehler && Date.now() - new Date(fach.letzter_abruf).getTime() < 40000 && body.sofort !== true) {
+          return new Response(JSON.stringify({ ok: true, neu: 0, offen: 0 }), { headers })
+        }
+        const ergebnis = await rufePostfachAb(admin, fach)
         if (ergebnis.fehler) return new Response(JSON.stringify({ error: ergebnis.fehler }), { status: 502, headers })
-        return new Response(JSON.stringify({ ok: true, neu: ergebnis.neu }), { headers })
+        return new Response(JSON.stringify({ ok: true, neu: ergebnis.neu, offen: ergebnis.offen }), { headers })
       }
       if (body.action === 'mail_freigeben') {
         const ergebnis = await holeInOeffentlich(admin, aufrufer, body)
