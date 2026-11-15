@@ -793,7 +793,7 @@ function fuerVerlauf(msgs: Nachricht[]): Nachricht[] {
 
 // ---------- Werkzeuge des Assistenten ----------
 
-type Mitarbeiter = { id: string; name: string; rolle?: string | null; ist_admin?: boolean | null; bereiche?: string[] | null }
+type Mitarbeiter = { id: string; name: string; email?: string | null; rolle?: string | null; ist_admin?: boolean | null; bereiche?: string[] | null }
 type ToolKontext = {
   supabase: Supa
   mitarbeiter: Mitarbeiter
@@ -1041,6 +1041,34 @@ const TOOLS = [
     input_schema: { type: 'object', properties: {} },
   },
   {
+    name: 'privater_bereich',
+    description:
+      'Zeigt, was im PRIVATEN Bereich des Mitarbeiters liegt, mit dem du gerade sprichst (nur seine eigenen Sachen, niemand sonst sieht sie): Mails aus seinem privaten Postfach (Eingang und Gesendet) und seine privaten Kontakte. Nur verwenden, wenn er ausdrücklich nach seinem privaten Postfach / seinen privaten Kontakten fragt oder etwas daraus in den öffentlichen Bereich holen will.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        was: { type: 'string', enum: ['mails', 'gesendete_mails', 'kontakte'], description: 'Was gezeigt werden soll.' },
+        suche: { type: 'string', description: 'Optional: Absender, Betreff oder Name zum Eingrenzen.' },
+      },
+      required: ['was'],
+    },
+  },
+  {
+    name: 'in_oeffentlich_holen',
+    description:
+      'Holt etwas aus dem PRIVATEN Bereich des Mitarbeiters in den öffentlichen Bereich, sodass es alle Kollegen sehen: eine private Mail (landet im gemeinsamen Postfach, auf Wunsch gleich bei einer Kundenakte) oder einen privaten Kontakt (wird samt seiner Akte — Notizen, Dokumente, Rechnungen — zum Kunden in einem Bereich). Nur aufrufen, wenn der Mitarbeiter das ausdrücklich verlangt und eindeutig ist, was gemeint ist; die Kennung stammt aus privater_bereich. Das lässt sich nicht per Assistent zurücknehmen.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        art: { type: 'string', enum: ['mail', 'gesendete_mail', 'kontakt'] },
+        kennung: { type: 'string', description: 'mail_id bzw. kontakt_id aus privater_bereich.' },
+        kunde_id: { type: 'string', description: 'Nur bei Mails, optional: öffentliche Kundenakte, der die Mail zugeordnet wird.' },
+        bereich: { type: 'string', enum: NEUANLAGE_BEREICHE, description: 'Nur bei art=kontakt: in welchen Bereich der Kontakt kommt.' },
+      },
+      required: ['art', 'kennung'],
+    },
+  },
+  {
     name: 'firmenueberblick',
     description: 'Überblick über ALLE Kunden und Immobilien-Objekte (Status, Zuständigkeit, letzte Aktivität, Suchprofile) samt aller fälligen Follow-ups. Für Fragen, die nicht einen einzelnen Kunden betreffen ("was steht heute an", "welche Käufer suchen …", "wer ist im Status …").',
     input_schema: { type: 'object', properties: {} },
@@ -1052,6 +1080,86 @@ async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKontext): Pr
   const { supabase, mitarbeiter, state } = ctx
   const heute = heuteBerlin()
   const protokolliere = (text: string) => state.aktionen.push({ z: new Date().toISOString(), text })
+
+  // Privater Bereich: ausschließlich die Sachen des Mitarbeiters, der gerade schreibt — jede Abfrage
+  // ist an seine eigene Adresse gebunden, nie an eine Angabe aus dem Gespräch.
+  if (name === 'privater_bereich' || name === 'in_oeffentlich_holen') {
+    const ich = String(mitarbeiter.email ?? '').trim().toLowerCase()
+    if (!ich) return 'Fehler: Für diesen Mitarbeiter ist keine E-Mail-Adresse hinterlegt — der private Bereich lässt sich nicht zuordnen.'
+    const suche = String(input.suche ?? '').replace(/[,()%]/g, ' ').trim()
+
+    if (name === 'privater_bereich') {
+      if (input.was === 'kontakte') {
+        const { data } = await supabase.from('kunden').select(KUNDE_SPALTEN).eq('bereich', 'privat').eq('verantwortlich_email', ich)
+        const liste = suche ? sucheKunden((data ?? []) as KundeRow[], suche) : ((data ?? []) as KundeRow[])
+        if (liste.length === 0) return 'Keine privaten Kontakte gefunden.'
+        return JSON.stringify(liste.slice(0, 40).map((k) => ({ kontakt_id: k.id, name: kundeName(k), email: k.email, telefon: k.telefon, dokumente: (k.dokumente ?? []).length })))
+      }
+      if (input.was === 'gesendete_mails') {
+        let abfrage = supabase.from('gesendete_emails').select('id, an, an_name, betreff, text, gesendet_am').eq('besitzer_email', ich)
+        if (suche) abfrage = abfrage.or(`betreff.ilike.%${suche}%,an.ilike.%${suche}%,an_name.ilike.%${suche}%`)
+        const { data } = await abfrage.order('gesendet_am', { ascending: false }).limit(15)
+        if (!data?.length) return 'Keine privat gesendeten Mails gefunden.'
+        // deno-lint-ignore no-explicit-any
+        return JSON.stringify(data.map((m: any) => ({ mail_id: m.id, an: `${m.an_name ?? ''} <${m.an}>`, betreff: m.betreff, gesendet: m.gesendet_am, anfang: String(m.text ?? '').slice(0, 300) })))
+      }
+      let abfrage = supabase.from('eingegangene_emails').select('message_id, von, von_name, betreff, mail_datum, ausschnitt, anhaenge').eq('besitzer_email', ich)
+      if (suche) abfrage = abfrage.or(`betreff.ilike.%${suche}%,von.ilike.%${suche}%,von_name.ilike.%${suche}%`)
+      const { data } = await abfrage.order('mail_datum', { ascending: false }).limit(15)
+      if (!data?.length) return 'Im privaten Postfach liegen keine (passenden) Mails. Hinweis: Ein eigenes Postfach verbindet der Mitarbeiter im CRM unter „Mein Profil“.'
+      return JSON.stringify(
+        // deno-lint-ignore no-explicit-any
+        data.map((m: any) => ({ mail_id: m.message_id, von: `${m.von_name ?? ''} <${m.von}>`, betreff: m.betreff, datum: m.mail_datum, anhaenge: (m.anhaenge ?? []).length, anfang: String(m.ausschnitt ?? '').slice(0, 400) })),
+      )
+    }
+
+    const kennung = String(input.kennung ?? '')
+    if (!kennung) return 'Fehler: kennung fehlt.'
+    if (input.art === 'kontakt') {
+      const bereich = String(input.bereich ?? '')
+      if (!NEUANLAGE_BEREICHE.includes(bereich)) return `Fehler: Für einen Kontakt muss der Ziel-Bereich angegeben werden. Erlaubt: ${NEUANLAGE_BEREICHE.join(', ')}.`
+      const { data: k } = await supabase.from('kunden').select(KUNDE_SPALTEN).eq('id', kennung).eq('bereich', 'privat').eq('verantwortlich_email', ich).maybeSingle()
+      if (!k) return 'Fehler: Diesen privaten Kontakt gibt es bei diesem Mitarbeiter nicht.'
+      const kontakt = k as KundeRow
+      const { error } = await supabase
+        .from('kunden')
+        .update({
+          bereich,
+          status: START_STATUS[bereich],
+          verantwortlich_email: null,
+          letzte_aktivitaet: heute,
+          activities: [{ id: crypto.randomUUID(), date: heute, text: `Aus dem privaten Bereich von ${mitarbeiter.name} in den öffentlichen Bereich übernommen (über den Assistenten).`, user: mitarbeiter.name }, ...(kontakt.activities ?? [])],
+        })
+        .eq('id', kontakt.id)
+        .eq('bereich', 'privat')
+      if (error) return `Fehler beim Übernehmen: ${error.message}`
+      protokolliere(`Privaten Kontakt ${kundeName(kontakt)} in den Bereich ${BEREICH_LABEL[bereich]} übernommen (kunde_id=${kontakt.id})`)
+      return `Übernommen: ${kundeName(kontakt)} ist jetzt Kunde im Bereich ${BEREICH_LABEL[bereich]} und für alle Kollegen dieses Bereichs sichtbar. kunde_id=${kontakt.id}`
+    }
+
+    const ziel = input.kunde_id ? await ladeKunde(supabase, input.kunde_id) : null
+    if (input.kunde_id && !ziel) return KEIN_KUNDE
+    if (input.art === 'gesendete_mail') {
+      const { data: m } = await supabase.from('gesendete_emails').select('id, betreff').eq('id', kennung).eq('besitzer_email', ich).maybeSingle()
+      if (!m) return 'Fehler: Diese Mail liegt nicht im privaten Gesendet-Ordner dieses Mitarbeiters.'
+      const { error } = await supabase
+        .from('gesendete_emails')
+        .update({ besitzer_email: null, ...(ziel ? { kunde_bereich: ziel.bereich, kunde_id: ziel.id, kunde_name: kundeName(ziel) } : {}) })
+        .eq('id', m.id)
+      if (error) return `Fehler: ${error.message}`
+      protokolliere(`Private gesendete Mail „${m.betreff}" in den öffentlichen Bereich geholt${ziel ? ` (Akte ${kundeName(ziel)})` : ''}`)
+      return `Erledigt: „${m.betreff}" liegt jetzt im gemeinsamen Gesendet-Ordner${ziel ? ` bei ${kundeName(ziel)}` : ''}.`
+    }
+    const { data: m } = await supabase.from('eingegangene_emails').select('id, betreff').eq('message_id', kennung).eq('besitzer_email', ich).maybeSingle()
+    if (!m) return 'Fehler: Diese Mail liegt nicht im privaten Postfach dieses Mitarbeiters.'
+    const { error } = await supabase
+      .from('eingegangene_emails')
+      .update({ besitzer_email: null, ignoriert: false, ...(ziel ? { zugewiesener_bereich: ziel.bereich, zugewiesener_kunde_id: ziel.id, zugewiesener_kunde_name: kundeName(ziel) } : {}) })
+      .eq('id', m.id)
+    if (error) return `Fehler: ${error.message}`
+    protokolliere(`Private Mail „${m.betreff}" in den öffentlichen Bereich geholt${ziel ? ` (Akte ${kundeName(ziel)})` : ''}`)
+    return `Erledigt: „${m.betreff}" liegt jetzt im gemeinsamen Postfach${ziel ? ` und ist ${kundeName(ziel)} zugeordnet` : ''}.`
+  }
 
   if (name === 'kunden_suchen') {
     const { data } = await supabase.from('kunden').select(KUNDE_SPALTEN).neq('bereich', 'privat')
@@ -1805,6 +1913,7 @@ So arbeitest du:
 - Behaupte nie, etwas erledigt zu haben, was kein Werkzeug bestätigt hat. Meldet ein Werkzeug einen Fehler oder kannst du etwas nicht, sag das offen und was stattdessen geht.
 - Erfinde nichts. Was nicht in Werkzeug-Ergebnissen oder im Gespräch steht, weißt du nicht. Ob es einen Kunden gibt oder nicht, sagst du erst, nachdem du mit kunden_suchen nachgesehen hast.
 - Die Bereiche der Holding heißen: Unternehmensberatung, Immobilien, Erben, Betriebsübergabe, Betriebsformen, Akademie, Finanzierungen. Verwende im Gespräch diese Namen.
+- Privater Bereich: Jeder Mitarbeiter hat einen privaten Bereich (eigenes Postfach, eigene Kontakte), den nur er selbst sieht. Du zeigst daraus nur etwas, wenn er ausdrücklich danach fragt (privater_bereich), und holst nur dann etwas in den öffentlichen Bereich (in_oeffentlich_holen), wenn er es klar verlangt. Passen mehrere Mails oder Kontakte, fragst du nach, welche gemeint ist. Bei einem Kontakt brauchst du den Ziel-Bereich; nennt er keinen, frag danach. Sag nach dem Rüberholen in einem Satz, wo es jetzt liegt.
 - Beziehe "er", "sie", "ihm", "seine Akte" auf den Kunden, um den es im Gespräch zuletzt ging. Ist nicht eindeutig, welcher Kunde gemeint ist (mehrere Treffer, kein Treffer, kein Bezug), frag kurz nach, statt zu raten. Lege niemals etwas bei einem Kunden ab, der nur vielleicht gemeint ist; bei Dateien nimmst du in diesem Fall die Sammelakte ziel=ungeklaert, statt zu fragen.
 - Fragt der Mitarbeiter im Gespräch nach einem Kunden, den es noch nicht gibt, sag das und biete an, ihn anzulegen. Frag nach dem Bereich, wenn er nicht klar ist. Sagt der Mitarbeiter klar, dass und wo er angelegt werden soll, leg ihn an. Für geschickte Dateien und weitergeleitete Nachrichten gilt das nicht: Dort legst du selbst an, ohne zu fragen (siehe unten).
 - Dateien: Jede geschickte Datei ist bereits sicher gespeichert, bevor du davon erfährst. Eine Nachricht, die mit "[Datei-Eingang" beginnt, kommt vom System und beschreibt, was angekommen ist. Du legst JEDE dieser Dateien noch im selben Zug mit dateien_ablegen in eine Akte. Du fragst vorher nicht nach und lässt nichts offen: Wer dir Dateien schickt, liest deine Rückfragen oft nicht, und dann bliebe die Datei liegen. Die Regeln, in dieser Reihenfolge:
@@ -2000,7 +2109,7 @@ async function webAnfrage(req: Request, body: any, headers: Record<string, strin
   if (nutzerFehler || !nutzer.user?.email) return json({ error: 'Anmeldung ungültig oder abgelaufen. Bitte neu anmelden.' }, 401)
   const { data: mitarbeiter } = await supabase
     .from('mitarbeiter')
-    .select('id, name, aktiv, rolle, ist_admin, bereiche, telegram_pending')
+    .select('id, name, email, aktiv, rolle, ist_admin, bereiche, telegram_pending')
     .eq('email', nutzer.user.email)
     .maybeSingle()
   if (!mitarbeiter || !mitarbeiter.aktiv) return json({ error: 'Kein aktiver Mitarbeiter-Zugang.' }, 403)
@@ -2070,7 +2179,7 @@ async function verarbeiteUpdate(update: any): Promise<void> {
 
   const { data: mitarbeiter } = await supabase
     .from('mitarbeiter')
-    .select('id, name, aktiv, rolle, ist_admin, bereiche, telegram_pending')
+    .select('id, name, email, aktiv, rolle, ist_admin, bereiche, telegram_pending')
     .eq('telegram_chat_id', chatId)
     .maybeSingle()
   if (!mitarbeiter || !mitarbeiter.aktiv) {
