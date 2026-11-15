@@ -565,16 +565,20 @@ export async function rufePostfachAb(
       if (liste.length > 0) await stelleAblageSicher(admin)
 
       let bytes = 0
-      for (const n of liste.slice(0, hoechstens)) {
+      let bearbeitet = 0
+      for (const n of liste) {
         if (Date.now() - beginn > budgetMs) break
-        if (erledigt > 0 && bytes + n.size > BYTES_JE_LAUF) break
-        bytes += n.size
         const umschlag = n.envelope ?? {}
+        // Kleine Mails gemeinsamer Postfächer kommen über die Weiterleitung — nur weiterzählen.
         if (gemeinsam && n.size <= WEITERLEITUNGS_GRENZE) {
           hoechsteUid = n.uid
           erledigt++
           continue
         }
+        if (bearbeitet >= hoechstens) break
+        if (bearbeitet > 0 && bytes + n.size > BYTES_JE_LAUF) break
+        bytes += n.size
+        bearbeitet++
         // Gemeinsam: dieselbe Kennung wie bei der Weiterleitung, damit nichts doppelt erscheint.
         const kennung = gemeinsam && umschlag.messageId ? String(umschlag.messageId) : `${p.id}:${umschlag.messageId ?? n.uid}`
         const { data: schonDa } = await admin.from('eingegangene_emails').select('id').eq('message_id', kennung).limit(1).maybeSingle()
