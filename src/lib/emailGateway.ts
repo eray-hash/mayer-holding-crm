@@ -511,3 +511,36 @@ export async function rechercheKundenUmfeld(params: { person: string; firma: str
 export async function setzeBewertungRechercheFort(params: { bereich: string; kundeId: string }): Promise<void> {
   await call({ action: 'bewertung_recherche_schritt', ...params })
 }
+
+// ---------- Kalender ----------
+
+export type TerminEingabe = {
+  id?: string
+  titel: string
+  beschreibung?: string
+  ort?: string
+  beginn: string
+  ende: string
+  ganztags?: boolean
+  teilnehmer?: string[]
+  kunde?: { id: string; bereich: string; name: string } | null
+  trotzUeberschneidung?: boolean
+}
+
+/** Der Server meldet, dass jemand in der Zeit schon belegt ist — der Nutzer kann trotzdem buchen. */
+export class TerminUeberschneidung extends Error {}
+
+export async function speichereTerminRemote(termin: TerminEingabe): Promise<{ benachrichtigt: string[]; ohneTelegram: string[] }> {
+  try {
+    const data = await callAuthenticated({ action: 'termin_speichern', termin })
+    return { benachrichtigt: data.benachrichtigt ?? [], ohneTelegram: data.ohneTelegram ?? [] }
+  } catch (err) {
+    if (err instanceof Error && /schon belegt/.test(err.message)) throw new TerminUeberschneidung(err.message)
+    throw err
+  }
+}
+
+export async function loescheTerminRemote(id: string): Promise<'abgesagt' | 'ausgetragen'> {
+  const data = await callAuthenticated({ action: 'termin_loeschen', id })
+  return data.art
+}

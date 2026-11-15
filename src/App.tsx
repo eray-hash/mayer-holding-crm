@@ -40,6 +40,7 @@ import { VorlagenPageFinanzierungen } from './pages/finanzierungen/VorlagenPageF
 import { PrivatListe } from './pages/privat/PrivatListe'
 import { PrivatDetail } from './pages/privat/PrivatDetail'
 import { PrivatPostfach } from './pages/privat/PrivatPostfach'
+import { Kalender } from './pages/kalender/Kalender'
 import { PostfachEinrichtenHinweis } from './components/PostfachEinstellungen'
 import { ToDoListe, BereichToDoListe } from './pages/todo/ToDoListe'
 import { HeuteScreen } from './pages/heute/HeuteScreen'
@@ -75,6 +76,7 @@ function AdminRoutesContent() {
         <Route path="/" element={<RootRedirect />} />
         <Route path="/heute" element={<HeuteScreen />} />
         <Route path="/postfach" element={<Postfach />} />
+        <Route path="/kalender" element={<Kalender />} />
         <Route path="/kampagnen" element={<Kampagnen />} />
         <Route path="/profil" element={<MeinProfil />} />
         <Route path="/mitarbeiter" element={<RequireAdmin><MitarbeiterVerwalten /></RequireAdmin>} />
@@ -85,6 +87,7 @@ function AdminRoutesContent() {
         <Route path="/privat" element={<PrivatListe />} />
         <Route path="/privat/kontakte/:id" element={<PrivatDetail />} />
         <Route path="/privat/postfach" element={<PrivatPostfach />} />
+        <Route path="/privat/kalender" element={<Kalender privat />} />
         <Route path="/privat/todo" element={<ToDoListe />} />
 
         <Route path="/beratung" element={<RequireBereich bereich="beratung"><KundenListe /></RequireBereich>} />

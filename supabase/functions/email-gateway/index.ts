@@ -221,6 +221,7 @@ import {
   verbindePostfach,
   zieheBesitzUm,
 } from './postfach.ts'
+import { loescheTermin, sendeErinnerungen, speichereTermin } from './kalender.ts'
 
 const ALLOWED_ORIGINS = [
   'https://eray-hash.github.io',
@@ -2430,6 +2431,29 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ ok: true }), { headers })
     }
 
+    // ---------- Kalender (siehe kalender.ts) ----------
+    if (body.action === 'termin_erinnerungen') {
+      // Vom Zeitplan jede Minute, ohne Login: verschickt fällige Erinnerungen, gibt nur eine Zahl zurück.
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const ergebnis = await sendeErinnerungen(admin)
+      return new Response(JSON.stringify({ ok: true, gesendet: ergebnis.gesendet }), { headers })
+    }
+    if (body.action === 'termin_speichern' || body.action === 'termin_loeschen') {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const aufrufer = await ermittleAufrufer(req, admin, body)
+      if (!aufrufer) {
+        return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
+      }
+      if (body.action === 'termin_loeschen') {
+        const ergebnis = await loescheTermin(admin, aufrufer, String(body.id ?? ''))
+        if (!ergebnis.ok) return new Response(JSON.stringify({ error: ergebnis.fehler }), { status: ergebnis.status, headers })
+        return new Response(JSON.stringify({ ok: true, art: ergebnis.art }), { headers })
+      }
+      const ergebnis = await speichereTermin(admin, aufrufer, body.termin ?? {})
+      if (!ergebnis.ok) return new Response(JSON.stringify({ error: ergebnis.fehler, belegt: ergebnis.belegt }), { status: ergebnis.status, headers })
+      return new Response(JSON.stringify({ ok: true, termin: ergebnis.termin, benachrichtigt: ergebnis.benachrichtigt, ohneTelegram: ergebnis.ohneTelegram }), { headers })
+    }
+
     // ---------- Postfächer (siehe postfach.ts) ----------
     if (
       body.action === 'postfaecher_liste' ||
@@ -3167,7 +3191,7 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ ok: true }), { headers })
     }
 
-    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "bewertung_recherche_start", "bewertung_recherche_schritt", "kunden_umfeld_recherche", "steuer_analyse_start", "steuer_analyse_schritt", "dokument_lesen", "dokument_inhalte", "postfaecher_liste", "postfach_verbinden", "postfach_trennen", "postfach_abruf", "mail_freigeben", "mail_anhang_url" oder "firmenwissen_answer"' }), { status: 400, headers })
+    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "bewertung_recherche_start", "bewertung_recherche_schritt", "kunden_umfeld_recherche", "steuer_analyse_start", "steuer_analyse_schritt", "dokument_lesen", "dokument_inhalte", "postfaecher_liste", "postfach_verbinden", "postfach_trennen", "postfach_abruf", "mail_freigeben", "mail_anhang_url", "termin_speichern", "termin_loeschen", "termin_erinnerungen" oder "firmenwissen_answer"' }), { status: 400, headers })
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }

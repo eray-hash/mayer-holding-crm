@@ -23,8 +23,7 @@ import {
   ChevronDown,
   Phone,
   Lock,
-  Search,
-} from 'lucide-react'
+  Search, CalendarDays } from 'lucide-react'
 import type { Bereich } from '../types'
 import { useApp } from '../context/AppContext'
 import { useAuth } from '../context/AuthContext'
@@ -190,6 +189,13 @@ export function Layout({ children }: { children: ReactNode }) {
             title="Gespräch aufzeichnen (Kunde per Telefonnummer oder Name finden)"
           >
             <Phone size={16} />
+          </button>
+          <button
+            onClick={() => navigate('/kalender')}
+            className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
+            title="Kalender (alle Kollegen)"
+          >
+            <CalendarDays size={16} />
           </button>
           <button
             onClick={() => navigate('/postfach')}

@@ -127,6 +127,26 @@ function heuteBerlin(): string {
   return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Berlin' }).format(new Date())
 }
 
+// Ortszeit Berlin ("2026-11-17T14:00") → Zeitpunkt. Sommer-/Winterzeit wird über den Versatz
+// bestimmt, den Berlin zu genau diesem Zeitpunkt hat.
+function berlinZuZeitpunkt(lokal: string): Date | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/.exec(String(lokal ?? '').trim())
+  if (!m) return null
+  const alsUtc = Date.UTC(+m[1], +m[2] - 1, +m[3], +(m[4] ?? 0), +(m[5] ?? 0))
+  const teile = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Berlin', hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).formatToParts(new Date(alsUtc))
+  const wert = (art: string) => Number(teile.find((t) => t.type === art)?.value ?? 0)
+  const berlinAlsUtc = Date.UTC(wert('year'), wert('month') - 1, wert('day'), wert('hour') % 24, wert('minute'))
+  return new Date(alsUtc - (berlinAlsUtc - alsUtc))
+}
+
+function berlinText(von: string, bis: string, ganztags: boolean): string {
+  const tag = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' })
+  const uhr = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit' })
+  const v = new Date(von)
+  const b = new Date(bis)
+  return ganztags ? `${tag.format(v)}, ganztägig` : `${tag.format(v)}, ${uhr.format(v)}–${uhr.format(b)} Uhr`
+}
+
 function deDatum(iso: string | undefined | null): string {
   const m = (iso ?? '').match(/^(\d{4})-(\d{2})-(\d{2})/)
   return m ? `${m[3]}.${m[2]}.${m[1]}` : (iso ?? '')
@@ -1041,6 +1061,45 @@ const TOOLS = [
     input_schema: { type: 'object', properties: {} },
   },
   {
+    name: 'termine_zeigen',
+    description:
+      'Kalender. Ohne person: die Termine des Mitarbeiters, mit dem du sprichst (eigene und gemeinsam gebuchte, vollständig). Mit person: wann dieser Kollege belegt ist — von fremden Terminen kennst du NUR die Zeit, nie den Inhalt; gemeinsam gebuchte Termine erscheinen vollständig. Nutze das auch, um einen freien Zeitpunkt für einen gemeinsamen Termin zu finden.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        von: { type: 'string', description: 'Erster Tag, JJJJ-MM-TT (Standard: heute).' },
+        bis: { type: 'string', description: 'Letzter Tag, JJJJ-MM-TT (Standard: 7 Tage nach von).' },
+        person: { type: 'string', description: 'Optional: Name eines Kollegen, dessen belegte Zeiten gezeigt werden sollen.' },
+      },
+    },
+  },
+  {
+    name: 'termin_anlegen',
+    description:
+      'Legt einen Termin im Kalender des Mitarbeiters an, mit dem du sprichst. Mit teilnehmer steht er auch im Kalender dieser Kollegen, und sie bekommen eine Telegram-Nachricht. Zeiten sind Ortszeit (Deutschland) im Format JJJJ-MM-TTTHH:MM. Meldet das Werkzeug eine Überschneidung, frag nach, ob trotzdem gebucht werden soll, und ruf es dann mit trotz_ueberschneidung=true erneut auf.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        titel: { type: 'string' },
+        beginn: { type: 'string', description: 'JJJJ-MM-TTTHH:MM (bei ganztägig reicht JJJJ-MM-TT).' },
+        ende: { type: 'string', description: 'JJJJ-MM-TTTHH:MM. Ohne Angabe eine Stunde nach beginn.' },
+        ganztags: { type: 'boolean' },
+        teilnehmer: { type: 'array', items: { type: 'string' }, description: 'Namen der Kollegen, die dabei sind (ohne den Mitarbeiter selbst).' },
+        ort: { type: 'string' },
+        notiz: { type: 'string' },
+        kunde_id: { type: 'string', description: 'Optional: Kundenakte, zu der der Termin gehört.' },
+        trotz_ueberschneidung: { type: 'boolean' },
+      },
+      required: ['titel', 'beginn'],
+    },
+  },
+  {
+    name: 'termin_absagen',
+    description:
+      'Sagt einen Termin ab (termin_id aus termine_zeigen). Hat der Mitarbeiter ihn selbst angelegt, wird er für alle gelöscht und die Beteiligten bekommen eine Nachricht; sonst trägt er nur sich selbst aus. Nur aufrufen, wenn der Mitarbeiter das ausdrücklich will und eindeutig ist, welcher Termin gemeint ist.',
+    input_schema: { type: 'object', properties: { termin_id: { type: 'string' } }, required: ['termin_id'] },
+  },
+  {
     name: 'privater_bereich',
     description:
       'Zeigt, was im PRIVATEN Bereich des Mitarbeiters liegt, mit dem du gerade sprichst (nur seine eigenen Sachen, niemand sonst sieht sie): Mails aus seinem privaten Postfach (Eingang und Gesendet) und seine privaten Kontakte. Nur verwenden, wenn er ausdrücklich nach seinem privaten Postfach / seinen privaten Kontakten fragt oder etwas daraus in den öffentlichen Bereich holen will.',
@@ -1080,6 +1139,110 @@ async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKontext): Pr
   const { supabase, mitarbeiter, state } = ctx
   const heute = heuteBerlin()
   const protokolliere = (text: string) => state.aktionen.push({ z: new Date().toISOString(), text })
+
+  // Kalender: Lesen direkt (an die eigene Adresse gebunden), Schreiben über die Mail-Funktion — dort
+  // liegen Überschneidungsprüfung, Telegram-Nachricht an Beteiligte und die Erinnerungen.
+  if (name === 'termine_zeigen' || name === 'termin_anlegen' || name === 'termin_absagen') {
+    const ich = String(mitarbeiter.email ?? '').trim().toLowerCase()
+    if (!ich) return 'Fehler: Für diesen Mitarbeiter ist keine E-Mail-Adresse hinterlegt.'
+    const { data: teamZeilen } = await supabase.from('mitarbeiter').select('name, email').eq('aktiv', true)
+    const team = ((teamZeilen ?? []) as { name: string; email: string }[]).map((m) => ({ name: m.name, email: String(m.email).toLowerCase() }))
+    const nameVon = (email: string) => (email === ich ? 'du' : team.find((m) => m.email === email)?.name ?? email)
+    const findePerson = (angabe: string) => {
+      const n = norm(angabe)
+      const treffer = team.filter((m) => m.email !== ich && (norm(m.name) === n || norm(m.name).split(' ').includes(n) || norm(m.name).includes(n)))
+      return treffer.length === 1 ? treffer[0] : null
+    }
+    const rufeKalender = async (body: Record<string, unknown>) => {
+      const antwort = await fetch(`${SUPABASE_URL}/functions/v1/email-gateway`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`, ...(CRM_SHARED_SECRET ? { 'x-crm-secret': CRM_SHARED_SECRET } : {}) },
+        body: JSON.stringify({ ...body, imAuftragVon: ich }),
+      })
+      return { ok: antwort.ok, status: antwort.status, daten: await antwort.json().catch(() => ({})) }
+    }
+
+    if (name === 'termine_zeigen') {
+      const von = berlinZuZeitpunkt(String(input.von || heute))
+      const bisTag = berlinZuZeitpunkt(String(input.bis || ''))
+      if (!von) return 'Fehler: von muss das Format JJJJ-MM-TT haben.'
+      const bis = bisTag ? new Date(bisTag.getTime() + 86400000) : new Date(von.getTime() + 8 * 86400000)
+      const { data } = await supabase.from('termine').select('id, titel, ort, beginn, ende, ganztags, besitzer_email, teilnehmer, kunde_name').lt('beginn', bis.toISOString()).gt('ende', von.toISOString()).order('beginn')
+      // deno-lint-ignore no-explicit-any
+      const alle = (data ?? []) as any[]
+      // deno-lint-ignore no-explicit-any
+      const beteiligt = (t: any, wer: string) => String(t.besitzer_email).toLowerCase() === wer || (t.teilnehmer ?? []).includes(wer)
+      // deno-lint-ignore no-explicit-any
+      const voll = (t: any) => ({
+        termin_id: t.id,
+        titel: t.titel,
+        wann: berlinText(t.beginn, t.ende, t.ganztags),
+        ort: t.ort || undefined,
+        kunde: t.kunde_name || undefined,
+        dabei: [String(t.besitzer_email).toLowerCase(), ...(t.teilnehmer ?? [])].map(nameVon),
+        angelegt_von: nameVon(String(t.besitzer_email).toLowerCase()),
+      })
+      if (input.person) {
+        const person = findePerson(String(input.person))
+        if (!person) return `Fehler: „${input.person}" ist kein eindeutiger Kollege. Aktive Kollegen: ${team.filter((m) => m.email !== ich).map((m) => m.name).join(', ')}.`
+        const { data: einst } = await supabase.from('kalender_einstellungen').select('sichtbar').eq('email', person.email).maybeSingle()
+        const seine = alle.filter((t) => beteiligt(t, person.email))
+        const liste = seine
+          .filter((t) => beteiligt(t, ich) || einst?.sichtbar !== false)
+          .map((t) => (beteiligt(t, ich) ? voll(t) : { belegt: berlinText(t.beginn, t.ende, t.ganztags), inhalt: 'privat — nicht einsehbar' }))
+        if (liste.length === 0) return `${person.name} hat in diesem Zeitraum keine Termine im Kalender${einst?.sichtbar === false ? ' (er/sie zeigt Kollegen den Kalender allerdings nicht)' : ''}.`
+        return JSON.stringify({ kollege: person.name, eintraege: liste })
+      }
+      const meine = alle.filter((t) => beteiligt(t, ich)).map(voll)
+      return meine.length === 0 ? 'In diesem Zeitraum stehen keine Termine im Kalender.' : JSON.stringify(meine)
+    }
+
+    if (name === 'termin_absagen') {
+      const ergebnis = await rufeKalender({ action: 'termin_loeschen', id: String(input.termin_id ?? '') })
+      if (!ergebnis.ok) return `Fehler: ${ergebnis.daten?.error ?? `Absagen fehlgeschlagen (${ergebnis.status})`}`
+      protokolliere(`Termin ${ergebnis.daten.art === 'abgesagt' ? 'abgesagt' : 'für sich abgesagt'} (termin_id=${input.termin_id})`)
+      return ergebnis.daten.art === 'abgesagt' ? 'Der Termin ist abgesagt; die Beteiligten wurden benachrichtigt.' : 'Du bist aus dem Termin ausgetragen; wer ihn angelegt hat, wurde benachrichtigt.'
+    }
+
+    const beginn = berlinZuZeitpunkt(String(input.beginn ?? ''))
+    if (!beginn) return 'Fehler: beginn muss das Format JJJJ-MM-TTTHH:MM haben.'
+    const ganztags = input.ganztags === true
+    const ende = ganztags ? new Date(beginn.getTime() + 86400000) : (berlinZuZeitpunkt(String(input.ende ?? '')) ?? new Date(beginn.getTime() + 3600000))
+    const teilnehmer: string[] = []
+    for (const angabe of Array.isArray(input.teilnehmer) ? input.teilnehmer : []) {
+      const person = findePerson(String(angabe))
+      if (!person) return `Fehler: „${angabe}" ist kein eindeutiger Kollege. Aktive Kollegen: ${team.filter((m) => m.email !== ich).map((m) => m.name).join(', ')}.`
+      teilnehmer.push(person.email)
+    }
+    const kunde = input.kunde_id ? await ladeKunde(supabase, input.kunde_id) : null
+    if (input.kunde_id && !kunde) return KEIN_KUNDE
+    const ergebnis = await rufeKalender({
+      action: 'termin_speichern',
+      termin: {
+        titel: String(input.titel ?? '').trim(),
+        beginn: beginn.toISOString(),
+        ende: ende.toISOString(),
+        ganztags,
+        teilnehmer,
+        ort: String(input.ort ?? ''),
+        beschreibung: String(input.notiz ?? ''),
+        kunde: kunde ? { id: kunde.id, bereich: kunde.bereich, name: kundeName(kunde) } : null,
+        trotzUeberschneidung: input.trotz_ueberschneidung === true,
+        quelle: 'assistent',
+      },
+    })
+    if (ergebnis.status === 409) return `Überschneidung: ${ergebnis.daten?.error} Nicht gebucht. Frag, ob trotzdem gebucht werden soll (dann trotz_ueberschneidung=true) oder ein anderer Zeitpunkt.`
+    if (!ergebnis.ok) return `Fehler: ${ergebnis.daten?.error ?? `Termin konnte nicht angelegt werden (${ergebnis.status})`}`
+    const t = ergebnis.daten.termin
+    protokolliere(`Termin „${t.titel}" angelegt, ${berlinText(t.beginn, t.ende, t.ganztags)} (termin_id=${t.id})`)
+    return [
+      `Angelegt: „${t.titel}", ${berlinText(t.beginn, t.ende, t.ganztags)}. termin_id=${t.id}`,
+      (ergebnis.daten.benachrichtigt ?? []).length > 0 ? `Per Telegram benachrichtigt: ${ergebnis.daten.benachrichtigt.join(', ')}.` : '',
+      (ergebnis.daten.ohneTelegram ?? []).length > 0 ? `Ohne Nachricht (Telegram nicht verbunden): ${ergebnis.daten.ohneTelegram.join(', ')} — der Termin steht trotzdem in ihrem Kalender.` : '',
+    ]
+      .filter(Boolean)
+      .join(' ')
+  }
 
   // Privater Bereich: ausschließlich die Sachen des Mitarbeiters, der gerade schreibt — jede Abfrage
   // ist an seine eigene Adresse gebunden, nie an eine Angabe aus dem Gespräch.
@@ -1918,6 +2081,7 @@ So arbeitest du:
 - Behaupte nie, etwas erledigt zu haben, was kein Werkzeug bestätigt hat. Meldet ein Werkzeug einen Fehler oder kannst du etwas nicht, sag das offen und was stattdessen geht.
 - Erfinde nichts. Was nicht in Werkzeug-Ergebnissen oder im Gespräch steht, weißt du nicht. Ob es einen Kunden gibt oder nicht, sagst du erst, nachdem du mit kunden_suchen nachgesehen hast.
 - Die Bereiche der Holding heißen: Unternehmensberatung, Immobilien, Erben, Betriebsübergabe, Betriebsformen, Akademie, Finanzierungen. Verwende im Gespräch diese Namen.
+- Kalender: Jeder Mitarbeiter hat seinen eigenen Kalender. Du zeigst und buchst Termine mit termine_zeigen, termin_anlegen und termin_absagen. Uhrzeiten sind immer deutsche Ortszeit. Fehlt für einen neuen Termin der Tag oder die Uhrzeit, frag kurz nach, statt zu raten; ohne genannte Dauer gilt eine Stunde. Soll ein Kollege dabei sein, sieh vorher mit termine_zeigen (person) nach, ob er frei ist, und schlag bei Belegung einen freien Zeitpunkt vor. Von fremden Terminen kennst du nur die Uhrzeit — sag dann „ist belegt“, nie mehr.
 - Privater Bereich: Jeder Mitarbeiter hat einen privaten Bereich (eigenes Postfach, eigene Kontakte), den nur er selbst sieht. Du zeigst daraus nur etwas, wenn er ausdrücklich danach fragt (privater_bereich), und holst nur dann etwas in den öffentlichen Bereich (in_oeffentlich_holen), wenn er es klar verlangt. Passen mehrere Mails oder Kontakte, fragst du nach, welche gemeint ist. Bei einem Kontakt brauchst du den Ziel-Bereich; nennt er keinen, frag danach. Sag nach dem Rüberholen in einem Satz, wo es jetzt liegt.
 - Beziehe "er", "sie", "ihm", "seine Akte" auf den Kunden, um den es im Gespräch zuletzt ging. Ist nicht eindeutig, welcher Kunde gemeint ist (mehrere Treffer, kein Treffer, kein Bezug), frag kurz nach, statt zu raten. Lege niemals etwas bei einem Kunden ab, der nur vielleicht gemeint ist; bei Dateien nimmst du in diesem Fall die Sammelakte ziel=ungeklaert, statt zu fragen.
 - Fragt der Mitarbeiter im Gespräch nach einem Kunden, den es noch nicht gibt, sag das und biete an, ihn anzulegen. Frag nach dem Bereich, wenn er nicht klar ist. Sagt der Mitarbeiter klar, dass und wo er angelegt werden soll, leg ihn an. Für geschickte Dateien und weitergeleitete Nachrichten gilt das nicht: Dort legst du selbst an, ohne zu fragen (siehe unten).
@@ -1978,7 +2142,7 @@ export async function agentAntwort(supabase: Supa, mitarbeiter: Mitarbeiter, sta
     {
       type: 'text',
       text: [
-        `Heute ist ${wochentag}, der ${deDatum(heuteBerlin())} (${heuteBerlin()}).`,
+        `Heute ist ${wochentag}, der ${deDatum(heuteBerlin())} (${heuteBerlin()}), es ist ${new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit' }).format(new Date())} Uhr.`,
         `Du schreibst mit ${mitarbeiter.name}${mitarbeiter.rolle === 'geschaeftsfuehrung' ? ' (Geschäftsführung)' : ''}.`,
         kanal === 'web'
           ? 'Dieses Gespräch läuft im Assistenten-Fenster des CRM, nicht in Telegram. Dateien kann der Mitarbeiter dir hier nicht schicken; dafür nutzt er Telegram oder lädt sie in der Akte hoch. Die Abschlussmeldung eines E-Mail-Versands erscheint hier im Fenster.'
