@@ -2437,6 +2437,20 @@ Deno.serve(async (req: Request) => {
       // Vom Zeitplan jede Minute, ohne Login: verschickt fällige Erinnerungen, gibt nur eine Zahl zurück.
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
       const ergebnis = await sendeErinnerungen(admin)
+      // Derselbe Minutentakt hält auch die Warteschlange für Sammelsendungen per Telegram in Gang
+      // (falls ein Schritt abgebrochen ist oder an der Mengengrenze des KI-Dienstes warten musste).
+      try {
+        const { count } = await admin.from('telegram_warteschlange').select('id', { count: 'exact', head: true })
+        if ((count ?? 0) > 0) {
+          await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/telegram-gateway`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', ...(sharedSecret ? { 'x-crm-secret': sharedSecret } : {}) },
+            body: JSON.stringify({ intern: 'sortier_anstoss' }),
+          })
+        }
+      } catch (err) {
+        console.error('Anstoß der Telegram-Warteschlange fehlgeschlagen:', err)
+      }
       return new Response(JSON.stringify({ ok: true, gesendet: ergebnis.gesendet }), { headers })
     }
     if (body.action === 'termin_speichern' || body.action === 'termin_loeschen') {

@@ -2115,14 +2115,23 @@ Ton und Form:
 // deno-lint-ignore no-explicit-any
 async function claude(system: unknown[], messages: unknown[]): Promise<any> {
   if (!ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY ist nicht gesetzt.')
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model: AGENT_MODEL, max_tokens: 2000, system, tools: TOOLS, messages }),
-  })
-  const data = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error(`KI-Dienst antwortet mit ${res.status}: ${data?.error?.message ?? 'unbekannter Fehler'}`)
-  return data
+  // Mengengrenze (429) oder Überlast (529) des KI-Dienstes: kurz warten und noch einmal versuchen,
+  // statt dem Mitarbeiter sofort einen Fehler zu zeigen.
+  for (let versuch = 0; ; versuch++) {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({ model: AGENT_MODEL, max_tokens: 2000, system, tools: TOOLS, messages }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (res.ok) return data
+    if ((res.status === 429 || res.status === 529) && versuch < 2) {
+      const warten = Math.min(20, Math.max(3, Number(res.headers.get('retry-after')) || 8 * (versuch + 1)))
+      await new Promise((r) => setTimeout(r, warten * 1000))
+      continue
+    }
+    throw new Error(`KI-Dienst antwortet mit ${res.status}: ${data?.error?.message ?? 'unbekannter Fehler'}`)
+  }
 }
 
 // Ein Gesprächszug: bekommt die neue Nachricht (oder einen Datei-Eingang), arbeitet mit Werkzeugen,
@@ -2321,6 +2330,143 @@ async function webAnfrage(req: Request, body: any, headers: Record<string, strin
   return json({ antwort, geaendert, mailStart: mailStart ?? null })
 }
 
+// ---------- Viele Dateien auf einmal ----------
+//
+// Am 16.11.2026 kamen 109 Dateien in einer Minute. Jede startete ihren eigenen Assistenten-Lauf; der
+// KI-Dienst lehnte fast alle wegen seiner Mengengrenze ab (429), und die 109 gleichzeitigen
+// Not-Ablagen haben sich in der Sammelakte gegenseitig überschrieben. Seitdem gilt: Je Mitarbeiter
+// läuft immer nur EIN Datei-Lauf. Kommt währenddessen eine weitere Datei, wird sie nur gespeichert
+// und in die Tabelle `telegram_warteschlange` eingetragen (ein Eintrag je Datei, nichts wird
+// überschrieben). Ein Schritt nach dem anderen arbeitet die Schlange ab und meldet sich am Ende
+// einmal — statt hundert Fehlermeldungen.
+
+async function belegeDateiLauf(supabase: Supa, mitarbeiterId: string): Promise<boolean> {
+  const jetzt = new Date()
+  const { data } = await supabase
+    .from('mitarbeiter')
+    .update({ datei_lauf_seit: jetzt.toISOString() })
+    .eq('id', mitarbeiterId)
+    // Ein Lauf lebt höchstens 150 Sekunden — ein älterer Eintrag stammt von einem abgebrochenen.
+    .or(`datei_lauf_seit.is.null,datei_lauf_seit.lt.${new Date(jetzt.getTime() - 170000).toISOString()}`)
+    .select('id')
+  return (data ?? []).length > 0
+}
+
+async function gebeDateiLaufFrei(supabase: Supa, mitarbeiterId: string): Promise<void> {
+  await supabase.from('mitarbeiter').update({ datei_lauf_seit: null }).eq('id', mitarbeiterId)
+}
+
+// Nur speichern, nichts auswerten: für Dateien, die in die Warteschlange kommen.
+// deno-lint-ignore no-explicit-any
+async function speichereNurDatei(supabase: Supa, message: any): Promise<string> {
+  const photo = message.photo?.at(-1)
+  const medium = message.document ?? message.audio ?? message.voice ?? message.video ?? message.video_note ?? message.animation
+  const caption: string = message.caption?.trim() ?? ''
+  const stempel = Date.now()
+  const dateiname: string =
+    medium?.file_name ??
+    (message.voice ? `sprachnachricht_${stempel}.ogg` : message.audio ? `audio_${stempel}.mp3` : message.video || message.video_note ? `video_${stempel}.mp4` : `foto_${stempel}.jpg`)
+  const contentType: string = medium?.mime_type ?? (message.voice ? 'audio/ogg' : message.audio ? 'audio/mpeg' : message.video || message.video_note ? 'video/mp4' : 'image/jpeg')
+  const bytes = await telegramDateiHerunterladen(medium?.file_id ?? photo.file_id)
+  if (!bytes) return `NICHT gespeichert: „${dateiname}" — Telegram gibt die Datei nicht heraus (meist, weil sie größer als 20 MB ist). Sag dem Mitarbeiter, dass er sie im CRM direkt in der Akte hochladen soll.`
+  const pfad = `${ORDNER}/${stempel}_h${await inhaltsHash(bytes)}_${sicheresPfadsegment(dateiname)}`
+  const { error } = await supabase.storage.from(BUCKET).upload(pfad, bytes, { contentType, upsert: true })
+  if (error) return `NICHT gespeichert: „${dateiname}" — Speichern fehlgeschlagen (${error.message}). Sag dem Mitarbeiter, dass er die Datei noch einmal schicken soll.`
+  return `pfad=${pfad} | Name: ${dateiname}${caption ? ` | Bildunterschrift: „${caption}"` : ''}`
+}
+
+async function stosseSortierSchrittAn(mitarbeiterId: string): Promise<void> {
+  await fetch(`${SUPABASE_URL}/functions/v1/telegram-gateway`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...(CRM_SHARED_SECRET ? { 'x-crm-secret': CRM_SHARED_SECRET } : {}) },
+    body: JSON.stringify({ intern: 'sortier_schritt', mitarbeiterId }),
+  }).catch((err) => console.error('Sortier-Schritt konnte nicht angestoßen werden:', err))
+}
+
+// Eine Nachricht am Ende statt einer je Datei: wie viele Dateien wohin gekommen sind.
+function sortierBericht(aktionen: string[]): string {
+  const jeAkte = new Map<string, number>()
+  const neueAkten: string[] = []
+  const nichtGespeichert: string[] = []
+  for (const a of aktionen) {
+    const ablage = /^(\d+) Datei\(en\) (?:bei|unter) (.+?) abgelegt/.exec(a)
+    if (ablage) jeAkte.set(ablage[2], (jeAkte.get(ablage[2]) ?? 0) + Number(ablage[1]))
+    const neu = /^Kunde (.+?) im Bereich (.+?) (?:automatisch )?angelegt/.exec(a)
+    if (neu) neueAkten.push(`${neu[1]} (${neu[2]})`)
+    if (a.startsWith('NICHT gespeichert')) nichtGespeichert.push(a)
+  }
+  const gesamt = [...jeAkte.values()].reduce((x, y) => x + y, 0)
+  const zeilen = [`Fertig: ${gesamt} ${gesamt === 1 ? 'Datei ist' : 'Dateien sind'} einsortiert.`, '']
+  for (const [akte, n] of [...jeAkte.entries()].sort((x, y) => y[1] - x[1]).slice(0, 40)) zeilen.push(`${n} × ${akte}`)
+  if (neueAkten.length > 0) zeilen.push('', `Neu angelegte Akten (bitte kurz prüfen): ${neueAkten.join(', ')}`)
+  if (jeAkte.has('Ungeklärte Eingänge')) zeilen.push('', 'Was unter „Ungeklärte Eingänge" liegt, konnte ich keinem Kunden zuordnen. Sag mir einfach, wohin es soll.')
+  if (nichtGespeichert.length > 0) zeilen.push('', ...nichtGespeichert.slice(0, 5))
+  return zeilen.join('\n').slice(0, 3900)
+}
+
+// Arbeitet die nächsten Dateien aus der Warteschlange eines Mitarbeiters ab (ein kleiner Stapel je
+// Schritt, weil ein Aufruf nur begrenzt lange lebt) und stößt bei Bedarf den nächsten Schritt an.
+export async function fuehreSortierSchrittAus(mitarbeiterId: string, selbstWeiter = true): Promise<'leer' | 'belegt' | 'weiter' | 'fertig' | 'spaeter'> {
+  const supabase = supa()
+  if (!(await belegeDateiLauf(supabase, mitarbeiterId))) return 'belegt'
+  let weiter = false
+  try {
+    const { data: zeilen } = await supabase.from('telegram_warteschlange').select('id, chat_id, zeile').eq('mitarbeiter_id', mitarbeiterId).order('id').limit(3)
+    // deno-lint-ignore no-explicit-any
+    const stapel = (zeilen ?? []) as any[]
+    if (stapel.length === 0) return 'leer'
+    const { data: m } = await supabase.from('mitarbeiter').select('id, name, email, aktiv, rolle, ist_admin, bereiche, telegram_chat_id, datei_bericht').eq('id', mitarbeiterId).maybeSingle()
+    if (!m) return 'leer'
+    const bericht: string[] = Array.isArray(m.datei_bericht) ? [...m.datei_bericht] : []
+    const gespeichert = stapel.filter((z) => String(z.zeile).startsWith('pfad='))
+    for (const z of stapel) if (!String(z.zeile).startsWith('pfad=')) bericht.push(String(z.zeile))
+    if (gespeichert.length > 0) {
+      const eingang = [
+        '[Datei-Eingang per Telegram — Systemmeldung, nicht vom Mitarbeiter getippt]',
+        'Sammelsendung: Diese Dateien kamen zusammen mit vielen anderen, ohne Gespräch dazu. Ordne jede einzeln ein (Inhalt bei Bedarf mit datei_lesen ansehen).',
+        'Gespeichert, noch keiner Akte zugeordnet:',
+        ...gespeichert.map((z, i) => `${i + 1}. ${z.zeile}`),
+      ].join('\n')
+      // Eigener, leerer Verlauf: Eine Sammelsendung soll das laufende Gespräch nicht verdrängen.
+      const state = { v: 3, zuege: [], aktionen: [] } as unknown as AgentState
+      try {
+        await agentAntwort(supabase, m as Mitarbeiter, state, eingang)
+      } catch (err) {
+        console.error('Sortier-Schritt: Assistent fehlgeschlagen:', err)
+        // Mengengrenze oder Überlast: Die Dateien bleiben in der Schlange, der Zeitplan versucht es gleich wieder.
+        if (/\b(429|529)\b|rate limit|overloaded/i.test(String(err))) return 'spaeter'
+      }
+      // Was der Assistent nicht abgelegt hat, kommt in die Sammelakte — hier schreibt immer nur ein Lauf.
+      const nachgelegt = await stelleAblageSicher(supabase, m.name, eingang).catch(() => [] as string[])
+      bericht.push(...state.aktionen.map((a) => a.text))
+      if (nachgelegt.length > 0) bericht.push(`${nachgelegt.length} Datei(en) bei Ungeklärte Eingänge abgelegt: ${nachgelegt.join(', ')}`)
+    }
+    await supabase.from('telegram_warteschlange').delete().in('id', stapel.map((z) => z.id))
+    const { count } = await supabase.from('telegram_warteschlange').select('id', { count: 'exact', head: true }).eq('mitarbeiter_id', mitarbeiterId)
+    if ((count ?? 0) > 0) {
+      await supabase.from('mitarbeiter').update({ datei_bericht: bericht }).eq('id', mitarbeiterId)
+      weiter = true
+      return 'weiter'
+    }
+    await supabase.from('mitarbeiter').update({ datei_bericht: null }).eq('id', mitarbeiterId)
+    const chat = Number(stapel[0].chat_id ?? m.telegram_chat_id)
+    if (chat) await sendTelegramMessage(chat, sortierBericht(bericht))
+    return 'fertig'
+  } finally {
+    await gebeDateiLaufFrei(supabase, mitarbeiterId)
+    if (weiter && selbstWeiter) await stosseSortierSchrittAn(mitarbeiterId)
+  }
+}
+
+// Vom Zeitplan (jede Minute): Schlangen anstoßen, an denen gerade niemand arbeitet.
+async function stosseWartendeAn(): Promise<number> {
+  const supabase = supa()
+  const { data } = await supabase.from('telegram_warteschlange').select('mitarbeiter_id').limit(500)
+  const ids = [...new Set(((data ?? []) as { mitarbeiter_id: string }[]).map((z) => z.mitarbeiter_id))]
+  for (const id of ids) await stosseSortierSchrittAn(id)
+  return ids.length
+}
+
 // deno-lint-ignore no-explicit-any
 async function verarbeiteUpdate(update: any): Promise<void> {
   const message = update?.message
@@ -2366,6 +2512,7 @@ async function verarbeiteUpdate(update: any): Promise<void> {
   // Eine selbst gesprochene Sprachnachricht (nicht weitergeleitet) ist eine Nachricht an den
   // Assistenten, kein Dokument: Sie wird abgehört und wie getippter Text behandelt. Die Tondatei
   // wird dafür nicht abgelegt — sonst läge jeder gesprochene Auftrag als Datei in einer Akte.
+  let dateiLauf = false
   let gesprochen = ''
   if (message.voice && !weitergeleitet && kannAbhoeren()) {
     try {
@@ -2383,7 +2530,29 @@ async function verarbeiteUpdate(update: any): Promise<void> {
     istDatei = false
     eingang = `[Sprachnachricht des Mitarbeiters, automatisch abgehört — behandle sie wie eine getippte Nachricht. Hörfehler sind möglich, vor allem bei Namen und Zahlen.]\n${gesprochen}`
   } else if (istDatei) {
-    eingang = await verarbeiteDateiEingang(supabase, message)
+    // Läuft für diesen Mitarbeiter schon ein Datei-Lauf (oder wartet schon etwas), kommt die Datei in
+    // die Warteschlange: speichern, eintragen, fertig — kein eigener Assistenten-Lauf.
+    const { count: wartend } = await supabase.from('telegram_warteschlange').select('id', { count: 'exact', head: true }).eq('mitarbeiter_id', String(mitarbeiter.id))
+    dateiLauf = (wartend ?? 0) === 0 && (await belegeDateiLauf(supabase, mitarbeiter.id))
+    if (!dateiLauf) {
+      let zeile = await speichereNurDatei(supabase, message)
+      if (weitergeleitet && vonWem && zeile.startsWith('pfad=')) zeile += ` | weitergeleitet, ursprünglich von ${vonWem}`
+      await supabase.from('telegram_warteschlange').insert({ mitarbeiter_id: String(mitarbeiter.id), chat_id: String(chatId), zeile })
+      // Genau eine Rückmeldung je Sammelsendung: Nur wer den Bericht als Erster eröffnet, schreibt.
+      const { data: erster } = await supabase.from('mitarbeiter').update({ datei_bericht: [] }).eq('id', mitarbeiter.id).is('datei_bericht', null).select('id')
+      if ((erster ?? []).length > 0) {
+        await sendTelegramMessage(chatId, 'Da kommen mehrere Dateien auf einmal. Ich speichere alle und sortiere sie der Reihe nach ein — du bekommst eine Nachricht, wenn ich fertig bin.')
+      }
+      // Falls gerade niemand mehr arbeitet, selbst anstoßen (sonst tut es der laufende Lauf am Ende).
+      await stosseSortierSchrittAn(String(mitarbeiter.id))
+      return
+    }
+    try {
+      eingang = await verarbeiteDateiEingang(supabase, message)
+    } catch (err) {
+      await gebeDateiLaufFrei(supabase, mitarbeiter.id)
+      throw err
+    }
     if (weitergeleitet) eingang += `\nDie Datei wurde aus einem anderen Chat weitergeleitet${vonWem ? ` (ursprünglich von ${vonWem})` : ''}.`
   } else if (text) {
     eingang = weitergeleitet
@@ -2394,6 +2563,7 @@ async function verarbeiteUpdate(update: any): Promise<void> {
     return
   }
 
+  try {
   const state = ladeState(mitarbeiter.telegram_pending)
   let antwort: string
   try {
@@ -2422,6 +2592,13 @@ async function verarbeiteUpdate(update: any): Promise<void> {
   const mailStart = await speichereZustand(supabase, mitarbeiter.id, state)
   await sendTelegramMessage(chatId, antwort)
   if (mailStart) await stosseMailSchrittAn(mitarbeiter.id, mailStart, {}, 0)
+  } finally {
+    // Datei-Lauf beenden; was inzwischen in die Warteschlange gekommen ist, wird jetzt abgearbeitet.
+    if (dateiLauf) {
+      await gebeDateiLaufFrei(supabase, mitarbeiter.id)
+      await stosseSortierSchrittAn(String(mitarbeiter.id))
+    }
+  }
 }
 
 Deno.serve(async (req: Request) => {
@@ -2443,6 +2620,22 @@ Deno.serve(async (req: Request) => {
     const schritt = fuehreMailSchrittAus(body.mitarbeiterId, body.auftragId, body.fehlversuche && typeof body.fehlversuche === 'object' ? body.fehlversuche : {}, Number(body.runde) || 0).catch((err) =>
       console.error('Mail-Schritt fehlgeschlagen:', err),
     )
+    if (runtime?.waitUntil) runtime.waitUntil(schritt)
+    else await schritt
+    return new Response('ok')
+  }
+
+  // Warteschlange für Sammelsendungen: ein Schritt je Aufruf bzw. Anstoß durch den Zeitplan. Beides
+  // kann nichts Neues auslösen, nur bereits gespeicherte Dateien einsortieren.
+  if (body?.intern === 'sortier_schritt' || body?.intern === 'sortier_anstoss') {
+    if (!CRM_SHARED_SECRET || req.headers.get('x-crm-secret') !== CRM_SHARED_SECRET) return new Response('Unauthorized', { status: 401 })
+    const schritt = (
+      body.intern === 'sortier_anstoss'
+        ? stosseWartendeAn()
+        : typeof body.mitarbeiterId === 'string'
+          ? fuehreSortierSchrittAus(body.mitarbeiterId)
+          : Promise.resolve('leer')
+    ).catch((err) => console.error('Sortier-Schritt fehlgeschlagen:', err))
     if (runtime?.waitUntil) runtime.waitUntil(schritt)
     else await schritt
     return new Response('ok')
