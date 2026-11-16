@@ -181,6 +181,7 @@ async function passwortVon(admin: Db, p: Postfach): Promise<string> {
 }
 
 export async function absenderVon(admin: Db, p: Postfach): Promise<MailAbsender> {
+  if (!p.smtp_host) throw new Error(`Von ${p.adresse} kann das CRM nicht senden — der Anbieter lässt den Versand von unserem Server nicht zu. Dieses Postfach ist nur für den Empfang angebunden.`)
   return {
     adresse: p.adresse,
     anzeigeName: p.anzeige_name || undefined,
@@ -199,6 +200,7 @@ export type PostfachInfo = {
   eigenes: boolean
   besitzer: string | null
   bereit: boolean
+  kannSenden: boolean
   holtAb: boolean
   letzterAbruf: string | null
   letzterFehler: string | null
@@ -219,6 +221,7 @@ export async function listePostfaecher(admin: Db, a: Aufrufer, alle: boolean): P
       eigenes: !!p.besitzer_email && p.besitzer_email.toLowerCase() === a.email,
       besitzer: p.besitzer_email,
       bereit: p.geheimnis_name ? !!Deno.env.get(p.geheimnis_name) : mitPasswort.has(p.id),
+      kannSenden: !!p.smtp_host,
       holtAb: !!p.besitzer_email,
       letzterAbruf: p.letzter_abruf,
       letzterFehler: p.letzter_fehler,
@@ -287,8 +290,8 @@ type Pruefung = { ok: true; port: number } | { ok: false; falschesPasswort: bool
 
 // Port 143 mit STARTTLS zuerst — Port 993 hängt in dieser Laufzeitumgebung bei manchen Anbietern.
 async function pruefeImap(host: string, benutzer: string, passwort: string): Promise<Pruefung> {
-  let letzte = 'keine Verbindung'
-  for (const port of [143, 993]) {
+  const versuche: string[] = []
+  for (const port of [993, 143]) {
     const client = new ImapFlow({ host, port, secure: port === 993, auth: { user: benutzer, pass: passwort }, logger: false })
     client.on('error', () => {})
     try {
@@ -303,15 +306,15 @@ async function pruefeImap(host: string, benutzer: string, passwort: string): Pro
       } catch {
         // schon geschlossen
       }
-      if (e?.authenticationFailed) return { ok: false, falschesPasswort: true, meldung: 'Der Mail-Server hat das Passwort abgelehnt.' }
-      letzte = e?.message ?? String(err)
+      if (e?.authenticationFailed) return { ok: false, falschesPasswort: true, meldung: `Port ${port}: Anmeldung abgelehnt${e?.responseText ? ` (${String(e.responseText).slice(0, 160)})` : ''}` }
+      versuche.push(`Port ${port}: ${e?.responseText ?? e?.message ?? String(err)}`)
     }
   }
-  return { ok: false, falschesPasswort: false, meldung: letzte }
+  return { ok: false, falschesPasswort: false, meldung: versuche.join('; ') }
 }
 
 async function pruefeSmtp(host: string, benutzer: string, passwort: string): Promise<Pruefung> {
-  let letzte = 'keine Verbindung'
+  const versuche: string[] = []
   for (const port of [587, 465]) {
     const transporter = nodemailer.createTransport({ host, port, secure: port === 465, auth: { user: benutzer, pass: passwort }, connectionTimeout: 10000, greetingTimeout: 10000 })
     try {
@@ -322,14 +325,38 @@ async function pruefeSmtp(host: string, benutzer: string, passwort: string): Pro
       // deno-lint-ignore no-explicit-any
       const e = err as any
       transporter.close()
-      if (e?.code === 'EAUTH') return { ok: false, falschesPasswort: true, meldung: 'Der Mail-Server hat das Passwort abgelehnt.' }
-      letzte = e?.message ?? String(err)
+      if (e?.code === 'EAUTH') return { ok: false, falschesPasswort: true, meldung: `Port ${port}: Anmeldung abgelehnt${e?.response ? ` (${String(e.response).slice(0, 160)})` : ''}` }
+      versuche.push(`Port ${port}: ${e?.response ?? e?.message ?? String(err)}`)
     }
   }
-  return { ok: false, falschesPasswort: false, meldung: letzte }
+  return { ok: false, falschesPasswort: false, meldung: versuche.join('; ') }
+}
+
+// Nur zur Fehlersuche (Geschäftsführung): Welche Server gehören zur Adresse, und was antworten sie
+// auf einen Anmeldeversuch? Mit erfundenen Zugangsdaten aufrufbar — "Anmeldung abgelehnt" heißt dann:
+// Server erreichbar, alles in Ordnung.
+export async function diagnostizierePostfach(adresse: string, passwort: string): Promise<unknown> {
+  const suche = await findeServer(adresse.trim().toLowerCase())
+  if ('fehler' in suche) return { fehler: suche.fehler }
+  const ergebnis = []
+  for (const v of suche.vorschlaege) {
+    const imap = await pruefeImap(v.imap, adresse, passwort)
+    const smtp = await pruefeSmtp(v.smtp, adresse, passwort)
+    ergebnis.push({ imap: v.imap, imapErgebnis: imap.ok ? `ok (Port ${imap.port})` : imap.meldung, smtp: v.smtp, smtpErgebnis: smtp.ok ? `ok (Port ${smtp.port})` : smtp.meldung })
+  }
+  return { server: ergebnis }
 }
 
 // ---------- Verbinden / Trennen ----------
+
+// Manche Anbieter verlangen für Mail-Programme ein eigenes Passwort.
+function hinweisZumAnbieter(adresse: string): string {
+  if (/@(t-online|magenta)\.de$/.test(adresse)) {
+    return ' Hinweis für Telekom-Adressen: Für die Anbindung braucht es das eigene „E-Mail-Passwort“ für Mail-Programme (im Telekom-Kundencenter unter „Passwörter“ einzurichten), nicht das normale Telekom-Login-Passwort.'
+  }
+  if (/@(gmx|web)\./.test(adresse)) return ' Hinweis: Bei GMX und WEB.DE muss in den Einstellungen des Postfachs „POP3/IMAP-Abruf“ einmal eingeschaltet werden.'
+  return ''
+}
 
 function postfachId(adresse: string): string {
   return `pf_${adresse.toLowerCase().replace(/[^a-z0-9]/g, (z) => `-${z.charCodeAt(0).toString(16)}-`)}`
@@ -337,7 +364,11 @@ function postfachId(adresse: string): string {
 
 export type VerbindenEingabe = { adresse?: string; passwort?: string; gemeinsam?: boolean; anzeigeName?: string; imapHost?: string; smtpHost?: string }
 
-export async function verbindePostfach(admin: Db, a: Aufrufer, eingabe: VerbindenEingabe): Promise<{ ok: true; id: string; adresse: string } | { ok: false; fehler: string }> {
+export async function verbindePostfach(
+  admin: Db,
+  a: Aufrufer,
+  eingabe: VerbindenEingabe,
+): Promise<{ ok: true; id: string; adresse: string; nurEmpfang: boolean } | { ok: false; fehler: string }> {
   const adresse = String(eingabe.adresse ?? a.email).trim().toLowerCase()
   const passwort = String(eingabe.passwort ?? '')
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(adresse)) return { ok: false, fehler: 'Bitte eine vollständige E-Mail-Adresse angeben.' }
@@ -358,24 +389,35 @@ export async function verbindePostfach(admin: Db, a: Aufrufer, eingabe: Verbinde
   const suche = eigeneAngabe ? { vorschlaege: eigeneAngabe } : await findeServer(adresse)
   if ('fehler' in suche) return { ok: false, fehler: suche.fehler }
 
+  // smtp leer = nur Empfang: Der Abruf klappt, aber der Versand-Server des Anbieters nimmt von unserem
+  // Server keine Verbindung an (die Telekom etwa sperrt Rechenzentrums-Adressen: "421 Your address is
+  // blocked", gesehen am 16.11.2026). Dann wird das Postfach trotzdem angebunden — Mails kommen an,
+  // als Absender steht es nicht zur Wahl.
   let treffer: { imap: string; imapPort: number; smtp: string; smtpPort: number } | null = null
-  let grund = ''
+  const gruende: string[] = []
   for (const v of suche.vorschlaege) {
     const imap = await pruefeImap(v.imap, adresse, passwort)
     if (!imap.ok) {
-      if (imap.falschesPasswort) return { ok: false, fehler: 'Das Passwort stimmt nicht — der Mail-Server hat die Anmeldung abgelehnt. Gemeint ist das Passwort des Postfachs, nicht das fürs CRM.' }
-      grund = `${v.imap}: ${imap.meldung}`
+      if (imap.falschesPasswort) return { ok: false, fehler: `Das Passwort stimmt nicht — der Mail-Server hat die Anmeldung abgelehnt. Gemeint ist das Passwort des Postfachs, nicht das fürs CRM.${hinweisZumAnbieter(adresse)}` }
+      gruende.push(`Abruf ${v.imap} — ${imap.meldung}`)
       continue
     }
     const smtp = await pruefeSmtp(v.smtp, adresse, passwort)
     if (!smtp.ok) {
-      grund = `${v.smtp}: ${smtp.meldung}`
-      continue
+      // Der Abruf-Server hat die Anmeldung angenommen — dann liegt es am Versand-Server, nicht an der
+      // Adresse. Weitere Abruf-Server durchzuprobieren würde nur zusätzliche Anmeldeversuche erzeugen.
+      if (smtp.falschesPasswort) {
+        gruende.push(`Versand ${v.smtp} — Anmeldung abgelehnt`)
+        break
+      }
+      console.error('Postfach nur für Empfang angebunden', adresse.split('@')[1], v.smtp, smtp.meldung)
+      treffer = { imap: v.imap, imapPort: imap.port, smtp: '', smtpPort: 587 }
+      break
     }
     treffer = { imap: v.imap, imapPort: imap.port, smtp: v.smtp, smtpPort: smtp.port }
     break
   }
-  if (!treffer) return { ok: false, fehler: `Der Mail-Server zu dieser Adresse war nicht erreichbar (${grund || 'kein Server gefunden'}).` }
+  if (!treffer) return { ok: false, fehler: `Das Postfach ließ sich nicht verbinden. ${gruende.join(' | ') || 'Kein Mail-Server gefunden.'}${hinweisZumAnbieter(adresse)}` }
 
   const id = alt?.id ?? postfachId(adresse)
   const zeile = {
@@ -401,7 +443,7 @@ export async function verbindePostfach(admin: Db, a: Aufrufer, eingabe: Verbinde
     if (!alt) await admin.from('postfaecher').delete().eq('id', id)
     return { ok: false, fehler: `Passwort konnte nicht gesichert werden: ${geheimFehler.message}` }
   }
-  return { ok: true, id, adresse }
+  return { ok: true, id, adresse, nurEmpfang: !treffer.smtp }
 }
 
 export async function trennePostfach(admin: Db, a: Aufrufer, id: string): Promise<{ ok: true } | { ok: false; fehler: string }> {

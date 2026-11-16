@@ -26,6 +26,7 @@ export function PostfachVerbinden({
   const [laeuft, setLaeuft] = useState(false)
   const [fehler, setFehler] = useState('')
   const [fertig, setFertig] = useState('')
+  const [nurEmpfang, setNurEmpfang] = useState(false)
 
   async function verbinden(e: React.FormEvent) {
     e.preventDefault()
@@ -34,6 +35,7 @@ export function PostfachVerbinden({
     try {
       const ergebnis = await verbindePostfach({ adresse: adresse.trim(), passwort, gemeinsam, anzeigeName: anzeigeName.trim() || undefined })
       setPasswort('')
+      setNurEmpfang(ergebnis.nurEmpfang === true)
       setFertig(ergebnis.adresse)
       await ladePostfaecherNeu().catch(() => {})
       onVerbunden?.(ergebnis.adresse)
@@ -49,7 +51,12 @@ export function PostfachVerbinden({
       <div className="flex items-start gap-2 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-800">
         <CheckCircle2 size={16} className="mt-0.5 flex-shrink-0" />
         <span>
-          <strong>{fertig}</strong> ist verbunden. {gemeinsam ? 'Alle Mitarbeiter können jetzt von dieser Adresse senden.' : 'Die letzten Mails werden gerade abgeholt, neue kommen ab jetzt von selbst.'}
+          <strong>{fertig}</strong> ist verbunden{nurEmpfang ? ' — nur für den Empfang' : ''}.{' '}
+          {nurEmpfang
+            ? 'Mails an diese Adresse kommen ab jetzt im CRM an. Senden unter dieser Adresse geht über das CRM nicht: Der Mail-Anbieter lässt den Versand von unserem Server nicht zu.'
+            : gemeinsam
+              ? 'Alle Mitarbeiter können jetzt von dieser Adresse senden.'
+              : 'Die letzten Mails werden gerade abgeholt, neue kommen ab jetzt von selbst.'}
         </span>
       </div>
     )

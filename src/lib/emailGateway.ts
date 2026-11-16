@@ -124,8 +124,10 @@ export type PostfachInfo = {
   gemeinsam: boolean
   eigenes: boolean
   besitzer: string | null
-  /** Zugang hinterlegt, es kann gesendet werden. */
+  /** Zugang hinterlegt. */
   bereit: boolean
+  /** Als Absender nutzbar. Falsch bei Anbietern, die den Versand von unserem Server sperren (z. B. Telekom) — dann nur Empfang. */
+  kannSenden: boolean
   /** Wird regelmäßig abgeholt (persönliche Postfächer). */
   holtAb: boolean
   letzterAbruf: string | null
@@ -137,7 +139,7 @@ export async function ladePostfaecher(alle = false): Promise<PostfachInfo[]> {
   return data.postfaecher ?? []
 }
 
-export async function verbindePostfach(eingabe: { adresse?: string; passwort: string; gemeinsam?: boolean; anzeigeName?: string }): Promise<{ id: string; adresse: string }> {
+export async function verbindePostfach(eingabe: { adresse?: string; passwort: string; gemeinsam?: boolean; anzeigeName?: string }): Promise<{ id: string; adresse: string; nurEmpfang?: boolean }> {
   return callAuthenticated({ action: 'postfach_verbinden', ...eingabe })
 }
 

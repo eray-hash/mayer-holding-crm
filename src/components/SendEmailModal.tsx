@@ -67,7 +67,7 @@ export function SendEmailModal({
   const { postfaecher } = usePostfaecher()
   // Privat geschrieben wird ausschließlich vom eigenen Postfach — sonst ginge eine Mail unter der
   // Firmenadresse raus, die im Haus niemand sieht.
-  const absenderListe = postfaecher.filter((p) => p.bereit && (!privat || p.eigenes))
+  const absenderListe = postfaecher.filter((p) => p.bereit && p.kannSenden !== false && (!privat || p.eigenes))
   const [vonId, setVonId] = useState('')
   useEffect(() => {
     if (!open) return
@@ -206,7 +206,11 @@ export function SendEmailModal({
             absenderListe.length === 1 && <p className="mb-3 text-xs text-slate-500">Von: {postfachBezeichnung(absenderListe[0])}</p>
           )}
           {privat && absenderListe.length === 0 && (
-            <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">Zum privaten Schreiben muss dein eigenes Postfach verbunden sein (Mein Profil → Mein Postfach).</p>
+            <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              {postfaecher.some((p) => p.eigenes)
+                ? 'Dein Postfach ist nur für den Empfang angebunden — dein Mail-Anbieter lässt den Versand über das CRM nicht zu. Bitte im eigenen Mail-Programm antworten oder die Mail in den öffentlichen Bereich holen.'
+                : 'Zum privaten Schreiben muss dein eigenes Postfach verbunden sein (Mein Profil → Mein Postfach).'}
+            </p>
           )}
           {privat && <p className="mb-3 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">Privat — diese Mail erscheint nur in deinem privaten Postfach, bis du sie in den öffentlichen Bereich holst.</p>}
           <Field label="An">

@@ -132,7 +132,7 @@ export function PrivatPostfach() {
         <p className="mb-3 flex items-center gap-1.5 text-xs text-slate-400">
           <Lock size={12} /> nur für dich sichtbar
         </p>
-        <PrimaryButton onClick={() => setCompose({})} disabled={!eigenes} className="mb-4 w-full justify-center">
+        <PrimaryButton onClick={() => setCompose({})} disabled={!eigenes || eigenes.kannSenden === false} className="mb-4 w-full justify-center">
           <Plus size={14} /> Neue E-Mail
         </PrimaryButton>
         <nav className="flex gap-1 lg:block lg:space-y-1">
@@ -155,6 +155,7 @@ export function PrivatPostfach() {
         {eigenes && (
           <p className="mt-4 break-all px-1 text-[11px] text-slate-400">
             {eigenes.adresse}
+            {eigenes.kannSenden === false && <><br />nur Empfang — der Anbieter lässt den Versand über das CRM nicht zu</>}
             {eigenes.letzterAbruf && <><br />zuletzt abgeholt: {fmtDateTime(eigenes.letzterAbruf)}</>}
           </p>
         )}
@@ -262,7 +263,7 @@ export function PrivatPostfach() {
                     </p>
                   </div>
                   <div className="flex flex-shrink-0 items-center gap-2">
-                    <SecondaryButton onClick={() => setCompose({ to: selectedMail.von, subject: `Re: ${selectedMail.betreff}` })} className="text-xs">
+                    <SecondaryButton onClick={() => setCompose({ to: selectedMail.von, subject: `Re: ${selectedMail.betreff}` })} disabled={eigenes?.kannSenden === false} className="text-xs">
                       <Reply size={13} /> Antworten
                     </SecondaryButton>
                     <button onClick={() => ausblenden(selectedMail)} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-50 hover:text-slate-600" title="Ausblenden">

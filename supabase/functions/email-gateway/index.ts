@@ -211,6 +211,7 @@ import {
   absenderVon,
   anhangUrl,
   darfNutzen,
+  diagnostizierePostfach,
   ermittleAufrufer,
   holeInOeffentlich,
   ladePostfach,
@@ -2488,6 +2489,10 @@ Deno.serve(async (req: Request) => {
       if (body.action === 'postfaecher_liste') {
         return new Response(JSON.stringify({ postfaecher: await listePostfaecher(admin, aufrufer, body.alle === true), ich: aufrufer.email }), { headers })
       }
+      if (body.action === 'postfach_verbinden' && body.nurDiagnose === true) {
+        if (!aufrufer.istGf) return new Response(JSON.stringify({ error: 'Nur für die Geschäftsführung.' }), { status: 403, headers })
+        return new Response(JSON.stringify(await diagnostizierePostfach(String(body.adresse ?? ''), String(body.passwort ?? 'x'))), { headers })
+      }
       if (body.action === 'postfach_verbinden') {
         const ergebnis = await verbindePostfach(admin, aufrufer, body)
         if (!ergebnis.ok) return new Response(JSON.stringify({ error: ergebnis.fehler }), { status: 400, headers })
@@ -2497,7 +2502,7 @@ Deno.serve(async (req: Request) => {
           // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
           EdgeRuntime.waitUntil(rufePostfachAb(admin, fach))
         }
-        return new Response(JSON.stringify({ ok: true, id: ergebnis.id, adresse: ergebnis.adresse }), { headers })
+        return new Response(JSON.stringify({ ok: true, id: ergebnis.id, adresse: ergebnis.adresse, nurEmpfang: ergebnis.nurEmpfang }), { headers })
       }
       if (body.action === 'postfach_trennen') {
         const ergebnis = await trennePostfach(admin, aufrufer, String(body.postfachId ?? ''))
