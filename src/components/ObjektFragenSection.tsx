@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { meldeFrage } from '../lib/assistentServer'
 import { Link } from 'react-router-dom'
 import { MessageCircleQuestion, Pencil, Trash2 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
@@ -78,6 +79,7 @@ export function FrageKarte({ frage, zeigeBezug = false }: { frage: ImmoFrage; ze
     const text = antwortText.trim()
     if (!text) return
     dispatch({ type: 'SPEICHERE_FRAGE', frage: { ...frage, antwort: text, beantwortetVon: wer, beantwortetAm: today() } })
+    meldeFrage(frage.id, 'antwort')
     setModus(null)
   }
 
@@ -220,10 +222,12 @@ export function ObjektFragenSection({ objekt }: { objekt: Objekt }) {
   function stellen() {
     const frage = text.trim()
     if (!frage) return
+    const id = uid('frage')
     dispatch({
       type: 'SPEICHERE_FRAGE',
-      frage: { id: uid('frage'), erstelltAm: today(), prio, objektId: objekt.id, bezug: objekt.bezeichnung, frage, gestelltVon: wer },
+      frage: { id, erstelltAm: today(), prio, objektId: objekt.id, bezug: objekt.bezeichnung, frage, gestelltVon: wer },
     })
+    meldeFrage(id, 'neu')
     setText('')
     setPrio(undefined)
   }

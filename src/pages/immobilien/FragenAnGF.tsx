@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { meldeFrage } from '../../lib/assistentServer'
 import { Plus, Search } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { Card, EmptyState, Field, inputClass, Modal, PrimaryButton, SecondaryButton } from '../../components/ui'
@@ -104,6 +105,7 @@ export function FragenAnGF() {
             onAbbrechen={() => setNeu(false)}
             onSpeichern={(frage) => {
               dispatch({ type: 'SPEICHERE_FRAGE', frage })
+              meldeFrage(frage.id, 'neu')
               // Die neue Frage ist offen — damit sie sofort zu sehen ist, nicht im Filter „beantwortet" bleiben.
               if (filter === 'beantwortet') setFilter('offen')
               setSuche('')

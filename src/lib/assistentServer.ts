@@ -37,6 +37,13 @@ export function frageAssistent(text: string, offen?: { art: 'mail' | 'akte'; ken
   return anfrage<AssistentAntwort>({ web: 'chat', text, ...(offen ? { offen } : {}) })
 }
 
+/** Benachrichtigt über Telegram: bei einer neuen Frage die Geschäftsführung, bei einer Antwort den Fragesteller.
+ *  Schlägt das fehl (niemand mit Telegram verbunden, kein Netz), bleibt die Frage trotzdem gespeichert. */
+export function meldeFrage(id: string, art: 'neu' | 'antwort'): void {
+  if (!istServerAssistentVerfuegbar) return
+  void anfrage({ web: 'frage_melden', id, art }).catch(() => undefined)
+}
+
 export function mailStatus(): Promise<{ laeuft: boolean; ergebnis: { id: string; text: string; z: string } | null }> {
   return anfrage({ web: 'mail_status' })
 }

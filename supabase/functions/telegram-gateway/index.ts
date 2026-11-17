@@ -2432,6 +2432,42 @@ async function webAnfrage(req: Request, body: any, headers: Record<string, strin
   }
   if (body.web === 'faehigkeiten') return json({ abhoeren: kannAbhoeren() })
 
+  // Fragen an die Geschäftsführung: Wer eine Frage stellt, benachrichtigt die Geschäftsführung über
+  // Telegram; wer antwortet, den Fragesteller. Der Text kommt aus der gespeicherten Frage, nicht vom Aufrufer.
+  if (body.web === 'frage_melden') {
+    const art = body.art === 'antwort' ? 'antwort' : 'neu'
+    const frageId = typeof body.id === 'string' ? body.id : ''
+    if (!frageId || frageId.length > 80) return json({ error: 'Unbekannte Frage.' }, 400)
+    // Das Fenster speichert im Hintergrund — die Zeile kann einen Augenblick brauchen.
+    // deno-lint-ignore no-explicit-any
+    let f: any = null
+    for (let versuch = 0; versuch < 6 && !f; versuch++) {
+      const { data } = await supabase.from('abteilung_eintraege').select('daten').eq('id', frageId).eq('art', 'frage').maybeSingle()
+      f = data?.daten ?? null
+      if (art === 'antwort' && f && !String(f.antwort ?? '').trim()) f = null
+      if (!f) await new Promise((r) => setTimeout(r, 1200))
+    }
+    if (!f) return json({ ok: false, grund: 'Die Frage ist noch nicht gespeichert.' })
+    const { data: alle } = await supabase.from('mitarbeiter').select('name, rolle, ist_admin, telegram_chat_id').eq('aktiv', true)
+    // deno-lint-ignore no-explicit-any
+    const kollegen = ((alle ?? []) as any[]).filter((k) => k.telegram_chat_id && k.name !== mitarbeiter.name)
+    const kurz = (t: unknown, n: number) => kuerze(String(t ?? '').trim(), n)
+    const bezug = String(f.bezug ?? '').trim() ? ` zu „${kurz(f.bezug, 80)}"` : ''
+    let empfaenger = kollegen.filter((k) => k.rolle === 'geschaeftsfuehrung' || k.ist_admin)
+    let text = `Neue Frage an die Geschäftsführung${bezug}${f.prio ? ` (Prio ${f.prio})` : ''} von ${mitarbeiter.name}:\n\n${kurz(f.frage, 1500)}\n\nAntworten kannst du im CRM unter Immobilien → Fragen an die GF.`
+    if (art === 'antwort') {
+      empfaenger = kollegen.filter((k) => k.name === f.gestelltVon)
+      text = `${mitarbeiter.name} hat deine Frage${bezug} beantwortet.\n\nDeine Frage: ${kurz(f.frage, 600)}\n\nAntwort: ${kurz(f.antwort, 1500)}`
+    }
+    const schon = new Set<number>()
+    for (const k of empfaenger) {
+      if (schon.has(Number(k.telegram_chat_id))) continue
+      schon.add(Number(k.telegram_chat_id))
+      await sendTelegramMessage(Number(k.telegram_chat_id), text)
+    }
+    return json({ ok: true, benachrichtigt: schon.size })
+  }
+
   // --- Dateien und Fotos direkt im Assistenten-Fenster abgeben (statt über Telegram) ---
   if (body.web === 'datei_ziel') {
     if ((Number(body.groesse) || 0) > WEB_DATEI_HOECHSTENS) {

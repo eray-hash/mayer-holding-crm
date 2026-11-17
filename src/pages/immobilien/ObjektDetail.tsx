@@ -19,6 +19,7 @@ import { ObjektVerkaufsdatenblatt } from '../../components/ObjektVerkaufsdatenbl
 import { ObjektKurzpruefungBlatt } from '../../components/ObjektKurzpruefungBlatt'
 import { ObjektFragenSection } from '../../components/ObjektFragenSection'
 import { ObjektWeitergabenSection } from '../../components/ObjektWeitergabenSection'
+import { ObjektAbrechnungSection } from '../../components/ObjektAbrechnungSection'
 
 const TABS = [
   { id: 'uebersicht', label: 'Übersicht' },
@@ -26,6 +27,7 @@ const TABS = [
   { id: 'kurzpruefung', label: 'Kurzprüfung' },
   { id: 'fragen', label: 'Fragen' },
   { id: 'weitergaben', label: 'Weitergaben' },
+  { id: 'abrechnung', label: 'Abrechnung' },
   { id: 'dokumente', label: 'Dokumente' },
   { id: 'finanzierung', label: 'Finanzierung' },
   { id: 'vorschlaege', label: 'Gesuche & Vorschläge' },
@@ -382,6 +384,8 @@ export function ObjektDetail() {
       {tab === 'fragen' && <ObjektFragenSection key={objekt.id} objekt={objekt} />}
 
       {tab === 'weitergaben' && <ObjektWeitergabenSection key={objekt.id} objekt={objekt} />}
+
+      {tab === 'abrechnung' && <ObjektAbrechnungSection key={objekt.id} objekt={objekt} />}
 
       {tab === 'finanzierung' && (
         <div>
