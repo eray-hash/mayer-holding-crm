@@ -20,6 +20,11 @@ function orte(lage: string): string[] {
     .filter((t) => t.length >= 3)
 }
 
+/** Bei übernommenen Objekten steht im ersten Verlaufseintrag, wenn die Objektart nur ein Platzhalter ist. */
+function artUngeprueft(o: Objekt): boolean {
+  return o.activities.some((a) => a.id.startsWith('a_ql_') && /Noch nicht geprüft:[^.]*Objektart/.test(a.text))
+}
+
 /** Prüft ein Objekt gegen ein Gesuch. null = passt nicht. */
 export function pruefe(gesuch: Gesuch, o: Objekt): ObjektTreffer | null {
   if (NICHT_VERFUEGBAR.has(o.status) || o.zugewiesenerKunde) return null
@@ -27,8 +32,13 @@ export function pruefe(gesuch: Gesuch, o: Objekt): ObjektTreffer | null {
   const offen: string[] = []
 
   if (gesuch.objekttypen.length > 0) {
-    if (!gesuch.objekttypen.includes(o.typ)) return null
-    passt.push(`Objektart ${o.typ}`)
+    if (artUngeprueft(o)) {
+      // Aus einem Ordner übernommen, die Objektart ist nur ein Platzhalter: weder Treffer noch Ausschluss.
+      offen.push('Objektart beim Objekt noch nicht geprüft')
+    } else {
+      if (!gesuch.objekttypen.includes(o.typ)) return null
+      passt.push(`Objektart ${o.typ}`)
+    }
   }
 
   const suchorte = orte(gesuch.lage)
@@ -56,7 +66,10 @@ export function pruefe(gesuch: Gesuch, o: Objekt): ObjektTreffer | null {
 
 export function passendeObjekte(gesuch: Gesuch, objekte: Objekt[]): ObjektTreffer[] {
   if (gesuch.erledigt) return []
-  return objekte.map((o) => pruefe(gesuch, o)).filter((t): t is ObjektTreffer => t !== null)
+  return objekte
+    .map((o) => pruefe(gesuch, o))
+    .filter((t): t is ObjektTreffer => t !== null)
+    .sort((x, y) => x.offen.length - y.offen.length || y.passt.length - x.passt.length)
 }
 
 /** Alle Gesuche aller Kontakte. Ein älteres „Käuferprofil" zählt als ein Gesuch mit. */
