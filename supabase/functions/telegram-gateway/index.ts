@@ -46,6 +46,19 @@ function supa(): Supa {
   return createClient(SUPABASE_URL, SERVICE_ROLE_KEY)
 }
 
+// Der Dienst-Schlüssel des Projekts in alter (JWT) oder neuer Schreibweise (sb_secret_…).
+function istDienstSchluessel(token: string): boolean {
+  if (token.length < 30) return false
+  if (token === SERVICE_ROLE_KEY) return true
+  try {
+    const sammle = (wert: unknown): string[] =>
+      typeof wert === 'string' ? [wert] : wert && typeof wert === 'object' ? Object.values(wert as Record<string, unknown>).flatMap(sammle) : []
+    return sammle(JSON.parse(Deno.env.get('SUPABASE_SECRET_KEYS') ?? '{}')).includes(token)
+  } catch {
+    return false
+  }
+}
+
 // Ohne Bot-Token (lokaler Testlauf) wird die Antwort nur protokolliert.
 async function sendTelegramMessage(chatId: number, text: string): Promise<void> {
   if (!BOT_TOKEN) {
@@ -2888,6 +2901,41 @@ Deno.serve(async (req: Request) => {
     if (runtime?.waitUntil) runtime.waitUntil(schritt)
     else await schritt
     return new Response('ok')
+  }
+
+  // Rückfrage an einen Mitarbeiter über Telegram, gestellt von außen (Einrichtung, Datenübernahme).
+  // Nur mit dem Dienst-Schlüssel des Projekts — das gemeinsame Geheimnis steht im ausgelieferten
+  // Programm und darf niemandem erlauben, Mitarbeitern im Namen des Assistenten zu schreiben.
+  // Die Frage wird in den Gesprächsverlauf gelegt, damit der Assistent die Antwort einordnen kann.
+  if (body?.intern === 'rueckfrage') {
+    const schluessel = (req.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '').trim()
+    if (!istDienstSchluessel(schluessel)) return new Response('Unauthorized', { status: 401 })
+    const text = typeof body.text === 'string' ? body.text.trim().slice(0, 3800) : ''
+    if (!text || typeof body.mitarbeiterId !== 'string') return new Response('Bad request', { status: 400 })
+    const supabase = supa()
+    const { data: m } = await supabase.from('mitarbeiter').select('id, name, aktiv, telegram_chat_id, telegram_pending').eq('id', body.mitarbeiterId).maybeSingle()
+    if (!m?.aktiv) return new Response(JSON.stringify({ ok: false, grund: 'Mitarbeiter nicht gefunden' }), { status: 404 })
+    if (!m.telegram_chat_id || !BOT_TOKEN) return new Response(JSON.stringify({ ok: false, grund: 'nicht mit Telegram verbunden' }), { status: 409 })
+    const antwort = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ chat_id: m.telegram_chat_id, text }),
+    })
+    if (!antwort.ok) return new Response(JSON.stringify({ ok: false, grund: `Telegram lehnt ab (${antwort.status})` }), { status: 502 })
+    const state = ladeState(m.telegram_pending)
+    const von = typeof body.von === 'string' && body.von.trim() ? body.von.trim().slice(0, 80) : 'der Einrichtung des CRM'
+    state.zuege.push({
+      z: new Date().toISOString(),
+      msgs: [
+        {
+          role: 'user',
+          content: `[Systemmeldung, nicht vom Mitarbeiter getippt] Im Auftrag von ${von} wurde dem Mitarbeiter über dich die folgende Rückfrage geschickt. Antwortet er darauf, bedanke dich kurz und sag ihm, dass seine Antwort an ${von} weitergegeben wird. Lege dafür nichts im CRM an und ändere nichts, außer er bittet ausdrücklich darum.`,
+        },
+        { role: 'assistant', content: text },
+      ],
+    })
+    await speichereZustand(supabase, String(m.id), state)
+    return new Response(JSON.stringify({ ok: true, an: m.name }), { headers: { 'content-type': 'application/json' } })
   }
 
   // 3) Telegram.
