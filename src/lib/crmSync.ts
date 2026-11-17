@@ -634,10 +634,158 @@ function syncSimpleCollection(client: NonNullable<typeof supabase>, prev: AppDat
   }
 }
 
+// ---------- Kundenakten: nur die eigene Änderung schreiben ----------
+//
+// Jedes offene CRM-Fenster hält den Stand vom Laden der Seite. Früher schrieb es bei jeder Änderung
+// die ganze Akte zurück — und löschte damit, was inzwischen der Telegram-Assistent, der Zeitplan oder
+// ein Kollege in dieselbe Akte gelegt hatte (echter Fall 17.11.2026: vier per Telegram abgelegte
+// Sprachnachrichten verschwanden, als ein Kollege in seinem Fenster eine Mail zuordnete).
+// Jetzt gilt: Geschrieben werden nur die Felder, die dieses Fenster wirklich geändert hat. Bei den
+// Listen der Akte (Verlauf, Dokumente, Unterschriften) wird Eintrag für Eintrag mit dem aktuellen
+// Stand der Datenbank zusammengeführt: eigene neue, geänderte und gelöschte Einträge gelten, alles
+// andere bleibt so, wie es in der Datenbank steht.
+
+type ListenEintrag = { id: string }
+const LISTEN_FELDER = ['activities', 'dokumente', 'signaturen'] as const
+type ListenFeld = (typeof LISTEN_FELDER)[number]
+
+/** Was die Datenbank gegenüber dem Stand dieses Fensters zusätzlich weiß — je Liste der Akte. */
+export type ServerStand = Partial<Record<ListenFeld, { neu: ListenEintrag[]; weg: string[]; frisch: ListenEintrag[] }>>
+
+function gleich(a: unknown, b: unknown): boolean {
+  return a === b || JSON.stringify(a ?? null) === JSON.stringify(b ?? null)
+}
+
+function alsListe(wert: unknown): ListenEintrag[] | null {
+  if (wert == null) return []
+  if (!Array.isArray(wert)) return null
+  return wert.every((x) => x && typeof x === 'object' && typeof (x as ListenEintrag).id === 'string') ? (wert as ListenEintrag[]) : null
+}
+
+/**
+ * Führt eine Liste zusammen: `vorher` und `nachher` sind der Stand dieses Fensters vor und nach der
+ * Änderung, `server` ist der aktuelle Stand der Datenbank. Gibt die zu schreibende Liste zurück und
+ * was der Server zusätzlich wusste (damit das Fenster es gleich mit anzeigt).
+ */
+export function fuehreListeZusammen(
+  vorher: ListenEintrag[],
+  nachher: ListenEintrag[],
+  server: ListenEintrag[],
+): { liste: ListenEintrag[]; neu: ListenEintrag[]; weg: string[]; frisch: ListenEintrag[] } {
+  const vorherNachId = new Map(vorher.map((x) => [x.id, x]))
+  const serverNachId = new Map(server.map((x) => [x.id, x]))
+  const nachherIds = new Set(nachher.map((x) => x.id))
+  // Was andere inzwischen dazugelegt haben: steht in der Datenbank, war diesem Fenster nie bekannt.
+  const neu = server.filter((x) => !vorherNachId.has(x.id) && !nachherIds.has(x.id))
+  const weg: string[] = []
+  const frisch: ListenEintrag[] = []
+  const liste: ListenEintrag[] = []
+  let fremdeEingefuegt = false
+  for (const eintrag of nachher) {
+    const alt = vorherNachId.get(eintrag.id)
+    if (!alt) {
+      liste.push(eintrag) // in diesem Fenster neu angelegt
+      continue
+    }
+    // Fremde neue Einträge kommen vor den ersten schon bekannten Eintrag (neueste stehen oben).
+    if (!fremdeEingefuegt) {
+      liste.push(...neu)
+      fremdeEingefuegt = true
+    }
+    if (!gleich(alt, eintrag)) {
+      liste.push(eintrag) // in diesem Fenster geändert
+      continue
+    }
+    const aktuell = serverNachId.get(eintrag.id)
+    if (!aktuell) {
+      weg.push(eintrag.id) // hier unverändert, in der Datenbank inzwischen gelöscht
+      continue
+    }
+    if (!gleich(aktuell, eintrag)) frisch.push(aktuell) // hier unverändert, in der Datenbank ergänzt
+    liste.push(aktuell)
+  }
+  if (!fremdeEingefuegt) liste.push(...neu)
+  return { liste, neu, weg, frisch }
+}
+
+/** Trägt in eine Liste des Fensters nach, was die Datenbank zusätzlich wusste. */
+export function wendeServerStandAn<T extends ListenEintrag>(liste: T[] | undefined, stand: { neu: ListenEintrag[]; weg: string[]; frisch: ListenEintrag[] }): T[] {
+  const weg = new Set(stand.weg)
+  const frisch = new Map(stand.frisch.map((x) => [x.id, x]))
+  const vorhanden = new Set((liste ?? []).map((x) => x.id))
+  const fremde = stand.neu.filter((x) => !vorhanden.has(x.id)) as T[]
+  const rest = (liste ?? []).filter((x) => !weg.has(x.id)).map((x) => (frisch.get(x.id) as T | undefined) ?? x)
+  return [...fremde, ...rest]
+}
+
+// Schreibvorgänge je Akte nacheinander, damit zwei schnelle Änderungen sich nicht überholen.
+const schreibKetten = new Map<string, Promise<void>>()
+let offeneSchreibvorgaenge = 0
+
+/** Läuft gerade noch ein Speichern? Dann lädt das Fenster den Stand nicht neu. */
+export function schreibtGerade(): boolean {
+  return offeneSchreibvorgaenge > 0
+}
+
+async function schreibeKunde(
+  client: NonNullable<typeof supabase>,
+  vorher: { bereich: KundeBereich; kunde: Kunde } | undefined,
+  bereich: KundeBereich,
+  kunde: Kunde,
+  meldeServerStand?: (id: string, stand: ServerStand) => void,
+): Promise<void> {
+  const nachherZeile = kundeToRow(bereich, kunde) as Record<string, unknown>
+  if (!vorher) {
+    // In diesem Fenster neu angelegt: ganze Zeile schreiben.
+    const { error } = await client.from('kunden').upsert(nachherZeile)
+    logFehler(`Kunde ${kunde.firma}`, error)
+    return
+  }
+  const vorherZeile = kundeToRow(vorher.bereich, vorher.kunde) as Record<string, unknown>
+  // Nur Felder, die der neue Stand mitbringt: Ein Feld, das dieses Fenster gar nicht (mehr) kennt, wird
+  // nie geleert (siehe potenzial_analyse in kundeToRow).
+  const geaendert = Object.keys(nachherZeile).filter((feld) => feld !== 'id' && !gleich(vorherZeile[feld], nachherZeile[feld]))
+  if (geaendert.length === 0) return
+
+  const aenderung: Record<string, unknown> = {}
+  for (const feld of geaendert) aenderung[feld] = nachherZeile[feld] ?? null
+  const listen = geaendert.filter((feld): feld is ListenFeld => (LISTEN_FELDER as readonly string[]).includes(feld))
+  const stand: ServerStand = {}
+  if (listen.length > 0) {
+    const { data: server, error } = await client.from('kunden').select(`id, ${listen.join(', ')}`).eq('id', kunde.id).maybeSingle()
+    if (!error && !server) {
+      // Die Akte gibt es in der Datenbank (noch) nicht: wie bisher vollständig anlegen.
+      const { error: anlegeFehler } = await client.from('kunden').upsert(nachherZeile)
+      logFehler(`Kunde ${kunde.firma}`, anlegeFehler)
+      return
+    }
+    if (server) {
+      for (const feld of listen) {
+        const a = alsListe(vorherZeile[feld])
+        const b = alsListe(nachherZeile[feld])
+        const c = alsListe((server as unknown as Record<string, unknown>)[feld])
+        if (!a || !b || !c) continue // Einträge ohne Kennung: Feld wie geändert schreiben
+        const ergebnis = fuehreListeZusammen(a, b, c)
+        aenderung[feld] = ergebnis.liste
+        if (ergebnis.neu.length > 0 || ergebnis.weg.length > 0 || ergebnis.frisch.length > 0) stand[feld] = { neu: ergebnis.neu, weg: ergebnis.weg, frisch: ergebnis.frisch }
+      }
+    }
+  }
+  const { data: geschrieben, error } = await client.from('kunden').update(aenderung).eq('id', kunde.id).select('id')
+  logFehler(`Kunde ${kunde.firma}`, error)
+  if (!error && (geschrieben ?? []).length === 0) {
+    // Nichts getroffen: Die Akte fehlt in der Datenbank — vollständig anlegen wie bisher.
+    const { error: anlegeFehler } = await client.from('kunden').upsert(nachherZeile)
+    logFehler(`Kunde ${kunde.firma}`, anlegeFehler)
+    return
+  }
+  if (!error && Object.keys(stand).length > 0) meldeServerStand?.(kunde.id, stand)
+}
+
 // Nach jedem Dispatch aufgerufen (außer beim initialen Hydrate selbst) — schreibt nur, was sich
 // seit dem letzten Stand tatsächlich geändert hat. Läuft bewusst "fire and forget": ein CRM-Nutzer
 // soll nicht auf einen Netzwerk-Roundtrip warten müssen, bevor die UI reagiert.
-export function syncAfterDispatch(prev: AppData, next: AppData) {
+export function syncAfterDispatch(prev: AppData, next: AppData, meldeServerStand?: (id: string, stand: ServerStand) => void) {
   if (!supabase) return
   const client = supabase
 
@@ -653,9 +801,24 @@ export function syncAfterDispatch(prev: AppData, next: AppData) {
   if (geloeschteKundenIds.length > 0) {
     client.from('kunden').delete().in('id', geloeschteKundenIds).then(({ error }) => logFehler('Kunde löschen', error))
   }
+  // Vorheriger Stand je Akte über alle Bereiche (eine verschobene Akte steht vorher in einer anderen Liste).
+  let vorherNachId: Map<string, { bereich: KundeBereich; kunde: Kunde }> | null = null
   for (const { bereich, key } of KUNDE_KEYS) {
     for (const k of diffById(prev[key] as Kunde[], next[key] as Kunde[])) {
-      client.from('kunden').upsert(kundeToRow(bereich, k)).then(({ error }) => logFehler(`Kunde ${k.firma}`, error))
+      if (!vorherNachId) {
+        vorherNachId = new Map()
+        for (const alt of KUNDE_KEYS) for (const kunde of prev[alt.key] as Kunde[]) vorherNachId.set(kunde.id, { bereich: alt.bereich, kunde })
+      }
+      const vorher = vorherNachId.get(k.id)
+      offeneSchreibvorgaenge++
+      const kette = (schreibKetten.get(k.id) ?? Promise.resolve())
+        .then(() => schreibeKunde(client, vorher, bereich, k, meldeServerStand))
+        .catch((err) => console.error(`[crmSync] Kunde ${k.firma}:`, err))
+        .finally(() => {
+          offeneSchreibvorgaenge--
+          if (schreibKetten.get(k.id) === kette) schreibKetten.delete(k.id)
+        })
+      schreibKetten.set(k.id, kette)
     }
   }
 

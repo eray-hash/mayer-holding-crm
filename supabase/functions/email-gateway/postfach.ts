@@ -751,6 +751,42 @@ export async function rufePostfachAb(
   }
 }
 
+// Welche Ordner hat das Postfach auf dem Mail-Server, und wie viele Mails liegen darin? Dient der
+// Klärung, wenn im CRM weniger Mails erscheinen als erwartet (abgeholt wird der Posteingang).
+// `mitNamen` nur für den Besitzer: Ordnernamen eines fremden Postfachs sind privat, andere sehen
+// nur die Art des Ordners und die Anzahl.
+export async function listeOrdner(admin: Db, p: Postfach, mitNamen: boolean): Promise<{ ordner: { name: string; art: string; mails: number }[] } | { fehler: string }> {
+  // deno-lint-ignore no-explicit-any
+  let client: any = null
+  try {
+    client = new ImapFlow({ host: p.imap_host, port: p.imap_port, secure: p.imap_port === 993, auth: { user: p.benutzer || p.adresse, pass: await passwortVon(admin, p) }, logger: false })
+    client.on('error', () => {})
+    await zeitlimit(client.connect(), 20000, 'Der Mail-Server hat nach 20 Sekunden nicht geantwortet.')
+    // deno-lint-ignore no-explicit-any
+    const liste: any[] = await zeitlimit(client.list({ statusQuery: { messages: true } }), 30000, 'Der Mail-Server hat die Ordnerliste nicht rechtzeitig geliefert.')
+    await client.logout().catch(() => {})
+    client = null
+    const arten: Record<string, string> = { '\\Inbox': 'Posteingang', '\\Sent': 'Gesendet', '\\Drafts': 'Entwürfe', '\\Trash': 'Papierkorb', '\\Junk': 'Spam', '\\Archive': 'Archiv', '\\All': 'Alle Mails' }
+    let eigene = 0
+    const ordner = liste
+      .filter((o) => !(o.flags instanceof Set && o.flags.has('\\Noselect')))
+      .map((o) => {
+        const art = String(o.path).toUpperCase() === 'INBOX' ? 'Posteingang' : arten[String(o.specialUse ?? '')] ?? 'eigener Ordner'
+        const name = mitNamen || art !== 'eigener Ordner' ? String(o.path) : `Ordner ${++eigene}`
+        return { name, art, mails: Number(o.status?.messages ?? 0) }
+      })
+    return { ordner }
+  } catch (err) {
+    try {
+      client?.close()
+    } catch {
+      // schon geschlossen
+    }
+    // deno-lint-ignore no-explicit-any
+    return { fehler: (err as any)?.message ?? String(err) }
+  }
+}
+
 // Alle Postfächer der Reihe nach, das am längsten nicht abgerufene zuerst (gemeinsame: nur große Mails).
 export async function rufeAlleAb(admin: Db, budgetMs = 110000): Promise<{ postfaecher: number; neu: number; fehler: string[] }> {
   const beginn = Date.now()
@@ -771,6 +807,109 @@ export async function rufeAlleAb(admin: Db, budgetMs = 110000): Promise<{ postfa
     if (ergebnis.fehler) fehler.push(`${p.adresse}: ${ergebnis.fehler}`)
   }
   return { postfaecher: anzahl, neu, fehler }
+}
+
+// ---------- Öffentliche Mails Kundenakten zuordnen ----------
+
+type MailAnhang = { filename?: string; size?: number; contentType?: string; url?: string }
+
+// Ordnet eine Mail aus dem gemeinsamen Postfach einer Kundenakte zu und legt ihre Anhänge in die
+// Dokumente der Akte — erst dort kann der Assistent sie lesen und kann eine Analyse darauf zugreifen.
+// `mailId` ist die Zeilen-Kennung oder die Message-ID der Mail.
+export async function ordneMailZu(
+  admin: Db,
+  mailId: string,
+  kundeId: string,
+  wer: string,
+): Promise<{ ok: true; betreff: string; kundeName: string; abgelegt: number } | { ok: false; fehler: string }> {
+  const spalten = 'id, message_id, von_name, betreff, anhaenge, relevanz, zugewiesener_kunde_id'
+  let { data: mail } = await admin.from('eingegangene_emails').select(spalten).eq('message_id', mailId).is('besitzer_email', null).limit(1).maybeSingle()
+  if (!mail && /^[0-9a-f-]{36}$/i.test(mailId)) {
+    mail = (await admin.from('eingegangene_emails').select(spalten).eq('id', mailId).is('besitzer_email', null).maybeSingle()).data
+  }
+  if (!mail) return { ok: false, fehler: 'Diese Mail liegt nicht im gemeinsamen Postfach.' }
+  const { data: kunde } = await admin.from('kunden').select('id, bereich, firma, ansprechpartner, dokumente, activities').eq('id', kundeId).neq('bereich', 'privat').maybeSingle()
+  if (!kunde) return { ok: false, fehler: 'Diese Kundenakte gibt es nicht.' }
+
+  const heute = new Date().toISOString().slice(0, 10)
+  const vorhanden = new Set(((kunde.dokumente ?? []) as { url?: string }[]).map((d) => d.url).filter(Boolean))
+  const neueDokumente = ((mail.anhaenge ?? []) as MailAnhang[])
+    // Nur was öffentlich abgelegt ist; winzige Bilder sind Logos aus der Signatur, keine Unterlagen.
+    .filter((a) => typeof a.url === 'string' && /^https?:/.test(a.url) && !vorhanden.has(a.url))
+    .filter((a) => !(String(a.contentType ?? '').startsWith('image/') && Number(a.size ?? 0) < 15 * 1024))
+    .map((a) => {
+      const bytes = Number(a.size ?? 0)
+      return {
+        id: crypto.randomUUID(),
+        name: a.filename || 'Anhang',
+        typ: a.contentType || 'application/octet-stream',
+        datum: heute,
+        groesse: bytes < 1024 * 1024 ? `${Math.round(bytes / 1024)} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`,
+        url: a.url,
+      }
+    })
+  const kundeName = kunde.ansprechpartner && kunde.ansprechpartner !== kunde.firma ? `${kunde.firma} (${kunde.ansprechpartner})` : kunde.firma
+  const schonHier = mail.zugewiesener_kunde_id === kunde.id
+  if (!schonHier || neueDokumente.length > 0) {
+    const text = `E-Mail zugeordnet: „${mail.betreff ?? '(ohne Betreff)'}" von ${mail.von_name ?? 'unbekannt'}${neueDokumente.length > 0 ? ` (${neueDokumente.length} ${neueDokumente.length === 1 ? 'Anhang' : 'Anhänge'} in Dokumente abgelegt)` : ''}`
+    const { error: kundeFehler } = await admin
+      .from('kunden')
+      .update({
+        dokumente: [...neueDokumente, ...((kunde.dokumente ?? []) as unknown[])],
+        activities: [{ id: crypto.randomUUID(), date: heute, text, user: wer }, ...((kunde.activities ?? []) as unknown[])],
+        letzte_aktivitaet: heute,
+      })
+      .eq('id', kunde.id)
+    if (kundeFehler) return { ok: false, fehler: `Die Akte ließ sich nicht ergänzen: ${kundeFehler.message}` }
+  }
+  const { error } = await admin
+    .from('eingegangene_emails')
+    .update({ zugewiesener_kunde_id: kunde.id, zugewiesener_bereich: kunde.bereich, zugewiesener_kunde_name: kundeName, ...(mail.relevanz ? {} : { relevanz: 'kunde' }) })
+    .eq('id', mail.id)
+  if (error) return { ok: false, fehler: `Die Zuordnung ließ sich nicht speichern: ${error.message}` }
+  return { ok: true, betreff: mail.betreff ?? '', kundeName, abgelegt: neueDokumente.length }
+}
+
+// Läuft mit dem Zeitplan: Mails der letzten Tage im gemeinsamen Postfach, die noch keiner Akte
+// zugeordnet sind, kommen zur Akte ihres Absenders — sofern dessen Adresse zu genau einer Akte gehört.
+// Schließt zwei Lücken: Mails, die über den Postfach-Abruf kommen (die großen, mit Anhängen), und die
+// erste Mail eines Absenders, aus der die Akte erst danach automatisch angelegt wurde.
+export async function ordneOffeneMailsZu(admin: Db, tage = 3): Promise<{ zugeordnet: number; fehler: string[] }> {
+  const seit = new Date(Date.now() - tage * 86400000).toISOString()
+  const { data: mails } = await admin
+    .from('eingegangene_emails')
+    .select('id, von, ignoriert')
+    .is('besitzer_email', null)
+    .is('zugewiesener_kunde_id', null)
+    .or('relevanz.is.null,relevanz.neq.nicht_relevant')
+    .gte('erstellt_am', seit)
+    .order('erstellt_am', { ascending: true })
+    .limit(60)
+  const offene = ((mails ?? []) as { id: string; von: string | null; ignoriert: boolean | null }[]).filter((m) => !m.ignoriert && m.von)
+  if (offene.length === 0) return { zugeordnet: 0, fehler: [] }
+  const [{ data: kunden }, { data: team }] = await Promise.all([
+    admin.from('kunden').select('id, email').neq('bereich', 'privat'),
+    admin.from('mitarbeiter').select('email'),
+  ])
+  const intern = new Set(((team ?? []) as { email: string | null }[]).map((m) => String(m.email ?? '').trim().toLowerCase()))
+  const jeAdresse = new Map<string, string[]>()
+  for (const k of (kunden ?? []) as { id: string; email: string | null }[]) {
+    const adresse = String(k.email ?? '').trim().toLowerCase()
+    if (!adresse.includes('@')) continue
+    jeAdresse.set(adresse, [...(jeAdresse.get(adresse) ?? []), k.id])
+  }
+  let zugeordnet = 0
+  const fehler: string[] = []
+  for (const m of offene) {
+    const von = String(m.von).trim().toLowerCase()
+    if (intern.has(von)) continue
+    const akten = jeAdresse.get(von) ?? []
+    if (akten.length !== 1) continue
+    const ergebnis = await ordneMailZu(admin, m.id, akten[0], 'System (automatische E-Mail-Zuordnung)')
+    if (ergebnis.ok) zugeordnet++
+    else fehler.push(ergebnis.fehler)
+  }
+  return { zugeordnet, fehler }
 }
 
 // ---------- Aus dem privaten in den öffentlichen Bereich ----------

@@ -34,7 +34,7 @@ import type {
 } from '../types'
 import { DEFAULT_FRAGENKATALOG } from '../data/fragenkataloge'
 import { KUNDEN_BEREICHE, kundeBereichLabel } from '../data/kundenBereiche'
-import { isSupabaseConfigured, hydrateFromSupabase, syncAfterDispatch, migriereLokaleDatenFallsLeer, type HydratedData } from '../lib/crmSync'
+import { isSupabaseConfigured, hydrateFromSupabase, syncAfterDispatch, migriereLokaleDatenFallsLeer, schreibtGerade, wendeServerStandAn, type HydratedData, type ServerStand } from '../lib/crmSync'
 import type { Projekt, Aufgabe, AufgabenStatus, Meilenstein } from '../types/project'
 import { seedKunden, seedRechnungen, seedProtokolle, seedKonzepte, seedVertraege, seedVorlagen } from '../data/seedBeratung'
 import { seedObjekte, seedFinanzierungen } from '../data/seedImmobilien'
@@ -1165,8 +1165,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const next = reducer(prev, action)
     stateRef.current = next
     dispatchRaw(action)
-    if (action.type !== 'HYDRATE_SUPABASE' && action.type !== 'KUNDE_VOM_SERVER') syncAfterDispatch(prev, next)
+    if (action.type !== 'HYDRATE_SUPABASE' && action.type !== 'KUNDE_VOM_SERVER') syncAfterDispatch(prev, next, uebernimmServerStand)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Beim Speichern einer Akte hat die Datenbank Einträge gemeldet, die dieses Fenster noch nicht
+  // kannte (vom Telegram-Assistenten, vom Zeitplan oder von Kollegen): gleich mit anzeigen. Gerechnet
+  // wird gegen den jetzigen Stand des Fensters, nicht gegen den zum Zeitpunkt des Speicherns.
+  function uebernimmServerStand(id: string, stand: ServerStand) {
+    for (const def of KUNDEN_BEREICHE) {
+      const kunde = def.get(stateRef.current).find((k) => k.id === id)
+      if (!kunde) continue
+      const patch: Partial<Kunde> = {}
+      if (stand.activities) patch.activities = wendeServerStandAn(kunde.activities, stand.activities)
+      if (stand.dokumente) patch.dokumente = wendeServerStandAn(kunde.dokumente, stand.dokumente)
+      if (stand.signaturen) patch.signaturen = wendeServerStandAn(kunde.signaturen, stand.signaturen)
+      dispatch({ type: 'KUNDE_VOM_SERVER', bereich: def.id, id, patch })
+      return
+    }
+  }
 
   useEffect(() => {
     if (!isSupabaseConfigured) return
@@ -1230,6 +1247,35 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!isSupabaseConfigured) return
     const data = await hydrateFromSupabase()
     if (data) dispatch({ type: 'HYDRATE_SUPABASE', data })
+  }, [dispatch])
+
+  // Ein Fenster, das lange offen ist, zeigt sonst den Stand vom Morgen. Kommt jemand zu seinem Fenster
+  // zurück, wird der Stand neu geladen — höchstens alle drei Minuten, nicht während gerade gespeichert
+  // wird und nicht, solange der Cursor in einem Eingabefeld steht (damit keine Eingabe verloren geht).
+  const zuletztGeladen = useRef(Date.now())
+  useEffect(() => {
+    if (!isSupabaseConfigured) return
+    const beiRueckkehr = () => {
+      if (document.visibilityState !== 'visible') return
+      if (Date.now() - zuletztGeladen.current < 180000 || schreibtGerade()) return
+      const aktiv = document.activeElement
+      if (aktiv instanceof HTMLElement && (aktiv.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(aktiv.tagName))) return
+      zuletztGeladen.current = Date.now()
+      // Ändert sich während des Ladens hier etwas, wird der geladene Stand verworfen — sonst würde
+      // die eben gemachte Eingabe aus der Anzeige fallen.
+      const vorher = stateRef.current
+      hydrateFromSupabase()
+        .then((data) => {
+          if (data && stateRef.current === vorher && !schreibtGerade()) dispatch({ type: 'HYDRATE_SUPABASE', data })
+        })
+        .catch(() => undefined)
+    }
+    document.addEventListener('visibilitychange', beiRueckkehr)
+    window.addEventListener('focus', beiRueckkehr)
+    return () => {
+      document.removeEventListener('visibilitychange', beiRueckkehr)
+      window.removeEventListener('focus', beiRueckkehr)
+    }
   }, [dispatch])
 
   const value = useMemo(() => ({ state, dispatch, hydrated, hydrateError, neuLaden }), [state, dispatch, hydrated, hydrateError, neuLaden])

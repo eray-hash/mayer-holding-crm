@@ -215,7 +215,10 @@ import {
   ermittleAufrufer,
   holeInOeffentlich,
   ladePostfach,
+  listeOrdner,
   listePostfaecher,
+  ordneMailZu,
+  ordneOffeneMailsZu,
   rufeAlleAb,
   rufePostfachAb,
   trennePostfach,
@@ -2475,6 +2478,8 @@ Deno.serve(async (req: Request) => {
       body.action === 'postfach_verbinden' ||
       body.action === 'postfach_trennen' ||
       body.action === 'postfach_abruf' ||
+      body.action === 'postfach_ordner' ||
+      body.action === 'mail_zuordnen' ||
       body.action === 'mail_freigeben' ||
       body.action === 'mail_anhang_url'
     ) {
@@ -2518,6 +2523,14 @@ Deno.serve(async (req: Request) => {
         }
         return new Response(JSON.stringify({ ok: true, id: ergebnis.id, adresse: ergebnis.adresse, nurEmpfang: ergebnis.nurEmpfang }), { headers })
       }
+      if (body.action === 'postfach_ordner') {
+        const fach = await ladePostfach(admin, String(body.postfachId ?? ''))
+        const eigenes = !!fach && !!fach.besitzer_email && fach.besitzer_email.toLowerCase() === aufrufer.email
+        if (!fach || !(eigenes || aufrufer.istGf)) return new Response(JSON.stringify({ error: 'Dieses Postfach kannst du nicht einsehen.' }), { status: 403, headers })
+        const ergebnis = await listeOrdner(admin, fach, eigenes || !fach.besitzer_email)
+        if ('fehler' in ergebnis) return new Response(JSON.stringify({ error: ergebnis.fehler }), { status: 502, headers })
+        return new Response(JSON.stringify(ergebnis), { headers })
+      }
       if (body.action === 'postfach_trennen') {
         const ergebnis = await trennePostfach(admin, aufrufer, String(body.postfachId ?? ''))
         if (!ergebnis.ok) return new Response(JSON.stringify({ error: ergebnis.fehler }), { status: 400, headers })
@@ -2535,6 +2548,11 @@ Deno.serve(async (req: Request) => {
         const ergebnis = await rufePostfachAb(admin, fach)
         if (ergebnis.fehler) return new Response(JSON.stringify({ error: ergebnis.fehler }), { status: 502, headers })
         return new Response(JSON.stringify({ ok: true, neu: ergebnis.neu, offen: ergebnis.offen }), { headers })
+      }
+      if (body.action === 'mail_zuordnen') {
+        const ergebnis = await ordneMailZu(admin, String(body.mailId ?? ''), String(body.kundeId ?? ''), aufrufer.name || aufrufer.email)
+        if (!ergebnis.ok) return new Response(JSON.stringify({ error: ergebnis.fehler }), { status: 400, headers })
+        return new Response(JSON.stringify(ergebnis), { headers })
       }
       if (body.action === 'mail_freigeben') {
         const ergebnis = await holeInOeffentlich(admin, aufrufer, body)
@@ -2775,7 +2793,17 @@ Deno.serve(async (req: Request) => {
 
     if (body.action === 'classify_new_leads') {
       const ergebnis = await classifyNewLeads()
-      return new Response(JSON.stringify(ergebnis), { headers })
+      // Danach: Mails der letzten Tage zur Akte ihres Absenders legen (samt Anhängen) — auch die Mail,
+      // aus der die Akte eben erst angelegt wurde.
+      let zugeordnet = 0
+      try {
+        const zuordnung = await ordneOffeneMailsZu(createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!))
+        zugeordnet = zuordnung.zugeordnet
+        if (zuordnung.fehler.length > 0) console.error('Mail-Zuordnung mit Fehlern:', zuordnung.fehler.join(' | '))
+      } catch (err) {
+        console.error('Mail-Zuordnung fehlgeschlagen:', err)
+      }
+      return new Response(JSON.stringify({ ...ergebnis, mails_zugeordnet: zugeordnet }), { headers })
     }
 
     if (body.action === 'draft_campaign') {
@@ -3210,7 +3238,7 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ ok: true }), { headers })
     }
 
-    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "bewertung_recherche_start", "bewertung_recherche_schritt", "kunden_umfeld_recherche", "steuer_analyse_start", "steuer_analyse_schritt", "dokument_lesen", "dokument_inhalte", "postfaecher_liste", "postfach_verbinden", "postfach_trennen", "postfach_abruf", "mail_freigeben", "mail_anhang_url", "termin_speichern", "termin_loeschen", "termin_erinnerungen" oder "firmenwissen_answer"' }), { status: 400, headers })
+    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "bewertung_recherche_start", "bewertung_recherche_schritt", "kunden_umfeld_recherche", "steuer_analyse_start", "steuer_analyse_schritt", "dokument_lesen", "dokument_inhalte", "postfaecher_liste", "postfach_verbinden", "postfach_trennen", "postfach_abruf", "postfach_ordner", "mail_zuordnen", "mail_freigeben", "mail_anhang_url", "termin_speichern", "termin_loeschen", "termin_erinnerungen" oder "firmenwissen_answer"' }), { status: 400, headers })
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }
