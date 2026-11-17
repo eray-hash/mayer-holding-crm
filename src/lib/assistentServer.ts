@@ -32,8 +32,9 @@ export type AssistentAntwort = {
   mailStart: string | null
 }
 
-export function frageAssistent(text: string): Promise<AssistentAntwort> {
-  return anfrage<AssistentAntwort>({ web: 'chat', text })
+/** `offen`: was im CRM gerade geöffnet ist (Mail im gemeinsamen Postfach oder eine Akte), siehe assistentKontext.ts. */
+export function frageAssistent(text: string, offen?: { art: 'mail' | 'akte'; kennung: string } | null): Promise<AssistentAntwort> {
+  return anfrage<AssistentAntwort>({ web: 'chat', text, ...(offen ? { offen } : {}) })
 }
 
 export function mailStatus(): Promise<{ laeuft: boolean; ergebnis: { id: string; text: string; z: string } | null }> {

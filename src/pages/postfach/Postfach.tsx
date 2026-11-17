@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { setzeOffeneMail } from '../../lib/assistentKontext'
 import { useNavigate } from 'react-router-dom'
 import { Inbox, Send, RefreshCw, UserPlus, Check, X, AlertTriangle, Plus, Reply, ListPlus, Search, Sparkles, Megaphone } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
@@ -251,6 +252,12 @@ export function Postfach() {
   }
 
   const selectedMail = ordner === 'posteingang' ? mails.find((m) => m.id === selectedId) : undefined
+  // Der Assistent soll wissen, welche Mail gerade offen ist („fass mir diese Mail zusammen").
+  const offeneMailKennung = selectedMail?.id ?? null
+  useEffect(() => {
+    setzeOffeneMail(offeneMailKennung)
+    return () => setzeOffeneMail(null)
+  }, [offeneMailKennung])
   const selectedGesendet = ordner === 'gesendet' ? gesendet.find((m) => m.id === selectedId) : undefined
   const selectedLead = ordner === 'leads' ? leads.find((l) => l.id === selectedId) : undefined
 

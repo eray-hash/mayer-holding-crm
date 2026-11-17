@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { Mic, Square, Sparkles, AlertTriangle, Send, X, Volume2, VolumeX, Bot, ImagePlus, Phone, Wrench, Check, BookOpen, Paperclip } from 'lucide-react'
+import { Mic, Square, Sparkles, AlertTriangle, Send, X, Volume2, VolumeX, Bot, ImagePlus, Phone, Wrench, Check, BookOpen, Paperclip, Maximize2, Minimize2 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { DATEI_ARTEN, dateiStatus, frageAssistent, istServerAssistentVerfuegbar, mailStatus, schickeDatei, verkleinereBild } from '../lib/assistentServer'
 import { useAuth } from '../context/AuthContext'
 import { isSupabaseConfigured } from '../lib/supabaseClient'
 import { useSpeechRecognition } from '../lib/useSpeechRecognition'
-import { speak, isSpeechSynthesisSupported } from '../lib/useSpeechSynthesis'
+import { speak, stopSpeaking, isSpeechSynthesisSupported } from '../lib/useSpeechSynthesis'
+import { offenerKontext } from '../lib/assistentKontext'
 import {
   isEmailGatewayConfigured,
   classifyAssistantInput,
@@ -83,7 +84,61 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
       ],
   )
   const [verarbeiten, setVerarbeiten] = useState(false)
-  const [ttsEnabled, setTtsEnabled] = useState(true)
+  // Vorlesen ist aus, bis es jemand einschaltet (Wunsch aus dem Büro: nicht ungefragt laut vorlesen).
+  // Die Wahl und die Fenstergröße bleiben je Browser gemerkt.
+  const [ttsEnabled, setTtsEnabled] = useState(() => {
+    try {
+      return localStorage.getItem('ki-assistent-vorlesen') === 'an'
+    } catch {
+      return false
+    }
+  })
+  const [gross, setGross] = useState(() => {
+    try {
+      return localStorage.getItem('ki-assistent-gross') === 'ja'
+    } catch {
+      return false
+    }
+  })
+  const [liestVor, setLiestVor] = useState<string | null>(null)
+
+  function merke(schluessel: string, wert: string) {
+    try {
+      localStorage.setItem(schluessel, wert)
+    } catch {
+      // ohne Browserspeicher gilt die Wahl nur für diese Sitzung
+    }
+  }
+
+  function schalteVorlesen() {
+    const an = !ttsEnabled
+    setTtsEnabled(an)
+    merke('ki-assistent-vorlesen', an ? 'an' : 'aus')
+    if (!an) {
+      stopSpeaking() // läuft gerade etwas, sofort verstummen
+      setLiestVor(null)
+    }
+  }
+
+  // Eine einzelne Antwort auf Klick vorlesen (oder das laufende Vorlesen beenden) — unabhängig vom Schalter oben.
+  function leseVor(id: string, text: string) {
+    if (liestVor === id) {
+      stopSpeaking()
+      setLiestVor(null)
+      return
+    }
+    setLiestVor(id)
+    speak(text, true, () => setLiestVor((jetzt) => (jetzt === id ? null : jetzt)))
+  }
+
+  // Fenster zu oder Seite verlassen: nichts redet weiter.
+  useEffect(() => {
+    if (!open) {
+      stopSpeaking()
+      setLiestVor(null)
+    }
+    return () => stopSpeaking()
+  }, [open])
   const [pastedImage, setPastedImage] = useState<PastedImage | null>(null)
   const [aufnahmeKunde, setAufnahmeKunde] = useState<AufnahmeKunde | null>(null)
   const [recorderOpen, setRecorderOpen] = useState(false)
@@ -608,7 +663,7 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
       addMessage('user', text)
       setVerarbeiten(true)
       try {
-        const r = await frageAssistent(text)
+        const r = await frageAssistent(text, offenerKontext())
         addMessage('assistant', r.antwort, sprechen)
         if (r.geaendert) await neuLaden().catch(() => undefined)
         if (r.mailStart) warteAufVersand(r.mailStart)
@@ -723,7 +778,11 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
 
   return (
     <div className="fixed inset-0 z-40 flex items-end justify-end sm:inset-auto sm:bottom-5 sm:right-5">
-      <div className="flex h-full w-full flex-col bg-white shadow-2xl sm:h-[600px] sm:w-96 sm:rounded-2xl sm:ring-1 sm:ring-slate-200">
+      <div
+        className={`flex h-full w-full flex-col bg-white shadow-2xl sm:rounded-2xl sm:ring-1 sm:ring-slate-200 ${
+          gross ? 'sm:h-[calc(100vh-2.5rem)] sm:w-[min(960px,calc(100vw-2.5rem))]' : 'sm:h-[min(760px,calc(100vh-2.5rem))] sm:w-[min(540px,calc(100vw-2.5rem))]'
+        }`}
+      >
         {/* Header */}
         <div className="flex flex-shrink-0 items-center justify-between border-b border-slate-100 px-4 py-3">
           <div className="flex items-center gap-2">
@@ -759,13 +818,28 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
             )}
             {isSpeechSynthesisSupported && (
               <button
-                onClick={() => setTtsEnabled((v) => !v)}
-                className="rounded-md p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
-                title={ttsEnabled ? 'Sprachausgabe ausschalten' : 'Sprachausgabe einschalten'}
+                onClick={schalteVorlesen}
+                className={`rounded-md p-1.5 ${ttsEnabled ? 'bg-accent-50 text-accent-700' : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600'}`}
+                title={ttsEnabled ? 'Vorlesen ist an (nach gesprochenen Fragen) — klicken zum Ausschalten, stoppt auch sofort' : 'Vorlesen ist aus — klicken, damit Antworten auf gesprochene Fragen vorgelesen werden'}
+                aria-label={ttsEnabled ? 'Vorlesen ausschalten' : 'Vorlesen einschalten'}
+                aria-pressed={ttsEnabled}
               >
                 {ttsEnabled ? <Volume2 size={15} /> : <VolumeX size={15} />}
               </button>
             )}
+            <button
+              onClick={() => {
+                setGross((g) => {
+                  merke('ki-assistent-gross', g ? 'nein' : 'ja')
+                  return !g
+                })
+              }}
+              className="hidden rounded-md p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 sm:block"
+              title={gross ? 'Fenster verkleinern' : 'Fenster vergrößern'}
+              aria-label={gross ? 'Fenster verkleinern' : 'Fenster vergrößern'}
+            >
+              {gross ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+            </button>
             <button onClick={onToggle} className="rounded-md p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600" title="Schließen">
               <X size={17} />
             </button>
@@ -789,12 +863,21 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
           {messages.map((m) => (
             <div key={m.id} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
               <div
-                className={`max-w-[85%] whitespace-pre-wrap rounded-2xl px-3.5 py-2 text-sm ${
-                  m.role === 'user' ? 'bg-accent-600 text-white' : 'bg-slate-100 text-slate-700'
+                className={`max-w-[88%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed ${
+                  m.role === 'user' ? 'bg-accent-600 text-white' : 'bg-slate-100 text-slate-800'
                 }`}
               >
                 {m.imageDataUrl && <img src={m.imageDataUrl} alt="Angehängtes Bild" className="mb-2 max-h-40 rounded-lg" />}
                 {m.text}
+                {m.role === 'assistant' && isSpeechSynthesisSupported && (
+                  <button
+                    onClick={() => leseVor(m.id, m.text)}
+                    className="mt-1.5 flex items-center gap-1 text-xs font-medium text-slate-400 hover:text-slate-600"
+                    aria-label={liestVor === m.id ? 'Vorlesen beenden' : 'Diese Antwort vorlesen'}
+                  >
+                    {liestVor === m.id ? <Square size={11} /> : <Volume2 size={12} />} {liestVor === m.id ? 'Stopp' : 'Vorlesen'}
+                  </button>
+                )}
               </div>
             </div>
           ))}

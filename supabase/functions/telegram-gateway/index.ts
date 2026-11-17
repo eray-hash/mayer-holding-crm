@@ -1384,12 +1384,16 @@ async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKontext): Pr
     // deno-lint-ignore no-explicit-any
     const anhaengeVon = (m: any) => ((m.anhaenge ?? []) as { filename?: string; size?: number }[]).map((a) => `${a.filename ?? 'Anhang'} (${formatGroesse(Number(a.size ?? 0))})`)
     if (input.mail_id) {
-      if (!istKennung(input.mail_id)) return 'Fehler: mail_id ist ungültig — exakt aus der Liste von gemeinsames_postfach übernehmen.'
+      // Entweder die Kennung aus der Liste oder die Kennung der Mail selbst (so nennt sie das CRM-Fenster,
+      // wenn der Mitarbeiter eine Mail geöffnet hat).
+      const kennung = String(input.mail_id).trim()
+      if (!kennung || kennung.length > 400 || /[\s"]/.test(kennung)) return 'Fehler: mail_id ist ungültig — exakt aus der Liste von gemeinsames_postfach übernehmen.'
       const { data: m } = await supabase
         .from('eingegangene_emails')
         .select('id, von, von_name, betreff, mail_datum, ausschnitt, anhaenge, rohdaten, zugewiesener_kunde_id, zugewiesener_kunde_name')
-        .eq('id', input.mail_id)
+        .eq(istKennung(kennung) ? 'id' : 'message_id', kennung)
         .is('besitzer_email', null)
+        .limit(1)
         .maybeSingle()
       if (!m) return 'Fehler: Diese Mail gibt es im gemeinsamen Postfach nicht.'
       // Weitergeleitete Mails tragen den vollen Text in den Rohdaten, abgeholte im Ausschnitt.
@@ -2487,9 +2491,18 @@ async function webAnfrage(req: Request, body: any, headers: Record<string, strin
 
   const state = ladeState(mitarbeiter.telegram_pending)
   const letzteAktion = state.aktionen.length > 0 ? state.aktionen[state.aktionen.length - 1].z : ''
+  // Was im CRM gerade offen ist, damit „diese Mail" / „dieser Kunde" verstanden wird. Nur die Kennung,
+  // streng geprüft — kein Text aus einer Mail gelangt so in die Anweisung.
+  let offen = ''
+  const o = body.offen
+  if (o && typeof o === 'object' && typeof o.kennung === 'string' && /^[^\s"\[\]]{1,400}$/.test(o.kennung)) {
+    if (o.art === 'mail') offen = `eine E-Mail im gemeinsamen Postfach (mail_id ${o.kennung} — mit gemeinsames_postfach und dieser mail_id lesen)`
+    else if (o.art === 'akte') offen = `die Akte mit kunde_id ${o.kennung} (mit kundenakte_lesen lesen)`
+  }
+  const eingabe = body.text.trim().slice(0, 4000) + (offen ? `\n\n[Vom CRM ergänzt, nicht vom Mitarbeiter getippt: Er hat im CRM gerade ${offen} geöffnet. „Diese Mail", „dieser Kunde", „hier" meinen das, wenn nichts anderes genannt ist. Nenne die Kennung nicht.]` : '')
   let antwort: string
   try {
-    antwort = await agentAntwort(supabase, mitarbeiter, state, body.text.trim().slice(0, 4000), 'web')
+    antwort = await agentAntwort(supabase, mitarbeiter, state, eingabe, 'web')
   } catch (err) {
     console.error('Assistent (CRM-Fenster) fehlgeschlagen:', err)
     return json({ error: `Da ist gerade etwas schiefgelaufen (${err instanceof Error ? err.message : 'unbekannter Fehler'}). Versuch es bitte gleich noch einmal.` }, 502)
