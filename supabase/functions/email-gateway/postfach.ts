@@ -31,6 +31,8 @@ export type Postfach = {
   letzter_abruf: string | null
   letzter_fehler: string | null
   letzte_uid: number | null
+  ordner_stand?: Record<string, { uid: number; g: number }> | null
+  in_arbeit_ordner?: string | null
   uid_gueltigkeit: number | null
   in_arbeit_uid?: number | null
   abruf_laeuft_seit?: string | null
@@ -204,6 +206,8 @@ export type PostfachInfo = {
   holtAb: boolean
   letzterAbruf: string | null
   letzterFehler: string | null
+  /** Eigene Ordner, aus denen Mails abgeholt werden — nur beim eigenen Postfach gefüllt. */
+  ordner: string[]
 }
 
 export async function listePostfaecher(admin: Db, a: Aufrufer, alle: boolean): Promise<PostfachInfo[]> {
@@ -225,6 +229,7 @@ export async function listePostfaecher(admin: Db, a: Aufrufer, alle: boolean): P
       holtAb: !!p.besitzer_email,
       letzterAbruf: p.letzter_abruf,
       letzterFehler: p.letzter_fehler,
+      ordner: !!p.besitzer_email && p.besitzer_email.toLowerCase() === a.email ? Object.keys(p.ordner_stand ?? {}).sort((x, y) => x.localeCompare(y, 'de')) : [],
     }))
 }
 
@@ -496,6 +501,26 @@ function sicheresDatum(wert: unknown): string {
 }
 
 const ERSTER_ABRUF = 30
+// Persönliche Postfächer: beim ersten Abholen je Ordner die neuesten 100 Mails, höchstens ein Jahr alt.
+const ERSTER_ABRUF_EIGENES = 100
+const ERSTER_ABRUF_HOECHSTALTER = 365 * 86400000
+const POSTEINGANG = 'INBOX'
+// Ordner, die nicht ins Postfach des CRM gehören.
+const NICHT_ABHOLEN = new Set(['\\Sent', '\\Drafts', '\\Trash', '\\Junk', '\\All', '\\Flagged'])
+const NICHT_ABHOLEN_NAMEN = /^(gesendet|gesendete (objekte|elemente)|sent([ -]?(items|messages|mail))?|entw(ü|ue)rfe|drafts?|papierkorb|trash|gel(ö|oe)schte? (objekte|elemente)|gel(ö|oe)scht|deleted([ -]?(items|messages))?|spam|spambucket|spamverdacht|junk([ -]?e-?mail)?|unerw(ü|ue)nscht(e (e-?mails?|werbung))?|virus(es)?|quarant(ä|ae)ne|quarantine|postausgang|outbox|vorlagen|templates)$/i
+
+// Gehört dieser Ordner ins Postfach des CRM? Der Posteingang wird gesondert abgeholt.
+// deno-lint-ignore no-explicit-any
+function istEigenerOrdner(o: any): boolean {
+  const pfad = String(o?.path ?? '')
+  if (!pfad || pfad.toUpperCase() === POSTEINGANG) return false
+  if (o.flags instanceof Set && o.flags.has('\\Noselect')) return false
+  if (NICHT_ABHOLEN.has(String(o.specialUse ?? ''))) return false
+  // Manche Anbieter hängen alles unter den Posteingang ("INBOX.Spam"): nur der letzte Teil zählt.
+  const letzterTeil = o.delimiter ? pfad.split(String(o.delimiter)).pop() ?? pfad : pfad
+  return !NICHT_ABHOLEN_NAMEN.test(letzterTeil.trim())
+}
+type OrdnerStand = { uid: number; g: number }
 const ZU_GROSS = 30 * 1024 * 1024
 const ANHANG_HOECHSTENS = 20 * 1024 * 1024
 const BYTES_JE_LAUF = 10 * 1024 * 1024
@@ -587,70 +612,95 @@ export async function rufePostfachAb(
       .update({ abruf_laeuft_seit: jetzt.toISOString(), letzter_abruf: jetzt.toISOString() })
       .eq('id', p.id)
       .or(`abruf_laeuft_seit.is.null,abruf_laeuft_seit.lt.${new Date(jetzt.getTime() - 180000).toISOString()}`)
-      .select('letzte_uid, uid_gueltigkeit, in_arbeit_uid')
+      .select('letzte_uid, uid_gueltigkeit, in_arbeit_uid, in_arbeit_ordner, ordner_stand')
     if (sperrFehler) return { neu: 0, gesehen: 0, offen: 0, fehler: sperrFehler.message }
     if (!belegt || belegt.length === 0) return { neu: 0, gesehen: 0, offen: 0 }
     // Mit dem frisch gelesenen Stand arbeiten, nicht mit dem, den der Aufrufer vorher geladen hat.
     p = { ...p, ...belegt[0] }
   }
 
-  let hoechsteUid = p.letzte_uid ?? 0
-  let gueltigkeit = p.uid_gueltigkeit
+  // Stand je Ordner: Der Posteingang steht in eigenen Spalten, alle weiteren Ordner in `ordner_stand`.
+  let posteingangUid = p.letzte_uid ?? 0
+  let posteingangGueltig = p.uid_gueltigkeit
+  const ordnerStand: Record<string, OrdnerStand> = { ...(p.ordner_stand ?? {}) }
   const abgebrochenBei = Number(p.in_arbeit_uid ?? 0)
+  const abgebrochenIn = p.in_arbeit_ordner ?? POSTEINGANG
   const gemeinsam = !p.besitzer_email
+  const standSpalten = () => ({ ...(posteingangUid ? { letzte_uid: posteingangUid, uid_gueltigkeit: posteingangGueltig } : {}), ordner_stand: ordnerStand })
+  let bytes = 0
+  let bearbeitet = 0
+  // Die Portion dieses Laufs ist ausgeschöpft, es liegt aber noch etwas auf dem Server.
+  let voll = false
   // deno-lint-ignore no-explicit-any
   let client: any = null
-  try {
-    client = new ImapFlow({ host: p.imap_host, port: p.imap_port, secure: p.imap_port === 993, auth: { user: p.benutzer || p.adresse, pass: await passwortVon(admin, p) }, logger: false })
-    client.on('error', () => {})
-    await zeitlimit(client.connect(), 20000, 'Der Mail-Server hat nach 20 Sekunden nicht geantwortet.')
-    const sperre = await client.getMailboxLock('INBOX')
+
+  // Holt einen Ordner ab dem gemerkten Stand ab. Der Fortschritt wird laufend über `merke` festgehalten,
+  // damit er auch bei einem Abbruch mitten im Ordner nicht verloren geht.
+  const holeOrdner = async (pfad: string, standUid: number, standGueltig: number | null, merke: (uid: number, gueltig: number) => void): Promise<void> => {
+    const istPosteingang = pfad === POSTEINGANG
+    const sperre = await client.getMailboxLock(pfad)
     try {
       const fach = client.mailbox
-      const aktuelleGueltigkeit = Number(fach?.uidValidity ?? 0)
+      const gueltig = Number(fach?.uidValidity ?? 0)
       const anzahl = Number(fach?.exists ?? 0)
-      const neuStart = !p.letzte_uid || (gueltigkeit != null && aktuelleGueltigkeit !== Number(gueltigkeit))
-      gueltigkeit = aktuelleGueltigkeit
+      const neuStart = !standUid || (standGueltig != null && gueltig !== Number(standGueltig))
+      let hoechste = neuStart ? 0 : standUid
       // deno-lint-ignore no-explicit-any
       const liste: { uid: number; size: number; envelope: any; bodyStructure: Teil }[] = []
       if (anzahl > 0) {
         const felder = { uid: true, size: true, envelope: true, bodyStructure: true }
         const auflisten = async () => {
           if (neuStart) {
-            hoechsteUid = 0
-            const ab = Math.max(1, anzahl - ERSTER_ABRUF + 1)
+            const ab = Math.max(1, anzahl - (gemeinsam ? ERSTER_ABRUF : ERSTER_ABRUF_EIGENES) + 1)
             for await (const n of client.fetch(`${ab}:*`, felder)) liste.push({ uid: Number(n.uid), size: Number(n.size ?? 0), envelope: n.envelope, bodyStructure: n.bodyStructure })
           } else {
-            for await (const n of client.fetch(`${hoechsteUid + 1}:*`, felder, { uid: true })) {
+            for await (const n of client.fetch(`${hoechste + 1}:*`, felder, { uid: true })) {
               // "n:*" liefert laut IMAP immer mindestens die letzte Nachricht — auch wenn sie älter ist.
-              if (Number(n.uid) > hoechsteUid) liste.push({ uid: Number(n.uid), size: Number(n.size ?? 0), envelope: n.envelope, bodyStructure: n.bodyStructure })
+              if (Number(n.uid) > hoechste) liste.push({ uid: Number(n.uid), size: Number(n.size ?? 0), envelope: n.envelope, bodyStructure: n.bodyStructure })
             }
           }
         }
         await zeitlimit(auflisten(), 40000, 'Der Mail-Server hat die Liste der neuen Mails nicht rechtzeitig geliefert.')
       }
       liste.sort((x, y) => x.uid - y.uid)
-      gesehen = liste.length
-      if (nurPruefen) return { neu: 0, gesehen, offen: gesehen }
-      if (liste.length > 0) await stelleAblageSicher(admin)
+      gesehen += liste.length
+      if (nurPruefen) return
+      if (liste.length === 0) {
+        // Nichts Neues: Stand auf die zuletzt vergebene Nummer vorziehen. Sonst würde ein Ordner, dessen
+        // neueste Mails gelöscht wurden, bei jedem Lauf wieder geöffnet.
+        merke(Math.max(hoechste, Number(fach?.uidNext ?? 1) - 1), gueltig)
+        return
+      }
+      await stelleAblageSicher(admin)
 
-      let bytes = 0
-      let bearbeitet = 0
       for (const n of liste) {
-        if (Date.now() - beginn > budgetMs) break
+        if (Date.now() - beginn > budgetMs) {
+          voll = true
+          break
+        }
         const umschlag = n.envelope ?? {}
         // Kleine Mails gemeinsamer Postfächer kommen über die Weiterleitung — nur weiterzählen.
         if (gemeinsam && n.size <= WEITERLEITUNGS_GRENZE) {
-          hoechsteUid = n.uid
+          hoechste = n.uid
+          merke(hoechste, gueltig)
           erledigt++
           continue
         }
-        if (bearbeitet >= hoechstens) break
-        if (bearbeitet > 0 && bytes + n.size > BYTES_JE_LAUF) break
+        // Beim ersten Abholen eines Ordners nichts, was älter als ein Jahr ist.
+        if (neuStart && !gemeinsam && umschlag.date && Date.now() - new Date(umschlag.date).getTime() > ERSTER_ABRUF_HOECHSTALTER) {
+          hoechste = n.uid
+          merke(hoechste, gueltig)
+          erledigt++
+          continue
+        }
+        if (bearbeitet >= hoechstens || (bearbeitet > 0 && bytes + n.size > BYTES_JE_LAUF)) {
+          voll = true
+          break
+        }
         bytes += n.size
         bearbeitet++
         // Gemeinsam: dieselbe Kennung wie bei der Weiterleitung, damit nichts doppelt erscheint.
-        const kennung = gemeinsam && umschlag.messageId ? String(umschlag.messageId) : `${p.id}:${umschlag.messageId ?? n.uid}`
+        const kennung = gemeinsam && umschlag.messageId ? String(umschlag.messageId) : `${p.id}:${umschlag.messageId ?? (istPosteingang ? n.uid : `${pfad}/${n.uid}`)}`
         const { data: schonDa } = await admin.from('eingegangene_emails').select('id').eq('message_id', kennung).limit(1).maybeSingle()
         if (!schonDa) {
           const von = umschlag.from?.[0]
@@ -662,17 +712,17 @@ export async function rufePostfachAb(
             von_name: von?.name || von?.address || 'Unbekannt',
             betreff: umschlag.subject ?? '(ohne Betreff)',
             mail_datum: sicheresDatum(umschlag.date),
-            rohdaten: { quelle: 'imap', uid: n.uid, an: adressen(umschlag.to), cc: adressen(umschlag.cc) },
+            rohdaten: { quelle: 'imap', uid: n.uid, an: adressen(umschlag.to), cc: adressen(umschlag.cc), ...(istPosteingang ? {} : { ordner: pfad }) },
             postfach_id: p.id,
             besitzer_email: p.besitzer_email,
           }
-          if (n.size > ZU_GROSS || n.uid === abgebrochenBei) {
-            zeile.ausschnitt =
-              n.uid === abgebrochenBei
-                ? '(Der Inhalt dieser Mail ließ sich nicht ins CRM übernehmen. Bitte im Mail-Programm öffnen.)'
-                : `(Diese Mail ist mit ${(n.size / 1024 / 1024).toFixed(0)} MB zu groß für das CRM. Inhalt und Anhänge bitte im Mail-Programm öffnen.)`
+          const hierAbgebrochen = n.uid === abgebrochenBei && pfad === abgebrochenIn
+          if (n.size > ZU_GROSS || hierAbgebrochen) {
+            zeile.ausschnitt = hierAbgebrochen
+              ? '(Der Inhalt dieser Mail ließ sich nicht ins CRM übernehmen. Bitte im Mail-Programm öffnen.)'
+              : `(Diese Mail ist mit ${(n.size / 1024 / 1024).toFixed(0)} MB zu groß für das CRM. Inhalt und Anhänge bitte im Mail-Programm öffnen.)`
           } else try {
-            await admin.from('postfaecher').update({ in_arbeit_uid: n.uid, ...(hoechsteUid ? { letzte_uid: hoechsteUid, uid_gueltigkeit: gueltigkeit } : {}) }).eq('id', p.id)
+            await admin.from('postfaecher').update({ in_arbeit_uid: n.uid, in_arbeit_ordner: pfad, ...standSpalten() }).eq('id', p.id)
             const { text: textTeil, html: htmlTeil, anhaenge: anhangTeile } = gliedere(n.bodyStructure)
             let text = ''
             const quelle = textTeil ?? htmlTeil
@@ -690,16 +740,18 @@ export async function rufePostfachAb(
               if (!geladen || geladen.bytes.length === 0 || geladen.bytes.length > ANHANG_HOECHSTENS) continue
               const anzeige = String(geladen.meta?.filename ?? teil.dispositionParameters?.filename ?? teil.parameters?.name ?? 'anhang')
               const inhaltsart = String(teil.type ?? geladen.meta?.contentType ?? 'application/octet-stream')
-              const pfad = `${p.id}/${n.uid}/${anhaenge.length + 1}_${sicherername(anzeige)}`
+              // Unterordner bekommen einen eigenen Abschnitt im Pfad: Nummern beginnen in jedem Ordner neu.
+              const pfadTeil = istPosteingang ? `${n.uid}` : `${sicherername(pfad)}/${n.uid}`
+              const ablagePfadPrivat = `${p.id}/${pfadTeil}/${anhaenge.length + 1}_${sicherername(anzeige)}`
               const ablage = gemeinsam ? OEFFENTLICHE_ABLAGE : ANHANG_ABLAGE
               // Öffentliche Ablage: Pfad mit Zufallsanteil, damit sich Adressen nicht erraten lassen.
-              const ablagePfad = gemeinsam ? `postfach/${crypto.randomUUID()}/${anhaenge.length + 1}_${sicherername(anzeige)}` : pfad
+              const ablagePfad = gemeinsam ? `postfach/${crypto.randomUUID()}/${anhaenge.length + 1}_${sicherername(anzeige)}` : ablagePfadPrivat
               const { error: ladeFehler } = await admin.storage.from(ablage).upload(ablagePfad, geladen.bytes, { contentType: inhaltsart, upsert: true })
               if (ladeFehler) {
-                console.error('Anhang konnte nicht abgelegt werden', pfad, ladeFehler.message)
+                console.error('Anhang konnte nicht abgelegt werden', ablagePfadPrivat, ladeFehler.message)
                 continue
               }
-              const url = gemeinsam ? admin.storage.from(ablage).getPublicUrl(ablagePfad).data.publicUrl : `${ANHANG_VORSATZ}${pfad}`
+              const url = gemeinsam ? admin.storage.from(ablage).getPublicUrl(ablagePfad).data.publicUrl : `${ANHANG_VORSATZ}${ablagePfadPrivat}`
               anhaenge.push({ filename: anzeige, size: geladen.bytes.length, contentType: inhaltsart, url })
             }
             zeile.ausschnitt = text.slice(0, 20000)
@@ -710,7 +762,7 @@ export async function rufePostfachAb(
             // deno-lint-ignore no-explicit-any
             const m = mailFehler as any
             if (!client?.usable || /rechtzeitig|Zeitüberschreitung/.test(String(m?.message ?? ''))) throw mailFehler
-            console.error('Mail-Inhalt nicht übernehmbar', p.id, n.uid, m?.message)
+            console.error('Mail-Inhalt nicht übernehmbar', p.id, pfad, n.uid, m?.message)
             zeile.ausschnitt = '(Der Inhalt dieser Mail ließ sich nicht ins CRM übernehmen. Bitte im Mail-Programm öffnen.)'
             zeile.anhaenge = null
           }
@@ -719,19 +771,66 @@ export async function rufePostfachAb(
           if (error && error.code !== '23505') throw new Error(`Mail konnte nicht gespeichert werden: ${error.message}`)
           if (!error) neu++
         }
-        hoechsteUid = n.uid
+        hoechste = n.uid
+        merke(hoechste, gueltig)
         erledigt++
       }
+      // Ordner ganz durch, aber nichts Neues gespeichert (alles schon da): Stand trotzdem festhalten.
+      if (!voll) merke(hoechste, gueltig)
     } finally {
       sperre.release()
     }
+  }
+
+  try {
+    client = new ImapFlow({ host: p.imap_host, port: p.imap_port, secure: p.imap_port === 993, auth: { user: p.benutzer || p.adresse, pass: await passwortVon(admin, p) }, logger: false })
+    client.on('error', () => {})
+    await zeitlimit(client.connect(), 20000, 'Der Mail-Server hat nach 20 Sekunden nicht geantwortet.')
+
+    await holeOrdner(POSTEINGANG, posteingangUid, posteingangGueltig, (uid, gueltig) => {
+      posteingangUid = uid
+      posteingangGueltig = gueltig
+    })
+
+    // Persönliche Postfächer: auch die eigenen Ordner, in die der Besitzer seine Mails sortiert.
+    // Gesendet, Entwürfe, Papierkorb und Spam bleiben außen vor. Gemeinsame Postfächer: nur Posteingang.
+    if (!gemeinsam && !nurPruefen && !voll) {
+      // deno-lint-ignore no-explicit-any
+      const ordner: any[] = await zeitlimit(client.list({ statusQuery: { messages: true, uidNext: true, uidValidity: true } }), 30000, 'Der Mail-Server hat die Ordnerliste nicht rechtzeitig geliefert.')
+      const vorhandene = new Set<string>()
+      for (const o of ordner) {
+        if (!istEigenerOrdner(o)) continue
+        const pfad = String(o.path)
+        vorhandene.add(pfad)
+        const stand = ordnerStand[pfad]
+        const naechste = Number(o.status?.uidNext ?? 0)
+        const gueltig = Number(o.status?.uidValidity ?? 0)
+        // Nichts Neues in diesem Ordner: gar nicht erst öffnen.
+        if (stand && naechste > 0 && stand.g === gueltig && stand.uid >= naechste - 1) continue
+        if (Number(o.status?.messages ?? 0) === 0) {
+          ordnerStand[pfad] = { uid: 0, g: gueltig }
+          continue
+        }
+        if (voll || Date.now() - beginn > budgetMs) {
+          voll = true
+          break
+        }
+        await holeOrdner(pfad, stand?.uid ?? 0, stand ? stand.g : null, (uid, g) => {
+          ordnerStand[pfad] = { uid, g }
+        })
+      }
+      // Auf dem Server gelöschte oder umbenannte Ordner aus dem Stand nehmen.
+      if (!voll) for (const pfad of Object.keys(ordnerStand)) if (!vorhandene.has(pfad)) delete ordnerStand[pfad]
+    }
+
     await client.logout().catch(() => {})
     client = null
+    if (nurPruefen) return { neu: 0, gesehen, offen: gesehen }
     await admin
       .from('postfaecher')
-      .update({ letzte_uid: hoechsteUid || null, uid_gueltigkeit: gueltigkeit, in_arbeit_uid: null, abruf_laeuft_seit: null, letzter_abruf: new Date().toISOString(), letzter_fehler: null })
+      .update({ letzte_uid: posteingangUid || null, uid_gueltigkeit: posteingangGueltig, ordner_stand: ordnerStand, in_arbeit_uid: null, in_arbeit_ordner: null, abruf_laeuft_seit: null, letzter_abruf: new Date().toISOString(), letzter_fehler: null })
       .eq('id', p.id)
-    return { neu, gesehen, offen: Math.max(0, gesehen - erledigt) }
+    return { neu, gesehen, offen: voll ? Math.max(1, gesehen - erledigt) : 0 }
   } catch (err) {
     // deno-lint-ignore no-explicit-any
     const e = err as any
@@ -744,7 +843,7 @@ export async function rufePostfachAb(
     if (!nurPruefen) {
       await admin
         .from('postfaecher')
-        .update({ ...(hoechsteUid ? { letzte_uid: hoechsteUid, uid_gueltigkeit: gueltigkeit } : {}), in_arbeit_uid: null, abruf_laeuft_seit: null, letzter_abruf: new Date().toISOString(), letzter_fehler: String(meldung).slice(0, 500) })
+        .update({ ...standSpalten(), in_arbeit_uid: null, in_arbeit_ordner: null, abruf_laeuft_seit: null, letzter_abruf: new Date().toISOString(), letzter_fehler: String(meldung).slice(0, 500) })
         .eq('id', p.id)
     }
     return { neu, gesehen, offen: Math.max(0, gesehen - erledigt), fehler: String(meldung) }
@@ -755,7 +854,7 @@ export async function rufePostfachAb(
 // Klärung, wenn im CRM weniger Mails erscheinen als erwartet (abgeholt wird der Posteingang).
 // `mitNamen` nur für den Besitzer: Ordnernamen eines fremden Postfachs sind privat, andere sehen
 // nur die Art des Ordners und die Anzahl.
-export async function listeOrdner(admin: Db, p: Postfach, mitNamen: boolean): Promise<{ ordner: { name: string; art: string; mails: number }[] } | { fehler: string }> {
+export async function listeOrdner(admin: Db, p: Postfach, mitNamen: boolean): Promise<{ ordner: { name: string; art: string; mails: number; wirdAbgeholt: boolean }[] } | { fehler: string }> {
   // deno-lint-ignore no-explicit-any
   let client: any = null
   try {
@@ -773,7 +872,8 @@ export async function listeOrdner(admin: Db, p: Postfach, mitNamen: boolean): Pr
       .map((o) => {
         const art = String(o.path).toUpperCase() === 'INBOX' ? 'Posteingang' : arten[String(o.specialUse ?? '')] ?? 'eigener Ordner'
         const name = mitNamen || art !== 'eigener Ordner' ? String(o.path) : `Ordner ${++eigene}`
-        return { name, art, mails: Number(o.status?.messages ?? 0) }
+        const posteingang = String(o.path).toUpperCase() === POSTEINGANG
+        return { name, art, mails: Number(o.status?.messages ?? 0), wirdAbgeholt: posteingang || (!!p.besitzer_email && istEigenerOrdner(o)) }
       })
     return { ordner }
   } catch (err) {
@@ -788,7 +888,7 @@ export async function listeOrdner(admin: Db, p: Postfach, mitNamen: boolean): Pr
 }
 
 // Alle Postfächer der Reihe nach, das am längsten nicht abgerufene zuerst (gemeinsame: nur große Mails).
-export async function rufeAlleAb(admin: Db, budgetMs = 110000): Promise<{ postfaecher: number; neu: number; fehler: string[] }> {
+export async function rufeAlleAb(admin: Db, budgetMs = 110000): Promise<{ postfaecher: number; neu: number; offen: boolean; fehler: string[] }> {
   const beginn = Date.now()
   const { data } = await admin.from('postfaecher').select('*').eq('aktiv', true).order('letzter_abruf', { ascending: true, nullsFirst: true })
   // Persönliche Postfächer nur, solange ihr Besitzer ein aktiver Mitarbeiter ist.
@@ -796,6 +896,7 @@ export async function rufeAlleAb(admin: Db, budgetMs = 110000): Promise<{ postfa
   const aktive = new Set(((team ?? []) as { email: string }[]).map((m) => String(m.email).toLowerCase()))
   let neu = 0
   let anzahl = 0
+  let offen = false
   const fehler: string[] = []
   for (const p of (data ?? []) as Postfach[]) {
     if (p.besitzer_email && !aktive.has(p.besitzer_email.toLowerCase())) continue
@@ -804,9 +905,11 @@ export async function rufeAlleAb(admin: Db, budgetMs = 110000): Promise<{ postfa
     const ergebnis = await rufePostfachAb(admin, p, 8, Math.min(rest - 15000, 45000))
     anzahl++
     neu += ergebnis.neu
+    // Nur wo es voranging und noch etwas liegt — ein Postfach mit Fehler stößt keine Kette an.
+    if (!ergebnis.fehler && ergebnis.neu > 0 && ergebnis.offen > 0) offen = true
     if (ergebnis.fehler) fehler.push(`${p.adresse}: ${ergebnis.fehler}`)
   }
-  return { postfaecher: anzahl, neu, fehler }
+  return { postfaecher: anzahl, neu, offen, fehler }
 }
 
 // ---------- Öffentliche Mails Kundenakten zuordnen ----------

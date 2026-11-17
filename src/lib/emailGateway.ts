@@ -25,6 +25,8 @@ export type EingegangeneMail = {
   ignoriert?: boolean
   /** In welchem Postfach die Mail angekommen ist (leer bei älteren Mails). */
   postfachId?: string
+  /** Ordner des Postfachs, aus dem die Mail stammt; leer = Posteingang. */
+  ordner?: string
 }
 
 async function call(body: Record<string, unknown>): Promise<any> {
@@ -128,6 +130,8 @@ export type PostfachInfo = {
   bereit: boolean
   /** Als Absender nutzbar. Falsch bei Anbietern, die den Versand von unserem Server sperren (z. B. Telekom) — dann nur Empfang. */
   kannSenden: boolean
+  /** Eigene Ordner, aus denen Mails abgeholt werden (nur beim eigenen Postfach). */
+  ordner?: string[]
   /** Wird regelmäßig abgeholt (persönliche Postfächer). */
   holtAb: boolean
   letzterAbruf: string | null

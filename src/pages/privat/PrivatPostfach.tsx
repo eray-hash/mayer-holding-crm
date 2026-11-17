@@ -24,6 +24,11 @@ const OEFFENTLICHE_BEREICHE = KUNDEN_BEREICHE.filter((b) => b.id !== 'privat')
  * sie — bis man eine Mail bewusst "in den öffentlichen Bereich holt" (dann liegt sie im gemeinsamen
  * Postfach, auf Wunsch gleich bei einer Akte).
  */
+// Manche Anbieter hängen alle Ordner unter den Posteingang ("INBOX.Kunden") — den Vorsatz nicht zeigen.
+function ordnerAnzeige(pfad: string): string {
+  return pfad.replace(/^INBOX[./]/i, '').replace(/\//g, ' › ')
+}
+
 export function PrivatPostfach() {
   const { state, dispatch } = useApp()
   const { session, mitarbeiter } = useAuth()
@@ -32,6 +37,8 @@ export function PrivatPostfach() {
   const loginIstGemeinsam = postfaecher.some((p) => p.gemeinsam && p.adresse.toLowerCase() === ich)
 
   const [ordner, setOrdner] = useState<Ordner>('posteingang')
+  // Ordner des eigenen Postfachs: 'alle', '' (nur Posteingang) oder der Name eines eigenen Ordners.
+  const [mailOrdner, setMailOrdner] = useState('alle')
   const [mails, setMails] = useState<EingegangeneMail[]>([])
   const [gesendet, setGesendet] = useState<GesendeteEmail[]>([])
   const [limit, setLimit] = useState(40)
@@ -42,14 +49,14 @@ export function PrivatPostfach() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [compose, setCompose] = useState<{ to?: string; subject?: string } | null>(null)
 
-  async function lade(l = limit, suche = query) {
+  async function lade(l = limit, suche = query, aus = mailOrdner) {
     if (!ich) return
     setLaedt(true)
     setFehler('')
     try {
-      const [ein, aus] = await Promise.all([fetchPrivateEmails(ich, l, suche), fetchPrivateSentEmails(ich, l, suche)])
+      const [ein, gesendete] = await Promise.all([fetchPrivateEmails(ich, l, suche, aus === 'alle' ? undefined : aus), fetchPrivateSentEmails(ich, l, suche)])
       setMails(ein)
-      setGesendet(aus)
+      setGesendet(gesendete)
     } catch (err) {
       setFehler(err instanceof Error ? err.message : 'Postfach konnte nicht geladen werden.')
     } finally {
@@ -205,10 +212,30 @@ export function PrivatPostfach() {
               <Search size={13} className="pointer-events-none absolute left-5 top-1/2 -translate-y-1/2 text-slate-400" />
               <input className={`${inputClass} py-1.5 pl-7 text-xs`} placeholder="Durchsuchen …" value={query} onChange={(e) => setQuery(e.target.value)} />
             </div>
+            {ordner === 'posteingang' && (eigenes?.ordner?.length ?? 0) > 0 && (
+              <div className="border-b border-slate-100 p-2">
+                <select
+                  className={`${inputClass} py-1.5 text-xs`}
+                  value={mailOrdner}
+                  onChange={(e) => {
+                    setMailOrdner(e.target.value)
+                    setSelectedId(null)
+                    lade(limit, query, e.target.value)
+                  }}
+                  title="Ordner des Postfachs"
+                >
+                  <option value="alle">Alle Ordner</option>
+                  <option value="">Posteingang</option>
+                  {eigenes!.ordner!.map((o) => (
+                    <option key={o} value={o}>{ordnerAnzeige(o)}</option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div className="min-h-0 flex-1 overflow-y-auto">
               {ordner === 'posteingang' &&
                 (mails.length === 0 ? (
-                  <EmptyState text={query.trim() ? 'Keine Treffer.' : eigenes ? 'Noch keine Mails abgeholt.' : 'Noch kein Postfach verbunden.'} />
+                  <EmptyState text={query.trim() ? 'Keine Treffer.' : mailOrdner !== 'alle' ? 'In diesem Ordner liegt nichts.' : eigenes ? 'Noch keine Mails abgeholt.' : 'Noch kein Postfach verbunden.'} />
                 ) : (
                   mails.map((mail) => (
                     <button
@@ -221,6 +248,9 @@ export function PrivatPostfach() {
                         <span className="flex-shrink-0 text-[11px] text-slate-400">{fmtDateTime(mail.datum).split(',')[0]}</span>
                       </div>
                       <div className="truncate text-xs text-slate-600">{mail.betreff}</div>
+                      {mailOrdner === 'alle' && mail.ordner && (
+                        <span className="mt-1 inline-block max-w-full truncate rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">{ordnerAnzeige(mail.ordner)}</span>
+                      )}
                     </button>
                   ))
                 ))}

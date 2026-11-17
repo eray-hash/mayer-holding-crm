@@ -1128,6 +1128,29 @@ const TOOLS = [
     },
   },
   {
+    name: 'gemeinsames_postfach',
+    description:
+      'Liest das GEMEINSAME Postfach der Firma (info@…), das alle Mitarbeiter sehen. Ohne mail_id: die zuletzt eingegangenen Mails (Werbung ist ausgeblendet), auf Wunsch eingegrenzt nach Absender, Name oder Betreff. Mit mail_id: der volle Text einer Mail samt Liste ihrer Anhänge. Nutze das, sobald jemand fragt, welche Mails gekommen sind, oder sagt, dass von einem Kunden eine Mail (mit Unterlagen) gekommen ist. Private Postfächer der Mitarbeiter sind hier nicht enthalten.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        suche: { type: 'string', description: 'Optional: Absender-Adresse, Name oder Wort aus dem Betreff.' },
+        tage: { type: 'number', description: 'Wie viele Tage zurück (Standard 7, höchstens 60).' },
+        mail_id: { type: 'string', description: 'Kennung einer Mail aus der Liste, um sie ganz zu lesen.' },
+      },
+    },
+  },
+  {
+    name: 'mail_zuordnen',
+    description:
+      'Ordnet eine Mail aus dem gemeinsamen Postfach einer Kundenakte zu und legt ihre Anhänge in die Dokumente dieser Akte. Erst danach lassen sich die Anhänge mit kundenakte_lesen und dokument_inhalt lesen und auswerten. mail_id stammt aus gemeinsames_postfach.',
+    input_schema: {
+      type: 'object',
+      properties: { mail_id: { type: 'string' }, kunde_id: { type: 'string' } },
+      required: ['mail_id', 'kunde_id'],
+    },
+  },
+  {
     name: 'firmenueberblick',
     description: 'Überblick über ALLE Kunden und Immobilien-Objekte (Status, Zuständigkeit, letzte Aktivität, Suchprofile) samt aller fälligen Follow-ups. Für Fragen, die nicht einen einzelnen Kunden betreffen ("was steht heute an", "welche Käufer suchen …", "wer ist im Status …").',
     input_schema: { type: 'object', properties: {} },
@@ -1327,6 +1350,80 @@ async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKontext): Pr
     }
     protokolliere(`Private Mail „${m.betreff}" in den öffentlichen Bereich geholt${ziel ? ` (Akte ${kundeName(ziel)})` : ''}`)
     return `Erledigt: „${m.betreff}" liegt jetzt im gemeinsamen Postfach${ziel ? ` und ist ${kundeName(ziel)} zugeordnet` : ''}.`
+  }
+
+  // Gemeinsames Postfach: ausschließlich Mails ohne Besitzer — die privaten Postfächer bleiben außen vor.
+  if (name === 'gemeinsames_postfach') {
+    const istKennung = (wert: unknown) => typeof wert === 'string' && /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(wert)
+    // deno-lint-ignore no-explicit-any
+    const anhaengeVon = (m: any) => ((m.anhaenge ?? []) as { filename?: string; size?: number }[]).map((a) => `${a.filename ?? 'Anhang'} (${formatGroesse(Number(a.size ?? 0))})`)
+    if (input.mail_id) {
+      if (!istKennung(input.mail_id)) return 'Fehler: mail_id ist ungültig — exakt aus der Liste von gemeinsames_postfach übernehmen.'
+      const { data: m } = await supabase
+        .from('eingegangene_emails')
+        .select('id, von, von_name, betreff, mail_datum, ausschnitt, anhaenge, rohdaten, zugewiesener_kunde_id, zugewiesener_kunde_name')
+        .eq('id', input.mail_id)
+        .is('besitzer_email', null)
+        .maybeSingle()
+      if (!m) return 'Fehler: Diese Mail gibt es im gemeinsamen Postfach nicht.'
+      // Weitergeleitete Mails tragen den vollen Text in den Rohdaten, abgeholte im Ausschnitt.
+      const roh = m.rohdaten && typeof m.rohdaten === 'object' ? (m.rohdaten as Record<string, unknown>) : {}
+      const voll = typeof roh.plain === 'string' && roh.plain.trim().length > String(m.ausschnitt ?? '').length ? roh.plain : String(m.ausschnitt ?? '')
+      const anhaenge = anhaengeVon(m)
+      return JSON.stringify({
+        mail_id: m.id,
+        von: `${m.von_name ?? ''} <${m.von}>`,
+        betreff: m.betreff,
+        datum: m.mail_datum,
+        akte: m.zugewiesener_kunde_id ? { kunde_id: m.zugewiesener_kunde_id, name: m.zugewiesener_kunde_name } : 'noch keiner Akte zugeordnet',
+        anhaenge,
+        hinweis: anhaenge.length === 0 ? undefined : m.zugewiesener_kunde_id ? 'Die Anhänge liegen in den Dokumenten der Akte (kundenakte_lesen, dokument_inhalt).' : 'Den Inhalt der Anhänge kannst du erst lesen, wenn die Mail mit mail_zuordnen einer Akte zugeordnet ist.',
+        text: kuerze(voll.trim(), 6000),
+      })
+    }
+    const tage = Math.min(60, Math.max(1, Number(input.tage) || 7))
+    const suche = String(input.suche ?? '').replace(/[,()%]/g, ' ').trim()
+    let abfrage = supabase
+      .from('eingegangene_emails')
+      .select('id, von, von_name, betreff, mail_datum, ausschnitt, anhaenge, zugewiesener_kunde_id, zugewiesener_kunde_name')
+      .is('besitzer_email', null)
+      .or('relevanz.is.null,relevanz.neq.nicht_relevant')
+      .gte('mail_datum', new Date(Date.now() - tage * 86400000).toISOString())
+    if (suche) abfrage = abfrage.or(`betreff.ilike.%${suche}%,von.ilike.%${suche}%,von_name.ilike.%${suche}%`)
+    const { data, error } = await abfrage.order('mail_datum', { ascending: false }).limit(60)
+    if (error) return `Fehler beim Lesen des Postfachs: ${error.message}`
+    // Vom Mail-Anbieter als Werbung markierte Mails weglassen.
+    // deno-lint-ignore no-explicit-any
+    const liste = ((data ?? []) as any[]).filter((m) => !/\*\s?SPAM\s?\*/i.test(String(m.betreff ?? ''))).slice(0, 20)
+    if (liste.length === 0) return `Im gemeinsamen Postfach liegt aus den letzten ${tage} Tagen keine ${suche ? 'passende ' : ''}Mail.`
+    return JSON.stringify(
+      liste.map((m) => ({
+        mail_id: m.id,
+        von: `${m.von_name ?? ''} <${m.von}>`,
+        betreff: m.betreff,
+        datum: m.mail_datum,
+        anhaenge: anhaengeVon(m).length,
+        akte: m.zugewiesener_kunde_id ? `${m.zugewiesener_kunde_name} (kunde_id=${m.zugewiesener_kunde_id})` : 'keine',
+        anfang: String(m.ausschnitt ?? '').replace(/\s+/g, ' ').slice(0, 200),
+      })),
+    )
+  }
+
+  if (name === 'mail_zuordnen') {
+    const ich = String(mitarbeiter.email ?? '').trim().toLowerCase()
+    if (!ich) return 'Fehler: Für diesen Mitarbeiter ist keine E-Mail-Adresse hinterlegt.'
+    const ziel = await ladeKunde(supabase, input.kunde_id)
+    if (!ziel) return KEIN_KUNDE
+    // Über die Mail-Funktion: dort werden die Anhänge in die Akte gelegt und der Verlauf ergänzt.
+    const antwort = await fetch(`${SUPABASE_URL}/functions/v1/email-gateway`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`, ...(CRM_SHARED_SECRET ? { 'x-crm-secret': CRM_SHARED_SECRET } : {}) },
+      body: JSON.stringify({ action: 'mail_zuordnen', mailId: String(input.mail_id ?? ''), kundeId: ziel.id, imAuftragVon: ich }),
+    })
+    const daten = await antwort.json().catch(() => ({}))
+    if (!antwort.ok) return `Fehler: ${daten?.error ?? `Zuordnen fehlgeschlagen (${antwort.status})`}`
+    protokolliere(`Mail „${daten.betreff}" der Akte ${kundeName(ziel)} zugeordnet (${daten.abgelegt} Anhänge abgelegt)`)
+    return `Erledigt: „${daten.betreff}" ist jetzt ${kundeName(ziel)} zugeordnet. ${daten.abgelegt > 0 ? `${daten.abgelegt === 1 ? '1 Anhang liegt' : `${daten.abgelegt} Anhänge liegen`} neu in den Dokumenten der Akte — lesbar mit kundenakte_lesen und dokument_inhalt.` : 'Neue Anhänge kamen dabei nicht in die Akte (keine vorhanden oder schon abgelegt).'}`
   }
 
   if (name === 'kunden_suchen') {
@@ -2082,6 +2179,7 @@ So arbeitest du:
 - Erfinde nichts. Was nicht in Werkzeug-Ergebnissen oder im Gespräch steht, weißt du nicht. Ob es einen Kunden gibt oder nicht, sagst du erst, nachdem du mit kunden_suchen nachgesehen hast.
 - Die Bereiche der Holding heißen: Unternehmensberatung, Immobilien, Erben, Betriebsübergabe, Betriebsformen, Akademie, Finanzierungen. Verwende im Gespräch diese Namen.
 - Kalender: Jeder Mitarbeiter hat seinen eigenen Kalender. Du zeigst und buchst Termine mit termine_zeigen, termin_anlegen und termin_absagen. Uhrzeiten sind immer deutsche Ortszeit. Fehlt für einen neuen Termin der Tag oder die Uhrzeit, frag kurz nach, statt zu raten; ohne genannte Dauer gilt eine Stunde. Soll ein Kollege dabei sein, sieh vorher mit termine_zeigen (person) nach, ob er frei ist, und schlag bei Belegung einen freien Zeitpunkt vor. Von fremden Terminen kennst du nur die Uhrzeit — sag dann „ist belegt“, nie mehr.
+- Gemeinsames Postfach: Du kannst das gemeinsame Postfach der Firma lesen (gemeinsames_postfach). Sagt jemand, von einem Kunden sei eine Mail gekommen, oder fragt nach Unterlagen aus einer Mail, sieh dort nach, statt zu sagen, dass dir nichts vorliegt. Mails bekannter Absender werden automatisch ihrer Akte zugeordnet, die Anhänge liegen dann in den Dokumenten der Akte. Ist eine Mail noch keiner Akte zugeordnet und ist klar, zu wem sie gehört, ordne sie mit mail_zuordnen zu; ist es unklar, frag nach. Den Inhalt von Anhängen liest du über die Akte (dokument_inhalt), nicht über das Postfach.
 - Privater Bereich: Jeder Mitarbeiter hat einen privaten Bereich (eigenes Postfach, eigene Kontakte), den nur er selbst sieht. Du zeigst daraus nur etwas, wenn er ausdrücklich danach fragt (privater_bereich), und holst nur dann etwas in den öffentlichen Bereich (in_oeffentlich_holen), wenn er es klar verlangt. Passen mehrere Mails oder Kontakte, fragst du nach, welche gemeint ist. Bei einem Kontakt brauchst du den Ziel-Bereich; nennt er keinen, frag danach. Sag nach dem Rüberholen in einem Satz, wo es jetzt liegt.
 - Beziehe "er", "sie", "ihm", "seine Akte" auf den Kunden, um den es im Gespräch zuletzt ging. Ist nicht eindeutig, welcher Kunde gemeint ist (mehrere Treffer, kein Treffer, kein Bezug), frag kurz nach, statt zu raten. Lege niemals etwas bei einem Kunden ab, der nur vielleicht gemeint ist; bei Dateien nimmst du in diesem Fall die Sammelakte ziel=ungeklaert, statt zu fragen.
 - Fragt der Mitarbeiter im Gespräch nach einem Kunden, den es noch nicht gibt, sag das und biete an, ihn anzulegen. Frag nach dem Bereich, wenn er nicht klar ist. Sagt der Mitarbeiter klar, dass und wo er angelegt werden soll, leg ihn an. Für geschickte Dateien und weitergeleitete Nachrichten gilt das nicht: Dort legst du selbst an, ohne zu fragen (siehe unten).

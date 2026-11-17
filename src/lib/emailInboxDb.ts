@@ -27,6 +27,7 @@ type Row = {
   zugewiesener_kunde_name: string | null
   ignoriert: boolean | null
   postfach_id: string | null
+  ordner?: string | null
 }
 
 const SELECT_SPALTEN =
@@ -47,6 +48,7 @@ function toMail(row: Row): EingegangeneMail {
         : undefined,
     ignoriert: row.ignoriert ?? undefined,
     postfachId: row.postfach_id ?? undefined,
+    ordner: row.ordner ?? undefined,
   }
 }
 
@@ -64,14 +66,21 @@ const NUR_RELEVANTE_MAILS = 'relevanz.is.null,relevanz.neq.nicht_relevant'
 // Das private Postfach: nur Mails mit dem eigenen Besitzer-Eintrag. Die Datenbank liefert einem
 // Mitarbeiter öffentliche UND eigene Mails — getrennt wird in den Abfragen ausdrücklich, damit private
 // Mails nie im gemeinsamen Postfach auftauchen (dort überall `.is('besitzer_email', null)`).
-export async function fetchPrivateEmails(eigeneEmail: string, limit = 30, suche = ''): Promise<EingegangeneMail[]> {
+// `ordner`: nicht angegeben = alle Ordner, '' = nur Posteingang, sonst genau dieser Ordner des Postfachs.
+export async function fetchPrivateEmails(eigeneEmail: string, limit = 30, suche = '', ordner?: string): Promise<EingegangeneMail[]> {
   if (!client) throw new Error('E-Mail-Datenbank ist noch nicht konfiguriert.')
   const term = sanitizeSearchTerm(suche)
-  let abfrage = client.from('eingegangene_emails').select(SELECT_SPALTEN).eq('besitzer_email', eigeneEmail.toLowerCase()).or('ignoriert.is.null,ignoriert.eq.false')
+  let abfrage = client
+    .from('eingegangene_emails')
+    .select(`${SELECT_SPALTEN}, ordner:rohdaten->>ordner`)
+    .eq('besitzer_email', eigeneEmail.toLowerCase())
+    .or('ignoriert.is.null,ignoriert.eq.false')
+  if (ordner === '') abfrage = abfrage.is('rohdaten->>ordner', null)
+  else if (ordner) abfrage = abfrage.eq('rohdaten->>ordner', ordner)
   if (term) abfrage = abfrage.or(`betreff.ilike.%${term}%,von.ilike.%${term}%,von_name.ilike.%${term}%,ausschnitt.ilike.%${term}%`)
   const { data, error } = await abfrage.order('mail_datum', { ascending: false }).limit(limit)
   if (error) throw new Error(error.message)
-  return (data ?? []).map(toMail)
+  return ((data ?? []) as unknown as Row[]).map(toMail)
 }
 
 export async function fetchStoredEmails(limit = 20): Promise<EingegangeneMail[]> {

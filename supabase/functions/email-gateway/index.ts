@@ -2489,8 +2489,21 @@ Deno.serve(async (req: Request) => {
       // Der Zeitplan ruft ohne Login auf: holt alle persönlichen Postfächer ab, gibt nur Zahlen zurück.
       if (body.action === 'postfach_abruf' && !body.postfachId) {
         // Sofort antworten und im Hintergrund abholen — der Zeitplan wartet nur wenige Sekunden.
-        const lauf = rufeAlleAb(admin).then((ergebnis) => {
+        const kette = Math.max(0, Number(body.kette) || 0)
+        const lauf = rufeAlleAb(admin).then(async (ergebnis) => {
           if (ergebnis.fehler.length > 0) console.error('Postfach-Abruf mit Fehlern:', ergebnis.fehler.join(' | '))
+          // Neue Mails im gemeinsamen Postfach gleich zur Akte ihres Absenders legen.
+          if (ergebnis.neu > 0) await ordneOffeneMailsZu(admin).catch((err) => console.error('Mail-Zuordnung fehlgeschlagen:', err))
+          // Liegt noch mehr auf dem Server (erstes Abholen eines Postfachs mit vielen Mails), gleich
+          // weitermachen statt drei Minuten zu warten — jeder Aufruf holt nur eine kleine Portion.
+          if (ergebnis.offen && kette < 15 && body.warten !== true) {
+            const geheim = Deno.env.get('CRM_SHARED_SECRET')
+            await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/email-gateway`, {
+              method: 'POST',
+              headers: { 'content-type': 'application/json', ...(geheim ? { 'x-crm-secret': geheim } : {}) },
+              body: JSON.stringify({ action: 'postfach_abruf', kette: kette + 1 }),
+            }).catch((err) => console.error('Postfach-Abruf: Folgeaufruf fehlgeschlagen:', err))
+          }
           return ergebnis
         })
         if (body.warten === true) {
