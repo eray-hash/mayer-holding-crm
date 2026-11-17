@@ -803,8 +803,8 @@ function ExposeSection({ objekt }: { objekt: Objekt }) {
           )}
         </div>
       )}
-      {objekt.exposeText === undefined && !generiert ? (
-        <p className="text-sm text-slate-400">Wird automatisch erstellt …</p>
+      {objekt.exposeText === undefined && !generiert && entwurf === '' ? (
+        <p className="text-sm text-slate-400">Noch kein Exposé-Text. Erstelle ihn mit „Neu generieren" oder nach einer eigenen KI-Anweisung.</p>
       ) : (
         <textarea className={inputClass} rows={entwurf.length > 900 ? 16 : 6} value={entwurf} onChange={(e) => setEntwurf(e.target.value)} />
       )}
