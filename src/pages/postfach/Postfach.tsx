@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react'
 import { setzeOffeneMail } from '../../lib/assistentKontext'
-import { useNavigate } from 'react-router-dom'
-import { Inbox, Send, RefreshCw, UserPlus, Check, X, AlertTriangle, Plus, Reply, ListPlus, Search, Sparkles, Megaphone } from 'lucide-react'
+import { Link, useNavigate } from 'react-router-dom'
+import { Inbox, Send, RefreshCw, UserPlus, Check, X, AlertTriangle, Plus, Reply, ListPlus, Search, Sparkles, Megaphone, Building2 } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { useAuth } from '../../context/AuthContext'
 import { isEmailInboxDbConfigured, fetchStoredEmails, searchStoredEmails, assignMail, ignoreMail } from '../../lib/emailInboxDb'
 import { isSentEmailsDbConfigured, fetchSentEmails, searchSentEmails } from '../../lib/sentEmailsDb'
 import { isLeadsDbConfigured, fetchOffeneLeads, setLeadStatus } from '../../lib/leadsDb'
 import { isEmailGatewayConfigured, classifyNewLeads } from '../../lib/emailGateway'
+import { ordneMailObjektZu } from '../../lib/objektMail'
 import { matchKundeByEmail, suggestKunde } from '../../lib/matchKunde'
 import { KUNDEN_BEREICHE, kundeBereichLabel } from '../../data/kundenBereiche'
 import { getHauptpfad } from '../../data/statusNetworks'
@@ -494,6 +495,8 @@ export function Postfach() {
                     }}
                   />
                 )}
+
+                <ObjektZuordnung key={selectedMail.id} mail={selectedMail} />
               </div>
             )}
 
@@ -664,6 +667,101 @@ function ZuordnungsZeile({
           <X size={14} />
         </button>
       </div>
+    </div>
+  )
+}
+
+// Die Immobilienabteilung denkt in Objekten: Eine Mail mit Exposé oder Grundbuchauszug gehört zum
+// Objekt. Der Server legt die Anhänge in die Dokumente des Objekts und vermerkt die Mail im Verlauf.
+function ObjektZuordnung({ mail }: { mail: EingegangeneEmail }) {
+  const { state, neuLaden } = useApp()
+  const [objektId, setObjektId] = useState('')
+  const [laeuft, setLaeuft] = useState(false)
+  const [fehler, setFehler] = useState('')
+  const [ergebnis, setErgebnis] = useState<{
+    objektId: string
+    bezeichnung: string
+    abgelegt: number
+    uebersprungen: number
+    ordner: string[]
+    nichtAufgefrischt: boolean
+  } | null>(null)
+
+  const objekte = [...state.objekte].sort((a, b) => a.bezeichnung.localeCompare(b.bezeichnung, 'de'))
+  if (objekte.length === 0) return null
+
+  async function zuordnen() {
+    const objekt = objekte.find((o) => o.id === objektId)
+    if (!objekt || laeuft) return
+    setLaeuft(true)
+    setFehler('')
+    setErgebnis(null)
+    try {
+      const antwort = await ordneMailObjektZu(mail.messageId, objekt.id)
+      // Erst den frischen Stand holen, dann den Link zeigen — sonst zeigt die Objektakte noch die
+      // alten Dokumente, und eine Änderung dort würde die neuen wieder überschreiben.
+      let nichtAufgefrischt = false
+      try {
+        await neuLaden()
+      } catch {
+        nichtAufgefrischt = true
+      }
+      setErgebnis({ objektId: objekt.id, bezeichnung: objekt.bezeichnung, abgelegt: antwort.abgelegt, uebersprungen: antwort.uebersprungen, ordner: antwort.ordner, nichtAufgefrischt })
+    } catch (err) {
+      setFehler(err instanceof Error ? err.message : 'Die Mail konnte dem Objekt nicht zugeordnet werden.')
+    } finally {
+      setLaeuft(false)
+    }
+  }
+
+  return (
+    <div className="mt-4 rounded-lg border border-slate-200 p-3">
+      <p className="mb-2 flex items-center gap-1.5 text-xs font-medium text-slate-500">
+        <Building2 size={13} /> Einem Objekt zuordnen
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <select className={`${inputClass} w-auto max-w-full`} value={objektId} onChange={(e) => setObjektId(e.target.value)} disabled={laeuft}>
+          <option value="">– Objekt wählen –</option>
+          {objekte.map((o) => (
+            <option key={o.id} value={o.id}>
+              {o.bezeichnung}
+            </option>
+          ))}
+        </select>
+        <SecondaryButton onClick={zuordnen} className="text-xs" disabled={!objektId || laeuft}>
+          {laeuft ? (
+            <>
+              <RefreshCw size={13} className="animate-spin" /> Wird abgelegt …
+            </>
+          ) : (
+            'Zuordnen'
+          )}
+        </SecondaryButton>
+      </div>
+      <p className="mt-2 text-[11px] text-slate-400">Die Anhänge der Mail kommen in die Dokumente des Objekts, jeweils in den passenden Ordner.</p>
+
+      {fehler && (
+        <div className="mt-2 flex items-start gap-2 rounded-lg bg-rose-50 p-2 text-xs text-rose-700">
+          <AlertTriangle size={13} className="mt-0.5 flex-shrink-0" /> {fehler}
+        </div>
+      )}
+
+      {ergebnis && (
+        <div className="mt-2 flex items-start gap-1.5 text-sm text-emerald-700">
+          <Check size={14} className="mt-0.5 flex-shrink-0" />
+          <p>
+            {ergebnis.abgelegt > 0
+              ? `${ergebnis.abgelegt} ${ergebnis.abgelegt === 1 ? 'Anhang' : 'Anhänge'} beim Objekt „${ergebnis.bezeichnung}“ abgelegt${ergebnis.ordner.length > 0 ? ` (${ergebnis.ordner.join(', ')})` : ''}.`
+              : `Mail dem Objekt „${ergebnis.bezeichnung}“ zugeordnet – dabei kam kein neuer Anhang dazu.`}
+            {ergebnis.uebersprungen > 0 &&
+              ` ${ergebnis.uebersprungen} ${ergebnis.uebersprungen === 1 ? 'Anhang' : 'Anhänge'} übersprungen (Bild aus der Signatur, schon vorhanden oder nicht lesbar).`}{' '}
+            <Link to={`/immobilien/objekte/${ergebnis.objektId}?tab=dokumente`} className="font-medium text-accent-600 hover:underline">
+              Zu den Dokumenten des Objekts
+            </Link>
+            {ergebnis.nichtAufgefrischt && ' Lade die Seite einmal neu, damit du die neuen Dokumente dort siehst.'}
+          </p>
+        </div>
+      )}
     </div>
   )
 }

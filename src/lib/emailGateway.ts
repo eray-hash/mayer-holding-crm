@@ -244,6 +244,28 @@ export async function generateExpose(bezeichnung: string, adresse: string, typ: 
   return data.exposeText
 }
 
+export type ObjektDatenVorschlag = {
+  /** Felder, die in den Unterlagen ausdrücklich standen; null, wenn nichts lesbar war. */
+  vorschlag: (Record<string, string | number | undefined> & { belege?: string; hinweise?: string }) | null
+  gelesen: string[]
+  ausgelassen: string[]
+  hinweis?: string
+}
+
+/** Liest die Unterlagen eines Objekts und schlägt Werte für das Verkaufsdatenblatt vor (dauert bis zu zwei Minuten). */
+export async function holeObjektDatenVorschlag(objektId: string): Promise<ObjektDatenVorschlag> {
+  return await callAuthenticated({ action: 'objekt_daten_vorschlag', objektId })
+}
+
+/** Lässt eine unter „Vorlagen → KI-Anweisungen" hinterlegte Anweisung für ein Objekt ausführen, z. B. ein Exposé schreiben. */
+export async function schreibeObjektTextNachAnweisung(
+  objektId: string,
+  vorlageId: string,
+  zusatz = '',
+): Promise<{ text: string; fehlendeAngaben: string; anweisung: string; gelesen: string[]; ausgelassen: string[] }> {
+  return await callAuthenticated({ action: 'objekt_text_nach_anweisung', objektId, vorlageId, zusatz })
+}
+
 export async function answerFirmenwissen(frage: string, kontext: string): Promise<string> {
   const data = await call({ action: 'firmenwissen_answer', frage, kontext })
   return data.antwort

@@ -1,7 +1,9 @@
-import { useMemo, useState } from 'react'
-import { Check, Copy, Printer } from 'lucide-react'
-import { Modal, PrimaryButton, SecondaryButton, inputClass } from './ui'
-import { fmtDate, fmtEUR, today } from '../lib/dates'
+import { useMemo, useRef, useState } from 'react'
+import { Check, ClipboardCheck, Copy, Printer } from 'lucide-react'
+import { useApp } from '../context/AppContext'
+import { Field, Modal, PrimaryButton, SecondaryButton, inputClass } from './ui'
+import { EmpfaengerFelder, VereinbarungWahl, empfaengerAus, type Vereinbarung } from './ObjektWeitergabenSection'
+import { fmtDate, fmtEUR, today, uid } from '../lib/dates'
 import type { Objekt } from '../types'
 
 type SpalteId = 'bezeichnung' | 'ort' | 'typ' | 'preis'
@@ -16,14 +18,40 @@ function html(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
+type Weg = 'Text kopiert' | 'Ausdruck' | 'nur festgehalten'
+
 /** Ausgewählte Objekte als kurze Liste zum Weitergeben an Makler, Investoren oder Kunden: nur die
  *  angehakten Angaben, nie Eigentümer, Unterlagen, Verlauf oder interne Zuständigkeiten. Die Bezeichnung
- *  lässt sich je Objekt für diese Liste umformulieren (interne Namen enthalten oft den Eigentümer). */
+ *  lässt sich je Objekt für diese Liste umformulieren (interne Namen enthalten oft den Eigentümer).
+ *
+ *  Ist ein Empfänger angegeben, wird beim Kopieren oder Drucken festgehalten, wer welche Objekte wann
+ *  bekommen hat (Nachweis für den Provisionsanspruch) — je Empfänger ein Eintrag, solange das Fenster
+ *  offen ist: Erst kopieren und dann drucken ergänzt denselben Eintrag, statt einen zweiten anzulegen. */
 export function ObjektlisteWeitergeben({ open, onClose, objekte, absender }: { open: boolean; onClose: () => void; objekte: Objekt[]; absender: string }) {
+  const { state, dispatch } = useApp()
   const [spalten, setSpalten] = useState<Set<SpalteId>>(new Set(['bezeichnung', 'ort', 'typ', 'preis']))
   const [namen, setNamen] = useState<Record<string, string>>({})
   const [kopiert, setKopiert] = useState(false)
+  const [kontaktId, setKontaktId] = useState('')
+  const [freierName, setFreierName] = useState('')
+  const [vereinbarung, setVereinbarung] = useState<Vereinbarung>('keine')
+  const [notiz, setNotiz] = useState('')
+  // Was in diesem Fenster schon festgehalten wurde: je Empfänger die Kennung des Eintrags und die Wege.
+  const festgehalten = useRef(new Map<string, { id: string; wege: Set<Weg> }>())
+  // Mit welcher Vereinbarung und Notiz je Empfänger zuletzt festgehalten wurde — für die Rückmeldung unten.
+  const [stand, setStand] = useState<Record<string, string>>({})
   const nichtOeffentlich = objekte.some((o) => o.offMarket)
+
+  const empfaenger = empfaengerAus(state.immobilienKunden, kontaktId, freierName)
+  const schluessel = empfaenger
+    ? `${empfaenger.kontaktId ?? `frei:${empfaenger.an.toLowerCase()}`}|${objekte
+        .map((o) => o.id)
+        .sort()
+        .join(',')}`
+    : ''
+  const fingerabdruck = `${vereinbarung}|${notiz.trim()}`
+  const schonFestgehalten = schluessel !== '' && stand[schluessel] !== undefined
+  const unveraendert = schonFestgehalten && stand[schluessel] === fingerabdruck
 
   const zeilen = useMemo(
     () =>
@@ -46,9 +74,38 @@ export function ObjektlisteWeitergeben({ open, onClose, objekte, absender }: { o
     return [kopf, hinweis, '', ...liste, '', `Bei Interesse melden Sie sich gern bei ${absender}.`].filter((x, i) => x !== '' || i > 1).join('\n')
   }
 
+  /** Hält die Weitergabe an den gewählten Empfänger fest. Ein zweiter Aufruf für denselben Empfänger
+   *  ersetzt den Eintrag (gleiche Kennung) und ergänzt den Weg, legt aber keinen zweiten Eintrag an. */
+  function halteFest(weg: Weg) {
+    if (!empfaenger) return
+    const bisher = festgehalten.current.get(schluessel) ?? { id: uid('wg'), wege: new Set<Weg>() }
+    if (weg !== 'nur festgehalten') bisher.wege.add(weg)
+    festgehalten.current.set(schluessel, bisher)
+    const kopiertSchon = bisher.wege.has('Text kopiert')
+    const gedruckt = bisher.wege.has('Ausdruck')
+    dispatch({
+      type: 'SPEICHERE_WEITERGABE',
+      weitergabe: {
+        id: bisher.id,
+        datum: today(),
+        an: empfaenger.an,
+        kontaktId: empfaenger.kontaktId,
+        objektIds: zeilen.map((z) => z.id),
+        bezeichnungen: Object.fromEntries(zeilen.map((z) => [z.id, z.bezeichnung])),
+        angaben: aktiv.map((s) => s.label),
+        weg: kopiertSchon && gedruckt ? 'Text kopiert und Ausdruck' : kopiertSchon ? 'Text kopiert' : gedruckt ? 'Ausdruck' : 'nur festgehalten',
+        vereinbarung,
+        notiz: notiz.trim() || undefined,
+        von: absender,
+      },
+    })
+    setStand((s) => ({ ...s, [schluessel]: fingerabdruck }))
+  }
+
   async function kopieren() {
     try {
       await navigator.clipboard.writeText(alsText())
+      halteFest('Text kopiert')
       setKopiert(true)
       window.setTimeout(() => setKopiert(false), 2500)
     } catch {
@@ -70,6 +127,7 @@ export function ObjektlisteWeitergeben({ open, onClose, objekte, absender }: { o
     <table><thead><tr><th>Nr.</th>${kopf}</tr></thead><tbody>${rumpf}</tbody></table>
     <p class="fuss">Bei Interesse melden Sie sich gern bei ${html(absender)}.</p></body></html>`)
     fenster.document.close()
+    halteFest('Ausdruck')
     fenster.focus()
     fenster.print()
   }
@@ -141,6 +199,39 @@ export function ObjektlisteWeitergeben({ open, onClose, objekte, absender }: { o
         </table>
       </div>
       {hinweis && <p className="mb-3 text-xs font-medium text-slate-600">{hinweis}</p>}
+
+      <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+        <h3 className="text-sm font-semibold text-slate-700">An wen geht die Liste?</h3>
+        <p className="mb-3 text-xs text-slate-500">Mit Empfänger wird beim Kopieren oder Drucken festgehalten, wer welche Objekte wann bekommen hat — dein Nachweis für die Provision.</p>
+        <div className="grid grid-cols-1 gap-x-3 sm:grid-cols-2">
+          <EmpfaengerFelder kontakte={state.immobilienKunden} kontaktId={kontaktId} name={freierName} onKontakt={setKontaktId} onName={setFreierName} />
+          <VereinbarungWahl wert={vereinbarung} onChange={setVereinbarung} />
+          <div className="sm:col-span-2">
+            <Field label="Notiz (freiwillig)">
+              <input className={inputClass} value={notiz} onChange={(e) => setNotiz(e.target.value)} placeholder="z. B. nach Telefonat, Vereinbarung vom 03.11. liegt unterschrieben vor" />
+            </Field>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="min-w-0 flex-1 text-xs" role="status">
+            {!empfaenger ? (
+              <span className="text-slate-400">Ohne Empfänger wird nichts festgehalten — kopieren und drucken kannst du trotzdem.</span>
+            ) : unveraendert ? (
+              <span className="inline-flex items-center gap-1 font-medium text-emerald-700">
+                <Check size={13} /> Weitergabe festgehalten ({empfaenger.an})
+              </span>
+            ) : schonFestgehalten ? (
+              <span className="text-amber-600">Vereinbarung oder Notiz geändert — das ist noch nicht festgehalten.</span>
+            ) : (
+              <span className="text-slate-500">Beim Kopieren oder Drucken wird die Weitergabe an {empfaenger.an} festgehalten.</span>
+            )}
+          </p>
+          <SecondaryButton onClick={() => halteFest('nur festgehalten')} disabled={!empfaenger || unveraendert}>
+            <ClipboardCheck size={14} /> {schonFestgehalten && !unveraendert ? 'Änderung festhalten' : 'Nur festhalten'}
+          </SecondaryButton>
+        </div>
+      </div>
+
       <div className="flex flex-wrap justify-end gap-2">
         <SecondaryButton onClick={kopieren}>
           {kopiert ? <Check size={14} /> : <Copy size={14} />} {kopiert ? 'Kopiert' : 'Als Text kopieren (E-Mail, WhatsApp)'}

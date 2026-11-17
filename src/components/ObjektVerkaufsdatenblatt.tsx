@@ -1,9 +1,10 @@
 import { useState } from 'react'
-import { Check, Printer } from 'lucide-react'
+import { Check, Printer, Sparkles } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { Card, Field, inputClass, PrimaryButton, SecondaryButton } from './ui'
 import { IMMO_AUFTRAGSARTEN } from './ImmoStammdatenblatt'
 import { druckeBlatt, type DruckAbschnitt } from '../lib/blattDruck'
+import { holeObjektDatenVorschlag, isEmailGatewayConfigured } from '../lib/emailGateway'
 import { fmtDate, fmtEUR, today } from '../lib/dates'
 import type { ImmoAuftragsart, Objekt, ObjektTyp, ObjektVerkaufsdaten } from '../types'
 
@@ -60,6 +61,19 @@ const UNTERLAGEN = [
   'Altlastenauskunft',
 ]
 
+// Welcher Ordner der Objektakte welche Zeile des Unterlagenstatus belegt.
+const UNTERLAGE_ORDNER: Record<string, 'Grundbuch' | 'Flurkarte' | 'Lageplan' | 'Wohnflächenberechnung' | 'Energieausweis' | 'Mietverträge' | 'Mieterliste' | 'Teilungserklärung' | 'Baulastenauskunft'> = {
+  Grundbuchauszug: 'Grundbuch',
+  Flurkarte: 'Flurkarte',
+  Lageplan: 'Lageplan',
+  Wohnflächenberechnung: 'Wohnflächenberechnung',
+  Energieausweis: 'Energieausweis',
+  Mietverträge: 'Mietverträge',
+  Mietaufstellung: 'Mieterliste',
+  Teilungserklärung: 'Teilungserklärung',
+  Baulastenverzeichnis: 'Baulastenauskunft',
+}
+
 function leer(o: Objekt): ObjektVerkaufsdaten {
   return {
     datum: today(),
@@ -99,6 +113,76 @@ export function ObjektVerkaufsdatenblatt({ objekt }: { objekt: Objekt }) {
   const miete = k.jahresnettokaltmiete
   const preis = k.kaufpreisvorstellung
   const rechnerisch = miete && preis ? `rechnerisch: Faktor ${(preis / miete).toLocaleString('de-DE', { maximumFractionDigits: 1 })} · Rendite ${((miete / preis) * 100).toLocaleString('de-DE', { maximumFractionDigits: 2 })} %` : ''
+
+  // Vorbefüllen aus den Unterlagen des Objekts: Die KI liest Exposé, Gutachten usw. und schlägt Werte vor.
+  // Übernommen wird nur in LEERE Felder — was schon eingetragen ist, bleibt. Gespeichert wird erst per Knopf.
+  const [liest, setLiest] = useState(false)
+  const [vorbefuellt, setVorbefuellt] = useState<{ felder: string[]; belege: string; hinweise: string; gelesen: string[]; ausgelassen: string[] } | null>(null)
+  const [leseFehler, setLeseFehler] = useState('')
+
+  async function vorbefuellen() {
+    setLiest(true)
+    setLeseFehler('')
+    setVorbefuellt(null)
+    try {
+      const r = await holeObjektDatenVorschlag(objekt.id)
+      const v = r.vorschlag
+      const felder: string[] = []
+      if (v) {
+        const s = (wert: unknown) => (typeof wert === 'string' ? wert.trim() : typeof wert === 'number' ? String(wert) : '')
+        const n = (wert: unknown) => (typeof wert === 'number' && Number.isFinite(wert) && wert > 0 ? Math.round(wert) : undefined)
+        setD((alt) => {
+          const neu: ObjektVerkaufsdaten = { ...alt, auftraggeber: { ...alt.auftraggeber }, kennzahlen: { ...alt.kennzahlen }, uebersicht: { ...alt.uebersicht }, unterlagen: { ...alt.unterlagen } }
+          const setzeText = <T extends Record<string, unknown>>(ziel: T, feld: keyof T, wert: unknown, name: string) => {
+            const text = s(wert)
+            if (text && !String(ziel[feld] ?? '').trim()) {
+              ziel[feld] = text as T[keyof T]
+              felder.push(name)
+            }
+          }
+          setzeText(neu.uebersicht, 'strasse', v.strasse, 'Straße')
+          // Der Ort war nur aus der Objektliste übernommen: ein genauerer Wert aus den Unterlagen ersetzt ihn.
+          if (s(v.plzOrt) && (!neu.uebersicht.plzOrt.trim() || neu.uebersicht.plzOrt === objekt.adresse)) {
+            neu.uebersicht.plzOrt = s(v.plzOrt)
+            felder.push('PLZ / Ort')
+          }
+          setzeText(neu.uebersicht, 'flurstueck', v.flurstueck, 'Flurstück')
+          setzeText(neu.uebersicht, 'gemarkung', v.gemarkung, 'Gemarkung')
+          if (!neu.uebersicht.objektart && OBJEKTARTEN.some((a) => a.label === v.objektart)) {
+            neu.uebersicht.objektart = String(v.objektart)
+            felder.push('Objektart')
+          }
+          for (const z of KENNZAHLEN) setzeText(neu.kennzahlen, z.id, v[z.id], z.label)
+          if (neu.kennzahlen.jahresnettokaltmiete == null && n(v.jahresnettokaltmiete)) {
+            neu.kennzahlen.jahresnettokaltmiete = n(v.jahresnettokaltmiete)
+            felder.push('Jahresnettokaltmiete')
+          }
+          if (neu.kennzahlen.kaufpreisvorstellung == null && n(v.kaufpreisvorstellung)) {
+            neu.kennzahlen.kaufpreisvorstellung = n(v.kaufpreisvorstellung)
+            felder.push('Kaufpreisvorstellung')
+          }
+          setzeText(neu.auftraggeber, 'name', v.auftraggeberName, 'Auftraggeber')
+          setzeText(neu.auftraggeber, 'telefon', v.auftraggeberTelefon, 'Telefon')
+          setzeText(neu.auftraggeber, 'email', v.auftraggeberEmail, 'E-Mail')
+          setzeText(neu.auftraggeber, 'adresse', v.auftraggeberAdresse, 'Adresse des Auftraggebers')
+          // Unterlagenstatus: Was in den Ordnern des Objekts liegt, gilt als vorhanden (geprüft setzt nur ein Mensch).
+          for (const [unterlage, ordner] of Object.entries(UNTERLAGE_ORDNER)) {
+            if ((objekt.dokumente[ordner]?.length ?? 0) > 0 && !neu.unterlagen[unterlage]?.vorhanden) {
+              neu.unterlagen[unterlage] = { vorhanden: true, geprueft: neu.unterlagen[unterlage]?.geprueft ?? false }
+              felder.push(`${unterlage} vorhanden`)
+            }
+          }
+          return neu
+        })
+        setGespeichert(false)
+      }
+      setVorbefuellt({ felder, belege: String(v?.belege ?? ''), hinweise: [r.hinweis, v?.hinweise].filter(Boolean).join(' '), gelesen: r.gelesen, ausgelassen: r.ausgelassen })
+    } catch (err) {
+      setLeseFehler(err instanceof Error ? err.message : 'Die Unterlagen konnten nicht gelesen werden.')
+    } finally {
+      setLiest(false)
+    }
+  }
 
   function speichern() {
     const art = OBJEKTARTEN.find((a) => a.label === d.uebersicht.objektart)
@@ -197,6 +281,31 @@ export function ObjektVerkaufsdatenblatt({ objekt }: { objekt: Objekt }) {
             </div>
           </div>
         </div>
+
+        {isEmailGatewayConfigured && (
+          <div className="mb-4 rounded-lg border border-accent-100 bg-accent-50/60 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm text-slate-700">
+                <strong>Aus den Unterlagen vorbefüllen:</strong> Die KI liest Exposé, Gutachten und weitere Dateien dieses Objekts und trägt ein, was dort steht. Nur leere Felder werden gefüllt.
+              </p>
+              <SecondaryButton onClick={vorbefuellen} disabled={liest}>
+                <Sparkles size={14} className={liest ? 'animate-pulse' : ''} /> {liest ? 'Liest die Unterlagen … (bis zu 2 Minuten)' : 'Vorbefüllen'}
+              </SecondaryButton>
+            </div>
+            {leseFehler && <p className="mt-2 text-sm text-rose-600">{leseFehler}</p>}
+            {vorbefuellt && (
+              <div className="mt-2 space-y-1 text-xs text-slate-600">
+                <p className="font-medium text-slate-700">
+                  {vorbefuellt.felder.length > 0 ? `Eingetragen (bitte prüfen, dann speichern): ${vorbefuellt.felder.join(', ')}.` : 'In den gelesenen Unterlagen stand nichts, was nicht schon eingetragen ist.'}
+                </p>
+                {vorbefuellt.belege && <p className="whitespace-pre-wrap">Woher: {vorbefuellt.belege}</p>}
+                {vorbefuellt.hinweise && <p className="whitespace-pre-wrap text-amber-700">Hinweise: {vorbefuellt.hinweise}</p>}
+                {vorbefuellt.gelesen.length > 0 && <p>Gelesen: {vorbefuellt.gelesen.join(', ')}.</p>}
+                {vorbefuellt.ausgelassen.length > 0 && <p className="text-slate-400">Nicht gelesen: {vorbefuellt.ausgelassen.slice(0, 8).join(', ')}{vorbefuellt.ausgelassen.length > 8 ? ` und ${vorbefuellt.ausgelassen.length - 8} weitere` : ''}.</p>}
+              </div>
+            )}
+          </div>
+        )}
 
         <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Auftraggeber / Eigentümer</h4>
         <div className="grid grid-cols-1 gap-x-4 sm:grid-cols-2 lg:grid-cols-3">

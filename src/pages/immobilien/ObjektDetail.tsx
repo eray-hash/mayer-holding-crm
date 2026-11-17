@@ -13,17 +13,19 @@ import { DOKUMENT_ORDNER } from '../../types'
 import type { DokumentOrdnerName, Prioritaet, FinanzierungStatus, KundeBereich, Dokument } from '../../types'
 import { pruefeUnterlagenVollstaendigkeit } from '../../data/objektUnterlagenPflicht'
 import { ladeObjektDokumentHoch, erzeugeDownloadUrl, leseAlsBase64, loescheObjektDokument } from '../../lib/objektDokumenteStorage'
-import { classifyObjektDokument, generateExpose, isEmailGatewayConfigured } from '../../lib/emailGateway'
+import { classifyObjektDokument, generateExpose, isEmailGatewayConfigured, schreibeObjektTextNachAnweisung } from '../../lib/emailGateway'
 import type { Objekt } from '../../types'
 import { ObjektVerkaufsdatenblatt } from '../../components/ObjektVerkaufsdatenblatt'
 import { ObjektKurzpruefungBlatt } from '../../components/ObjektKurzpruefungBlatt'
 import { ObjektFragenSection } from '../../components/ObjektFragenSection'
+import { ObjektWeitergabenSection } from '../../components/ObjektWeitergabenSection'
 
 const TABS = [
   { id: 'uebersicht', label: 'Übersicht' },
   { id: 'verkaufsdaten', label: 'Verkaufsdatenblatt' },
   { id: 'kurzpruefung', label: 'Kurzprüfung' },
   { id: 'fragen', label: 'Fragen' },
+  { id: 'weitergaben', label: 'Weitergaben' },
   { id: 'dokumente', label: 'Dokumente' },
   { id: 'finanzierung', label: 'Finanzierung' },
   { id: 'vorschlaege', label: 'Gesuche & Vorschläge' },
@@ -379,6 +381,8 @@ export function ObjektDetail() {
 
       {tab === 'fragen' && <ObjektFragenSection key={objekt.id} objekt={objekt} />}
 
+      {tab === 'weitergaben' && <ObjektWeitergabenSection key={objekt.id} objekt={objekt} />}
+
       {tab === 'finanzierung' && (
         <div>
           <div className="mb-3 flex justify-end">
@@ -709,9 +713,31 @@ export function finStatusColor(status: FinanzierungStatus): string {
 // Automatisch bei Objektanlage per KI erstelltes 1-Seiten-Exposé (siehe ObjektListe.tsx) — hier
 // einsehbar/editierbar und bei Bedarf neu generierbar (Punkt 12 der Bugfix-Liste).
 function ExposeSection({ objekt }: { objekt: Objekt }) {
-  const { dispatch } = useApp()
+  const { state, dispatch } = useApp()
   const [entwurf, setEntwurf] = useState(objekt.exposeText ?? '')
   const [generiert, setGeneriert] = useState(false)
+  // Text nach einer eigenen, unter „Vorlagen → KI-Anweisungen" hinterlegten Anweisung der Abteilung.
+  const anweisungen = state.vorlagenImmobilien.filter((v) => v.kategorie === 'ki' && v.text.trim() !== '')
+  const [anweisungId, setAnweisungId] = useState('')
+  const [zusatz, setZusatz] = useState('')
+  const [schreibt, setSchreibt] = useState(false)
+  const [schreibHinweis, setSchreibHinweis] = useState<{ fehler?: string; fehlend?: string; gelesen?: string[]; name?: string } | null>(null)
+
+  async function nachAnweisung() {
+    if (!anweisungId) return
+    setSchreibt(true)
+    setSchreibHinweis(null)
+    try {
+      const r = await schreibeObjektTextNachAnweisung(objekt.id, anweisungId, zusatz)
+      // Erst in das Textfeld — gespeichert wird mit „Speichern", damit nichts ungelesen überschrieben wird.
+      setEntwurf(r.text)
+      setSchreibHinweis({ fehlend: r.fehlendeAngaben, gelesen: r.gelesen, name: r.anweisung })
+    } catch (err) {
+      setSchreibHinweis({ fehler: err instanceof Error ? err.message : 'Der Text konnte nicht erstellt werden.' })
+    } finally {
+      setSchreibt(false)
+    }
+  }
 
   // Übernimmt den Text neu, sobald die automatische Generierung (siehe ObjektListe.tsx) im
   // Hintergrund fertig wird und objekt.exposeText von außen gesetzt wird.
@@ -744,10 +770,39 @@ function ExposeSection({ objekt }: { objekt: Objekt }) {
           </SecondaryButton>
         )}
       </div>
+      {isEmailGatewayConfigured && anweisungen.length > 0 && (
+        <div className="mb-3 rounded-lg border border-accent-100 bg-accent-50/60 p-3">
+          <p className="mb-2 text-sm text-slate-700">
+            <strong>Nach eigener KI-Anweisung schreiben:</strong> Die KI nimmt eine eurer hinterlegten Anweisungen, die Daten des Objekts und seine Unterlagen. Das Ergebnis erscheint unten im Textfeld und wird erst mit „Speichern" übernommen.
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <select className={`${inputClass} w-auto max-w-full flex-1`} value={anweisungId} onChange={(e) => setAnweisungId(e.target.value)} aria-label="KI-Anweisung">
+              <option value="">Anweisung wählen …</option>
+              {anweisungen.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {v.name}
+                </option>
+              ))}
+            </select>
+            <SecondaryButton onClick={nachAnweisung} disabled={!anweisungId || schreibt}>
+              <Sparkles size={13} className={schreibt ? 'animate-pulse' : ''} /> {schreibt ? 'Schreibt … (bis zu 2 Minuten)' : 'Text erstellen'}
+            </SecondaryButton>
+          </div>
+          <input className={`${inputClass} mt-2`} value={zusatz} onChange={(e) => setZusatz(e.target.value)} placeholder="Zusätzlicher Wunsch (optional), z. B. „für Kapitalanleger, eine Seite“" aria-label="Zusätzlicher Wunsch" />
+          {schreibHinweis?.fehler && <p className="mt-2 text-sm text-rose-600">{schreibHinweis.fehler}</p>}
+          {schreibHinweis && !schreibHinweis.fehler && (
+            <div className="mt-2 space-y-1 text-xs text-slate-600">
+              <p className="font-medium text-slate-700">Erstellt nach „{schreibHinweis.name}". Bitte lesen, bei Bedarf ändern und dann speichern.</p>
+              {schreibHinweis.gelesen && schreibHinweis.gelesen.length > 0 && <p>Gelesene Unterlagen: {schreibHinweis.gelesen.join(', ')}.</p>}
+              {schreibHinweis.fehlend && <p className="whitespace-pre-wrap text-amber-700">Für ein besseres Ergebnis fehlt noch: {schreibHinweis.fehlend}</p>}
+            </div>
+          )}
+        </div>
+      )}
       {objekt.exposeText === undefined && !generiert ? (
         <p className="text-sm text-slate-400">Wird automatisch erstellt …</p>
       ) : (
-        <textarea className={inputClass} rows={6} value={entwurf} onChange={(e) => setEntwurf(e.target.value)} />
+        <textarea className={inputClass} rows={entwurf.length > 900 ? 16 : 6} value={entwurf} onChange={(e) => setEntwurf(e.target.value)} />
       )}
       {entwurf !== (objekt.exposeText ?? '') && (
         <div className="mt-2 flex justify-end">

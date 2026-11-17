@@ -230,6 +230,7 @@ import {
   zieheBesitzUm,
 } from './postfach.ts'
 import { loescheTermin, sendeErinnerungen, speichereTermin } from './kalender.ts'
+import { ordneMailObjektZu } from './objektMail.ts'
 
 const ALLOWED_ORIGINS = [
   'https://eray-hash.github.io',
@@ -513,6 +514,8 @@ async function callClaudeTool<T>(
   // this model" ab — dann hilft nur "auto" (das Modell antwortet dann zwar frei, ruft das Tool aber
   // i.d.R. trotzdem auf, da es das einzig sinnvolle Werkzeug ist).
   toolChoice: 'tool' | 'auto' = 'tool',
+  // Optional: Abbruch nach so vielen Millisekunden (die Funktion selbst lebt höchstens 150 Sekunden).
+  timeoutMs?: number,
 ): Promise<T> {
   const apiKey = env('ANTHROPIC_API_KEY')
   const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -522,6 +525,7 @@ async function callClaudeTool<T>(
       'anthropic-version': '2023-06-01',
       'content-type': 'application/json',
     },
+    ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
     body: JSON.stringify({
       model,
       max_tokens: maxTokens,
@@ -1869,6 +1873,180 @@ type KundenDokumentKlassifikation = {
   kategorie: string
   drehung?: number
   rechnung?: RechnungsDaten
+}
+
+// ---------- Objekte der Immobilienabteilung: Unterlagen eines Objekts für die KI zusammenstellen ----------
+
+// Welche Ordner eines Objekts am ehesten die Eckdaten enthalten — in dieser Reihenfolge wird gelesen.
+const OBJEKT_ORDNER_RANG = ['Exposé', 'Gutachten', 'Mieterliste', 'Wohnflächenberechnung', 'Grundbuch', 'Energieausweis', 'Teilungserklärung', 'Flurkarte', 'Mietverträge', 'Finanzierung', 'Sonstiges', 'Aktennotiz']
+
+function groesseInBytes(text: unknown): number {
+  const m = String(text ?? '').match(/([\d.,]+)\s*(KB|MB|B)/i)
+  if (!m) return 0
+  const zahl = Number(m[1].replace(',', '.'))
+  return m[2].toUpperCase() === 'MB' ? zahl * 1024 * 1024 : m[2].toUpperCase() === 'KB' ? zahl * 1024 : zahl
+}
+
+/** Lädt die aussagekräftigsten Unterlagen eines Objekts als Inhaltsblöcke für einen KI-Aufruf — begrenzt,
+ *  damit der Aufruf sicher innerhalb der Laufzeit der Funktion fertig wird. */
+// deno-lint-ignore no-explicit-any
+async function ladeObjektUnterlagen(admin: any, dokumente: Record<string, any[]>, hoechstens = 4, hoechstensBytes = 12 * 1024 * 1024) {
+  const bloecke: ClaudeContentBlock[] = []
+  const gelesen: string[] = []
+  const ausgelassen: string[] = []
+  let summe = 0
+  const reihe = Object.entries(dokumente ?? {})
+    .filter(([ordner]) => ordner !== 'Bilder')
+    .sort(([a], [b]) => (OBJEKT_ORDNER_RANG.indexOf(a) + 100) % 100 - (OBJEKT_ORDNER_RANG.indexOf(b) + 100) % 100)
+    // deno-lint-ignore no-explicit-any
+    .flatMap(([ordner, liste]) => [...(liste ?? [])].sort((x: any, y: any) => groesseInBytes(x.groesse) - groesseInBytes(y.groesse)).map((d: any) => ({ ordner, d })))
+  for (const { ordner, d } of reihe) {
+    if (!d?.url) continue
+    const name = String(d.name ?? 'Datei')
+    const art = lesbareArt(name, d.typ)
+    if (!art) continue
+    if (gelesen.length >= hoechstens) {
+      ausgelassen.push(`${name} (${ordner})`)
+      continue
+    }
+    // Word und Excel werden als Text gelesen (die Dateigröße kommt dort meist von eingebetteten Bildern);
+    // PDF und Bilder gehen als Ganzes an die KI und zählen deshalb voll.
+    const erwartet = groesseInBytes(d.groesse)
+    const alsText = art === 'buero'
+    if (alsText ? erwartet > 40 * 1024 * 1024 : erwartet > 10 * 1024 * 1024 || summe + erwartet > hoechstensBytes) {
+      ausgelassen.push(`${name} (${ordner}, zu groß für einen Durchgang)`)
+      continue
+    }
+    const { data: datei, error } = await admin.storage.from('objekt-dokumente').download(d.url)
+    if (error || !datei) {
+      ausgelassen.push(`${name} (${ordner}, nicht abrufbar)`)
+      continue
+    }
+    const bytes = new Uint8Array(await datei.arrayBuffer())
+    summe += alsText ? 0 : bytes.length
+    const typ = String(d.typ ?? '')
+    bloecke.push({ type: 'text', text: `--- Unterlage „${name}" aus dem Ordner „${ordner}" ---` })
+    if (art === 'buero') bloecke.push({ type: 'text', text: bueroDateiText(name, typ, bytes, 30_000) ?? '(nicht lesbar)' })
+    else if (art === 'pdf') bloecke.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: bytesNachBase64(bytes) } })
+    else bloecke.push({ type: 'image', source: { type: 'base64', media_type: typ.startsWith('image/') ? typ : 'image/jpeg', data: bytesNachBase64(bytes) } })
+    gelesen.push(`${name} (${ordner})`)
+  }
+  return { bloecke, gelesen, ausgelassen }
+}
+
+const OBJEKTARTEN_BLATT = ['Eigentumswohnung', 'Einfamilienhaus', 'Zweifamilienhaus', 'Reihenhaus / Doppelhaus', 'Mehrfamilienhaus', 'Wohn- und Geschäftshaus', 'Gewerbeimmobilie', 'Grundstück', 'Projektentwicklung']
+
+// Vorschlag für das Verkaufsdatenblatt: liest die Unterlagen des Objekts und nennt nur, was dort ausdrücklich steht.
+// deno-lint-ignore no-explicit-any
+async function schlageObjektDatenVor(admin: any, objektId: string) {
+  const { data: o } = await admin.from('objekte').select('id, bezeichnung, adresse, dokumente').eq('id', objektId).maybeSingle()
+  if (!o) throw new Error('Dieses Objekt gibt es nicht (mehr).')
+  const { bloecke, gelesen, ausgelassen } = await ladeObjektUnterlagen(admin, o.dokumente ?? {})
+  if (gelesen.length === 0) return { vorschlag: null, gelesen, ausgelassen, hinweis: 'Zu diesem Objekt liegt keine Unterlage, die sich lesen lässt (PDF, Word, Excel oder Bild außerhalb des Ordners „Bilder").' }
+  const text = (beschreibung: string) => ({ type: 'string', description: beschreibung })
+  const vorschlag = await callClaudeTool<Record<string, unknown>>(
+    [
+      {
+        type: 'text',
+        text: `Du füllst für die Immobilienabteilung das Verkaufsdatenblatt des Objekts „${o.bezeichnung}"${o.adresse ? ` (${o.adresse})` : ''} vor. Unten folgen Unterlagen aus der Objektakte.
+
+Regeln:
+- Trage NUR ein, was in den Unterlagen ausdrücklich steht. Nichts schätzen, nichts aus Erfahrung ergänzen, nichts umrechnen außer offensichtlichen Einheiten.
+- Widersprechen sich Unterlagen oder ist ein Wert unklar, lass das Feld weg und nenne den Widerspruch in „hinweise".
+- Betrifft eine Unterlage erkennbar ein anderes Objekt, verwende sie nicht und sag das in „hinweise".
+- Flächen mit Einheit (z. B. „412 m²"), Geldbeträge als ganze Zahl in Euro ohne Punkt und Zeichen.
+- „belege": je eingetragenem Feld kurz, woher der Wert stammt (Unterlage und möglichst Seite), z. B. „Wohnfläche: Exposé S. 3".
+Rufe danach das Werkzeug verkaufsdaten auf.`,
+      },
+      ...bloecke,
+    ],
+    {
+      name: 'verkaufsdaten',
+      description: 'Eckdaten des Objekts, soweit sie ausdrücklich in den Unterlagen stehen.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          strasse: text('Straße und Hausnummer des Objekts'),
+          plzOrt: text('Postleitzahl und Ort des Objekts'),
+          flurstueck: text('Flurstücknummer'),
+          gemarkung: text('Gemarkung'),
+          objektart: { type: 'string', enum: OBJEKTARTEN_BLATT },
+          baujahr: text('Baujahr'),
+          grundstuecksflaeche: text('Grundstücksfläche mit Einheit'),
+          wohnflaeche: text('Wohnfläche mit Einheit'),
+          nutzflaeche: text('Nutz- oder Gewerbefläche mit Einheit'),
+          einheiten: text('Anzahl der Einheiten (Wohnungen/Gewerbe)'),
+          zimmer: text('Zimmeranzahl'),
+          stellplaetze: text('Stellplätze/Garagen'),
+          vermietungsstatus: text('z. B. „voll vermietet", „leerstehend", „2 von 6 vermietet"'),
+          jahresnettokaltmiete: { type: 'number', description: 'Jahresnettokaltmiete in Euro (Ist-Miete)' },
+          kaufpreisvorstellung: { type: 'number', description: 'Angebots- oder Kaufpreis in Euro' },
+          auftraggeberName: text('Eigentümer oder Auftraggeber, wenn genannt'),
+          auftraggeberTelefon: text('Telefon des Eigentümers/Auftraggebers'),
+          auftraggeberEmail: text('E-Mail des Eigentümers/Auftraggebers'),
+          auftraggeberAdresse: text('Anschrift des Eigentümers/Auftraggebers'),
+          belege: text('Woher die eingetragenen Werte stammen, ein Eintrag je Zeile'),
+          hinweise: text('Widersprüche, Unklarheiten, nicht verwendete Unterlagen'),
+        },
+      },
+    },
+    2500,
+    'claude-sonnet-5-5',
+    'auto',
+    115_000,
+  )
+  return { vorschlag, gelesen, ausgelassen }
+}
+
+// Text nach einer hinterlegten KI-Anweisung der Abteilung (Vorlagen → KI-Anweisungen), z. B. ein Exposé:
+// Die Anweisung stammt aus dem CRM selbst, dazu kommen die Daten und Unterlagen des Objekts.
+// deno-lint-ignore no-explicit-any
+async function schreibeNachAnweisung(admin: any, objektId: string, vorlageId: string, zusatz: string) {
+  const [{ data: o }, { data: v }] = await Promise.all([
+    admin.from('objekte').select('id, bezeichnung, adresse, typ, kaufpreis, dokumente, verkaufsdaten, kurzpruefung').eq('id', objektId).maybeSingle(),
+    admin.from('vorlagen').select('id, name, kategorie, text').eq('id', vorlageId).maybeSingle(),
+  ])
+  if (!o) throw new Error('Dieses Objekt gibt es nicht (mehr).')
+  if (!v || v.kategorie !== 'ki' || !String(v.text ?? '').trim()) throw new Error('Diese KI-Anweisung gibt es nicht oder sie hat keinen Text.')
+  const { bloecke, gelesen, ausgelassen } = await ladeObjektUnterlagen(admin, o.dokumente ?? {}, 3, 10 * 1024 * 1024)
+  const daten = JSON.stringify({ bezeichnung: o.bezeichnung, adresse: o.adresse, objektart: o.typ, kaufpreis: o.kaufpreis || undefined, verkaufsdatenblatt: o.verkaufsdaten ?? undefined, kurzpruefung: o.kurzpruefung ?? undefined }, null, 1)
+  const ergebnis = await callClaudeTool<{ text?: string; fehlende_angaben?: string }>(
+    [
+      {
+        type: 'text',
+        text: `Du arbeitest für die Immobilienabteilung der Andreas Mayer Holding. Führe die folgende, von der Abteilung hinterlegte Arbeitsanweisung für das Objekt „${o.bezeichnung}" aus.
+
+=== Arbeitsanweisung „${v.name}" ===
+${String(v.text).slice(0, 45_000)}
+=== Ende der Arbeitsanweisung ===
+
+Was du über das Objekt weißt (Daten aus dem CRM):
+${daten}
+${zusatz.trim() ? `\nZusätzlicher Wunsch des Mitarbeiters: ${zusatz.trim().slice(0, 1500)}\n` : ''}
+Regeln, die über der Arbeitsanweisung stehen:
+- Stellt die Anweisung Rückfragen oder verlangt sie ein Gespräch in mehreren Schritten, dann arbeite stattdessen in EINEM Durchgang mit dem, was vorliegt, und liste fehlende Angaben in „fehlende_angaben" auf.
+- Erfinde keine Zahlen, Flächen, Mieten oder Ausstattungsmerkmale. Was nicht in den Daten oder Unterlagen steht, bleibt offen oder wird als „noch zu klären" gekennzeichnet.
+- Nenne weder den Eigentümer noch interne Notizen, wenn der Text für Außenstehende gedacht ist (z. B. ein Exposé).
+- Schreibe auf Deutsch, als fertigen Text ohne Vorrede.
+${gelesen.length > 0 ? 'Es folgen Unterlagen aus der Objektakte.' : 'Unterlagen zum Lesen liegen nicht vor.'} Rufe danach das Werkzeug ergebnis auf.`,
+      },
+      ...bloecke,
+    ],
+    {
+      name: 'ergebnis',
+      description: 'Der fertige Text nach der Arbeitsanweisung.',
+      input_schema: {
+        type: 'object',
+        properties: { text: { type: 'string', description: 'Der fertige Text.' }, fehlende_angaben: { type: 'string', description: 'Was für ein besseres Ergebnis noch fehlt, eine Angabe je Zeile.' } },
+        required: ['text'],
+      },
+    },
+    6000,
+    'claude-sonnet-5-5',
+    'auto',
+    120_000,
+  )
+  return { text: String(ergebnis.text ?? ''), fehlendeAngaben: String(ergebnis.fehlende_angaben ?? ''), anweisung: v.name as string, gelesen, ausgelassen }
 }
 
 // KI-Dokumentenverarbeitung für per Telegram geschickte Kunden-Unterlagen (siehe telegram-gateway):
@@ -3219,6 +3397,40 @@ Deno.serve(async (req: Request) => {
       if (startError) return new Response(JSON.stringify({ error: startError.message }), { status: 500, headers })
       await stosseRechercheSchrittAn(bereich, kundeId, 0)
       return new Response(JSON.stringify({ ok: true }), { headers })
+    }
+
+    // Immobilien-Objekte: Vorschlag fürs Verkaufsdatenblatt und Text nach hinterlegter KI-Anweisung — nur mit eigenem Login.
+    // Mail aus dem gemeinsamen Postfach einem Immobilien-Objekt zuordnen (Anhänge in die Objektakte) — nur mit eigenem Login.
+    if (body.action === 'mail_objekt_zuordnen') {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const aufrufer = await ermittleAufrufer(req, admin, body)
+      if (!aufrufer) {
+        return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
+      }
+      const ergebnis = await ordneMailObjektZu(admin, String(body.mailId ?? ''), String(body.objektId ?? ''), { name: aufrufer.name || aufrufer.email })
+      if (!ergebnis.ok) return new Response(JSON.stringify({ error: ergebnis.fehler }), { status: 400, headers })
+      return new Response(JSON.stringify(ergebnis), { headers })
+    }
+
+    if (body.action === 'objekt_daten_vorschlag' || body.action === 'objekt_text_nach_anweisung') {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const aufrufer = await ermittleAufrufer(req, admin, body)
+      if (!aufrufer) {
+        return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
+      }
+      if (typeof body.objektId !== 'string' || !body.objektId) {
+        return new Response(JSON.stringify({ error: 'objektId fehlt.' }), { status: 400, headers })
+      }
+      try {
+        const ergebnis =
+          body.action === 'objekt_daten_vorschlag'
+            ? await schlageObjektDatenVor(admin, body.objektId)
+            : await schreibeNachAnweisung(admin, body.objektId, String(body.vorlageId ?? ''), typeof body.zusatz === 'string' ? body.zusatz : '')
+        return new Response(JSON.stringify({ ok: true, ...ergebnis }), { headers })
+      } catch (err) {
+        const zeit = err instanceof Error && /abort|timeout|timed out/i.test(`${err.name} ${err.message}`)
+        return new Response(JSON.stringify({ error: zeit ? 'Das Lesen der Unterlagen hat zu lange gedauert. Bitte noch einmal versuchen — beim zweiten Mal geht es oft schneller.' : err instanceof Error ? err.message : String(err) }), { status: zeit ? 504 : 500, headers })
+      }
     }
 
     if (body.action === 'dokument_lesen') {
