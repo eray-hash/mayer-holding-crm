@@ -4,6 +4,7 @@ import { useApp } from '../context/AppContext'
 import { KUNDEN_BEREICHE } from '../data/kundenBereiche'
 import { Card, EmptyState } from './ui'
 import { erzeugeKundenDownloadUrl, ladeKundenDokumentHoch } from '../lib/kundenDokumenteStorage'
+import { brauchtDateiLink, holeAnhangUrl } from '../lib/emailGateway'
 import { uid, today } from '../lib/dates'
 import type { Dokument, KundeBereich } from '../types'
 
@@ -23,10 +24,14 @@ export function DokumenteSection({ bereich, kundeId }: { bereich: KundeBereich; 
   async function dokumentOeffnen(d: Dokument) {
     if (!d.url) return
     setFehler('')
+    // Fenster sofort öffnen (sonst blockt der Browser es nach dem Warten), Adresse danach setzen.
+    const fenster = window.open('', '_blank')
     try {
-      const ziel = d.url.startsWith('http') ? d.url : await erzeugeKundenDownloadUrl(d.url)
-      window.open(ziel, '_blank', 'noopener,noreferrer')
+      const ziel = brauchtDateiLink(d.url) ? await holeAnhangUrl(d.url) : d.url.startsWith('http') ? d.url : await erzeugeKundenDownloadUrl(d.url)
+      if (fenster) fenster.location.href = ziel
+      else window.location.href = ziel
     } catch (err) {
+      fenster?.close()
       setFehler(err instanceof Error ? err.message : 'Datei konnte nicht geöffnet werden.')
     }
   }

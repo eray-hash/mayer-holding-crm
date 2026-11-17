@@ -214,7 +214,9 @@ import {
   darfNutzen,
   diagnostizierePostfach,
   ermittleAufrufer,
+  gemeinsamerAblagePfad,
   holeInOeffentlich,
+  ladeGemeinsameDatei,
   ladePostfach,
   listeOrdner,
   listePostfaecher,
@@ -1162,6 +1164,9 @@ function dokumentSchluessel(url: string): string {
 
 // deno-lint-ignore no-explicit-any
 async function ladeDokumentBytes(admin: any, url: string): Promise<Uint8Array> {
+  // Gemeinsame Ablage: nicht mehr offen abrufbar, also mit den Rechten der Funktion lesen.
+  const gemeinsam = gemeinsamerAblagePfad(url)
+  if (gemeinsam) return await ladeGemeinsameDatei(admin, gemeinsam)
   if (/^https?:\/\//i.test(url)) {
     const res = await fetch(url, { signal: AbortSignal.timeout(25_000) })
     if (!res.ok) throw new Error(`Datei nicht abrufbar (${res.status})`)
@@ -2398,7 +2403,27 @@ Deno.serve(async (req: Request) => {
         // Sonst ginge eine "private" Mail unter der Firmenadresse raus und niemand im Haus sähe sie.
         return new Response(JSON.stringify({ error: 'Aus dem privaten Postfach kannst du nur von deinem eigenen Postfach senden — bitte erst dein Postfach verbinden.' }), { status: 400, headers })
       }
-      await sendMail(to, subject, text, html, attachments, absender)
+      // Anhänge per Adresse: Dateien der gemeinsamen Ablage liest die Funktion selbst (nur für angemeldete
+      // Mitarbeiter); sonst sind nur https-Adressen erlaubt — nie ein Pfad auf dem Server.
+      const anhaengeFertig: MailAnhang[] = []
+      for (const a of (Array.isArray(attachments) ? attachments : []) as MailAnhang[]) {
+        if (a.contentBase64 || !a.url) {
+          anhaengeFertig.push(a)
+          continue
+        }
+        const gemeinsam = gemeinsamerAblagePfad(a.url)
+        if (gemeinsam) {
+          if (!aufrufer) {
+            return new Response(JSON.stringify({ error: 'Bitte neu einloggen — zum Anhängen dieser Datei fehlt der Login-Nachweis.' }), { status: 401, headers })
+          }
+          anhaengeFertig.push({ filename: a.filename, contentType: a.contentType, contentBase64: bytesNachBase64(await ladeGemeinsameDatei(supabase, gemeinsam)) })
+        } else if (/^https:\/\//i.test(a.url)) {
+          anhaengeFertig.push(a)
+        } else {
+          return new Response(JSON.stringify({ error: `Der Anhang "${a.filename}" lässt sich nicht laden.` }), { status: 400, headers })
+        }
+      }
+      await sendMail(to, subject, text, html, anhaengeFertig, absender)
 
       // Für den "Gesendet"-Ordner im Postfach mitschreiben — best effort, ein Fehler hier darf den
       // bereits erfolgreich versendeten Mailversand nicht als fehlgeschlagen melden. Aus dem privaten

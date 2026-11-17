@@ -29,12 +29,17 @@ export type EingegangeneMail = {
   ordner?: string
 }
 
+// Schickt den eigenen Login mit, sobald es einen gibt (öffentliche Formulare haben keinen): Der Server
+// kann damit prüfen, wer fragt — das geteilte Secret steht im ausgelieferten Programm und beweist nichts.
 async function call(body: Record<string, unknown>): Promise<any> {
   if (!FUNCTION_URL) throw new Error('E-Mail-Postfach ist noch nicht konfiguriert (VITE_EMAIL_GATEWAY_URL fehlt).')
+  const { data: sessionData } = (await supabase?.auth.getSession()) ?? { data: { session: null } }
+  const token = sessionData.session?.access_token
   const res = await fetch(FUNCTION_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(SHARED_SECRET ? { 'x-crm-secret': SHARED_SECRET } : {}),
     },
     body: JSON.stringify(body),
@@ -171,7 +176,16 @@ export async function holeMailInOeffentlich(
   await callAuthenticated({ action: 'mail_freigeben', art, id, kunde })
 }
 
-/** Anhänge persönlicher Postfächer liegen nicht öffentlich — der Link wird erst beim Öffnen geholt. */
+const ABLAGE_ADRESSE = `${(import.meta.env.VITE_SUPABASE_URL as string | undefined) ?? ''}/storage/v1/object/public/`
+
+/** Dateien aus persönlichen Postfächern ("privat:…") und aus der gemeinsamen Ablage (Mail-Anhänge,
+ *  Dateien aus Telegram und dem Assistenten) sind nicht offen abrufbar. Ihre gespeicherte Adresse ist
+ *  nur eine Kennung — zum Öffnen braucht es einen kurz gültigen Link, siehe holeAnhangUrl(). */
+export function brauchtDateiLink(url: string): boolean {
+  return url.startsWith('privat:') || (ABLAGE_ADRESSE.length > 40 && url.startsWith(ABLAGE_ADRESSE))
+}
+
+/** Kurz gültiger Link auf eine solche Datei — nur für angemeldete Mitarbeiter. */
 export async function holeAnhangUrl(verweis: string): Promise<string> {
   const data = await callAuthenticated({ action: 'mail_anhang_url', verweis })
   return data.url

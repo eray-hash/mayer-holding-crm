@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Paperclip } from 'lucide-react'
-import { holeAnhangUrl } from '../lib/emailGateway'
+import { brauchtDateiLink, holeAnhangUrl } from '../lib/emailGateway'
 import type { EmailAnhang } from '../types'
 
 function fmtGroesse(bytes: number): string {
@@ -9,8 +9,8 @@ function fmtGroesse(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-/** Anhang einer Mail. Anhänge aus persönlichen Postfächern ("privat:…") liegen nicht öffentlich —
- *  für sie wird erst beim Klick ein kurz gültiger Link geholt. */
+/** Anhang einer Mail. Die Dateien liegen nicht offen im Netz — beim Klick wird ein kurz gültiger Link
+ *  geholt (nur für angemeldete Mitarbeiter). */
 export function MailAnhangLink({ anhang }: { anhang: EmailAnhang }) {
   const [laeuft, setLaeuft] = useState(false)
   const [fehler, setFehler] = useState('')
@@ -21,7 +21,7 @@ export function MailAnhangLink({ anhang }: { anhang: EmailAnhang }) {
     </>
   )
 
-  if (!anhang.url.startsWith('privat:')) {
+  if (!brauchtDateiLink(anhang.url)) {
     return (
       <a href={anhang.url} target="_blank" rel="noreferrer" className={klasse}>
         {inhalt}

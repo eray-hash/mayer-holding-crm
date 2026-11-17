@@ -1182,8 +1182,35 @@ export async function veroeffentlicheAnhaenge(admin: Db, anhaenge: any): Promise
   return ergebnis
 }
 
-// Zeitlich begrenzter Link auf einen Anhang — nur wenn der Fragende die zugehörige Mail sehen darf.
+// Dateien der gemeinsamen Ablage (Anhänge des gemeinsamen Postfachs, Dateien aus Telegram und aus dem
+// Assistenten) tragen in Akten und Mails ihre frühere, offen abrufbare Adresse. Die Ablage ist nicht mehr
+// offen; die Adresse dient nur noch als Kennung, aus der hier der Pfad in der Ablage wird.
+export function gemeinsamerAblagePfad(url: string): string | null {
+  const basis = `${Deno.env.get('SUPABASE_URL') ?? ''}/storage/v1/object/`
+  if (typeof url !== 'string' || basis.length < 30 || !url.startsWith(basis)) return null
+  const treffer = url.slice(basis.length).split(/[?#]/)[0].match(/^(?:public|sign|authenticated)\/([^/]+)\/(.+)$/)
+  if (!treffer || treffer[1] !== OEFFENTLICHE_ABLAGE) return null
+  try {
+    return decodeURIComponent(treffer[2])
+  } catch {
+    return treffer[2]
+  }
+}
+
+export async function ladeGemeinsameDatei(admin: Db, pfad: string): Promise<Uint8Array> {
+  const { data, error } = await admin.storage.from(OEFFENTLICHE_ABLAGE).download(pfad)
+  if (error || !data) throw new Error(`Datei nicht abrufbar (${error?.message ?? 'unbekannt'})`)
+  return new Uint8Array(await data.arrayBuffer())
+}
+
+// Zeitlich begrenzter Link auf eine Datei. Gemeinsame Ablage: jeder angemeldete Mitarbeiter, zehn
+// Minuten. Persönliches Postfach: nur wenn der Fragende die zugehörige Mail sehen darf.
 export async function anhangUrl(admin: Db, a: Aufrufer, verweis: string): Promise<string | null> {
+  const gemeinsam = gemeinsamerAblagePfad(verweis)
+  if (gemeinsam) {
+    const { data: link } = await admin.storage.from(OEFFENTLICHE_ABLAGE).createSignedUrl(gemeinsam, 600)
+    return link?.signedUrl ?? null
+  }
   if (!verweis.startsWith(ANHANG_VORSATZ)) return null
   const pfad = verweis.slice(ANHANG_VORSATZ.length)
   const fach = pfad.split('/')[0]
