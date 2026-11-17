@@ -34,6 +34,10 @@ export default defineConfig({
         // App-Shell-Strategie: HashRouter-Routen sind alle derselbe index.html, es gibt also
         // keine weiteren HTML-Seiten, die vorab zwischengespeichert werden müssten.
         globPatterns: ['**/*.{js,css,html,svg,png,ico}'],
+        // Das Hauptprogramm ist über die Standardgrenze von 2 MiB gewachsen (17.11.2026). Ohne diese
+        // Angabe bricht der Bau ab und nichts wird veröffentlicht — die Datei muss aber vorab
+        // zwischengespeichert werden, sonst startet die installierte App ohne Netz nicht.
+        maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
         navigateFallback: 'index.html',
       },
     }),
