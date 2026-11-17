@@ -23,6 +23,7 @@ import { ImmobilienKundenDetail } from './pages/immobilien/ImmobilienKundenDetai
 import { Gesuche } from './pages/immobilien/Gesuche'
 import { FragenAnGF } from './pages/immobilien/FragenAnGF'
 import { Zeiterfassung } from './pages/immobilien/Zeiterfassung'
+import { TagesablaufSeite } from './pages/immobilien/Tagesablauf'
 import { Finanzierungen } from './pages/immobilien/Finanzierungen'
 import { VorlagenPageImmobilien } from './pages/immobilien/VorlagenPageImmobilien'
 import { ErbenListe } from './pages/erben/ErbenListe'
@@ -110,6 +111,7 @@ function AdminRoutesContent() {
         <Route path="/immobilien/gesuche" element={<RequireBereich bereich="immobilien"><Gesuche /></RequireBereich>} />
         <Route path="/immobilien/fragen" element={<RequireBereich bereich="immobilien"><FragenAnGF /></RequireBereich>} />
         <Route path="/immobilien/zeiterfassung" element={<RequireBereich bereich="immobilien"><Zeiterfassung /></RequireBereich>} />
+        <Route path="/immobilien/tagesablauf" element={<RequireBereich bereich="immobilien"><TagesablaufSeite /></RequireBereich>} />
         <Route path="/immobilien/finanzierungen" element={<RequireBereich bereich="immobilien"><Finanzierungen /></RequireBereich>} />
         <Route path="/immobilien/vorlagen/:kind" element={<RequireBereich bereich="immobilien"><VorlagenPageImmobilien /></RequireBereich>} />
         <Route path="/immobilien/projekte" element={<RequireBereich bereich="immobilien"><ProjekteListe /></RequireBereich>} />

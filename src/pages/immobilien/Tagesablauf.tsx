@@ -1,0 +1,792 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Check, ChevronLeft, ChevronRight, Plus, Trash2 } from 'lucide-react'
+import { useApp } from '../../context/AppContext'
+import { useAuth } from '../../context/AuthContext'
+import { Card, EmptyState, Field, inputClass, PrimaryButton, SecondaryButton } from '../../components/ui'
+import { CURRENT_USER, MITARBEITER } from '../../data/constants'
+import { addDays, fmtDate, fmtDateTime, today, uid } from '../../lib/dates'
+import type { Tagesplan, TagesplanBlock, TagesplanZeile, Wochenplan } from '../../types'
+
+// Die Blöcke der Vorlage „Tagesablauf klar definieren", in der Reihenfolge des Blatts.
+// leer = so viele Zeilen stehen mindestens da, auch wenn noch nichts eingetragen ist.
+const BLOECKE: { id: TagesplanBlock; titel: string; hinweis: string; kuerzel: string; leer: number }[] = [
+  { id: 'organisation', titel: 'Organisatorisch', hinweis: 'wiederholte Aufgaben', kuerzel: '', leer: 0 },
+  { id: 'frist', titel: 'Fristsachen', hinweis: 'unbedingt erledigen', kuerzel: '', leer: 3 },
+  { id: 'A', titel: 'A-Aufgaben', hinweis: 'Dauer ca. 2 Std.', kuerzel: 'A', leer: 3 },
+  { id: 'B', titel: 'B-Aufgaben', hinweis: 'ca. 1,5 Std.', kuerzel: 'B', leer: 4 },
+  { id: 'C', titel: 'C-Aufgaben', hinweis: 'ca. 1 Std., falls noch Zeit übrig ist', kuerzel: 'C', leer: 4 },
+  { id: 'kurz', titel: 'Kurze Arbeiten', hinweis: 'viele 3–7-Minuten-Arbeiten', kuerzel: '', leer: 2 },
+]
+
+// Stehen in jedem neuen Tagesablauf schon drin.
+const FESTE_AUFGABEN = ['To-do-Liste überarbeiten', 'Objektliste aktualisieren', 'Tagesablauf festlegen']
+
+const WOCHENTAGE = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag']
+const STUNDEN = [9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+
+const KEINE_ZELLEN: Record<string, string> = {}
+
+// Schmales Eingabefeld für die Zeilen des Tagesablaufs (inputClass ist immer volle Breite).
+const feldGrund = 'rounded-lg border border-slate-200 bg-white text-sm text-slate-800 outline-none focus:border-accent-400 focus:ring-2 focus:ring-accent-100'
+const feldKlasse = `${feldGrund} px-2.5 py-1.5`
+const feldSchmal = `${feldGrund} px-1.5 py-1.5`
+
+const pfeilKlasse = 'rounded-lg border border-slate-200 bg-white p-2 text-slate-500 hover:bg-slate-50 hover:text-slate-700'
+
+type TagEntwurf = { ort: string; zeilen: TagesplanZeile[]; anrufe: string }
+
+// ── Datum ────────────────────────────────────────────────────────────────────────────────────────
+
+/** Montag der Woche, in der das Datum liegt — aus dem lokalen Kalendertag gerechnet. */
+function montagVon(iso: string): string {
+  const d = new Date(iso + 'T00:00:00')
+  return addDays(iso, -((d.getDay() + 6) % 7))
+}
+
+function wochentag(iso: string): string {
+  return new Date(iso + 'T00:00:00').toLocaleDateString('de-DE', { weekday: 'long' })
+}
+
+function fmtDauer(minuten: number): string {
+  const std = Math.floor(minuten / 60)
+  const min = minuten % 60
+  if (std === 0) return `${min} Min.`
+  return min === 0 ? `${std} Std.` : `${std} Std. ${min} Min.`
+}
+
+// ── Tagesablauf: Zeilen ──────────────────────────────────────────────────────────────────────────
+
+function leereZeile(block: TagesplanBlock): TagesplanZeile {
+  return { id: uid('tz'), block, was: '' }
+}
+
+function neuerTag(): TagEntwurf {
+  return {
+    ort: '',
+    anrufe: '',
+    zeilen: BLOECKE.flatMap((b) =>
+      b.id === 'organisation' ? FESTE_AUFGABEN.map((was) => ({ id: uid('tz'), block: b.id, was })) : Array.from({ length: b.leer }, () => leereZeile(b.id)),
+    ),
+  }
+}
+
+/** Gespeicherte Zeilen, je Block mit leeren Zeilen aufgefüllt — damit das Blatt immer gleich aussieht. */
+function mitLeerzeilen(zeilen: TagesplanZeile[]): TagesplanZeile[] {
+  return BLOECKE.flatMap((b) => {
+    const vorhanden = zeilen.filter((z) => z.block === b.id)
+    return [...vorhanden, ...Array.from({ length: Math.max(0, b.leer - vorhanden.length) }, () => leereZeile(b.id))]
+  })
+}
+
+/** So wird gespeichert: nur Zeilen mit Text, in Blockreihenfolge, ohne leere Angaben. */
+function bereinigeZeilen(zeilen: TagesplanZeile[]): TagesplanZeile[] {
+  return BLOECKE.flatMap((b) =>
+    zeilen
+      .filter((z) => z.block === b.id && z.was.trim() !== '')
+      .map((z) => {
+        const sauber: TagesplanZeile = { id: z.id, block: z.block, was: z.was.trim() }
+        if (z.dauerMin && z.dauerMin > 0) sauber.dauerMin = z.dauerMin
+        if (z.bisUhr) sauber.bisUhr = z.bisUhr
+        if (z.ergebnis?.trim()) sauber.ergebnis = z.ergebnis.trim()
+        if (z.stand?.trim()) sauber.stand = z.stand.trim()
+        if (z.erledigt) sauber.erledigt = true
+        return sauber
+      }),
+  )
+}
+
+function tagKern(e: TagEntwurf): string {
+  return JSON.stringify([e.ort.trim(), bereinigeZeilen(e.zeilen), e.anrufe.trim()])
+}
+
+function kennzahlen(zeilen: TagesplanZeile[]) {
+  const mitText = zeilen.filter((z) => z.was.trim() !== '')
+  return {
+    anzahl: mitText.length,
+    erledigt: mitText.filter((z) => z.erledigt).length,
+    minuten: mitText.reduce((summe, z) => summe + (z.dauerMin ?? 0), 0),
+  }
+}
+
+function zeilenNummer(block: (typeof BLOECKE)[number], index: number): string {
+  return `${block.kuerzel}${index + 1}`
+}
+
+// ── Wochenplan: Zellen ───────────────────────────────────────────────────────────────────────────
+
+function bereinigeZellen(zellen: Record<string, string>): Record<string, string> {
+  const sauber: Record<string, string> = {}
+  for (const schluessel of Object.keys(zellen).sort()) {
+    const text = (zellen[schluessel] ?? '').trim()
+    if (text) sauber[schluessel] = text
+  }
+  return sauber
+}
+
+function wochenKern(zellen: Record<string, string>): string {
+  return JSON.stringify(Object.entries(bereinigeZellen(zellen)))
+}
+
+// ── Entwurf mit Abgleich gegen den gespeicherten Stand ───────────────────────────────────────────
+
+/** Hält den eigenen, noch nicht gespeicherten Stand. Solange du nichts geändert hast, zeigt er immer
+ *  den gespeicherten Stand (auch wenn der erst nach dem Öffnen der Seite geladen wird oder von einem
+ *  anderen Gerät kommt) — so überschreibt ein leeres Blatt nie versehentlich einen gespeicherten Plan. */
+function useEntwurf<T>(gespeicherterStand: T, kern: (wert: T) => string) {
+  const [lokal, setLokal] = useState<{ daten: T; basis: string } | null>(null)
+  const standKern = kern(gespeicherterStand)
+  const selbstGeaendert = lokal !== null && kern(lokal.daten) !== lokal.basis
+  const anderswoGeaendert = lokal !== null && lokal.basis !== standKern
+  const eigenerStand = lokal !== null && (selbstGeaendert || !anderswoGeaendert) ? lokal : null
+  const entwurf = eigenerStand ? eigenerStand.daten : gespeicherterStand
+  const geaendert = kern(entwurf) !== standKern
+  return {
+    entwurf,
+    geaendert,
+    /** Du hast geändert, und gleichzeitig ist anderswo ein neuer Stand gespeichert worden. */
+    ueberholt: eigenerStand !== null && anderswoGeaendert && geaendert,
+    setze: (neu: T) => setLokal({ daten: neu, basis: eigenerStand ? eigenerStand.basis : standKern }),
+    uebernommen: (daten: T) => setLokal({ daten, basis: kern(daten) }),
+    verwerfen: () => setLokal(null),
+  }
+}
+
+/** Meldet der Seite, ob es ungespeicherte Änderungen gibt (für die Rückfrage beim Wechseln). */
+function useMeldeUngespeichert(melde: (ungespeichert: boolean) => void, geaendert: boolean) {
+  useEffect(() => {
+    melde(geaendert)
+    return () => melde(false)
+  }, [melde, geaendert])
+}
+
+// ── Seite ────────────────────────────────────────────────────────────────────────────────────────
+
+/** Tagesablauf und Wochenplan der Immobilienabteilung. Morgens trägt jeder ein, was heute in welcher
+ *  Reihenfolge ansteht — alle anderen sehen es darunter. Der Wochenplan ist das Stundenraster je Woche.
+ *  Vorlagen: die Tabellenblätter „Tagesablauf klar definieren" und „Wochenplan". */
+export function TagesablaufSeite() {
+  const { mitarbeiter } = useAuth()
+  const ich = mitarbeiter?.name ?? CURRENT_USER
+  const [ansicht, setAnsicht] = useState<'tag' | 'woche'>('tag')
+  const [datum, setDatum] = useState(today())
+  const [wocheAb, setWocheAb] = useState(() => montagVon(today()))
+  const [kollege, setKollege] = useState('') // leer = mein eigener Wochenplan
+  const ungespeichert = useRef(false)
+  const meldeUngespeichert = useCallback((wert: boolean) => {
+    ungespeichert.current = wert
+  }, [])
+
+  function wechsle(aktion: () => void) {
+    if (ungespeichert.current && !window.confirm('Du hast Änderungen, die noch nicht gespeichert sind. Trotzdem wechseln? Sie gehen dann verloren.')) return
+    ungespeichert.current = false
+    aktion()
+  }
+
+  const wessen = kollege || ich
+
+  return (
+    <div>
+      <div className="mb-4">
+        <h1 className="text-xl font-semibold text-slate-800">Tagesablauf</h1>
+        <p className="text-sm text-slate-500">Wer macht heute was – dein Tagesablauf, die der Kollegen und der Wochenplan.</p>
+      </div>
+
+      <div className="mb-4 flex gap-1 border-b border-slate-200">
+        {(
+          [
+            { id: 'tag', label: 'Tagesablauf' },
+            { id: 'woche', label: 'Wochenplan' },
+          ] as const
+        ).map((t) => (
+          <button
+            key={t.id}
+            onClick={() => ansicht !== t.id && wechsle(() => setAnsicht(t.id))}
+            className={`whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium ${ansicht === t.id ? 'border-accent-600 text-accent-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+            aria-pressed={ansicht === t.id}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {ansicht === 'tag' ? (
+        <>
+          <Card className="mb-4 flex flex-wrap items-center gap-2 p-3">
+            <button className={pfeilKlasse} onClick={() => wechsle(() => setDatum(addDays(datum, -1)))} aria-label="Einen Tag zurück" title="Einen Tag zurück">
+              <ChevronLeft size={16} />
+            </button>
+            <input
+              type="date"
+              className={`${feldGrund} px-2.5 py-2`}
+              value={datum}
+              onChange={(e) => {
+                const neu = e.target.value
+                if (neu && neu !== datum) wechsle(() => setDatum(neu))
+              }}
+              aria-label="Datum"
+            />
+            <button className={pfeilKlasse} onClick={() => wechsle(() => setDatum(addDays(datum, 1)))} aria-label="Einen Tag weiter" title="Einen Tag weiter">
+              <ChevronRight size={16} />
+            </button>
+            {datum !== today() && <SecondaryButton onClick={() => wechsle(() => setDatum(today()))}>Heute</SecondaryButton>}
+            <span className="ml-1 text-sm text-slate-600">
+              {wochentag(datum)}
+              {datum === today() && <span className="text-slate-400"> · heute</span>}
+            </span>
+          </Card>
+
+          <MeinTagesablauf key={`${ich}|${datum}`} ich={ich} datum={datum} onUngespeichert={meldeUngespeichert} />
+          <KollegenTagesablaeufe ich={ich} datum={datum} />
+        </>
+      ) : (
+        <>
+          <Card className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-3 p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <button className={pfeilKlasse} onClick={() => wechsle(() => setWocheAb(addDays(wocheAb, -7)))} aria-label="Eine Woche zurück" title="Eine Woche zurück">
+                <ChevronLeft size={16} />
+              </button>
+              <span className="text-sm font-medium text-slate-700">
+                Wochenplan vom {fmtDate(wocheAb)} bis {fmtDate(addDays(wocheAb, 6))}
+              </span>
+              <button className={pfeilKlasse} onClick={() => wechsle(() => setWocheAb(addDays(wocheAb, 7)))} aria-label="Eine Woche weiter" title="Eine Woche weiter">
+                <ChevronRight size={16} />
+              </button>
+              {wocheAb !== montagVon(today()) && <SecondaryButton onClick={() => wechsle(() => setWocheAb(montagVon(today())))}>Diese Woche</SecondaryButton>}
+            </div>
+            <label className="flex min-w-52 flex-1 items-center gap-2 text-sm text-slate-600 sm:flex-none">
+              <span className="whitespace-nowrap">Wessen Plan?</span>
+              <select
+                className={inputClass}
+                value={kollege}
+                onChange={(e) => {
+                  const neu = e.target.value
+                  wechsle(() => setKollege(neu))
+                }}
+              >
+                <option value="">Mein Wochenplan ({ich})</option>
+                {MITARBEITER.filter((name) => name !== ich).map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </Card>
+
+          {wessen === ich ? (
+            <MeinWochenplan key={`${ich}|${wocheAb}`} ich={ich} wocheAb={wocheAb} onUngespeichert={meldeUngespeichert} />
+          ) : (
+            <KollegenWochenplan name={wessen} wocheAb={wocheAb} />
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+// ── Speichern-Leiste ─────────────────────────────────────────────────────────────────────────────
+
+function SpeicherLeiste({
+  text,
+  geaendert,
+  gespeichert,
+  aktiv,
+  onSpeichern,
+}: {
+  text: string
+  geaendert: boolean
+  gespeichert: boolean
+  aktiv: boolean
+  onSpeichern: () => void
+}) {
+  return (
+    <div className="flex flex-wrap items-center justify-end gap-3">
+      {geaendert && <span className="text-xs font-medium text-amber-600">Änderungen noch nicht gespeichert</span>}
+      {gespeichert && !geaendert && (
+        <span className="flex items-center gap-1 text-xs font-medium text-emerald-600">
+          <Check size={13} /> Gespeichert
+        </span>
+      )}
+      <PrimaryButton onClick={onSpeichern} disabled={!aktiv}>
+        {text}
+      </PrimaryButton>
+    </div>
+  )
+}
+
+function UeberholtHinweis({ onLaden }: { onLaden: () => void }) {
+  return (
+    <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+      <span className="min-w-0 flex-1">Der gespeicherte Stand wurde inzwischen an anderer Stelle geändert. Wenn du jetzt speicherst, gilt dein Stand von hier.</span>
+      <button onClick={onLaden} className="rounded-md border border-amber-300 bg-white px-2 py-1 font-medium hover:bg-amber-100">
+        Gespeicherten Stand laden
+      </button>
+    </div>
+  )
+}
+
+// ── Mein Tagesablauf ─────────────────────────────────────────────────────────────────────────────
+
+function MeinTagesablauf({ ich, datum, onUngespeichert }: { ich: string; datum: string; onUngespeichert: (ungespeichert: boolean) => void }) {
+  const { state, dispatch } = useApp()
+  const [vorlage] = useState(neuerTag)
+  const [gespeichertMeldung, setGespeichertMeldung] = useState(false)
+  const [uebernahmeMeldung, setUebernahmeMeldung] = useState('')
+
+  const gespeicherterPlan = state.tagesplaene.find((p) => p.mitarbeiter === ich && p.datum === datum)
+  const gespeicherterStand = useMemo<TagEntwurf>(
+    () => (gespeicherterPlan ? { ort: gespeicherterPlan.ort ?? '', zeilen: mitLeerzeilen(gespeicherterPlan.zeilen ?? []), anrufe: gespeicherterPlan.anrufe ?? '' } : vorlage),
+    [gespeicherterPlan, vorlage],
+  )
+  const { entwurf, geaendert, ueberholt, setze, uebernommen, verwerfen } = useEntwurf(gespeicherterStand, tagKern)
+  useMeldeUngespeichert(onUngespeichert, geaendert)
+
+  // Der letzte frühere Tagesablauf — von dort kommen die offenen Aufgaben für „Vom letzten Tag übernehmen".
+  const letzterPlan = useMemo(
+    () => state.tagesplaene.filter((p) => p.mitarbeiter === ich && p.datum < datum).sort((a, b) => b.datum.localeCompare(a.datum))[0],
+    [state.tagesplaene, ich, datum],
+  )
+  const offenVomLetzten = letzterPlan ? (letzterPlan.zeilen ?? []).filter((z) => z.was.trim() !== '' && !z.erledigt) : []
+
+  const zahlen = kennzahlen(entwurf.zeilen)
+
+  function aendere(neu: TagEntwurf) {
+    setze(neu)
+    setGespeichertMeldung(false)
+  }
+
+  function aendereZeile(id: string, patch: Partial<TagesplanZeile>) {
+    aendere({ ...entwurf, zeilen: entwurf.zeilen.map((z) => (z.id === id ? { ...z, ...patch } : z)) })
+  }
+
+  function neueZeile(block: TagesplanBlock) {
+    // Hinter der letzten Zeile des Blocks einfügen (die Reihenfolge beim Speichern richtet sich ohnehin nach den Blöcken).
+    aendere({ ...entwurf, zeilen: [...entwurf.zeilen, leereZeile(block)] })
+  }
+
+  function entferneZeile(id: string) {
+    aendere({ ...entwurf, zeilen: entwurf.zeilen.filter((z) => z.id !== id) })
+  }
+
+  function uebernehmeVomLetztenTag() {
+    if (!letzterPlan) return
+    let dazu = 0
+    const zeilen = BLOECKE.flatMap((b) => {
+      const gefuellt = entwurf.zeilen.filter((z) => z.block === b.id && z.was.trim() !== '')
+      const leere = entwurf.zeilen.filter((z) => z.block === b.id && z.was.trim() === '')
+      const schonDa = new Set(gefuellt.map((z) => z.was.trim().toLowerCase()))
+      const neu: TagesplanZeile[] = []
+      for (const z of offenVomLetzten) {
+        const text = z.was.trim()
+        if (z.block !== b.id || schonDa.has(text.toLowerCase())) continue
+        schonDa.add(text.toLowerCase())
+        // Ohne Häkchen und ohne Ergebnis — beides gehört zum alten Tag.
+        neu.push({ id: uid('tz'), block: b.id, was: text, dauerMin: z.dauerMin, bisUhr: z.bisUhr, stand: z.stand })
+      }
+      dazu += neu.length
+      // Die übernommenen Zeilen füllen zuerst die leeren Zeilen des Blocks.
+      return [...gefuellt, ...neu, ...leere.slice(0, Math.max(0, leere.length - neu.length))]
+    })
+    if (dazu > 0) aendere({ ...entwurf, zeilen })
+    setUebernahmeMeldung(
+      dazu > 0
+        ? `${dazu} offene ${dazu === 1 ? 'Aufgabe' : 'Aufgaben'} vom ${fmtDate(letzterPlan.datum)} übernommen.`
+        : offenVomLetzten.length === 0
+          ? `Am ${fmtDate(letzterPlan.datum)} ist nichts offen geblieben.`
+          : `Alles Offene vom ${fmtDate(letzterPlan.datum)} steht schon in deinem Tagesablauf.`,
+    )
+  }
+
+  function speichern() {
+    const ort = entwurf.ort.trim()
+    const plan: Tagesplan = {
+      id: `${ich}|${datum}`,
+      mitarbeiter: ich,
+      datum,
+      ...(ort ? { ort } : {}),
+      zeilen: bereinigeZeilen(entwurf.zeilen),
+      anrufe: entwurf.anrufe.trim(),
+      aktualisiertAm: new Date().toISOString(),
+    }
+    dispatch({ type: 'SPEICHERE_TAGESPLAN', plan })
+    uebernommen(entwurf)
+    setGespeichertMeldung(true)
+  }
+
+  const leiste = <SpeicherLeiste text="Tagesablauf speichern" geaendert={geaendert} gespeichert={gespeichertMeldung} aktiv={geaendert || !gespeicherterPlan} onSpeichern={speichern} />
+
+  return (
+    <Card className="mb-5 p-4 sm:p-5">
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-700">Mein Tagesablauf</h3>
+          <p className="text-xs text-slate-400">
+            {wochentag(datum)}, {fmtDate(datum)} · Bearbeiter: {ich}
+          </p>
+        </div>
+        {leiste}
+      </div>
+
+      {ueberholt && <UeberholtHinweis onLaden={verwerfen} />}
+      {!gespeicherterPlan && !geaendert && (
+        <p className="mb-4 text-xs text-slate-500">Für diesen Tag ist noch nichts gespeichert. Die Kollegen sehen deinen Tagesablauf erst, wenn du ihn gespeichert hast.</p>
+      )}
+
+      <div className="mb-2 grid grid-cols-1 items-end gap-x-4 sm:grid-cols-2 lg:grid-cols-3">
+        <Field label="Ort">
+          <input className={inputClass} value={entwurf.ort} onChange={(e) => aendere({ ...entwurf, ort: e.target.value })} placeholder="z. B. Büro Ulm, unterwegs" />
+        </Field>
+        <div className="mb-3 text-sm text-slate-600 lg:col-span-2">
+          <span className="font-medium text-slate-700">{zahlen.minuten > 0 ? fmtDauer(zahlen.minuten) : 'Noch keine Zeiten'}</span> geplant ·{' '}
+          <span className="font-medium text-slate-700">
+            {zahlen.erledigt} von {zahlen.anzahl}
+          </span>{' '}
+          erledigt
+        </div>
+      </div>
+
+      <div className="mb-5 flex flex-wrap items-center gap-x-3 gap-y-1">
+        <SecondaryButton onClick={uebernehmeVomLetztenTag} disabled={!letzterPlan}>
+          Vom letzten Tag übernehmen
+        </SecondaryButton>
+        <span className="text-xs text-slate-500">
+          {uebernahmeMeldung ||
+            (letzterPlan
+              ? `Letzter Tagesablauf: ${fmtDate(letzterPlan.datum)} · ${offenVomLetzten.length} ${offenVomLetzten.length === 1 ? 'Aufgabe' : 'Aufgaben'} offen`
+              : 'Es gibt noch keinen früheren Tagesablauf von dir.')}
+        </span>
+      </div>
+
+      {/* Spaltenköpfe wie im Tabellenblatt — nur am großen Bildschirm, am Handy stehen die Angaben untereinander. */}
+      <div className="mb-1 hidden items-center gap-2 text-xs font-medium text-slate-400 lg:flex">
+        <span className="w-4 shrink-0" />
+        <span className="w-6 shrink-0" />
+        <span className="w-14 shrink-0">ca. Min.</span>
+        <span className="w-24 shrink-0">bis Uhrzeit</span>
+        <span className="min-w-0 flex-[2_1_0%]">Was ist heute zu tun (in dieser Reihenfolge)</span>
+        <span className="min-w-0 flex-[1_1_0%]">Gewinn/Verlust</span>
+        <span className="min-w-0 flex-[1.5_1_0%]">Infos, Stand, Fragen, nächste Schritte</span>
+        <span className="w-8 shrink-0" />
+      </div>
+
+      <div className="space-y-5">
+        {BLOECKE.map((b) => {
+          const zeilen = entwurf.zeilen.filter((z) => z.block === b.id)
+          const minuten = kennzahlen(zeilen).minuten
+          return (
+            <section key={b.id} aria-label={b.titel}>
+              <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 border-b border-slate-100 pb-1">
+                <h4 className="text-sm font-semibold text-slate-700">
+                  {b.titel} <span className="text-xs font-normal text-slate-400">· {b.hinweis}</span>
+                </h4>
+                {minuten > 0 && <span className="text-xs text-slate-400">{fmtDauer(minuten)} geplant</span>}
+              </div>
+              <div className="space-y-3 lg:space-y-1.5">
+                {zeilen.map((z, i) => {
+                  const nummer = zeilenNummer(b, i)
+                  const name = z.was.trim() || `Zeile ${nummer}`
+                  // Am Handy erscheinen Ergebnis und Stand erst, wenn die Zeile einen Text hat — sonst wird das Blatt zu lang.
+                  const nurMitText = z.was.trim() === '' ? 'hidden lg:block' : ''
+                  return (
+                    <div key={z.id} className="flex flex-wrap items-center gap-2 lg:flex-nowrap">
+                      <input type="checkbox" className="h-4 w-4 shrink-0" checked={!!z.erledigt} onChange={(e) => aendereZeile(z.id, { erledigt: e.target.checked })} aria-label={`${name} erledigt`} title="erledigt" />
+                      <span className="w-6 shrink-0 text-xs font-semibold text-slate-400">{nummer}</span>
+                      <input
+                        type="number"
+                        min={0}
+                        step={5}
+                        inputMode="numeric"
+                        className={`${feldSchmal} w-14 shrink-0`}
+                        value={z.dauerMin ?? ''}
+                        onChange={(e) => {
+                          const zahl = Math.round(Number(e.target.value))
+                          aendereZeile(z.id, { dauerMin: e.target.value === '' || !Number.isFinite(zahl) || zahl <= 0 ? undefined : zahl })
+                        }}
+                        placeholder="Min."
+                        aria-label={`${name}: ca. Minuten`}
+                        title="ca. Minuten"
+                      />
+                      <span className="text-xs text-slate-400 lg:hidden">bis</span>
+                      <input
+                        type="time"
+                        className={`${feldSchmal} w-24 shrink-0`}
+                        value={z.bisUhr ?? ''}
+                        onChange={(e) => aendereZeile(z.id, { bisUhr: e.target.value || undefined })}
+                        aria-label={`${name}: bis Uhrzeit`}
+                        title="bis Uhrzeit"
+                      />
+                      <button
+                        onClick={() => entferneZeile(z.id)}
+                        className="ml-auto flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-slate-300 hover:bg-rose-50 hover:text-rose-600 lg:order-last lg:ml-0"
+                        aria-label={`${name} entfernen`}
+                        title="Zeile entfernen"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                      <input
+                        className={`${feldKlasse} min-w-0 basis-full lg:flex-[2_1_0%] ${z.erledigt ? 'text-slate-400 line-through' : ''}`}
+                        value={z.was}
+                        onChange={(e) => aendereZeile(z.id, { was: e.target.value })}
+                        placeholder="Was ist zu tun?"
+                        aria-label={`${b.titel} ${nummer}: Was ist zu tun?`}
+                      />
+                      <input
+                        className={`${feldKlasse} min-w-0 basis-full lg:flex-[1_1_0%] ${nurMitText}`}
+                        value={z.ergebnis ?? ''}
+                        onChange={(e) => aendereZeile(z.id, { ergebnis: e.target.value })}
+                        placeholder="Gewinn/Verlust – was hat es gebracht?"
+                        aria-label={`${name}: Gewinn/Verlust`}
+                      />
+                      <textarea
+                        rows={1}
+                        className={`${feldKlasse} min-h-[2.125rem] min-w-0 basis-full lg:flex-[1.5_1_0%] ${nurMitText}`}
+                        value={z.stand ?? ''}
+                        onChange={(e) => aendereZeile(z.id, { stand: e.target.value })}
+                        placeholder="Infos, Stand, Fragen, nächste Schritte"
+                        aria-label={`${name}: Infos, aktueller Stand, Fragen, nächste Schritte`}
+                      />
+                    </div>
+                  )
+                })}
+              </div>
+              <button onClick={() => neueZeile(b.id)} className="mt-2 inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-xs font-medium text-accent-600 hover:bg-accent-50">
+                <Plus size={13} /> Zeile
+              </button>
+            </section>
+          )
+        })}
+      </div>
+
+      <div className="mt-5">
+        <Field label="Anrufe">
+          <textarea
+            className={`${inputClass} min-h-24`}
+            value={entwurf.anrufe}
+            onChange={(e) => aendere({ ...entwurf, anrufe: e.target.value })}
+            placeholder="Wen rufst du heute an, wer hat angerufen, was ist dabei herausgekommen?"
+          />
+        </Field>
+      </div>
+
+      {leiste}
+    </Card>
+  )
+}
+
+// ── Tagesabläufe der Kollegen ────────────────────────────────────────────────────────────────────
+
+function KollegenTagesablaeufe({ ich, datum }: { ich: string; datum: string }) {
+  const { state } = useApp()
+  const plaene = useMemo(
+    () => state.tagesplaene.filter((p) => p.datum === datum && p.mitarbeiter !== ich).sort((a, b) => a.mitarbeiter.localeCompare(b.mitarbeiter, 'de')),
+    [state.tagesplaene, datum, ich],
+  )
+
+  return (
+    <div>
+      <h3 className="mb-1 text-sm font-semibold text-slate-700">Tagesabläufe der Kollegen</h3>
+      {plaene.length === 0 ? (
+        <p className="text-sm text-slate-400">Für den {fmtDate(datum)} hat noch kein Kollege einen Tagesablauf gespeichert.</p>
+      ) : (
+        <>
+          <p className="mb-3 text-xs text-slate-400">
+            {plaene.length} {plaene.length === 1 ? 'Kollege hat' : 'Kollegen haben'} für den {fmtDate(datum)} einen Tagesablauf gespeichert – nur zum Lesen.
+          </p>
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            {plaene.map((p) => (
+              <KollegenKarte key={p.id} plan={p} />
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+function KollegenKarte({ plan }: { plan: Tagesplan }) {
+  const zeilen = (plan.zeilen ?? []).filter((z) => z.was.trim() !== '')
+  const zahlen = kennzahlen(zeilen)
+  const anrufe = (plan.anrufe ?? '').trim()
+
+  return (
+    <Card className="p-4 sm:p-5">
+      <div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-slate-800">{plan.mitarbeiter}</div>
+          <div className="text-xs text-slate-500">
+            {[plan.ort ? `Ort: ${plan.ort}` : '', `${zahlen.erledigt} von ${zahlen.anzahl} erledigt`, zahlen.minuten > 0 ? `${fmtDauer(zahlen.minuten)} geplant` : ''].filter(Boolean).join(' · ')}
+          </div>
+        </div>
+        {plan.aktualisiertAm && <span className="text-xs text-slate-400">gespeichert {fmtDateTime(plan.aktualisiertAm)}</span>}
+      </div>
+
+      {zeilen.length === 0 && !anrufe && <p className="text-sm text-slate-400">Noch nichts eingetragen.</p>}
+
+      <div className="space-y-3">
+        {BLOECKE.map((b) => {
+          const imBlock = zeilen.filter((z) => z.block === b.id)
+          if (imBlock.length === 0) return null
+          return (
+            <div key={b.id}>
+              <div className="mb-1 text-xs font-semibold text-slate-500">{b.titel}</div>
+              <ul className="space-y-1.5">
+                {imBlock.map((z, i) => (
+                  <li key={z.id} className="flex items-start gap-2 text-sm">
+                    <span
+                      className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border ${z.erledigt ? 'border-emerald-300 bg-emerald-50 text-emerald-600' : 'border-slate-300 text-transparent'}`}
+                      role="img"
+                      aria-label={z.erledigt ? 'erledigt' : 'offen'}
+                    >
+                      <Check size={11} />
+                    </span>
+                    <div className="min-w-0">
+                      <div className={z.erledigt ? 'text-slate-400 line-through' : 'text-slate-800'}>
+                        {b.kuerzel && <span className="mr-1 text-xs font-semibold text-slate-400">{zeilenNummer(b, i)}</span>}
+                        {z.was}
+                      </div>
+                      {(z.dauerMin || z.bisUhr) && (
+                        <div className="text-xs text-slate-400">{[z.dauerMin ? `ca. ${z.dauerMin} Min.` : '', z.bisUhr ? `bis ${z.bisUhr} Uhr` : ''].filter(Boolean).join(' · ')}</div>
+                      )}
+                      {z.stand && <p className="whitespace-pre-wrap text-xs text-slate-500">{z.stand}</p>}
+                      {z.ergebnis && <p className="whitespace-pre-wrap text-xs text-slate-500">Gewinn/Verlust: {z.ergebnis}</p>}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )
+        })}
+        {anrufe && (
+          <div>
+            <div className="mb-1 text-xs font-semibold text-slate-500">Anrufe</div>
+            <p className="whitespace-pre-wrap text-sm text-slate-700">{anrufe}</p>
+          </div>
+        )}
+      </div>
+    </Card>
+  )
+}
+
+// ── Wochenplan ───────────────────────────────────────────────────────────────────────────────────
+
+function MeinWochenplan({ ich, wocheAb, onUngespeichert }: { ich: string; wocheAb: string; onUngespeichert: (ungespeichert: boolean) => void }) {
+  const { state, dispatch } = useApp()
+  const [gespeichertMeldung, setGespeichertMeldung] = useState(false)
+  const gespeicherterPlan = state.wochenplaene.find((p) => p.mitarbeiter === ich && p.wocheAb === wocheAb)
+  const { entwurf, geaendert, ueberholt, setze, uebernommen, verwerfen } = useEntwurf(gespeicherterPlan?.zellen ?? KEINE_ZELLEN, wochenKern)
+  useMeldeUngespeichert(onUngespeichert, geaendert)
+
+  function speichern() {
+    const plan: Wochenplan = { id: `${ich}|${wocheAb}`, mitarbeiter: ich, wocheAb, zellen: bereinigeZellen(entwurf), aktualisiertAm: new Date().toISOString() }
+    dispatch({ type: 'SPEICHERE_WOCHENPLAN', plan })
+    uebernommen(entwurf)
+    setGespeichertMeldung(true)
+  }
+
+  const eintraege = Object.keys(bereinigeZellen(entwurf)).length
+  const leiste = <SpeicherLeiste text="Wochenplan speichern" geaendert={geaendert} gespeichert={gespeichertMeldung} aktiv={geaendert} onSpeichern={speichern} />
+
+  return (
+    <Card className="p-4 sm:p-5">
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-700">Mein Wochenplan</h3>
+          <p className="text-xs text-slate-400">
+            {eintraege} {eintraege === 1 ? 'Eintrag' : 'Einträge'} · je Stunde ein kurzer Text
+          </p>
+        </div>
+        {leiste}
+      </div>
+      {ueberholt && <UeberholtHinweis onLaden={verwerfen} />}
+      <WochenRaster
+        wocheAb={wocheAb}
+        zellen={entwurf}
+        onAendere={(schluessel, text) => {
+          setze({ ...entwurf, [schluessel]: text })
+          setGespeichertMeldung(false)
+        }}
+      />
+      <div className="mt-4">{leiste}</div>
+    </Card>
+  )
+}
+
+function KollegenWochenplan({ name, wocheAb }: { name: string; wocheAb: string }) {
+  const { state } = useApp()
+  const plan = state.wochenplaene.find((p) => p.mitarbeiter === name && p.wocheAb === wocheAb)
+  const zellen = plan ? bereinigeZellen(plan.zellen ?? KEINE_ZELLEN) : KEINE_ZELLEN
+
+  if (!plan || Object.keys(zellen).length === 0) {
+    return <EmptyState text={`${name} hat für die Woche vom ${fmtDate(wocheAb)} bis ${fmtDate(addDays(wocheAb, 6))} noch keinen Wochenplan gespeichert.`} />
+  }
+  return (
+    <Card className="p-4 sm:p-5">
+      <div className="mb-4 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-700">Wochenplan von {name}</h3>
+          <p className="text-xs text-slate-400">Nur zum Lesen.</p>
+        </div>
+        {plan.aktualisiertAm && <span className="text-xs text-slate-400">gespeichert {fmtDateTime(plan.aktualisiertAm)}</span>}
+      </div>
+      <WochenRaster wocheAb={wocheAb} zellen={zellen} />
+    </Card>
+  )
+}
+
+/** Das Stundenraster: Zeilen 09.00 bis 20.00, Spalten Montag bis Sonntag. Ohne onAendere nur zum Lesen. */
+function WochenRaster({ wocheAb, zellen, onAendere }: { wocheAb: string; zellen: Record<string, string>; onAendere?: (schluessel: string, text: string) => void }) {
+  const heute = today()
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[820px] table-fixed border-collapse text-sm">
+        <thead>
+          <tr>
+            <th scope="col" className="sticky left-0 z-10 w-14 border border-slate-200 bg-slate-50 px-1.5 py-2 text-left text-xs font-medium text-slate-500">
+              Uhrzeit
+            </th>
+            {WOCHENTAGE.map((tagName, tag) => {
+              const datum = addDays(wocheAb, tag)
+              return (
+                <th key={tagName} scope="col" className={`border border-slate-200 px-1.5 py-2 text-left text-xs font-semibold ${datum === heute ? 'bg-accent-50 text-accent-700' : 'bg-slate-50 text-slate-600'}`}>
+                  {tagName}
+                  <span className="ml-1 font-normal text-slate-400">{fmtDate(datum).slice(0, 6)}</span>
+                </th>
+              )
+            })}
+          </tr>
+        </thead>
+        <tbody>
+          {STUNDEN.map((stunde) => {
+            const uhrzeit = `${String(stunde).padStart(2, '0')}.00`
+            return (
+              <tr key={stunde}>
+                <th scope="row" className="sticky left-0 z-10 border border-slate-200 bg-slate-50 px-1.5 py-1.5 text-left text-xs font-medium text-slate-500">
+                  {uhrzeit}
+                </th>
+                {WOCHENTAGE.map((tagName, tag) => {
+                  const schluessel = `${tag}-${stunde}`
+                  const text = zellen[schluessel] ?? ''
+                  return (
+                    <td key={schluessel} className="border border-slate-200 p-0 align-top">
+                      {onAendere ? (
+                        <input
+                          className="w-full bg-transparent px-1.5 py-1.5 text-sm text-slate-800 outline-none focus:bg-accent-50 focus:ring-2 focus:ring-inset focus:ring-accent-200"
+                          value={text}
+                          onChange={(e) => onAendere(schluessel, e.target.value)}
+                          aria-label={`${tagName}, ${uhrzeit} Uhr`}
+                          title={text || undefined}
+                        />
+                      ) : (
+                        <div className="min-h-8 break-words px-1.5 py-1.5 text-sm text-slate-700">{text}</div>
+                      )}
+                    </td>
+                  )
+                })}
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { Building2, Landmark, FileText, ChevronDown, ChevronLeft, ChevronRight, ScrollText, Sun, LayoutGrid, UserCog, ListTodo, Users, Search, MessageCircleQuestion, Clock } from 'lucide-react'
+import { Building2, Landmark, FileText, ChevronDown, ChevronLeft, ChevronRight, ScrollText, Sun, LayoutGrid, UserCog, ListTodo, Users, Search, MessageCircleQuestion, Clock, CalendarClock } from 'lucide-react'
 import { UngeklaertSideLink } from './UngeklaertSideLink'
 import { useApp } from '../context/AppContext'
 import { OBJEKT_GRUPPEN } from '../data/constants'
@@ -96,6 +96,7 @@ export function SidebarImmobilien({ collapsed, onToggle }: { collapsed: boolean;
           collapsed={collapsed}
           active={isActive('/immobilien/fragen')}
         />
+        <SideLink to="/immobilien/tagesablauf" icon={<CalendarClock size={17} />} label="Tagesablauf & Woche" collapsed={collapsed} active={isActive('/immobilien/tagesablauf')} />
         <SideLink to="/immobilien/zeiterfassung" icon={<Clock size={17} />} label="Zeiterfassung" collapsed={collapsed} active={isActive('/immobilien/zeiterfassung')} />
 
         <div>
