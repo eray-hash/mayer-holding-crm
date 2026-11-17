@@ -522,7 +522,10 @@ function istEigenerOrdner(o: any): boolean {
 }
 type OrdnerStand = { uid: number; g: number }
 const ZU_GROSS = 30 * 1024 * 1024
-const ANHANG_HOECHSTENS = 20 * 1024 * 1024
+// Größere Anhänge sprengen die Rechenzeit eines Aufrufs — der Lauf bricht dann ab und blockiert das
+// Postfach für mehrere Minuten. Sie werden ausgelassen und im Mailtext vermerkt.
+const ANHANG_HOECHSTENS = 10 * 1024 * 1024
+const ANHAENGE_JE_MAIL = 12 * 1024 * 1024
 const BYTES_JE_LAUF = 10 * 1024 * 1024
 
 // deno-lint-ignore no-explicit-any
@@ -734,10 +737,18 @@ export async function rufePostfachAb(
               }
             }
             const anhaenge: { filename: string; size: number; contentType: string; url: string }[] = []
+            const ausgelassen: string[] = []
+            let anhangBytes = 0
             for (const teil of anhangTeile) {
-              if (Number(teil.size ?? 0) > ANHANG_HOECHSTENS * 1.4) continue
+              // Die Gliederung nennt die Größe in der Übertragungsform (etwa ein Drittel mehr als die Datei).
+              const etwa = Math.round(Number(teil.size ?? 0) / 1.37)
+              if (etwa > ANHANG_HOECHSTENS || anhangBytes + etwa > ANHAENGE_JE_MAIL) {
+                ausgelassen.push(`${String(teil.dispositionParameters?.filename ?? teil.parameters?.name ?? 'Anhang')} (${(etwa / 1024 / 1024).toFixed(1)} MB)`)
+                continue
+              }
               const geladen = await zeitlimit(ladeTeil(client, n.uid, teil), 50000, 'Der Mail-Server hat einen Anhang nicht rechtzeitig geliefert.')
-              if (!geladen || geladen.bytes.length === 0 || geladen.bytes.length > ANHANG_HOECHSTENS) continue
+              if (!geladen || geladen.bytes.length === 0) continue
+              anhangBytes += geladen.bytes.length
               const anzeige = String(geladen.meta?.filename ?? teil.dispositionParameters?.filename ?? teil.parameters?.name ?? 'anhang')
               const inhaltsart = String(teil.type ?? geladen.meta?.contentType ?? 'application/octet-stream')
               // Unterordner bekommen einen eigenen Abschnitt im Pfad: Nummern beginnen in jedem Ordner neu.
@@ -754,7 +765,8 @@ export async function rufePostfachAb(
               const url = gemeinsam ? admin.storage.from(ablage).getPublicUrl(ablagePfad).data.publicUrl : `${ANHANG_VORSATZ}${ablagePfadPrivat}`
               anhaenge.push({ filename: anzeige, size: geladen.bytes.length, contentType: inhaltsart, url })
             }
-            zeile.ausschnitt = text.slice(0, 20000)
+            const vermerk = ausgelassen.length > 0 ? `\n\n[Nicht ins CRM übernommen, weil zu groß: ${ausgelassen.join(', ')}. Bitte im Mail-Programm öffnen.]` : ''
+            zeile.ausschnitt = text.slice(0, 20000 - vermerk.length) + vermerk
             zeile.anhaenge = anhaenge.length > 0 ? anhaenge : null
           } catch (mailFehler) {
             // Verbindung weg oder Zeitgrenze: nichts speichern, der nächste Lauf versucht dieselbe Mail
