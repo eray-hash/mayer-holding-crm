@@ -181,7 +181,7 @@ export function ObjektDetail() {
         </div>
       </Card>
 
-      <div className="mb-4 flex gap-1 border-b border-slate-200">
+      <div className="mb-4 flex gap-1 overflow-x-auto border-b border-slate-200">
         {TABS.map((t) => (
           <button
             key={t.id}
@@ -322,7 +322,7 @@ export function ObjektDetail() {
             </button>
           </div>
           {oeffneFehler && <p className="mb-3 text-sm font-medium text-rose-600">{oeffneFehler}</p>}
-          <Card className="overflow-hidden">
+          <Card className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-slate-100 bg-slate-50 text-left text-xs font-medium uppercase tracking-wide text-slate-400">
@@ -392,7 +392,7 @@ export function ObjektDetail() {
           <div className="mb-3 flex justify-end">
             <PrimaryButton onClick={() => setFinOpen(true)}><Plus size={14} /> Finanzierung anlegen</PrimaryButton>
           </div>
-          <Card className="overflow-hidden">
+          <Card className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-slate-100 bg-slate-50 text-left text-xs font-medium uppercase tracking-wide text-slate-400">

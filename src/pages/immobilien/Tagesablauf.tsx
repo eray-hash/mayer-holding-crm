@@ -372,7 +372,7 @@ export function TagesablaufSeite() {
         <p className="text-sm text-slate-500">Wer macht heute was – dein Tagesablauf, die der Kollegen und der Wochenplan.</p>
       </div>
 
-      <div className="mb-4 flex gap-1 border-b border-slate-200">
+      <div className="mb-4 flex gap-1 overflow-x-auto border-b border-slate-200">
         {(
           [
             { id: 'tag', label: 'Tagesablauf' },

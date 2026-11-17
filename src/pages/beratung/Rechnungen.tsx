@@ -69,7 +69,7 @@ export function Rechnungen() {
 
   return (
     <div>
-      <div className="mb-5 flex items-center justify-between">
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold text-slate-800">Rechnungen</h1>
           <p className="text-sm text-slate-500">Alle Rechnungen an Kunden, über alle Bereiche</p>

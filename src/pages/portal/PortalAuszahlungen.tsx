@@ -33,7 +33,7 @@ export function PortalAuszahlungen() {
       {sorted.length === 0 ? (
         <EmptyState text="Für Sie sind noch keine Ausschüttungen hinterlegt." />
       ) : (
-        <Card className="overflow-hidden">
+        <Card className="overflow-x-auto">
           <table className="w-full text-left text-sm">
             <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
               <tr>

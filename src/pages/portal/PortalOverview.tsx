@@ -59,7 +59,7 @@ export function PortalOverview() {
       </div>
 
       <h2 className="mb-3 text-sm font-semibold text-slate-700">Ihre Zeichnungen</h2>
-      <Card className="overflow-hidden">
+      <Card className="overflow-x-auto">
         <table className="w-full text-left text-sm">
           <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
             <tr>

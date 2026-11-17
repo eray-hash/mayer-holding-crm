@@ -62,7 +62,7 @@ export function ProjekteListe() {
 
   return (
     <div>
-      <div className="mb-5 flex items-center justify-between">
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold text-slate-800">Projekte</h1>
           <p className="text-sm text-slate-500">{projekte.length} Projekte in diesem Bereich</p>

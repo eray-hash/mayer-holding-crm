@@ -38,12 +38,12 @@ export function PrivatListe() {
 
   return (
     <div>
-      <div className="mb-5 flex items-center justify-between">
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold text-slate-800">Meine Kontakte</h1>
           <p className="text-sm text-slate-500">{filtered.length} von {state.privatKunden.length} Kontakten · nur für dich sichtbar</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <div className="flex rounded-lg border border-slate-200 bg-white p-0.5">
             <button
               onClick={() => setView('liste')}
@@ -87,7 +87,7 @@ export function PrivatListe() {
       </div>
 
       {view === 'liste' ? (
-        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-slate-100 bg-slate-50 text-left text-xs font-medium uppercase tracking-wide text-slate-400">

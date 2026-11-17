@@ -14,7 +14,7 @@ export function Finanzierungen() {
 
   return (
     <div>
-      <div className="mb-5 flex items-center justify-between">
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold text-slate-800">Finanzierungen</h1>
           <p className="text-sm text-slate-500">Alle Finanzierungen über alle Objekte</p>
@@ -22,7 +22,7 @@ export function Finanzierungen() {
         <PrimaryButton onClick={() => setAddOpen(true)}><Plus size={15} /> Neue Finanzierung</PrimaryButton>
       </div>
 
-      <Card className="overflow-hidden">
+      <Card className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-slate-100 bg-slate-50 text-left text-xs font-medium uppercase tracking-wide text-slate-400">

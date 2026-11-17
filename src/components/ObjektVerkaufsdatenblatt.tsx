@@ -266,7 +266,7 @@ export function ObjektVerkaufsdatenblatt({ objekt }: { objekt: Objekt }) {
             <h3 className="text-sm font-semibold text-slate-700">Verkaufsdaten – {objekt.bezeichnung}</h3>
             <p className="text-xs text-slate-400">Die Zusammenfassung des Objekts auf einer Seite.</p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <label className="flex items-center gap-2 text-xs font-medium text-slate-500">
               Datum
               <input type="date" className={`${inputClass} w-auto`} value={d.datum ?? ''} onChange={(e) => setze({ datum: e.target.value || undefined })} />

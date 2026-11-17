@@ -50,7 +50,7 @@ export function Verbindlichkeiten() {
 
   return (
     <div>
-      <div className="mb-5 flex items-center justify-between">
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold text-slate-800">Verbindlichkeiten</h1>
           <p className="text-sm text-slate-500">Eingehende Rechnungen, die Mayer Holding selbst bezahlen muss</p>
@@ -64,7 +64,7 @@ export function Verbindlichkeiten() {
         <Kpi label="Automatisch erkannt, unvollständig" value={String(kpis.zuPruefen)} accent="text-amber-600" />
       </div>
 
-      <Card className="overflow-hidden">
+      <Card className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-slate-100 bg-slate-50 text-left text-xs font-medium uppercase tracking-wide text-slate-400">

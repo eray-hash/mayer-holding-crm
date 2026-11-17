@@ -68,7 +68,7 @@ export function VorlagenListe({ kategorie, vorlagen, rubriken = STANDARD_RUBRIKE
           Geheimhaltungsvereinbarung, Gesprächsprotokoll, Anschreiben) stehen unter Unternehmensberatung → Vorlagen.
         </Card>
       )}
-      <Card className={list.length === 0 ? 'hidden' : 'overflow-hidden'}>
+      <Card className={list.length === 0 ? 'hidden' : 'overflow-x-auto'}>
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-slate-100 bg-slate-50 text-left text-xs font-medium uppercase tracking-wide text-slate-400">
