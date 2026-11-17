@@ -253,7 +253,7 @@ export function Postfach() {
 
   const selectedMail = ordner === 'posteingang' ? mails.find((m) => m.id === selectedId) : undefined
   // Der Assistent soll wissen, welche Mail gerade offen ist („fass mir diese Mail zusammen").
-  const offeneMailKennung = selectedMail?.id ?? null
+  const offeneMailKennung = selectedMail?.messageId ?? null // die Kennung der Mail in der Datenbank, nicht die des Fensters
   useEffect(() => {
     setzeOffeneMail(offeneMailKennung)
     return () => setzeOffeneMail(null)

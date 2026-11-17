@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Check, ChevronLeft, ChevronRight, Plus, Trash2 } from 'lucide-react'
-import { useApp } from '../../context/AppContext'
+import { useApp, type AppData } from '../../context/AppContext'
 import { useAuth } from '../../context/AuthContext'
+import { isSupabaseConfigured } from '../../lib/supabaseClient'
 import { Card, EmptyState, Field, inputClass, PrimaryButton, SecondaryButton } from '../../components/ui'
 import { CURRENT_USER, MITARBEITER } from '../../data/constants'
 import { addDays, fmtDate, fmtDateTime, today, uid } from '../../lib/dates'
@@ -110,6 +111,186 @@ function kennzahlen(zeilen: TagesplanZeile[]) {
 
 function zeilenNummer(block: (typeof BLOECKE)[number], index: number): string {
   return `${block.kuerzel}${index + 1}`
+}
+
+// ── Vorschläge für den Tag ───────────────────────────────────────────────────────────────────────
+
+/** In diese Blöcke lassen sich Vorschläge übernehmen. */
+type VorschlagBlock = Extract<TagesplanBlock, 'frist' | 'A' | 'B' | 'C'>
+
+const VORSCHLAG_BLOECKE: { id: VorschlagBlock; kurz: string }[] = [
+  { id: 'frist', kurz: 'Frist' },
+  { id: 'A', kurz: 'A' },
+  { id: 'B', kurz: 'B' },
+  { id: 'C', kurz: 'C' },
+]
+
+const VORSCHLAEGE_SICHTBAR = 12
+
+type Vorschlag = {
+  id: string
+  /** So landet der Vorschlag als Zeile im Tagesablauf. */
+  text: string
+  quelle: string
+  hinweis: string
+  /** Gesetzt, wenn der Vorschlag am gewählten Tag fällig oder schon überfällig ist. */
+  faellig: string | null
+  ueberfaellig: boolean
+  /** Der vorgeschlagene Block. */
+  block: VorschlagBlock
+  /** 0 = A/Hoch, 1 = B/Mittel, 2 = C/Niedrig, 3 = ohne Angabe. */
+  rang: number
+  /** Für die Reihenfolge der nicht fälligen Vorschläge: „erledigen bis“, sonst ganz hinten. */
+  spaeter: string
+}
+
+type VorschlagDaten = Pick<AppData, 'todos' | 'objekte' | 'immobilienKunden' | 'projekte'>
+
+/** Vergleichsform eines Zeilentexts: ohne Groß-/Kleinschreibung, ohne doppelte Leerzeichen. */
+function textSchluessel(text: string): string {
+  return text.trim().replace(/\s+/g, ' ').toLowerCase()
+}
+
+/** Datumsangabe als lokales yyyy-mm-dd — die Wiedervorlage der To-do-Liste ist ein freies Textfeld
+ *  (auch „17.11.2026“). Leer, wenn kein Datum zu erkennen ist. */
+function alsDatum(wert: string | null | undefined): string {
+  const s = (wert ?? '').trim()
+  const iso = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/)
+  if (iso) return `${iso[1]}-${iso[2].padStart(2, '0')}-${iso[3].padStart(2, '0')}`
+  const deutsch = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{2}|\d{4})$/)
+  if (deutsch) return `${deutsch[3].length === 2 ? `20${deutsch[3]}` : deutsch[3]}-${deutsch[2].padStart(2, '0')}-${deutsch[1].padStart(2, '0')}`
+  return ''
+}
+
+function woerter(text: string): string[] {
+  return text.toLowerCase().split(/[^\p{L}]+/u).filter(Boolean)
+}
+
+/** Steht in „zuständig“/„verantwortlich“ der angemeldete Mitarbeiter? Ohne Groß-/Kleinschreibung:
+ *  der volle Name, nur Vor- oder nur Nachname, auch mit abgekürztem zweiten Teil („Quirin L.“) und in
+ *  Aufzählungen („Quirin / Hasan“). Ein anderer voller Name mit gleichem Nachnamen zählt nicht. */
+function gehoertMir(angabe: string | null | undefined, ich: string): boolean {
+  const meinName = textSchluessel(ich)
+  const text = textSchluessel(angabe ?? '')
+  if (!text || !meinName) return false
+  if (text.includes(meinName)) return true
+  const teile = woerter(meinName).filter((t) => t.length >= 3)
+  if (teile.length === 0) return false
+  return text.split(/[,;/&+]|\s+und\s+/).some((eintrag) => {
+    const w = woerter(eintrag)
+    return w.some((x) => teile.includes(x)) && w.every((x) => teile.includes(x) || (x.length === 1 && teile.some((t) => t.startsWith(x))))
+  })
+}
+
+function rangVonPrioritaet(prioritaet: string | null | undefined): number {
+  return prioritaet === 'Hoch' ? 0 : prioritaet === 'Mittel' ? 1 : prioritaet === 'Niedrig' ? 2 : 3
+}
+
+/** Was am gewählten Tag für den Mitarbeiter ansteht — aus den Daten, die das CRM schon hat:
+ *  offene To-dos (Abteilung und eigene Liste), fällige Follow-ups der Objekte und Kontakte und
+ *  fällige Projektaufgaben. Fälliges und Überfälliges zuerst (das Älteste oben), danach nach Prio. */
+function sammleVorschlaege(daten: VorschlagDaten, ich: string, email: string, datum: string): Vorschlag[] {
+  const istHeute = datum === today()
+  const faelligText = (tag: string) => (tag < datum ? `überfällig seit ${fmtDate(tag)}` : istHeute ? 'fällig heute' : `fällig am ${fmtDate(tag)}`)
+  const liste: Vorschlag[] = []
+
+  for (const t of daten.todos ?? []) {
+    if ((t.erledigtAm ?? '').trim()) continue
+    const inMeinerListe = t.bereich ? t.bereich === 'immobilien' : (t.besitzerEmail ?? '').trim().toLowerCase() === email
+    if (!inMeinerListe) continue
+    if ((t.zustaendig ?? '').trim() && !gehoertMir(t.zustaendig, ich)) continue
+    const aufgabe = (t.aufgabe ?? '').trim()
+    if (!aufgabe) continue
+    const kundeProjekt = (t.kundeProjekt ?? '').trim()
+    const bis = alsDatum(t.erledigenBis)
+    const wiedervorlage = alsDatum(t.geplanteWiedervorlage)
+    const prio = (t.prio ?? '').trim().toUpperCase().charAt(0)
+    const mitFrist = bis !== '' && bis <= datum
+    const faellig = mitFrist ? bis : wiedervorlage === datum ? datum : null
+    const hinweise: string[] = []
+    if (mitFrist) hinweise.push(faelligText(bis))
+    else if (faellig) hinweise.push(istHeute ? 'Wiedervorlage heute' : `Wiedervorlage am ${fmtDate(datum)}`)
+    if (prio === 'A' || prio === 'B' || prio === 'C') hinweise.push(`Prio ${prio}`)
+    if (!mitFrist && bis) hinweise.push(`erledigen bis ${fmtDate(bis)}`)
+    const wartenAuf = (t.wartenAuf ?? '').trim()
+    if (wartenAuf) hinweise.push(`warten auf ${wartenAuf}`)
+    liste.push({
+      id: `todo-${t.id}`,
+      text: kundeProjekt ? `${aufgabe} (${kundeProjekt})` : aufgabe,
+      quelle: t.bereich ? 'To-do Abteilung' : 'Eigenes To-do',
+      hinweis: hinweise.join(' · '),
+      faellig,
+      ueberfaellig: mitFrist && bis < datum,
+      block: faellig ? 'frist' : prio === 'A' ? 'A' : prio === 'B' ? 'B' : 'C',
+      rang: prio === 'A' ? 0 : prio === 'B' ? 1 : prio === 'C' ? 2 : 3,
+      spaeter: bis || '9999-99-99',
+    })
+  }
+
+  const followUp = (id: string, quelle: string, name: string, f: { date: string; note: string; done: boolean } | undefined, verantwortlich: string, prioritaet: string) => {
+    const tag = alsDatum(f?.date)
+    if (!f || f.done || !tag || tag > datum || !gehoertMir(verantwortlich, ich)) return
+    const notiz = (f.note ?? '').trim()
+    liste.push({
+      id,
+      text: notiz ? `Follow-up ${name}: ${notiz}` : `Follow-up ${name}`,
+      quelle,
+      hinweis: faelligText(tag),
+      faellig: tag,
+      ueberfaellig: tag < datum,
+      block: 'frist',
+      rang: rangVonPrioritaet(prioritaet),
+      spaeter: tag,
+    })
+  }
+  for (const o of daten.objekte ?? []) {
+    followUp(`objekt-${o.id}`, 'Follow-up Objekt', (o.bezeichnung ?? '').trim() || (o.adresse ?? '').trim() || 'Objekt', o.followUp, o.verantwortlich, o.prioritaet)
+  }
+  for (const k of daten.immobilienKunden ?? []) {
+    const firma = (k.firma ?? '').trim()
+    const person = (k.ansprechpartner ?? '').trim()
+    const name = firma && person && firma.toLowerCase() !== person.toLowerCase() ? `${firma} (${person})` : firma || person || 'Kontakt'
+    followUp(`kontakt-${k.id}`, 'Follow-up Kontakt', name, k.followUp, k.verantwortlich, k.prioritaet)
+  }
+
+  // Projektaufgaben, wie sie auch die Seite „Heute“ liest: offene Aufgaben mit Wiedervorlage bis zum gewählten Tag.
+  for (const projekt of daten.projekte ?? []) {
+    for (const meilenstein of projekt.meilensteine ?? []) {
+      for (const aufgabe of meilenstein.aufgaben ?? []) {
+        const tag = alsDatum(aufgabe.wiedervorlage)
+        if (aufgabe.status === 'erledigt' || !tag || tag > datum || !gehoertMir(aufgabe.zustaendig, ich)) continue
+        const titel = (aufgabe.titel ?? '').trim()
+        if (!titel) continue
+        liste.push({
+          id: `aufgabe-${aufgabe.id}`,
+          text: projekt.name ? `${titel} (${projekt.name})` : titel,
+          quelle: 'Projektaufgabe',
+          hinweis: faelligText(tag),
+          faellig: tag,
+          ueberfaellig: tag < datum,
+          block: 'frist',
+          rang: rangVonPrioritaet(aufgabe.prioritaet),
+          spaeter: tag,
+        })
+      }
+    }
+  }
+
+  liste.sort((a, b) => {
+    if (a.faellig && b.faellig) return a.faellig.localeCompare(b.faellig) || a.rang - b.rang || a.text.localeCompare(b.text, 'de')
+    if (a.faellig) return -1
+    if (b.faellig) return 1
+    return a.rang - b.rang || a.spaeter.localeCompare(b.spaeter) || a.text.localeCompare(b.text, 'de')
+  })
+
+  // Zwei Einträge mit demselben Text ergäben dieselbe Zeile — nur der erste (dringendere) bleibt.
+  const gesehen = new Set<string>()
+  return liste.filter((v) => {
+    const schluessel = textSchluessel(v.text)
+    if (gesehen.has(schluessel)) return false
+    gesehen.add(schluessel)
+    return true
+  })
 }
 
 // ── Wochenplan: Zellen ───────────────────────────────────────────────────────────────────────────
@@ -329,6 +510,9 @@ function UeberholtHinweis({ onLaden }: { onLaden: () => void }) {
 
 function MeinTagesablauf({ ich, datum, onUngespeichert }: { ich: string; datum: string; onUngespeichert: (ungespeichert: boolean) => void }) {
   const { state, dispatch } = useApp()
+  const { session } = useAuth()
+  // Wie in der To-do-Liste: ohne Anmeldung gehören die eigenen To-dos dem Besitzer „lokal“.
+  const meineEmail = ((isSupabaseConfigured && session?.user?.email) || 'lokal').toLowerCase()
   const [vorlage] = useState(neuerTag)
   const [gespeichertMeldung, setGespeichertMeldung] = useState(false)
   const [uebernahmeMeldung, setUebernahmeMeldung] = useState('')
@@ -347,6 +531,12 @@ function MeinTagesablauf({ ich, datum, onUngespeichert }: { ich: string; datum: 
     [state.tagesplaene, ich, datum],
   )
   const offenVomLetzten = letzterPlan ? (letzterPlan.zeilen ?? []).filter((z) => z.was.trim() !== '' && !z.erledigt) : []
+
+  const { todos, objekte, immobilienKunden, projekte } = state
+  const vorschlaege = useMemo(
+    () => sammleVorschlaege({ todos, objekte, immobilienKunden, projekte }, ich, meineEmail, datum),
+    [todos, objekte, immobilienKunden, projekte, ich, meineEmail, datum],
+  )
 
   const zahlen = kennzahlen(entwurf.zeilen)
 
@@ -397,6 +587,22 @@ function MeinTagesablauf({ ich, datum, onUngespeichert }: { ich: string; datum: 
     )
   }
 
+  /** Vorschläge als Zeilen in den Tagesablauf legen: in die erste leere Zeile des Blocks, sonst als neue
+   *  Zeile dahinter. Was mit demselben Text schon im Plan steht, kommt nicht doppelt. Gespeichert wird
+   *  dabei nichts — das bleibt bei „Tagesablauf speichern“. */
+  function uebernehmeVorschlaege(auswahl: { text: string; block: VorschlagBlock }[]) {
+    let zeilen = entwurf.zeilen
+    const schonDa = new Set(zeilen.map((z) => textSchluessel(z.was)).filter(Boolean))
+    for (const { text, block } of auswahl) {
+      const schluessel = textSchluessel(text)
+      if (!schluessel || schonDa.has(schluessel)) continue
+      schonDa.add(schluessel)
+      const leer = zeilen.find((z) => z.block === block && z.was.trim() === '')
+      zeilen = leer ? zeilen.map((z) => (z.id === leer.id ? { ...z, was: text } : z)) : [...zeilen, { ...leereZeile(block), was: text }]
+    }
+    if (zeilen !== entwurf.zeilen) aendere({ ...entwurf, zeilen })
+  }
+
   function speichern() {
     const ort = entwurf.ort.trim()
     const plan: Tagesplan = {
@@ -416,159 +622,270 @@ function MeinTagesablauf({ ich, datum, onUngespeichert }: { ich: string; datum: 
   const leiste = <SpeicherLeiste text="Tagesablauf speichern" geaendert={geaendert} gespeichert={gespeichertMeldung} aktiv={geaendert || !gespeicherterPlan} onSpeichern={speichern} />
 
   return (
-    <Card className="mb-5 p-4 sm:p-5">
-      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h3 className="text-sm font-semibold text-slate-700">Mein Tagesablauf</h3>
+    <>
+      <VorschlaegeKarte datum={datum} vorschlaege={vorschlaege} zeilen={entwurf.zeilen} onUebernehmen={uebernehmeVorschlaege} />
+      <Card className="mb-5 p-4 sm:p-5">
+        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold text-slate-700">Mein Tagesablauf</h3>
+            <p className="text-xs text-slate-400">
+              {wochentag(datum)}, {fmtDate(datum)} · Bearbeiter: {ich}
+            </p>
+          </div>
+          {leiste}
+        </div>
+
+        {ueberholt && <UeberholtHinweis onLaden={verwerfen} />}
+        {!gespeicherterPlan && !geaendert && (
+          <p className="mb-4 text-xs text-slate-500">Für diesen Tag ist noch nichts gespeichert. Die Kollegen sehen deinen Tagesablauf erst, wenn du ihn gespeichert hast.</p>
+        )}
+
+        <div className="mb-2 grid grid-cols-1 items-end gap-x-4 sm:grid-cols-2 lg:grid-cols-3">
+          <Field label="Ort">
+            <input className={inputClass} value={entwurf.ort} onChange={(e) => aendere({ ...entwurf, ort: e.target.value })} placeholder="z. B. Büro Ulm, unterwegs" />
+          </Field>
+          <div className="mb-3 text-sm text-slate-600 lg:col-span-2">
+            <span className="font-medium text-slate-700">{zahlen.minuten > 0 ? fmtDauer(zahlen.minuten) : 'Noch keine Zeiten'}</span> geplant ·{' '}
+            <span className="font-medium text-slate-700">
+              {zahlen.erledigt} von {zahlen.anzahl}
+            </span>{' '}
+            erledigt
+          </div>
+        </div>
+
+        <div className="mb-5 flex flex-wrap items-center gap-x-3 gap-y-1">
+          <SecondaryButton onClick={uebernehmeVomLetztenTag} disabled={!letzterPlan}>
+            Vom letzten Tag übernehmen
+          </SecondaryButton>
+          <span className="text-xs text-slate-500">
+            {uebernahmeMeldung ||
+              (letzterPlan
+                ? `Letzter Tagesablauf: ${fmtDate(letzterPlan.datum)} · ${offenVomLetzten.length} ${offenVomLetzten.length === 1 ? 'Aufgabe' : 'Aufgaben'} offen`
+                : 'Es gibt noch keinen früheren Tagesablauf von dir.')}
+          </span>
+        </div>
+
+        {/* Spaltenköpfe wie im Tabellenblatt — nur am großen Bildschirm, am Handy stehen die Angaben untereinander. */}
+        <div className="mb-1 hidden items-center gap-2 text-xs font-medium text-slate-400 lg:flex">
+          <span className="w-4 shrink-0" />
+          <span className="w-6 shrink-0" />
+          <span className="w-14 shrink-0">ca. Min.</span>
+          <span className="w-24 shrink-0">bis Uhrzeit</span>
+          <span className="min-w-0 flex-[2_1_0%]">Was ist heute zu tun (in dieser Reihenfolge)</span>
+          <span className="min-w-0 flex-[1_1_0%]">Gewinn/Verlust</span>
+          <span className="min-w-0 flex-[1.5_1_0%]">Infos, Stand, Fragen, nächste Schritte</span>
+          <span className="w-8 shrink-0" />
+        </div>
+
+        <div className="space-y-5">
+          {BLOECKE.map((b) => {
+            const zeilen = entwurf.zeilen.filter((z) => z.block === b.id)
+            const minuten = kennzahlen(zeilen).minuten
+            return (
+              <section key={b.id} aria-label={b.titel}>
+                <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 border-b border-slate-100 pb-1">
+                  <h4 className="text-sm font-semibold text-slate-700">
+                    {b.titel} <span className="text-xs font-normal text-slate-400">· {b.hinweis}</span>
+                  </h4>
+                  {minuten > 0 && <span className="text-xs text-slate-400">{fmtDauer(minuten)} geplant</span>}
+                </div>
+                <div className="space-y-3 lg:space-y-1.5">
+                  {zeilen.map((z, i) => {
+                    const nummer = zeilenNummer(b, i)
+                    const name = z.was.trim() || `Zeile ${nummer}`
+                    // Am Handy erscheinen Ergebnis und Stand erst, wenn die Zeile einen Text hat — sonst wird das Blatt zu lang.
+                    const nurMitText = z.was.trim() === '' ? 'hidden lg:block' : ''
+                    return (
+                      <div key={z.id} className="flex flex-wrap items-center gap-2 lg:flex-nowrap">
+                        <input type="checkbox" className="h-4 w-4 shrink-0" checked={!!z.erledigt} onChange={(e) => aendereZeile(z.id, { erledigt: e.target.checked })} aria-label={`${name} erledigt`} title="erledigt" />
+                        <span className="w-6 shrink-0 text-xs font-semibold text-slate-400">{nummer}</span>
+                        <input
+                          type="number"
+                          min={0}
+                          step={5}
+                          inputMode="numeric"
+                          className={`${feldSchmal} w-14 shrink-0`}
+                          value={z.dauerMin ?? ''}
+                          onChange={(e) => {
+                            const zahl = Math.round(Number(e.target.value))
+                            aendereZeile(z.id, { dauerMin: e.target.value === '' || !Number.isFinite(zahl) || zahl <= 0 ? undefined : zahl })
+                          }}
+                          placeholder="Min."
+                          aria-label={`${name}: ca. Minuten`}
+                          title="ca. Minuten"
+                        />
+                        <span className="text-xs text-slate-400 lg:hidden">bis</span>
+                        <input
+                          type="time"
+                          className={`${feldSchmal} w-24 shrink-0`}
+                          value={z.bisUhr ?? ''}
+                          onChange={(e) => aendereZeile(z.id, { bisUhr: e.target.value || undefined })}
+                          aria-label={`${name}: bis Uhrzeit`}
+                          title="bis Uhrzeit"
+                        />
+                        <button
+                          onClick={() => entferneZeile(z.id)}
+                          className="ml-auto flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-slate-300 hover:bg-rose-50 hover:text-rose-600 lg:order-last lg:ml-0"
+                          aria-label={`${name} entfernen`}
+                          title="Zeile entfernen"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                        <input
+                          className={`${feldKlasse} min-w-0 basis-full lg:flex-[2_1_0%] ${z.erledigt ? 'text-slate-400 line-through' : ''}`}
+                          value={z.was}
+                          onChange={(e) => aendereZeile(z.id, { was: e.target.value })}
+                          placeholder="Was ist zu tun?"
+                          aria-label={`${b.titel} ${nummer}: Was ist zu tun?`}
+                        />
+                        <input
+                          className={`${feldKlasse} min-w-0 basis-full lg:flex-[1_1_0%] ${nurMitText}`}
+                          value={z.ergebnis ?? ''}
+                          onChange={(e) => aendereZeile(z.id, { ergebnis: e.target.value })}
+                          placeholder="Gewinn/Verlust – was hat es gebracht?"
+                          aria-label={`${name}: Gewinn/Verlust`}
+                        />
+                        <textarea
+                          rows={1}
+                          className={`${feldKlasse} min-h-[2.125rem] min-w-0 basis-full lg:flex-[1.5_1_0%] ${nurMitText}`}
+                          value={z.stand ?? ''}
+                          onChange={(e) => aendereZeile(z.id, { stand: e.target.value })}
+                          placeholder="Infos, Stand, Fragen, nächste Schritte"
+                          aria-label={`${name}: Infos, aktueller Stand, Fragen, nächste Schritte`}
+                        />
+                      </div>
+                    )
+                  })}
+                </div>
+                <button onClick={() => neueZeile(b.id)} className="mt-2 inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-xs font-medium text-accent-600 hover:bg-accent-50">
+                  <Plus size={13} /> Zeile
+                </button>
+              </section>
+            )
+          })}
+        </div>
+
+        <div className="mt-5">
+          <Field label="Anrufe">
+            <textarea
+              className={`${inputClass} min-h-24`}
+              value={entwurf.anrufe}
+              onChange={(e) => aendere({ ...entwurf, anrufe: e.target.value })}
+              placeholder="Wen rufst du heute an, wer hat angerufen, was ist dabei herausgekommen?"
+            />
+          </Field>
+        </div>
+
+        {leiste}
+      </Card>
+    </>
+  )
+}
+
+// ── Vorschläge für heute ─────────────────────────────────────────────────────────────────────────
+
+/** Was das CRM für den Tag vorschlägt. Ein Klick auf Frist, A, B oder C legt den Vorschlag als Zeile in
+ *  diesen Block; was schon im Plan steht, erscheint als „übernommen“. */
+function VorschlaegeKarte({
+  datum,
+  vorschlaege,
+  zeilen,
+  onUebernehmen,
+}: {
+  datum: string
+  vorschlaege: Vorschlag[]
+  zeilen: TagesplanZeile[]
+  onUebernehmen: (auswahl: { text: string; block: VorschlagBlock }[]) => void
+}) {
+  const [alleZeigen, setAlleZeigen] = useState(false)
+  const istHeute = datum === today()
+
+  // In welchem Block ein Text schon steht.
+  const imPlan = new Map<string, TagesplanBlock>()
+  for (const z of zeilen) {
+    const schluessel = textSchluessel(z.was)
+    if (schluessel && !imPlan.has(schluessel)) imPlan.set(schluessel, z.block)
+  }
+  const offen = vorschlaege.filter((v) => !imPlan.has(textSchluessel(v.text)))
+  const uebernommen = vorschlaege.filter((v) => imPlan.has(textSchluessel(v.text)))
+  const alle = [...offen, ...uebernommen]
+  const sichtbar = alleZeigen ? alle : alle.slice(0, VORSCHLAEGE_SICHTBAR)
+  const offeneFristen = offen.filter((v) => v.block === 'frist')
+
+  return (
+    <Card className="mb-4 p-4 sm:p-5">
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
+        <div className="min-w-0">
+          <h3 className="text-sm font-semibold text-slate-700">{istHeute ? 'Vorschläge für heute' : `Vorschläge für ${wochentag(datum)}, ${fmtDate(datum)}`}</h3>
           <p className="text-xs text-slate-400">
-            {wochentag(datum)}, {fmtDate(datum)} · Bearbeiter: {ich}
+            Aus To-do-Liste, Follow-ups und Projektaufgaben. Mit Frist, A, B oder C legst du fest, in welchen Block eine Aufgabe kommt – der farbige Knopf ist der Vorschlag. Gespeichert
+            wird erst mit „Tagesablauf speichern“.
           </p>
         </div>
-        {leiste}
+        {offeneFristen.length > 0 && (
+          <SecondaryButton onClick={() => onUebernehmen(offeneFristen.map((v) => ({ text: v.text, block: 'frist' as const })))}>Alle Fristen übernehmen ({offeneFristen.length})</SecondaryButton>
+        )}
       </div>
 
-      {ueberholt && <UeberholtHinweis onLaden={verwerfen} />}
-      {!gespeicherterPlan && !geaendert && (
-        <p className="mb-4 text-xs text-slate-500">Für diesen Tag ist noch nichts gespeichert. Die Kollegen sehen deinen Tagesablauf erst, wenn du ihn gespeichert hast.</p>
+      {offen.length === 0 && (
+        <p className="text-sm text-slate-400">{istHeute ? 'Für heute liegt nichts an, das nicht schon in deinem Plan steht.' : 'Für diesen Tag liegt nichts an, das nicht schon in deinem Plan steht.'}</p>
       )}
 
-      <div className="mb-2 grid grid-cols-1 items-end gap-x-4 sm:grid-cols-2 lg:grid-cols-3">
-        <Field label="Ort">
-          <input className={inputClass} value={entwurf.ort} onChange={(e) => aendere({ ...entwurf, ort: e.target.value })} placeholder="z. B. Büro Ulm, unterwegs" />
-        </Field>
-        <div className="mb-3 text-sm text-slate-600 lg:col-span-2">
-          <span className="font-medium text-slate-700">{zahlen.minuten > 0 ? fmtDauer(zahlen.minuten) : 'Noch keine Zeiten'}</span> geplant ·{' '}
-          <span className="font-medium text-slate-700">
-            {zahlen.erledigt} von {zahlen.anzahl}
-          </span>{' '}
-          erledigt
-        </div>
-      </div>
+      {sichtbar.length > 0 && (
+        <ul className={`space-y-2 ${offen.length === 0 ? 'mt-3' : ''}`}>
+          {sichtbar.map((v) => {
+            const blockImPlan = imPlan.get(textSchluessel(v.text))
+            const blockTitel = blockImPlan ? BLOECKE.find((b) => b.id === blockImPlan)?.titel : undefined
+            return (
+              <li key={v.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg bg-slate-50 px-3 py-2">
+                <div className="min-w-0 basis-full sm:flex-1">
+                  <p className={`break-words text-sm ${blockImPlan ? 'text-slate-400' : 'text-slate-800'}`}>{v.text}</p>
+                  <p className="text-xs text-slate-400">
+                    <span className="font-medium text-slate-500">{v.quelle}</span>
+                    {v.hinweis && (
+                      <>
+                        {' · '}
+                        <span className={blockImPlan ? '' : v.ueberfaellig ? 'font-medium text-rose-600' : v.faellig ? 'font-medium text-amber-600' : ''}>{v.hinweis}</span>
+                      </>
+                    )}
+                  </p>
+                </div>
+                {blockImPlan ? (
+                  <span className="flex shrink-0 items-center gap-1 text-xs font-medium text-emerald-600">
+                    <Check size={13} /> übernommen{blockTitel ? ` · ${blockTitel}` : ''}
+                  </span>
+                ) : (
+                  <div className="flex shrink-0 items-center gap-1" role="group" aria-label={`${v.text} übernehmen in`}>
+                    {VORSCHLAG_BLOECKE.map((b) => {
+                      const titel = BLOECKE.find((x) => x.id === b.id)?.titel ?? b.kurz
+                      const vorgeschlagen = b.id === v.block
+                      return (
+                        <button
+                          key={b.id}
+                          onClick={() => onUebernehmen([{ text: v.text, block: b.id }])}
+                          className={`min-w-9 rounded-md px-2.5 py-1.5 text-xs ${
+                            vorgeschlagen ? 'bg-accent-600 font-semibold text-white hover:bg-accent-700' : 'border border-slate-200 bg-white font-medium text-slate-600 hover:bg-slate-100'
+                          }`}
+                          aria-label={`${v.text}: in ${titel} übernehmen${vorgeschlagen ? ' (vorgeschlagen)' : ''}`}
+                          title={`In ${titel} übernehmen${vorgeschlagen ? ' (vorgeschlagen)' : ''}`}
+                        >
+                          {b.kurz}
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+              </li>
+            )
+          })}
+        </ul>
+      )}
 
-      <div className="mb-5 flex flex-wrap items-center gap-x-3 gap-y-1">
-        <SecondaryButton onClick={uebernehmeVomLetztenTag} disabled={!letzterPlan}>
-          Vom letzten Tag übernehmen
-        </SecondaryButton>
-        <span className="text-xs text-slate-500">
-          {uebernahmeMeldung ||
-            (letzterPlan
-              ? `Letzter Tagesablauf: ${fmtDate(letzterPlan.datum)} · ${offenVomLetzten.length} ${offenVomLetzten.length === 1 ? 'Aufgabe' : 'Aufgaben'} offen`
-              : 'Es gibt noch keinen früheren Tagesablauf von dir.')}
-        </span>
-      </div>
-
-      {/* Spaltenköpfe wie im Tabellenblatt — nur am großen Bildschirm, am Handy stehen die Angaben untereinander. */}
-      <div className="mb-1 hidden items-center gap-2 text-xs font-medium text-slate-400 lg:flex">
-        <span className="w-4 shrink-0" />
-        <span className="w-6 shrink-0" />
-        <span className="w-14 shrink-0">ca. Min.</span>
-        <span className="w-24 shrink-0">bis Uhrzeit</span>
-        <span className="min-w-0 flex-[2_1_0%]">Was ist heute zu tun (in dieser Reihenfolge)</span>
-        <span className="min-w-0 flex-[1_1_0%]">Gewinn/Verlust</span>
-        <span className="min-w-0 flex-[1.5_1_0%]">Infos, Stand, Fragen, nächste Schritte</span>
-        <span className="w-8 shrink-0" />
-      </div>
-
-      <div className="space-y-5">
-        {BLOECKE.map((b) => {
-          const zeilen = entwurf.zeilen.filter((z) => z.block === b.id)
-          const minuten = kennzahlen(zeilen).minuten
-          return (
-            <section key={b.id} aria-label={b.titel}>
-              <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 border-b border-slate-100 pb-1">
-                <h4 className="text-sm font-semibold text-slate-700">
-                  {b.titel} <span className="text-xs font-normal text-slate-400">· {b.hinweis}</span>
-                </h4>
-                {minuten > 0 && <span className="text-xs text-slate-400">{fmtDauer(minuten)} geplant</span>}
-              </div>
-              <div className="space-y-3 lg:space-y-1.5">
-                {zeilen.map((z, i) => {
-                  const nummer = zeilenNummer(b, i)
-                  const name = z.was.trim() || `Zeile ${nummer}`
-                  // Am Handy erscheinen Ergebnis und Stand erst, wenn die Zeile einen Text hat — sonst wird das Blatt zu lang.
-                  const nurMitText = z.was.trim() === '' ? 'hidden lg:block' : ''
-                  return (
-                    <div key={z.id} className="flex flex-wrap items-center gap-2 lg:flex-nowrap">
-                      <input type="checkbox" className="h-4 w-4 shrink-0" checked={!!z.erledigt} onChange={(e) => aendereZeile(z.id, { erledigt: e.target.checked })} aria-label={`${name} erledigt`} title="erledigt" />
-                      <span className="w-6 shrink-0 text-xs font-semibold text-slate-400">{nummer}</span>
-                      <input
-                        type="number"
-                        min={0}
-                        step={5}
-                        inputMode="numeric"
-                        className={`${feldSchmal} w-14 shrink-0`}
-                        value={z.dauerMin ?? ''}
-                        onChange={(e) => {
-                          const zahl = Math.round(Number(e.target.value))
-                          aendereZeile(z.id, { dauerMin: e.target.value === '' || !Number.isFinite(zahl) || zahl <= 0 ? undefined : zahl })
-                        }}
-                        placeholder="Min."
-                        aria-label={`${name}: ca. Minuten`}
-                        title="ca. Minuten"
-                      />
-                      <span className="text-xs text-slate-400 lg:hidden">bis</span>
-                      <input
-                        type="time"
-                        className={`${feldSchmal} w-24 shrink-0`}
-                        value={z.bisUhr ?? ''}
-                        onChange={(e) => aendereZeile(z.id, { bisUhr: e.target.value || undefined })}
-                        aria-label={`${name}: bis Uhrzeit`}
-                        title="bis Uhrzeit"
-                      />
-                      <button
-                        onClick={() => entferneZeile(z.id)}
-                        className="ml-auto flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-slate-300 hover:bg-rose-50 hover:text-rose-600 lg:order-last lg:ml-0"
-                        aria-label={`${name} entfernen`}
-                        title="Zeile entfernen"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                      <input
-                        className={`${feldKlasse} min-w-0 basis-full lg:flex-[2_1_0%] ${z.erledigt ? 'text-slate-400 line-through' : ''}`}
-                        value={z.was}
-                        onChange={(e) => aendereZeile(z.id, { was: e.target.value })}
-                        placeholder="Was ist zu tun?"
-                        aria-label={`${b.titel} ${nummer}: Was ist zu tun?`}
-                      />
-                      <input
-                        className={`${feldKlasse} min-w-0 basis-full lg:flex-[1_1_0%] ${nurMitText}`}
-                        value={z.ergebnis ?? ''}
-                        onChange={(e) => aendereZeile(z.id, { ergebnis: e.target.value })}
-                        placeholder="Gewinn/Verlust – was hat es gebracht?"
-                        aria-label={`${name}: Gewinn/Verlust`}
-                      />
-                      <textarea
-                        rows={1}
-                        className={`${feldKlasse} min-h-[2.125rem] min-w-0 basis-full lg:flex-[1.5_1_0%] ${nurMitText}`}
-                        value={z.stand ?? ''}
-                        onChange={(e) => aendereZeile(z.id, { stand: e.target.value })}
-                        placeholder="Infos, Stand, Fragen, nächste Schritte"
-                        aria-label={`${name}: Infos, aktueller Stand, Fragen, nächste Schritte`}
-                      />
-                    </div>
-                  )
-                })}
-              </div>
-              <button onClick={() => neueZeile(b.id)} className="mt-2 inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-xs font-medium text-accent-600 hover:bg-accent-50">
-                <Plus size={13} /> Zeile
-              </button>
-            </section>
-          )
-        })}
-      </div>
-
-      <div className="mt-5">
-        <Field label="Anrufe">
-          <textarea
-            className={`${inputClass} min-h-24`}
-            value={entwurf.anrufe}
-            onChange={(e) => aendere({ ...entwurf, anrufe: e.target.value })}
-            placeholder="Wen rufst du heute an, wer hat angerufen, was ist dabei herausgekommen?"
-          />
-        </Field>
-      </div>
-
-      {leiste}
+      {alle.length > VORSCHLAEGE_SICHTBAR && (
+        <button onClick={() => setAlleZeigen(!alleZeigen)} className="mt-2 rounded-md px-1.5 py-1 text-xs font-medium text-accent-600 hover:bg-accent-50" aria-expanded={alleZeigen}>
+          {alleZeigen ? 'weniger anzeigen' : `${alle.length - VORSCHLAEGE_SICHTBAR} weitere anzeigen`}
+        </button>
+      )}
     </Card>
   )
 }
