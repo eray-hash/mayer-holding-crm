@@ -61,6 +61,7 @@ export function Gesuche() {
           {zeilen.map(({ gesuch: g, kunde, bereich, treffer }) => {
             const schluessel = `${kunde.id}:${g.id}`
             const auf = offen === schluessel
+            const sicher = treffer.filter((t) => t.offen.length === 0).length
             const kontaktLink = bereich === 'immobilienkunden' ? `/immobilien/kunden/${kunde.id}?tab=stammdatenblatt` : kundeDetailPfad(bereich, kunde.id)
             return (
               <div key={schluessel} className={g.erledigt ? 'opacity-60' : ''}>
@@ -82,10 +83,13 @@ export function Gesuche() {
                   <button
                     onClick={() => setOffen(auf ? null : schluessel)}
                     disabled={treffer.length === 0}
-                    className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-medium ${treffer.length > 0 ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : 'bg-slate-50 text-slate-400'}`}
+                    className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-medium ${
+                      sicher > 0 ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : treffer.length > 0 ? 'bg-amber-50 text-amber-700 hover:bg-amber-100' : 'bg-slate-50 text-slate-400'
+                    }`}
+                    title="Treffer: alle Angaben passen. Zu prüfen: Beim Objekt fehlt eine Angabe (z. B. der Kaufpreis), deshalb ist der Abgleich nicht sicher."
                     aria-expanded={auf}
                   >
-                    {treffer.length === 0 ? 'kein Treffer' : `${treffer.length} ${treffer.length === 1 ? 'Treffer' : 'Treffer'}`}
+                    {treffer.length === 0 ? 'kein Treffer' : [sicher > 0 ? `${sicher} Treffer` : '', treffer.length - sicher > 0 ? `${treffer.length - sicher} zu prüfen` : ''].filter(Boolean).join(' · ')}
                     {treffer.length > 0 && <ChevronDown size={13} className={auf ? 'rotate-180' : ''} />}
                   </button>
                 </div>

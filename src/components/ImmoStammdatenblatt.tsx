@@ -209,7 +209,9 @@ export function ImmoStammdatenblatt({ kunde }: { kunde: Kunde }) {
                 {!g.erledigt && (
                   <div className="mt-2 border-t border-slate-100 pt-2">
                     <div className="mb-1 text-xs font-medium text-slate-500">
-                      {treffer.length === 0 ? 'Zurzeit kein passendes Objekt im Bestand.' : `${treffer.length} ${treffer.length === 1 ? 'passendes Objekt' : 'passende Objekte'}:`}
+                      {treffer.length === 0
+                        ? 'Zurzeit kein passendes Objekt im Bestand.'
+                        : `${treffer.filter((t) => t.offen.length === 0).length} passend, ${treffer.filter((t) => t.offen.length > 0).length} zu prüfen (dort fehlt beim Objekt eine Angabe):`}
                     </div>
                     <ul className="space-y-1">
                       {treffer.map((t) => (
