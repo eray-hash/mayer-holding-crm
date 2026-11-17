@@ -335,12 +335,15 @@ export type PotenzialAnalyse = {
 export type Vorlage = {
   id: string
   // 'briefkopf' ist kein Schriftstück, sondern die eine Zeile mit den Briefkopf-Angaben (siehe data/briefkopf.ts).
-  kategorie: 'vollmacht' | 'schreiben' | 'vertraege' | 'briefkopf'
+  kategorie: 'vollmacht' | 'schreiben' | 'vertraege' | 'formulare' | 'ki' | 'briefkopf'
   name: string
   typ: string
   zuletztGeaendert: string
   text: string
   formularPfad?: string // gesetzt, wenn diese Vorlage ein echtes, ausfüllbares digitales Formular hat
+  // Vorlage als Datei (Word, PDF, Excel, Bild) statt als Text: liegt in der geschützten Ablage
+  // "kunden-dokumente" unter vorlagen/<bereich>/… und wird beim Klick über einen kurz gültigen Link geöffnet.
+  datei?: { pfad: string; name: string; typ: string; groesse: string }
 }
 
 // ---------- Immobilien ----------

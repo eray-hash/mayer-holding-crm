@@ -350,6 +350,9 @@ type Action =
   | { type: 'ADD_MAIL_VORLAGE'; vorlage: MailVorlage }
   | { type: 'UPDATE_MAIL_VORLAGE'; id: string; patch: Partial<MailVorlage> }
   | { type: 'DELETE_MAIL_VORLAGE'; id: string }
+  // Vorlagen, die als Datei vorliegen, lassen sich aus der Liste nehmen oder in eine andere Rubrik legen.
+  | { type: 'DELETE_VORLAGE'; id: string }
+  | { type: 'SET_VORLAGE_KATEGORIE'; id: string; kategorie: Vorlage['kategorie'] }
   | { type: 'ADD_VOICE_TASK'; bereich: KundeBereich; kundeId: string; text: string; followUp?: FollowUp }
   | { type: 'ADD_POTENZIAL_NOTIZ'; bereich: KundeBereich; kundeId: string; titel: string; begruendung: string; followUp?: FollowUp }
   | { type: 'SET_KAEUFERPROFIL'; bereich: KundeBereich; kundeId: string; profil: Kaeuferprofil }
@@ -958,6 +961,26 @@ function reducer(state: AppData, action: Action): AppData {
       }
     case 'DELETE_MAIL_VORLAGE':
       return { ...state, mailVorlagen: state.mailVorlagen.filter((v) => v.id !== action.id) }
+    case 'DELETE_VORLAGE':
+    case 'SET_VORLAGE_KATEGORIE': {
+      // Kennungen sind über alle Bereiche eindeutig — die Vorlage wird dort geändert, wo sie liegt.
+      const aendere = (liste: Vorlage[]): Vorlage[] => {
+        if (!liste.some((v) => v.id === action.id)) return liste
+        return action.type === 'DELETE_VORLAGE'
+          ? liste.filter((v) => v.id !== action.id)
+          : liste.map((v) => (v.id === action.id ? { ...v, kategorie: action.kategorie, zuletztGeaendert: today() } : v))
+      }
+      return {
+        ...state,
+        vorlagenBeratung: aendere(state.vorlagenBeratung),
+        vorlagenImmobilien: aendere(state.vorlagenImmobilien),
+        vorlagenErben: aendere(state.vorlagenErben),
+        vorlagenBetriebsuebergabe: aendere(state.vorlagenBetriebsuebergabe),
+        vorlagenBetriebsformen: aendere(state.vorlagenBetriebsformen),
+        vorlagenAkademie: aendere(state.vorlagenAkademie),
+        vorlagenFinanzierungen: aendere(state.vorlagenFinanzierungen),
+      }
+    }
     case 'ADD_VOICE_TASK': {
       const activity: ActivityEntry = {
         id: uid('act'),

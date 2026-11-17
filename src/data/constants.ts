@@ -44,10 +44,12 @@ export const PRIORITAET_COLOR: Record<Prioritaet, string> = {
   Niedrig: 'bg-slate-100 text-slate-600',
 }
 
-export const VORLAGEN_KATEGORIEN: { id: 'vollmacht' | 'schreiben' | 'vertraege'; label: string }[] = [
+export const VORLAGEN_KATEGORIEN: { id: 'vollmacht' | 'schreiben' | 'vertraege' | 'formulare' | 'ki'; label: string }[] = [
   { id: 'vollmacht', label: 'Vollmacht' },
   { id: 'schreiben', label: 'Schreiben' },
   { id: 'vertraege', label: 'Verträge' },
+  { id: 'formulare', label: 'Formulare & Checklisten' },
+  { id: 'ki', label: 'KI-Anweisungen' },
 ]
 
 // "Verantwortlich"-Dropdown in allen Kunden-/Mandanten-/Objekt-/Projekt-Listen. Lebender Binding

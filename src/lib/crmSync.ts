@@ -258,6 +258,7 @@ function vorlageToRow(bereich: Bereich, v: Vorlage) {
     zuletzt_geaendert: v.zuletztGeaendert,
     text: v.text,
     formular_pfad: v.formularPfad ?? null,
+    datei: v.datei ?? null,
   }
 }
 
@@ -270,6 +271,7 @@ function rowToVorlage(row: any): Vorlage {
     zuletztGeaendert: row.zuletzt_geaendert,
     text: row.text,
     formularPfad: row.formular_pfad ?? undefined,
+    datei: row.datei ?? undefined,
   }
 }
 

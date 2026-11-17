@@ -9,6 +9,8 @@ const VORLAGEN_LINKS = [
   { kind: 'vollmacht', label: 'Vollmacht' },
   { kind: 'schreiben', label: 'Schreiben' },
   { kind: 'vertraege', label: 'Verträge' },
+  { kind: 'formulare', label: 'Formulare & Checklisten' },
+  { kind: 'ki', label: 'KI-Anweisungen' },
 ]
 
 export function SidebarImmobilien({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {

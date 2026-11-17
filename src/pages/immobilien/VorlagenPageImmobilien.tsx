@@ -5,5 +5,5 @@ import { VorlagenListe } from '../../components/VorlagenListe'
 export function VorlagenPageImmobilien() {
   const { kind } = useParams()
   const { state } = useApp()
-  return <VorlagenListe kategorie={kind ?? 'vollmacht'} vorlagen={state.vorlagenImmobilien} />
+  return <VorlagenListe kategorie={kind ?? 'vollmacht'} vorlagen={state.vorlagenImmobilien} rubriken={['vollmacht', 'schreiben', 'vertraege', 'formulare', 'ki']} />
 }
