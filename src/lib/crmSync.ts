@@ -41,6 +41,8 @@ import type {
   Zeiteintrag,
   Tagesplan,
   Wochenplan,
+  Weitergabe,
+  ObjektAbrechnung,
   ToDoEintrag,
   ToDoFreigabe,
   Verbindlichkeit,
@@ -647,6 +649,8 @@ const SIMPLE_SYNCS: { table: string; key: keyof AppData; label: (item: any) => s
   { table: 'abteilung_eintraege', key: 'zeiteintraege', label: () => 'Zeiteintrag', toRow: abteilungZeile('zeit') },
   { table: 'abteilung_eintraege', key: 'tagesplaene', label: () => 'Tagesablauf', toRow: abteilungZeile('tagesplan') },
   { table: 'abteilung_eintraege', key: 'wochenplaene', label: () => 'Wochenplan', toRow: abteilungZeile('wochenplan') },
+  { table: 'abteilung_eintraege', key: 'weitergaben', label: () => 'Weitergabe', toRow: abteilungZeile('weitergabe') },
+  { table: 'abteilung_eintraege', key: 'abrechnungen', label: () => 'Abrechnung', toRow: abteilungZeile('abrechnung') },
   { table: 'todos', key: 'todos', label: (t: ToDoEintrag) => `Aufgabe ${t.aufgabe}`, toRow: todoToRow },
   { table: 'todo_freigaben', key: 'todoFreigaben', label: (f: ToDoFreigabe) => `To-Do-Freigabe an ${f.empfaengerEmail}`, toRow: todoFreigabeToRow },
   { table: 'verbindlichkeiten', key: 'verbindlichkeiten', label: (v: Verbindlichkeit) => `Verbindlichkeit ${v.lieferant}`, toRow: verbindlichkeitToRow },
@@ -907,6 +911,8 @@ export type HydratedData = {
   zeiteintraege: Zeiteintrag[]
   tagesplaene: Tagesplan[]
   wochenplaene: Wochenplan[]
+  weitergaben: Weitergabe[]
+  abrechnungen: ObjektAbrechnung[]
   todos: ToDoEintrag[]
   todoFreigaben: ToDoFreigabe[]
   verbindlichkeiten: Verbindlichkeit[]
@@ -1048,6 +1054,8 @@ export async function hydrateFromSupabase(): Promise<HydratedData | null> {
     zeiteintraege: abteilung('zeit') as Zeiteintrag[],
     tagesplaene: abteilung('tagesplan') as Tagesplan[],
     wochenplaene: abteilung('wochenplan') as Wochenplan[],
+    weitergaben: abteilung('weitergabe') as Weitergabe[],
+    abrechnungen: abteilung('abrechnung') as ObjektAbrechnung[],
     todos: (todosRes.data ?? []).map(rowToTodo),
     todoFreigaben: (todoFreigabenRes.data ?? []).map(rowToTodoFreigabe),
     verbindlichkeiten: (verbindlichkeitenRes.data ?? []).map(rowToVerbindlichkeit),

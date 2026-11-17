@@ -719,6 +719,41 @@ export type Tagesplan = {
   aktualisiertAm: string
 }
 
+/** Nachweis, wem welche Objekte wann angeboten wurden (Grundlage für den Provisionsanspruch). */
+export type Weitergabe = {
+  id: string
+  datum: string // ISO-Datum
+  /** Empfänger als Text (Name, Firma). */
+  an: string
+  /** Kontakt im CRM, falls der Empfänger dort geführt wird. */
+  kontaktId?: string
+  objektIds: string[]
+  /** Unter welcher Bezeichnung jedes Objekt in der Liste stand (objektId → Text) — so ist nachvollziehbar, was der Empfänger gesehen hat. */
+  bezeichnungen: Record<string, string>
+  /** Welche Angaben mitgegeben wurden, z. B. ['Bezeichnung', 'Ort', 'Objektart', 'Kaufpreis']. */
+  angaben: string[]
+  /** Auf welchem Weg: 'Text kopiert', 'Ausdruck', … */
+  weg: string
+  /** Lag vor der Weitergabe eine Vertraulichkeits- oder Nichtumgehungsvereinbarung vor? */
+  vereinbarung: 'keine' | 'nda' | 'nichtumgehung' | 'beides'
+  notiz?: string
+  von: string
+}
+
+/** Abrechnung eines Objekts/Projekts: Wer hat wie viel Zeit investiert, was kostet sie, wie wird die Provision geteilt. id = objektId. */
+export type ObjektAbrechnung = {
+  id: string
+  objektId: string
+  /** Erwartete oder erzielte Provision in Euro. */
+  provision?: number
+  /** Stundensatz je Mitarbeiter (Name → Euro je Stunde). */
+  stundensaetze: Record<string, number>
+  /** Fester Anteil an der Provision in Prozent je Mitarbeiter; leer = Aufteilung nach Zeitanteil. */
+  anteile: Record<string, number>
+  notiz: string
+  aktualisiertAm: string
+}
+
 /** Wochenplan eines Mitarbeiters. id = `${mitarbeiter}|${wocheAb}`; zellen: Schlüssel `${tag}-${stunde}` (tag 0 = Montag, stunde 9–20). */
 export type Wochenplan = {
   id: string

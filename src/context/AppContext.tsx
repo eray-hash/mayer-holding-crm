@@ -25,6 +25,8 @@ import type {
   Zeiteintrag,
   Tagesplan,
   Wochenplan,
+  Weitergabe,
+  ObjektAbrechnung,
   ToDoEintrag,
   ToDoFreigabe,
   Verbindlichkeit,
@@ -108,6 +110,8 @@ export type AppData = {
   zeiteintraege: Zeiteintrag[]
   tagesplaene: Tagesplan[]
   wochenplaene: Wochenplan[]
+  weitergaben: Weitergabe[]
+  abrechnungen: ObjektAbrechnung[]
   todos: ToDoEintrag[]
   todoFreigaben: ToDoFreigabe[]
   verbindlichkeiten: Verbindlichkeit[]
@@ -175,6 +179,8 @@ function leereGeteilteEntities(data: AppData): AppData {
     zeiteintraege: [],
     tagesplaene: [],
     wochenplaene: [],
+    weitergaben: [],
+    abrechnungen: [],
     todos: [],
     todoFreigaben: [],
     verbindlichkeiten: [],
@@ -219,6 +225,8 @@ function buildSeed(): AppData {
     zeiteintraege: [],
     tagesplaene: [],
     wochenplaene: [],
+    weitergaben: [],
+    abrechnungen: [],
     todos: [],
     todoFreigaben: [],
     verbindlichkeiten: [],
@@ -273,6 +281,8 @@ function loadInitial(): AppData {
         if (!Array.isArray(parsed.zeiteintraege)) parsed.zeiteintraege = []
         if (!Array.isArray(parsed.tagesplaene)) parsed.tagesplaene = []
         if (!Array.isArray(parsed.wochenplaene)) parsed.wochenplaene = []
+        if (!Array.isArray(parsed.weitergaben)) parsed.weitergaben = []
+        if (!Array.isArray(parsed.abrechnungen)) parsed.abrechnungen = []
         if (!Array.isArray(parsed.todos)) parsed.todos = []
         if (!Array.isArray(parsed.todoFreigaben)) parsed.todoFreigaben = []
         if (!Array.isArray(parsed.verbindlichkeiten)) parsed.verbindlichkeiten = []
@@ -396,6 +406,9 @@ type Action =
   | { type: 'LOESCHE_ZEITEINTRAG'; id: string }
   | { type: 'SPEICHERE_TAGESPLAN'; plan: Tagesplan }
   | { type: 'SPEICHERE_WOCHENPLAN'; plan: Wochenplan }
+  | { type: 'SPEICHERE_WEITERGABE'; weitergabe: Weitergabe }
+  | { type: 'LOESCHE_WEITERGABE'; id: string }
+  | { type: 'SPEICHERE_ABRECHNUNG'; abrechnung: ObjektAbrechnung }
   | { type: 'DELETE_ABWESENHEIT'; id: string }
   | { type: 'ADD_TODO'; todo: ToDoEintrag }
   | { type: 'UPDATE_TODO'; id: string; patch: Partial<ToDoEintrag> }
@@ -1118,6 +1131,8 @@ function reducer(state: AppData, action: Action): AppData {
         zeiteintraege: action.data.zeiteintraege,
         tagesplaene: action.data.tagesplaene,
         wochenplaene: action.data.wochenplaene,
+        weitergaben: action.data.weitergaben,
+        abrechnungen: action.data.abrechnungen,
         todos: action.data.todos,
         todoFreigaben: action.data.todoFreigaben,
         verbindlichkeiten: action.data.verbindlichkeiten,
@@ -1155,6 +1170,12 @@ function reducer(state: AppData, action: Action): AppData {
       return { ...state, tagesplaene: ersetzeOderVoran(state.tagesplaene, action.plan) }
     case 'SPEICHERE_WOCHENPLAN':
       return { ...state, wochenplaene: ersetzeOderVoran(state.wochenplaene, action.plan) }
+    case 'SPEICHERE_WEITERGABE':
+      return { ...state, weitergaben: ersetzeOderVoran(state.weitergaben, action.weitergabe) }
+    case 'LOESCHE_WEITERGABE':
+      return { ...state, weitergaben: state.weitergaben.filter((w) => w.id !== action.id) }
+    case 'SPEICHERE_ABRECHNUNG':
+      return { ...state, abrechnungen: ersetzeOderVoran(state.abrechnungen, action.abrechnung) }
     case 'ADD_ABWESENHEIT':
       return { ...state, abwesenheiten: [action.abwesenheit, ...state.abwesenheiten] }
     case 'DELETE_ABWESENHEIT':
