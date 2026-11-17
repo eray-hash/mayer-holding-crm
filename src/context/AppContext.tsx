@@ -21,6 +21,10 @@ import type {
   MailVorlage,
   Notiz,
   Abwesenheit,
+  ImmoFrage,
+  Zeiteintrag,
+  Tagesplan,
+  Wochenplan,
   ToDoEintrag,
   ToDoFreigabe,
   Verbindlichkeit,
@@ -100,6 +104,10 @@ export type AppData = {
   mailVorlagen: MailVorlage[]
   notizen: Notiz[]
   abwesenheiten: Abwesenheit[]
+  immoFragen: ImmoFrage[]
+  zeiteintraege: Zeiteintrag[]
+  tagesplaene: Tagesplan[]
+  wochenplaene: Wochenplan[]
   todos: ToDoEintrag[]
   todoFreigaben: ToDoFreigabe[]
   verbindlichkeiten: Verbindlichkeit[]
@@ -163,6 +171,10 @@ function leereGeteilteEntities(data: AppData): AppData {
     mailVorlagen: [],
     notizen: [],
     abwesenheiten: [],
+    immoFragen: [],
+    zeiteintraege: [],
+    tagesplaene: [],
+    wochenplaene: [],
     todos: [],
     todoFreigaben: [],
     verbindlichkeiten: [],
@@ -203,6 +215,10 @@ function buildSeed(): AppData {
     mailVorlagen: seedMailVorlagen,
     notizen: [],
     abwesenheiten: [],
+    immoFragen: [],
+    zeiteintraege: [],
+    tagesplaene: [],
+    wochenplaene: [],
     todos: [],
     todoFreigaben: [],
     verbindlichkeiten: [],
@@ -253,6 +269,10 @@ function loadInitial(): AppData {
         if (!Array.isArray(parsed.mailVorlagen)) parsed.mailVorlagen = seedMailVorlagen
         if (!Array.isArray(parsed.notizen)) parsed.notizen = []
         if (!Array.isArray(parsed.abwesenheiten)) parsed.abwesenheiten = []
+        if (!Array.isArray(parsed.immoFragen)) parsed.immoFragen = []
+        if (!Array.isArray(parsed.zeiteintraege)) parsed.zeiteintraege = []
+        if (!Array.isArray(parsed.tagesplaene)) parsed.tagesplaene = []
+        if (!Array.isArray(parsed.wochenplaene)) parsed.wochenplaene = []
         if (!Array.isArray(parsed.todos)) parsed.todos = []
         if (!Array.isArray(parsed.todoFreigaben)) parsed.todoFreigaben = []
         if (!Array.isArray(parsed.verbindlichkeiten)) parsed.verbindlichkeiten = []
@@ -369,6 +389,13 @@ type Action =
   | { type: 'TOGGLE_NOTIZ'; id: string }
   | { type: 'DELETE_NOTIZ'; id: string }
   | { type: 'ADD_ABWESENHEIT'; abwesenheit: Abwesenheit }
+  // Arbeitsorganisation der Abteilung: Eintrag anlegen oder ändern (gleiche id = ersetzen) und löschen.
+  | { type: 'SPEICHERE_FRAGE'; frage: ImmoFrage }
+  | { type: 'LOESCHE_FRAGE'; id: string }
+  | { type: 'SPEICHERE_ZEITEINTRAG'; eintrag: Zeiteintrag }
+  | { type: 'LOESCHE_ZEITEINTRAG'; id: string }
+  | { type: 'SPEICHERE_TAGESPLAN'; plan: Tagesplan }
+  | { type: 'SPEICHERE_WOCHENPLAN'; plan: Wochenplan }
   | { type: 'DELETE_ABWESENHEIT'; id: string }
   | { type: 'ADD_TODO'; todo: ToDoEintrag }
   | { type: 'UPDATE_TODO'; id: string; patch: Partial<ToDoEintrag> }
@@ -426,6 +453,11 @@ function setKundenListe(state: AppData, bereich: KundeBereich, liste: Kunde[]): 
 
 function getKundenListe(state: AppData, bereich: KundeBereich): Kunde[] {
   return KUNDEN_BEREICHE.find((b) => b.id === bereich)!.get(state)
+}
+
+/** Eintrag mit derselben id ersetzen, sonst vorn anfügen. */
+function ersetzeOderVoran<T extends { id: string }>(liste: T[], eintrag: T): T[] {
+  return liste.some((x) => x.id === eintrag.id) ? liste.map((x) => (x.id === eintrag.id ? eintrag : x)) : [eintrag, ...liste]
 }
 
 function reducer(state: AppData, action: Action): AppData {
@@ -1082,6 +1114,10 @@ function reducer(state: AppData, action: Action): AppData {
         mailVorlagen: action.data.mailVorlagen,
         notizen: action.data.notizen,
         abwesenheiten: action.data.abwesenheiten,
+        immoFragen: action.data.immoFragen,
+        zeiteintraege: action.data.zeiteintraege,
+        tagesplaene: action.data.tagesplaene,
+        wochenplaene: action.data.wochenplaene,
         todos: action.data.todos,
         todoFreigaben: action.data.todoFreigaben,
         verbindlichkeiten: action.data.verbindlichkeiten,
@@ -1107,6 +1143,18 @@ function reducer(state: AppData, action: Action): AppData {
       return { ...state, notizen: state.notizen.map((n) => (n.id === action.id ? { ...n, erledigt: !n.erledigt } : n)) }
     case 'DELETE_NOTIZ':
       return { ...state, notizen: state.notizen.filter((n) => n.id !== action.id) }
+    case 'SPEICHERE_FRAGE':
+      return { ...state, immoFragen: ersetzeOderVoran(state.immoFragen, action.frage) }
+    case 'LOESCHE_FRAGE':
+      return { ...state, immoFragen: state.immoFragen.filter((f) => f.id !== action.id) }
+    case 'SPEICHERE_ZEITEINTRAG':
+      return { ...state, zeiteintraege: ersetzeOderVoran(state.zeiteintraege, action.eintrag) }
+    case 'LOESCHE_ZEITEINTRAG':
+      return { ...state, zeiteintraege: state.zeiteintraege.filter((z) => z.id !== action.id) }
+    case 'SPEICHERE_TAGESPLAN':
+      return { ...state, tagesplaene: ersetzeOderVoran(state.tagesplaene, action.plan) }
+    case 'SPEICHERE_WOCHENPLAN':
+      return { ...state, wochenplaene: ersetzeOderVoran(state.wochenplaene, action.plan) }
     case 'ADD_ABWESENHEIT':
       return { ...state, abwesenheiten: [action.abwesenheit, ...state.abwesenheiten] }
     case 'DELETE_ABWESENHEIT':

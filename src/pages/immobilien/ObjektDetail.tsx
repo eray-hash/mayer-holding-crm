@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
-import { ArrowLeft, Folder, FolderOpen, File, Upload, Plus, Radar, ExternalLink, Users, Sparkles, CheckCircle2, XCircle } from 'lucide-react'
+import { ArrowLeft, Folder, FolderOpen, File, Upload, Plus, Radar, ExternalLink, Users, Sparkles, CheckCircle2, XCircle, Trash2 } from 'lucide-react'
 import { useApp, type AppData } from '../../context/AppContext'
 import { StatusWidget } from '../../components/StatusWidget'
 import { Card, Modal, Field, inputClass, PrimaryButton, SecondaryButton, EmptyState, StatusBadge } from '../../components/ui'
@@ -12,7 +12,7 @@ import { PRIORITAETEN, gruppeLabel, LUKRATIVITAET_COLOR } from '../../data/const
 import { DOKUMENT_ORDNER } from '../../types'
 import type { DokumentOrdnerName, Prioritaet, FinanzierungStatus, KundeBereich, Dokument } from '../../types'
 import { pruefeUnterlagenVollstaendigkeit } from '../../data/objektUnterlagenPflicht'
-import { ladeObjektDokumentHoch, erzeugeDownloadUrl, leseAlsBase64 } from '../../lib/objektDokumenteStorage'
+import { ladeObjektDokumentHoch, erzeugeDownloadUrl, leseAlsBase64, loescheObjektDokument } from '../../lib/objektDokumenteStorage'
 import { classifyObjektDokument, generateExpose, isEmailGatewayConfigured } from '../../lib/emailGateway'
 import type { Objekt } from '../../types'
 import { ObjektVerkaufsdatenblatt } from '../../components/ObjektVerkaufsdatenblatt'
@@ -81,12 +81,32 @@ export function ObjektDetail() {
   async function dokumentOeffnen(d: Dokument) {
     if (!d.url) return
     setOeffneFehler('')
+    // Fenster sofort öffnen (sonst blockt der Browser es nach dem Warten), Adresse danach setzen.
+    const fenster = window.open('', '_blank')
     try {
       const url = await erzeugeDownloadUrl(d.url)
-      window.open(url, '_blank', 'noopener,noreferrer')
+      if (fenster) fenster.location.href = url
+      else window.location.href = url
     } catch (err) {
+      fenster?.close()
       setOeffneFehler(err instanceof Error ? err.message : 'Datei konnte nicht geöffnet werden.')
     }
+  }
+
+  // Aufräumen der Ablage: eine Datei in einen anderen Ordner dieses Objekts legen oder ganz löschen.
+  const ablage = objekt.dokumente
+  function dokumentVerschieben(d: Dokument, von: DokumentOrdnerName, nach: DokumentOrdnerName) {
+    if (von === nach) return
+    const dokumente = { ...ablage }
+    dokumente[von] = (dokumente[von] ?? []).filter((x) => x.id !== d.id)
+    dokumente[nach] = [...(dokumente[nach] ?? []).filter((x) => x.id !== d.id), d]
+    dispatch({ type: 'UPDATE_OBJEKT', id: objektId, patch: { dokumente } })
+  }
+
+  async function dokumentLoeschen(d: Dokument, von: DokumentOrdnerName) {
+    if (!window.confirm(`„${d.name}" endgültig löschen? Die Datei wird auch aus der Ablage entfernt.`)) return
+    if (d.url) await loescheObjektDokument(d.url).catch(() => undefined)
+    dispatch({ type: 'UPDATE_OBJEKT', id: objektId, patch: { dokumente: { ...ablage, [von]: (ablage[von] ?? []).filter((x) => x.id !== d.id) } } })
   }
 
   const unterlagenCheck = pruefeUnterlagenVollstaendigkeit(objekt)
@@ -300,7 +320,7 @@ export function ObjektDetail() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-slate-100 bg-slate-50 text-left text-xs font-medium uppercase tracking-wide text-slate-400">
-                  <th className="px-4 py-3">Name</th><th className="px-4 py-3">Typ</th><th className="px-4 py-3">Datum</th><th className="px-4 py-3">Größe</th>
+                  <th className="px-4 py-3">Name</th><th className="px-4 py-3">Datum</th><th className="px-4 py-3">Größe</th><th className="px-4 py-3">Ordner</th><th className="px-4 py-3"></th>
                 </tr>
               </thead>
               <tbody>
@@ -315,13 +335,35 @@ export function ObjektDetail() {
                         <span className="flex items-center gap-2"><File size={14} className="text-slate-400" />{d.name}</span>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-slate-500">{d.typ}</td>
-                    <td className="px-4 py-3 text-slate-500">{fmtDate(d.datum)}</td>
-                    <td className="px-4 py-3 text-slate-500">{d.groesse}</td>
+                    <td className="whitespace-nowrap px-4 py-3 text-slate-500">{fmtDate(d.datum)}</td>
+                    <td className="whitespace-nowrap px-4 py-3 text-slate-500">{d.groesse}</td>
+                    <td className="px-4 py-2">
+                      <select
+                        value={ordner}
+                        onChange={(e) => dokumentVerschieben(d, ordner as DokumentOrdnerName, e.target.value as DokumentOrdnerName)}
+                        className="rounded-md border border-slate-200 bg-white px-1.5 py-1 text-xs text-slate-600"
+                        title="In einen anderen Ordner legen"
+                        aria-label={`${d.name} in einen anderen Ordner legen`}
+                      >
+                        {DOKUMENT_ORDNER.map((o) => (
+                          <option key={o} value={o}>{o}</option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="px-4 py-2 text-right">
+                      <button
+                        onClick={() => dokumentLoeschen(d, ordner as DokumentOrdnerName)}
+                        className="inline-flex items-center rounded-md border border-slate-200 p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                        title="Datei löschen"
+                        aria-label={`${d.name} löschen`}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </td>
                   </tr>
                 ))}
                 {(objekt.dokumente[ordner] ?? []).length === 0 && (
-                  <tr><td colSpan={4} className="px-4 py-8 text-center text-slate-400">Keine Dateien in diesem Ordner.</td></tr>
+                  <tr><td colSpan={5} className="px-4 py-8 text-center text-slate-400">Keine Dateien in diesem Ordner.</td></tr>
                 )}
               </tbody>
             </table>

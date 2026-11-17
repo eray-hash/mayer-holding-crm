@@ -1,10 +1,10 @@
 import { useState } from 'react'
-import { ExternalLink, FileText, PenLine, Trash2 } from 'lucide-react'
+import { Check, Copy, ExternalLink, FileText, PenLine, Trash2 } from 'lucide-react'
 import type { Vorlage } from '../types'
 import { useApp } from '../context/AppContext'
 import { erzeugeKundenDownloadUrl, loescheKundenDokument } from '../lib/kundenDokumenteStorage'
 import { fmtDate } from '../lib/dates'
-import { Card } from './ui'
+import { Card, Modal, SecondaryButton } from './ui'
 import { VORLAGEN_KATEGORIEN } from '../data/constants'
 import { FormularLinkButtons } from './FormularLink'
 import { VorlageAusfuellenModal } from './VorlageAusfuellenModal'
@@ -16,6 +16,19 @@ export function VorlagenListe({ kategorie, vorlagen, rubriken = STANDARD_RUBRIKE
   const { dispatch } = useApp()
   const [offen, setOffen] = useState<Vorlage | null>(null)
   const [fehler, setFehler] = useState('')
+  // Datei-Vorlagen mit hinterlegtem Text (z. B. KI-Anweisungen): Text ansehen und in die Zwischenablage kopieren.
+  const [textOffen, setTextOffen] = useState<Vorlage | null>(null)
+  const [kopiert, setKopiert] = useState('')
+
+  async function textKopieren(v: Vorlage) {
+    try {
+      await navigator.clipboard.writeText(v.text)
+      setKopiert(v.id)
+      window.setTimeout(() => setKopiert(''), 2500)
+    } catch {
+      setTextOffen(v) // Zwischenablage gesperrt: Text anzeigen, dann lässt er sich von Hand markieren
+    }
+  }
   const label = VORLAGEN_KATEGORIEN.find((k) => k.id === kategorie)?.label ?? kategorie
   const gefiltert = vorlagen.filter((v) => v.kategorie === kategorie)
   // Viele Dateien (übernommene Ordner) nach Namen ordnen; die wenigen Text-Vorlagen behalten ihre gewohnte Reihenfolge.
@@ -96,6 +109,20 @@ export function VorlagenListe({ kategorie, vorlagen, rubriken = STANDARD_RUBRIKE
                             </option>
                           ))}
                         </select>
+                        {v.text.trim() !== '' && (
+                          <>
+                            <button
+                              onClick={() => textKopieren(v)}
+                              className="inline-flex items-center gap-1 rounded-md border border-accent-200 bg-accent-50 px-2.5 py-1 text-xs font-medium text-accent-700 hover:bg-accent-100"
+                              title="Text in die Zwischenablage kopieren"
+                            >
+                              {kopiert === v.id ? <Check size={13} /> : <Copy size={13} />} {kopiert === v.id ? 'Kopiert' : 'Text kopieren'}
+                            </button>
+                            <button onClick={() => setTextOffen(v)} className="rounded-md border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50">
+                              Ansehen
+                            </button>
+                          </>
+                        )}
                         <button
                           onClick={() => dateiOeffnen(v)}
                           className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
@@ -131,6 +158,18 @@ export function VorlagenListe({ kategorie, vorlagen, rubriken = STANDARD_RUBRIKE
       </Card>
 
       {offen && <VorlageAusfuellenModal key={offen.id} vorlage={offen} onClose={() => setOffen(null)} />}
+      <Modal open={textOffen !== null} onClose={() => setTextOffen(null)} title={textOffen?.name ?? ''} width="max-w-3xl">
+        {textOffen && (
+          <div>
+            <pre className="mb-3 max-h-[60vh] select-all overflow-auto whitespace-pre-wrap rounded-lg bg-slate-50 p-3 font-sans text-sm text-slate-700">{textOffen.text}</pre>
+            <div className="flex justify-end">
+              <SecondaryButton onClick={() => textKopieren(textOffen)}>
+                {kopiert === textOffen.id ? <Check size={14} /> : <Copy size={14} />} {kopiert === textOffen.id ? 'Kopiert' : 'Text kopieren'}
+              </SecondaryButton>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   )
 }

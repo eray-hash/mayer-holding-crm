@@ -37,6 +37,10 @@ import type {
   MailVorlage,
   Notiz,
   Abwesenheit,
+  ImmoFrage,
+  Zeiteintrag,
+  Tagesplan,
+  Wochenplan,
   ToDoEintrag,
   ToDoFreigabe,
   Verbindlichkeit,
@@ -515,7 +519,17 @@ function todoToRow(t: ToDoEintrag) {
     geplante_wiedervorlage: t.geplanteWiedervorlage ?? null,
     erledigt_am: t.erledigtAm ?? null,
     erstellt_am: t.erstelltAm,
+    warten_auf: t.wartenAuf ?? null,
+    erhalten_am: t.erhaltenAm ?? null,
+    erledigen_bis: t.erledigenBis ?? null,
+    stundensatz: t.stundensatz ?? null,
   }
+}
+
+// Arbeitsorganisation der Abteilung: vier Sammlungen in einer Tabelle (abteilung_eintraege), je Eintrag
+// eine Zeile — so überschreibt die Frage des einen nie die Antwort des anderen.
+function abteilungZeile(art: string) {
+  return (e: { id: string }) => ({ id: e.id, art, daten: e, updated_at: new Date().toISOString() })
 }
 
 function rowToTodo(row: any): ToDoEintrag {
@@ -540,6 +554,10 @@ function rowToTodo(row: any): ToDoEintrag {
     geplanteWiedervorlage: row.geplante_wiedervorlage ?? undefined,
     erledigtAm: row.erledigt_am ?? undefined,
     erstelltAm: row.erstellt_am,
+    wartenAuf: row.warten_auf ?? undefined,
+    erhaltenAm: row.erhalten_am ?? undefined,
+    erledigenBis: row.erledigen_bis ?? undefined,
+    stundensatz: row.stundensatz ?? undefined,
   }
 }
 
@@ -625,6 +643,10 @@ const SIMPLE_SYNCS: { table: string; key: keyof AppData; label: (item: any) => s
   { table: 'mail_vorlagen', key: 'mailVorlagen', label: (m: MailVorlage) => `Mail-Vorlage ${m.name}`, toRow: mailVorlageToRow },
   { table: 'notizen', key: 'notizen', label: () => 'Notiz', toRow: notizToRow },
   { table: 'abwesenheiten', key: 'abwesenheiten', label: (a: Abwesenheit) => `Abwesenheit ${a.mitarbeiterName}`, toRow: abwesenheitToRow },
+  { table: 'abteilung_eintraege', key: 'immoFragen', label: () => 'Frage an die Geschäftsführung', toRow: abteilungZeile('frage') },
+  { table: 'abteilung_eintraege', key: 'zeiteintraege', label: () => 'Zeiteintrag', toRow: abteilungZeile('zeit') },
+  { table: 'abteilung_eintraege', key: 'tagesplaene', label: () => 'Tagesablauf', toRow: abteilungZeile('tagesplan') },
+  { table: 'abteilung_eintraege', key: 'wochenplaene', label: () => 'Wochenplan', toRow: abteilungZeile('wochenplan') },
   { table: 'todos', key: 'todos', label: (t: ToDoEintrag) => `Aufgabe ${t.aufgabe}`, toRow: todoToRow },
   { table: 'todo_freigaben', key: 'todoFreigaben', label: (f: ToDoFreigabe) => `To-Do-Freigabe an ${f.empfaengerEmail}`, toRow: todoFreigabeToRow },
   { table: 'verbindlichkeiten', key: 'verbindlichkeiten', label: (v: Verbindlichkeit) => `Verbindlichkeit ${v.lieferant}`, toRow: verbindlichkeitToRow },
@@ -881,6 +903,10 @@ export type HydratedData = {
   mailVorlagen: MailVorlage[]
   notizen: Notiz[]
   abwesenheiten: Abwesenheit[]
+  immoFragen: ImmoFrage[]
+  zeiteintraege: Zeiteintrag[]
+  tagesplaene: Tagesplan[]
+  wochenplaene: Wochenplan[]
   todos: ToDoEintrag[]
   todoFreigaben: ToDoFreigabe[]
   verbindlichkeiten: Verbindlichkeit[]
@@ -912,6 +938,7 @@ export async function hydrateFromSupabase(): Promise<HydratedData | null> {
     todoFreigabenRes,
     verbindlichkeitenRes,
     mitarbeiterRes,
+    abteilungRes,
   ] = await Promise.all([
     supabase.from('kunden').select('*'),
     supabase.from('objekte').select('*'),
@@ -933,7 +960,11 @@ export async function hydrateFromSupabase(): Promise<HydratedData | null> {
     supabase.from('todo_freigaben').select('*'),
     supabase.from('verbindlichkeiten').select('*'),
     supabase.from('mitarbeiter').select('name').eq('aktiv', true).order('name'),
+    supabase.from('abteilung_eintraege').select('art, daten'),
   ])
+  // Fehlt diese Tabelle einmal oder antwortet sie nicht, soll deshalb nicht das ganze CRM leer bleiben.
+  if (abteilungRes.error) console.error('[crmSync] abteilung_eintraege:', abteilungRes.error.message)
+  const abteilung = (art: string) => ((abteilungRes.data ?? []) as { art: string; daten: unknown }[]).filter((z) => z.art === art).map((z) => z.daten)
   for (const res of [
     kundenRes,
     objekteRes,
@@ -1013,6 +1044,10 @@ export async function hydrateFromSupabase(): Promise<HydratedData | null> {
     mailVorlagen: (mailVorlagenRes.data ?? []).map(rowToMailVorlage),
     notizen: (notizenRes.data ?? []).map(rowToNotiz),
     abwesenheiten: (abwesenheitenRes.data ?? []).map(rowToAbwesenheit),
+    immoFragen: abteilung('frage') as ImmoFrage[],
+    zeiteintraege: abteilung('zeit') as Zeiteintrag[],
+    tagesplaene: abteilung('tagesplan') as Tagesplan[],
+    wochenplaene: abteilung('wochenplan') as Wochenplan[],
     todos: (todosRes.data ?? []).map(rowToTodo),
     todoFreigaben: (todoFreigabenRes.data ?? []).map(rowToTodoFreigabe),
     verbindlichkeiten: (verbindlichkeitenRes.data ?? []).map(rowToVerbindlichkeit),

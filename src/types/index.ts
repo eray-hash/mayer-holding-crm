@@ -652,6 +652,80 @@ export type ToDoEintrag = {
   geplanteWiedervorlage?: string
   erledigtAm?: string
   erstelltAm: string
+  // Aus der To-do-Vorlage der Immobilienabteilung (Papierformular „To Do", 2026-11): auf wen gewartet wird,
+  // wann die Aufgabe kam, bis wann sie erledigt sein muss, und der Stundensatz für die Zeitaufwandskosten
+  // (Kosten = Ist-Zeit in Minuten / 60 × Stundensatz).
+  wartenAuf?: string
+  erhaltenAm?: string
+  erledigenBis?: string
+  stundensatz?: number
+}
+
+// ---------- Arbeitsorganisation der Abteilung (Tabelle abteilung_eintraege: je Eintrag eine Zeile) ----------
+
+/** Frage zu einem Objekt/Projekt an die Geschäftsführung, mit dokumentierter Antwort (Papierformular „Fragenkatalog"). */
+export type ImmoFrage = {
+  id: string
+  erstelltAm: string // ISO-Datum
+  prio?: 'A' | 'B' | 'C'
+  objektId?: string
+  /** Kunde, Projekt oder Vorgang als freier Text — für Fragen ohne Objekt oder zur Anzeige. */
+  bezug: string
+  frage: string
+  gestelltVon: string
+  antwort?: string
+  beantwortetVon?: string
+  beantwortetAm?: string
+}
+
+/** Eine Zeile der täglichen Zeiterfassung: wer hat wann wie lange woran gearbeitet. */
+export type Zeiteintrag = {
+  id: string
+  mitarbeiter: string
+  datum: string // ISO-Datum
+  start?: string // "09:30"
+  ende?: string
+  dauerMin: number
+  taetigkeit: string
+  objektId?: string
+  /** Projekt/Kunde als freier Text, wenn kein Objekt gewählt ist. */
+  bezug?: string
+  notiz?: string
+}
+
+export type TagesplanBlock = 'organisation' | 'frist' | 'A' | 'B' | 'C' | 'kurz'
+
+export type TagesplanZeile = {
+  id: string
+  block: TagesplanBlock
+  dauerMin?: number
+  bisUhr?: string
+  was: string
+  /** „Gewinn/Verlust" der Vorlage: was es gebracht hat. */
+  ergebnis?: string
+  /** Infos, aktueller Stand, Fragen, nächste Schritte. */
+  stand?: string
+  erledigt?: boolean
+}
+
+/** Tagesablauf eines Mitarbeiters für einen Tag — für die ganze Abteilung einsehbar. id = `${mitarbeiter}|${datum}`. */
+export type Tagesplan = {
+  id: string
+  mitarbeiter: string
+  datum: string
+  ort?: string
+  zeilen: TagesplanZeile[]
+  anrufe: string
+  aktualisiertAm: string
+}
+
+/** Wochenplan eines Mitarbeiters. id = `${mitarbeiter}|${wocheAb}`; zellen: Schlüssel `${tag}-${stunde}` (tag 0 = Montag, stunde 9–20). */
+export type Wochenplan = {
+  id: string
+  mitarbeiter: string
+  wocheAb: string // ISO-Datum des Montags
+  zellen: Record<string, string>
+  aktualisiertAm: string
 }
 
 // Freigabe der eigenen To-Do-Liste an einen Kollegen (Nutzer-Entscheidung 2026-11-06: jeder hat
