@@ -2574,19 +2574,39 @@ async function verarbeiteUpdate(update: any): Promise<void> {
   const supabase = supa()
 
   // --- Verknüpfung über /start <code> (aus "Mein Profil" generiert) ---
+  // Der Link aus dem CRM schickt "/start <code>" — aber nur, wenn in Telegram noch auf "Starten" getippt
+  // wird, und manche Telegram-Apps zeigen diesen Knopf bei einem schon geöffneten Chat gar nicht. Deshalb
+  // gilt der Code auch als ganz normale Nachricht (auch mit Text drumherum, Groß-/Kleinschreibung egal).
+  const verknuepfe = async (woerter: string[]): Promise<boolean> => {
+    const kandidaten = [...new Set(woerter.map((w) => w.replace(/[^A-Za-z0-9_-]/g, '')).filter((w) => w.length >= 6 && w.length <= 64))].slice(0, 6)
+    for (const wort of kandidaten) {
+      for (const code of [...new Set([wort, wort.toLowerCase()])]) {
+        const { data: kandidat } = await supabase.from('mitarbeiter').select('id, name').eq('telegram_link_code', code).eq('aktiv', true).maybeSingle()
+        if (!kandidat) continue
+        // Ein Telegram-Chat gehört immer nur zu einem Zugang — sonst wäre er danach keinem mehr eindeutig zuzuordnen.
+        await supabase.from('mitarbeiter').update({ telegram_chat_id: null }).eq('telegram_chat_id', chatId).neq('id', kandidat.id)
+        await supabase.from('mitarbeiter').update({ telegram_chat_id: chatId, telegram_link_code: null }).eq('id', kandidat.id)
+        await sendTelegramMessage(chatId, `Verbunden! Du bist jetzt als ${kandidat.name} mit dem CRM verknüpft. Schreib mir einfach, was du brauchst: Fragen zu Kunden, Akten anlegen oder ändern, Notizen, Aufgaben. Dateien und Scans kannst du mir direkt schicken, ich lege sie in die richtige Akte.`)
+        return true
+      }
+    }
+    return false
+  }
+  const SO_GEHTS = 'So geht es: Im CRM auf "Mein Profil" gehen, bei "Telegram-Assistent" auf "Mit Telegram verbinden" tippen und mir den Code, der dort erscheint, hier als Nachricht schicken.'
+
   if (text?.startsWith('/start')) {
-    const code = text.split(/\s+/)[1]?.trim()
-    if (!code) {
-      await sendTelegramMessage(chatId, 'Willkommen beim Assistenten der Mayer Holding! Bitte nutze den Verknüpfungs-Link aus "Mein Profil" im CRM, um deinen Zugang zu verbinden.')
+    const rest = text.split(/\s+/).slice(1)
+    if (rest.length === 0) {
+      // Schon verbunden und nur noch einmal auf "Starten" getippt: nichts kaputt machen, kurz Bescheid geben.
+      const { data: schon } = await supabase.from('mitarbeiter').select('name').eq('telegram_chat_id', chatId).eq('aktiv', true).maybeSingle()
+      await sendTelegramMessage(
+        chatId,
+        schon ? `Du bist schon als ${schon.name} mit dem CRM verbunden. Schreib mir einfach, was du brauchst.` : `Willkommen beim Assistenten der Mayer Holding! Dieser Chat ist noch nicht mit deinem CRM-Zugang verbunden. ${SO_GEHTS}`,
+      )
       return
     }
-    const { data: kandidat } = await supabase.from('mitarbeiter').select('id, name').eq('telegram_link_code', code).eq('aktiv', true).maybeSingle()
-    if (!kandidat) {
-      await sendTelegramMessage(chatId, 'Dieser Verknüpfungs-Code ist ungültig oder abgelaufen. Erzeug dir in "Mein Profil" im CRM einen neuen Link.')
-      return
-    }
-    await supabase.from('mitarbeiter').update({ telegram_chat_id: chatId, telegram_link_code: null }).eq('id', kandidat.id)
-    await sendTelegramMessage(chatId, `Verbunden! Du bist jetzt als ${kandidat.name} mit dem CRM verknüpft. Schreib mir einfach, was du brauchst: Fragen zu Kunden, Akten anlegen oder ändern, Notizen, Aufgaben. Dateien und Scans kannst du mir direkt schicken, ich lege sie in die richtige Akte.`)
+    if (await verknuepfe(rest)) return
+    await sendTelegramMessage(chatId, `Dieser Code ist ungültig oder schon verbraucht. ${SO_GEHTS}`)
     return
   }
 
@@ -2596,7 +2616,8 @@ async function verarbeiteUpdate(update: any): Promise<void> {
     .eq('telegram_chat_id', chatId)
     .maybeSingle()
   if (!mitarbeiter || !mitarbeiter.aktiv) {
-    await sendTelegramMessage(chatId, 'Dieser Chat ist noch nicht mit einem CRM-Zugang verknüpft. Geh in "Mein Profil" im CRM und folge dem Verknüpfungs-Link.')
+    if (text && (await verknuepfe(text.split(/\s+/)))) return
+    await sendTelegramMessage(chatId, `Dieser Chat ist noch nicht mit einem CRM-Zugang verbunden. ${SO_GEHTS}`)
     return
   }
 

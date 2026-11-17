@@ -151,15 +151,35 @@ function TelegramVerbinden() {
   const [code, setCode] = useState<string | null>(null)
   const [erzeugen, setErzeugen] = useState(false)
   const [fehler, setFehler] = useState('')
+  const [kopiert, setKopiert] = useState(false)
 
   async function laden() {
     if (!supabase || !session?.user?.email) return
     const { data } = await supabase.from('mitarbeiter').select('telegram_chat_id').eq('email', session.user.email).maybeSingle()
     setChatId(data?.telegram_chat_id ?? null)
+    if (data?.telegram_chat_id) merkeCode(null)
     setLaedt(false)
   }
 
+  // Der offene Code bleibt für dieses Browserfenster gemerkt: Wer zu Telegram wechselt und zurückkommt
+  // (das Handy lädt die Seite dabei oft neu), soll nicht versehentlich einen neuen Code erzeugen — der
+  // alte wäre damit ungültig.
+  const merkSchluessel = `telegram-code:${session?.user?.email ?? ''}`
+  function merkeCode(wert: string | null) {
+    try {
+      if (wert) sessionStorage.setItem(merkSchluessel, wert)
+      else sessionStorage.removeItem(merkSchluessel)
+    } catch {
+      // Ohne Browserspeicher gilt der Code eben nur, solange die Seite offen bleibt.
+    }
+  }
+
   useEffect(() => {
+    try {
+      setCode(sessionStorage.getItem(merkSchluessel))
+    } catch {
+      setCode(null)
+    }
     laden()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.user?.email])
@@ -172,6 +192,7 @@ function TelegramVerbinden() {
       const { data, error } = await supabase.rpc('generate_my_telegram_link_code')
       if (error) throw new Error(error.message)
       setCode(data as string)
+      merkeCode(data as string)
     } catch (err) {
       setFehler(err instanceof Error ? err.message : 'Link konnte nicht erzeugt werden.')
     } finally {
@@ -179,9 +200,40 @@ function TelegramVerbinden() {
     }
   }
 
+  // Solange ein Code offen ist, selbst nachsehen, ob Telegram inzwischen verbunden ist (höchstens 15 Minuten).
+  useEffect(() => {
+    if (!code || chatId) return
+    const beginn = Date.now()
+    const takt = window.setInterval(() => {
+      if (Date.now() - beginn > 15 * 60_000) window.clearInterval(takt)
+      else if (document.visibilityState === 'visible') laden()
+    }, 4000)
+    const beiRueckkehr = () => {
+      if (document.visibilityState === 'visible') laden()
+    }
+    document.addEventListener('visibilitychange', beiRueckkehr)
+    return () => {
+      window.clearInterval(takt)
+      document.removeEventListener('visibilitychange', beiRueckkehr)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [code, chatId])
+
+  async function codeKopieren() {
+    if (!code) return
+    try {
+      await navigator.clipboard.writeText(code)
+      setKopiert(true)
+      window.setTimeout(() => setKopiert(false), 2000)
+    } catch {
+      // Zwischenablage gesperrt: Der Code steht sichtbar da und lässt sich von Hand markieren.
+    }
+  }
+
   async function trennen() {
     if (!supabase) return
     await supabase.rpc('clear_my_telegram_link')
+    merkeCode(null)
     setChatId(null)
     setCode(null)
     laden()
@@ -209,23 +261,46 @@ function TelegramVerbinden() {
         </div>
       ) : code ? (
         <div>
-          {TELEGRAM_BOT_USERNAME ? (
-            <a
-              href={`https://t.me/${TELEGRAM_BOT_USERNAME}?start=${code}`}
-              target="_blank"
-              rel="noreferrer"
-              className="mb-2 inline-flex items-center gap-1.5 rounded-lg bg-accent-600 px-3 py-2 text-sm font-medium text-white hover:bg-accent-700"
-            >
-              <Send size={14} /> In Telegram öffnen & verbinden
-            </a>
-          ) : (
-            <p className="mb-2 text-sm text-slate-600">
-              Schick dem Bot in Telegram: <code className="rounded bg-slate-100 px-1.5 py-0.5">/start {code}</code>
+          <ol className="mb-3 list-decimal space-y-2 pl-5 text-sm text-slate-600">
+            {TELEGRAM_BOT_USERNAME && (
+              <li>
+                <a
+                  href={`https://t.me/${TELEGRAM_BOT_USERNAME}?start=${code}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-accent-600 px-3 py-2 text-sm font-medium text-white hover:bg-accent-700"
+                >
+                  <Send size={14} /> In Telegram öffnen
+                </a>
+                <span className="mt-1 block text-xs text-slate-500">
+                  Am besten auf dem Handy, auf dem Telegram läuft. Telegram öffnet den Chat mit dem Assistenten.
+                </span>
+              </li>
+            )}
+            <li>
+              In Telegram ganz unten auf <strong>„Starten“</strong> tippen. Erst damit wird die Verbindung hergestellt.
+            </li>
+          </ol>
+          <div className="mb-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <p className="text-xs font-medium text-slate-600">Passiert in Telegram nichts?</p>
+            <p className="mt-1 text-xs text-slate-500">
+              Dann öffne in Telegram den Chat mit dem Assistenten
+              {TELEGRAM_BOT_USERNAME ? ` (Suche: @${TELEGRAM_BOT_USERNAME})` : ''} und schick ihm diesen Code als ganz normale Nachricht:
             </p>
-          )}
-          <p className="text-xs text-slate-400">Klick danach hier auf "Status aktualisieren", sobald du in Telegram verbunden bist.</p>
-          <button onClick={laden} className="mt-2 text-sm font-medium text-accent-600 hover:underline">
-            Status aktualisieren
+            <div className="mt-2 flex items-center gap-2">
+              <code className="select-all rounded bg-white px-2.5 py-1.5 text-base font-semibold tracking-widest text-slate-800 ring-1 ring-slate-200">
+                {code}
+              </code>
+              <button onClick={codeKopieren} className="text-sm font-medium text-accent-600 hover:underline">
+                {kopiert ? 'Kopiert' : 'Kopieren'}
+              </button>
+            </div>
+          </div>
+          <p className="text-xs text-slate-400">
+            Diese Seite merkt von selbst, wenn die Verbindung steht. Der Code gilt, bis du einen neuen erzeugst.
+          </p>
+          <button onClick={linkErzeugen} disabled={erzeugen} className="mt-2 text-sm font-medium text-accent-600 hover:underline">
+            {erzeugen ? 'Erzeugt …' : 'Neuen Code erzeugen'}
           </button>
         </div>
       ) : (
