@@ -209,6 +209,7 @@ import { PDFDocument } from 'npm:pdf-lib@1.17.1'
 import {
   STANDARD_ID,
   absenderVon,
+  abzuholendePostfaecher,
   anhangUrl,
   darfNutzen,
   diagnostizierePostfach,
@@ -219,6 +220,7 @@ import {
   listePostfaecher,
   ordneMailZu,
   ordneOffeneMailsZu,
+  pruefeOrdnerAufbau,
   rufeAlleAb,
   rufePostfachAb,
   trennePostfach,
@@ -2490,20 +2492,27 @@ Deno.serve(async (req: Request) => {
       if (body.action === 'postfach_abruf' && !body.postfachId) {
         // Sofort antworten und im Hintergrund abholen — der Zeitplan wartet nur wenige Sekunden.
         const kette = Math.max(0, Number(body.kette) || 0)
-        const lauf = rufeAlleAb(admin).then(async (ergebnis) => {
+        const einzeln = typeof body.einzeln === 'string' && body.einzeln ? body.einzeln : undefined
+        const geheim = Deno.env.get('CRM_SHARED_SECRET')
+        const rufeSelbst = (inhalt: Record<string, unknown>) =>
+          fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/email-gateway`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', ...(geheim ? { 'x-crm-secret': geheim } : {}) },
+            body: JSON.stringify({ action: 'postfach_abruf', ...inhalt }),
+          }).catch((err) => console.error('Postfach-Abruf: Folgeaufruf fehlgeschlagen:', err))
+        // Der Zeitplan selbst holt nichts ab, er stößt je Postfach einen eigenen Aufruf an.
+        if (!einzeln && body.warten !== true) {
+          const faecher = await abzuholendePostfaecher(admin)
+          await Promise.all(faecher.map((f) => rufeSelbst({ einzeln: f.id })))
+          return new Response(JSON.stringify({ ok: true, gestartet: faecher.length }), { headers })
+        }
+        const lauf = rufeAlleAb(admin, 110000, einzeln).then(async (ergebnis) => {
           if (ergebnis.fehler.length > 0) console.error('Postfach-Abruf mit Fehlern:', ergebnis.fehler.join(' | '))
           // Neue Mails im gemeinsamen Postfach gleich zur Akte ihres Absenders legen.
           if (ergebnis.neu > 0) await ordneOffeneMailsZu(admin).catch((err) => console.error('Mail-Zuordnung fehlgeschlagen:', err))
           // Liegt noch mehr auf dem Server (erstes Abholen eines Postfachs mit vielen Mails), gleich
           // weitermachen statt drei Minuten zu warten — jeder Aufruf holt nur eine kleine Portion.
-          if (ergebnis.offen && kette < 15 && body.warten !== true) {
-            const geheim = Deno.env.get('CRM_SHARED_SECRET')
-            await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/email-gateway`, {
-              method: 'POST',
-              headers: { 'content-type': 'application/json', ...(geheim ? { 'x-crm-secret': geheim } : {}) },
-              body: JSON.stringify({ action: 'postfach_abruf', kette: kette + 1 }),
-            }).catch((err) => console.error('Postfach-Abruf: Folgeaufruf fehlgeschlagen:', err))
-          }
+          if (ergebnis.offen && einzeln && kette < 15) await rufeSelbst({ einzeln, kette: kette + 1 })
           return ergebnis
         })
         if (body.warten === true) {
@@ -2540,6 +2549,7 @@ Deno.serve(async (req: Request) => {
         const fach = await ladePostfach(admin, String(body.postfachId ?? ''))
         const eigenes = !!fach && !!fach.besitzer_email && fach.besitzer_email.toLowerCase() === aufrufer.email
         if (!fach || !(eigenes || aufrufer.istGf)) return new Response(JSON.stringify({ error: 'Dieses Postfach kannst du nicht einsehen.' }), { status: 403, headers })
+        if (typeof body.aufbauVon === 'number') return new Response(JSON.stringify(await pruefeOrdnerAufbau(admin, fach, body.aufbauVon, Number(body.abUid) || 1)), { headers })
         const ergebnis = await listeOrdner(admin, fach, eigenes || !fach.besitzer_email)
         if ('fehler' in ergebnis) return new Response(JSON.stringify({ error: ergebnis.fehler }), { status: 502, headers })
         return new Response(JSON.stringify(ergebnis), { headers })

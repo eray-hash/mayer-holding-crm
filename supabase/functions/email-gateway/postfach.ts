@@ -524,8 +524,9 @@ type OrdnerStand = { uid: number; g: number }
 const ZU_GROSS = 30 * 1024 * 1024
 // Größere Anhänge sprengen die Rechenzeit eines Aufrufs — der Lauf bricht dann ab und blockiert das
 // Postfach für mehrere Minuten. Sie werden ausgelassen und im Mailtext vermerkt.
-const ANHANG_HOECHSTENS = 10 * 1024 * 1024
-const ANHAENGE_JE_MAIL = 12 * 1024 * 1024
+// Erfahrungswert 17.11.2026: 8 MB je Mail gingen durch, bei gut 10 MB brach der Lauf zweimal ab.
+const ANHANG_HOECHSTENS = 9 * 1024 * 1024
+const ANHAENGE_JE_MAIL = 9 * 1024 * 1024
 const BYTES_JE_LAUF = 10 * 1024 * 1024
 
 // deno-lint-ignore no-explicit-any
@@ -899,19 +900,71 @@ export async function listeOrdner(admin: Db, p: Postfach, mitNamen: boolean): Pr
   }
 }
 
-// Alle Postfächer der Reihe nach, das am längsten nicht abgerufene zuerst (gemeinsame: nur große Mails).
-export async function rufeAlleAb(admin: Db, budgetMs = 110000): Promise<{ postfaecher: number; neu: number; offen: boolean; fehler: string[] }> {
-  const beginn = Date.now()
+// Aufbau der ersten Mails eines Ordners — nur Größen und Dateiarten, keine Namen, kein Inhalt. Dient
+// der Klärung, wenn der Abruf an einer bestimmten Mail hängen bleibt. `nr` zählt die Ordner so, wie
+// listeOrdner sie ausgibt (ab 0).
+export async function pruefeOrdnerAufbau(admin: Db, p: Postfach, nr: number, abUid = 1): Promise<unknown> {
+  // deno-lint-ignore no-explicit-any
+  let client: any = null
+  try {
+    client = new ImapFlow({ host: p.imap_host, port: p.imap_port, secure: p.imap_port === 993, auth: { user: p.benutzer || p.adresse, pass: await passwortVon(admin, p) }, logger: false })
+    client.on('error', () => {})
+    await zeitlimit(client.connect(), 20000, 'Der Mail-Server hat nach 20 Sekunden nicht geantwortet.')
+    // deno-lint-ignore no-explicit-any
+    const liste: any[] = (await client.list()).filter((o: any) => !(o.flags instanceof Set && o.flags.has('\\Noselect')))
+    const ordner = liste[nr]
+    if (!ordner) return { fehler: 'Diesen Ordner gibt es nicht.' }
+    const sperre = await client.getMailboxLock(ordner.path)
+    const mails: unknown[] = []
+    try {
+      for await (const n of client.fetch(`${abUid}:${abUid + 4}`, { uid: true, size: true, bodyStructure: true }, { uid: true })) {
+        const teile: string[] = []
+        // deno-lint-ignore no-explicit-any
+        const gehe = (k: any, tiefe: number) => {
+          if (!k) return
+          teile.push(`${'>'.repeat(tiefe)}${k.part ?? '-'} ${k.type} ${k.encoding ?? ''} ${Math.round(Number(k.size ?? 0) / 1024)}KB ${k.disposition ?? ''}${k.dispositionParameters?.filename || k.parameters?.name ? ' mit-Namen' : ''}`)
+          // deno-lint-ignore no-explicit-any
+          if (Array.isArray(k.childNodes)) k.childNodes.forEach((c: any) => gehe(c, tiefe + 1))
+        }
+        gehe(n.bodyStructure, 0)
+        mails.push({ uid: Number(n.uid), kb: Math.round(Number(n.size ?? 0) / 1024), teile })
+      }
+    } finally {
+      sperre.release()
+    }
+    await client.logout().catch(() => {})
+    return { mails }
+  } catch (err) {
+    try {
+      client?.close()
+    } catch {
+      // schon geschlossen
+    }
+    // deno-lint-ignore no-explicit-any
+    return { fehler: (err as any)?.message ?? String(err) }
+  }
+}
+
+// Welche Postfächer sind abzuholen? Das am längsten nicht abgerufene zuerst; persönliche nur, solange
+// ihr Besitzer ein aktiver Mitarbeiter ist.
+export async function abzuholendePostfaecher(admin: Db): Promise<Postfach[]> {
   const { data } = await admin.from('postfaecher').select('*').eq('aktiv', true).order('letzter_abruf', { ascending: true, nullsFirst: true })
-  // Persönliche Postfächer nur, solange ihr Besitzer ein aktiver Mitarbeiter ist.
   const { data: team } = await admin.from('mitarbeiter').select('email').eq('aktiv', true)
   const aktive = new Set(((team ?? []) as { email: string }[]).map((m) => String(m.email).toLowerCase()))
+  return ((data ?? []) as Postfach[]).filter((p) => !p.besitzer_email || aktive.has(p.besitzer_email.toLowerCase()))
+}
+
+// Holt die Postfächer der Reihe nach ab (gemeinsame: nur große Mails) — alle oder nur das genannte.
+// Der Zeitplan ruft je Postfach einzeln auf: Jeder Aufruf hat nur begrenzte Rechenzeit, und ein
+// Postfach mit großen Anhängen soll sie nicht mit den anderen teilen müssen.
+export async function rufeAlleAb(admin: Db, budgetMs = 110000, nurId?: string): Promise<{ postfaecher: number; neu: number; offen: boolean; fehler: string[] }> {
+  const beginn = Date.now()
   let neu = 0
   let anzahl = 0
   let offen = false
   const fehler: string[] = []
-  for (const p of (data ?? []) as Postfach[]) {
-    if (p.besitzer_email && !aktive.has(p.besitzer_email.toLowerCase())) continue
+  for (const p of await abzuholendePostfaecher(admin)) {
+    if (nurId && p.id !== nurId) continue
     const rest = budgetMs - (Date.now() - beginn)
     if (rest < 25000) break
     const ergebnis = await rufePostfachAb(admin, p, 8, Math.min(rest - 15000, 45000))
