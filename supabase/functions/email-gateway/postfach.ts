@@ -524,9 +524,8 @@ type OrdnerStand = { uid: number; g: number }
 const ZU_GROSS = 30 * 1024 * 1024
 // Größere Anhänge sprengen die Rechenzeit eines Aufrufs — der Lauf bricht dann ab und blockiert das
 // Postfach für mehrere Minuten. Sie werden ausgelassen und im Mailtext vermerkt.
-// Erfahrungswert 17.11.2026: 8 MB je Mail gingen durch, bei gut 10 MB brach der Lauf zweimal ab.
-const ANHANG_HOECHSTENS = 9 * 1024 * 1024
-const ANHAENGE_JE_MAIL = 9 * 1024 * 1024
+const ANHANG_HOECHSTENS = 12 * 1024 * 1024
+const ANHAENGE_JE_MAIL = 16 * 1024 * 1024
 const BYTES_JE_LAUF = 10 * 1024 * 1024
 
 // deno-lint-ignore no-explicit-any
@@ -573,6 +572,29 @@ async function ladeTeil(client: any, uid: number, teil: Teil, hoechstens?: numbe
     stelle += b.length
   }
   return { bytes, meta: antwort.meta ?? {} }
+}
+
+// Anhänge: in einem Stück abrufen und mit der eingebauten Entschlüsselung umwandeln. Der Weg über
+// `download` holt die Datei in vielen kleinen Häppchen und wandelt sie in JavaScript um — das kostet bei
+// großen Anhängen so viel Rechenzeit, dass der Aufruf abgebrochen wird (ab etwa 8 MB, 17.11.2026).
+// deno-lint-ignore no-explicit-any
+async function ladeAnhang(client: any, uid: number, teil: Teil): Promise<{ bytes: Uint8Array; meta: any } | null> {
+  const nummer = String(teil.part ?? '')
+  if (!nummer || String(teil.encoding ?? '').toLowerCase() !== 'base64') return ladeTeil(client, uid, teil)
+  try {
+    const antwort = await client.fetchOne(String(uid), { bodyParts: [nummer] }, { uid: true })
+    const teile: Map<string, Uint8Array> | undefined = antwort?.bodyParts
+    const roh = teile?.get(nummer) ?? (teile ? [...teile.values()][0] : undefined)
+    if (!roh || roh.length === 0) return ladeTeil(client, uid, teil)
+    const binaer = atob(new TextDecoder('latin1').decode(roh).replace(/[^A-Za-z0-9+/=]/g, ''))
+    const bytes = new Uint8Array(binaer.length)
+    for (let i = 0; i < binaer.length; i++) bytes[i] = binaer.charCodeAt(i)
+    return { bytes, meta: {} }
+  } catch (err) {
+    // deno-lint-ignore no-explicit-any
+    if (!client?.usable) throw err as any
+    return ladeTeil(client, uid, teil)
+  }
 }
 
 function alsText(bytes: Uint8Array, zeichensatz?: string): string {
@@ -747,7 +769,7 @@ export async function rufePostfachAb(
                 ausgelassen.push(`${String(teil.dispositionParameters?.filename ?? teil.parameters?.name ?? 'Anhang')} (${(etwa / 1024 / 1024).toFixed(1)} MB)`)
                 continue
               }
-              const geladen = await zeitlimit(ladeTeil(client, n.uid, teil), 50000, 'Der Mail-Server hat einen Anhang nicht rechtzeitig geliefert.')
+              const geladen = await zeitlimit(ladeAnhang(client, n.uid, teil), 50000, 'Der Mail-Server hat einen Anhang nicht rechtzeitig geliefert.')
               if (!geladen || geladen.bytes.length === 0) continue
               anhangBytes += geladen.bytes.length
               const anzeige = String(geladen.meta?.filename ?? teil.dispositionParameters?.filename ?? teil.parameters?.name ?? 'anhang')
