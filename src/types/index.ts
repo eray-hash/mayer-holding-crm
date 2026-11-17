@@ -474,12 +474,59 @@ export type Objekt = {
   zugewiesenerKunde?: { bereich: KundeBereich; kundeId: string; kundeName: string }
   // Nicht öffentlich angeboten ("Off-Market") — Kennzeichen für die Objektliste zum Weitergeben.
   offMarket?: boolean
+  // Die beiden Arbeitsblätter der Immobilienabteilung, siehe ObjektVerkaufsdatenblatt.tsx / ObjektKurzpruefungBlatt.tsx.
+  verkaufsdaten?: ObjektVerkaufsdaten
+  kurzpruefung?: ObjektKurzpruefung
   // Vom Eigentümer selbst über das öffentliche Formular (/formular/eigentuemer/:objektId)
   // bestätigt/gepflegt — siehe PublicEigentuemerPortal.tsx.
   eigentuemer?: ObjektEigentuemer
   // Automatisch per KI erstelltes 1-Seiten-Exposé (Whitelabel) direkt bei Objektanlage, siehe
   // ObjektListe.tsx. undefined solange die Generierung noch läuft oder fehlgeschlagen ist.
   exposeText?: string
+}
+
+/** Verkaufsdatenblatt (Papiervorlage „Verkaufsdaten", Version 3 vom 14.8.26): die Zusammenfassung eines Objekts auf einer Seite. */
+export type ObjektVerkaufsdaten = {
+  datum?: string
+  prio?: 'A' | 'B' | 'C'
+  auftraggeber: { name: string; telefon: string; email: string; adresse: string; webseite: string; bonitaet: string }
+  auftragsart?: ImmoAuftragsart
+  kennzahlen: {
+    baujahr: string
+    grundstuecksflaeche: string
+    wohnflaeche: string
+    nutzflaeche: string
+    einheiten: string
+    zimmer: string
+    stellplaetze: string
+    vermietungsstatus: string
+    jahresnettokaltmiete?: number
+    kaufpreisvorstellung?: number
+    zielverkaufspreis?: number
+  }
+  bewertung: { rendite: string; faktor: string; verfahren: string[]; marktwert?: number }
+  verkaufsstatus: string[]
+  verkaufsstatusNotiz: string
+  uebersicht: { strasse: string; plzOrt: string; flurstueck: string; gemarkung: string; objektart: string }
+  unterlagen: Record<string, { vorhanden: boolean; geprueft: boolean }>
+  sonstiges: string
+}
+
+/** Vorab-Kurzprüfung eines Immobilienobjekts (Papiervorlage Version 1 vom 14.04.26): lohnt sich der Auftrag? */
+export type ObjektKurzpruefung = {
+  datum?: string
+  zeilen: Record<string, { ist: string; marktwert: string; ergebnis: string }>
+  provisionProzent: string
+  provisionBetrag: string
+  verkaeuferBekannt: string
+  direktesMandat: string
+  offeneFragen: string
+  gruendeDagegen: string[]
+  gruendeDafuer: string[]
+  prio?: 'A' | 'B' | 'C'
+  prioBegruendung: string
+  zeiterfordernis: string
+  naechsteSchritte: string[]
 }
 
 export type ObjektEigentuemer = {

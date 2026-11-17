@@ -22,6 +22,8 @@ function orte(lage: string): string[] {
 
 /** Bei übernommenen Objekten steht im ersten Verlaufseintrag, wenn die Objektart nur ein Platzhalter ist. */
 function artUngeprueft(o: Objekt): boolean {
+  // Sobald im Verkaufsdatenblatt eine Objektart gewählt ist, gilt sie als geprüft.
+  if (o.verkaufsdaten?.uebersicht.objektart) return false
   return o.activities.some((a) => a.id.startsWith('a_ql_') && /Noch nicht geprüft:[^.]*Objektart/.test(a.text))
 }
 

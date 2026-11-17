@@ -15,9 +15,13 @@ import { pruefeUnterlagenVollstaendigkeit } from '../../data/objektUnterlagenPfl
 import { ladeObjektDokumentHoch, erzeugeDownloadUrl, leseAlsBase64 } from '../../lib/objektDokumenteStorage'
 import { classifyObjektDokument, generateExpose, isEmailGatewayConfigured } from '../../lib/emailGateway'
 import type { Objekt } from '../../types'
+import { ObjektVerkaufsdatenblatt } from '../../components/ObjektVerkaufsdatenblatt'
+import { ObjektKurzpruefungBlatt } from '../../components/ObjektKurzpruefungBlatt'
 
 const TABS = [
   { id: 'uebersicht', label: 'Übersicht' },
+  { id: 'verkaufsdaten', label: 'Verkaufsdatenblatt' },
+  { id: 'kurzpruefung', label: 'Kurzprüfung' },
   { id: 'dokumente', label: 'Dokumente' },
   { id: 'finanzierung', label: 'Finanzierung' },
   { id: 'vorschlaege', label: 'Gesuche & Vorschläge' },
@@ -324,6 +328,10 @@ export function ObjektDetail() {
           </Card>
         </div>
       )}
+
+      {tab === 'verkaufsdaten' && <ObjektVerkaufsdatenblatt key={objekt.id} objekt={objekt} />}
+
+      {tab === 'kurzpruefung' && <ObjektKurzpruefungBlatt key={objekt.id} objekt={objekt} />}
 
       {tab === 'finanzierung' && (
         <div>

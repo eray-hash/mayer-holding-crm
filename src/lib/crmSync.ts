@@ -159,6 +159,8 @@ function objektToRow(o: Objekt) {
     lukrativitaet: o.lukrativitaet ?? null,
     zugewiesener_kunde: o.zugewiesenerKunde ?? null,
     off_market: o.offMarket ?? false,
+    verkaufsdaten: o.verkaufsdaten ?? null,
+    kurzpruefung: o.kurzpruefung ?? null,
     eigentuemer: o.eigentuemer ?? null,
     expose_text: o.exposeText ?? null,
   }
@@ -183,6 +185,8 @@ function rowToObjekt(row: any): Objekt {
     lukrativitaet: row.lukrativitaet ?? undefined,
     zugewiesenerKunde: row.zugewiesener_kunde ?? undefined,
     offMarket: row.off_market ?? false,
+    verkaufsdaten: row.verkaufsdaten ?? undefined,
+    kurzpruefung: row.kurzpruefung ?? undefined,
     eigentuemer: row.eigentuemer ?? undefined,
     exposeText: row.expose_text ?? undefined,
   }
