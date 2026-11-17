@@ -43,6 +43,7 @@ import type {
   Wochenplan,
   Weitergabe,
   ObjektAbrechnung,
+  TrefferMeldung,
   ToDoEintrag,
   ToDoFreigabe,
   Verbindlichkeit,
@@ -169,6 +170,8 @@ function objektToRow(o: Objekt) {
     kurzpruefung: o.kurzpruefung ?? null,
     eigentuemer: o.eigentuemer ?? null,
     expose_text: o.exposeText ?? null,
+    unterlagen_anforderungen: o.unterlagenAnforderungen ?? null,
+    // `bewertung` fehlt hier mit Absicht: Die Spalte schreibt nur der Server (mehrstufiger Lauf).
   }
 }
 
@@ -195,6 +198,8 @@ function rowToObjekt(row: any): Objekt {
     kurzpruefung: row.kurzpruefung ?? undefined,
     eigentuemer: row.eigentuemer ?? undefined,
     exposeText: row.expose_text ?? undefined,
+    bewertung: row.bewertung ?? undefined,
+    unterlagenAnforderungen: row.unterlagen_anforderungen ?? undefined,
   }
 }
 
@@ -823,7 +828,79 @@ async function schreibeKunde(
 // Nach jedem Dispatch aufgerufen (außer beim initialen Hydrate selbst) — schreibt nur, was sich
 // seit dem letzten Stand tatsächlich geändert hat. Läuft bewusst "fire and forget": ein CRM-Nutzer
 // soll nicht auf einen Netzwerk-Roundtrip warten müssen, bevor die UI reagiert.
-export function syncAfterDispatch(prev: AppData, next: AppData, meldeServerStand?: (id: string, stand: ServerStand) => void) {
+/** Was die Datenbank an einem Objekt zusätzlich wusste: der zusammengeführte Stand von Verlauf und Dokumenten. */
+export type ObjektServerStand = { activities?: Objekt['activities']; dokumente?: Objekt['dokumente'] }
+
+/**
+ * Schreibt ein Objekt wie eine Kundenakte: nur die Felder, die dieses Fenster geändert hat. Verlauf und
+ * Dokumente (je Ordner) werden mit dem Stand der Datenbank zusammengeführt — was der Server inzwischen
+ * abgelegt hat (Mail-Zuordnung, Eigentümer-Zugang, ungeklärte Eingänge), bleibt erhalten.
+ */
+async function schreibeObjekt(client: NonNullable<typeof supabase>, vorher: Objekt | undefined, o: Objekt, meldeStand?: (id: string, stand: ObjektServerStand) => void): Promise<void> {
+  const nachherZeile = objektToRow(o) as Record<string, unknown>
+  if (!vorher) {
+    const { error } = await client.from('objekte').upsert(nachherZeile)
+    logFehler(`Objekt ${o.bezeichnung}`, error)
+    return
+  }
+  const vorherZeile = objektToRow(vorher) as Record<string, unknown>
+  const geaendert = Object.keys(nachherZeile).filter((feld) => feld !== 'id' && !gleich(vorherZeile[feld], nachherZeile[feld]))
+  if (geaendert.length === 0) return
+  const aenderung: Record<string, unknown> = {}
+  for (const feld of geaendert) aenderung[feld] = nachherZeile[feld] ?? null
+  const stand: ObjektServerStand = {}
+  const listen = geaendert.filter((feld) => feld === 'activities' || feld === 'dokumente')
+  if (listen.length > 0) {
+    const { data: server, error } = await client.from('objekte').select(`id, ${listen.join(', ')}`).eq('id', o.id).maybeSingle()
+    if (!error && !server) {
+      const { error: anlegeFehler } = await client.from('objekte').upsert(nachherZeile)
+      logFehler(`Objekt ${o.bezeichnung}`, anlegeFehler)
+      return
+    }
+    const zeile = server as unknown as Record<string, unknown> | null
+    if (zeile && listen.includes('activities')) {
+      const a = alsListe(vorher.activities)
+      const b = alsListe(o.activities)
+      const c = alsListe(zeile.activities)
+      if (a && b && c) {
+        const ergebnis = fuehreListeZusammen(a, b, c)
+        aenderung.activities = ergebnis.liste
+        if (ergebnis.neu.length > 0 || ergebnis.weg.length > 0 || ergebnis.frisch.length > 0) stand.activities = ergebnis.liste as Objekt['activities']
+      }
+    }
+    if (zeile && listen.includes('dokumente')) {
+      const serverOrdner = (zeile.dokumente && typeof zeile.dokumente === 'object' ? zeile.dokumente : {}) as Record<string, unknown>
+      const vorherOrdner = (vorher.dokumente ?? {}) as Record<string, unknown>
+      const nachherOrdner = (o.dokumente ?? {}) as Record<string, unknown>
+      const zusammen: Record<string, unknown> = {}
+      let abweichung = false
+      for (const ordner of new Set([...Object.keys(serverOrdner), ...Object.keys(vorherOrdner), ...Object.keys(nachherOrdner)])) {
+        const a = alsListe(vorherOrdner[ordner])
+        const b = alsListe(nachherOrdner[ordner])
+        const c = alsListe(serverOrdner[ordner])
+        if (!a || !b || !c) {
+          if (nachherOrdner[ordner] !== undefined) zusammen[ordner] = nachherOrdner[ordner]
+          continue
+        }
+        const ergebnis = fuehreListeZusammen(a, b, c)
+        if (ergebnis.liste.length > 0 || ordner in nachherOrdner) zusammen[ordner] = ergebnis.liste
+        if (ergebnis.neu.length > 0 || ergebnis.weg.length > 0 || ergebnis.frisch.length > 0) abweichung = true
+      }
+      aenderung.dokumente = zusammen
+      if (abweichung) stand.dokumente = zusammen as Objekt['dokumente']
+    }
+  }
+  const { data: geschrieben, error } = await client.from('objekte').update(aenderung).eq('id', o.id).select('id')
+  logFehler(`Objekt ${o.bezeichnung}`, error)
+  if (!error && (geschrieben ?? []).length === 0) {
+    const { error: anlegeFehler } = await client.from('objekte').upsert(nachherZeile)
+    logFehler(`Objekt ${o.bezeichnung}`, anlegeFehler)
+    return
+  }
+  if (!error && (stand.activities || stand.dokumente)) meldeStand?.(o.id, stand)
+}
+
+export function syncAfterDispatch(prev: AppData, next: AppData, meldeServerStand?: (id: string, stand: ServerStand) => void, meldeObjektStand?: (id: string, stand: ObjektServerStand) => void) {
   if (!supabase) return
   const client = supabase
 
@@ -873,8 +950,20 @@ export function syncAfterDispatch(prev: AppData, next: AppData, meldeServerStand
     }
   }
 
+  let objekteVorher: Map<string, Objekt> | null = null
   for (const o of diffById(prev.objekte, next.objekte)) {
-    client.from('objekte').upsert(objektToRow(o)).then(({ error }) => logFehler(`Objekt ${o.bezeichnung}`, error))
+    if (!objekteVorher) objekteVorher = new Map(prev.objekte.map((x) => [x.id, x]))
+    const vorher = objekteVorher.get(o.id)
+    const schluessel = `objekt:${o.id}`
+    offeneSchreibvorgaenge++
+    const kette = (schreibKetten.get(schluessel) ?? Promise.resolve())
+      .then(() => schreibeObjekt(client, vorher, o, meldeObjektStand))
+      .catch((err) => console.error(`[crmSync] Objekt ${o.bezeichnung}:`, err))
+      .finally(() => {
+        offeneSchreibvorgaenge--
+        if (schreibKetten.get(schluessel) === kette) schreibKetten.delete(schluessel)
+      })
+    schreibKetten.set(schluessel, kette)
   }
 
   for (const p of diffById(prev.protokolle, next.protokolle)) {
@@ -913,6 +1002,7 @@ export type HydratedData = {
   wochenplaene: Wochenplan[]
   weitergaben: Weitergabe[]
   abrechnungen: ObjektAbrechnung[]
+  trefferMeldungen: TrefferMeldung[]
   todos: ToDoEintrag[]
   todoFreigaben: ToDoFreigabe[]
   verbindlichkeiten: Verbindlichkeit[]
@@ -1056,6 +1146,7 @@ export async function hydrateFromSupabase(): Promise<HydratedData | null> {
     wochenplaene: abteilung('wochenplan') as Wochenplan[],
     weitergaben: abteilung('weitergabe') as Weitergabe[],
     abrechnungen: abteilung('abrechnung') as ObjektAbrechnung[],
+    trefferMeldungen: abteilung('treffer') as TrefferMeldung[],
     todos: (todosRes.data ?? []).map(rowToTodo),
     todoFreigaben: (todoFreigabenRes.data ?? []).map(rowToTodoFreigabe),
     verbindlichkeiten: (verbindlichkeitenRes.data ?? []).map(rowToVerbindlichkeit),

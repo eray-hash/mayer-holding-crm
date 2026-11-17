@@ -440,6 +440,8 @@ export type PublicObjekt = {
   typ: import('../types').ObjektTyp
   dokumente: Partial<Record<import('../types').DokumentOrdnerName, import('../types').Dokument[]>>
   eigentuemer?: import('../types').ObjektEigentuemer
+  /** Die jüngste Anforderung von Unterlagen durch den Mitarbeiter (falls es eine gibt). */
+  angefordert?: { datum: string; ordner: import('../types').DokumentOrdnerName[]; weitere?: string }
 }
 
 export async function holePublicObjekt(objektId: string): Promise<PublicObjekt | null> {
@@ -585,4 +587,29 @@ export async function speichereTerminRemote(termin: TerminEingabe): Promise<{ be
 export async function loescheTerminRemote(id: string): Promise<'abgesagt' | 'ausgetragen'> {
   const data = await callAuthenticated({ action: 'termin_loeschen', id })
   return data.art
+}
+
+// ---------- Bewertung eines Objekts per Knopf (läuft auf dem Server in mehreren Schritten) ----------
+
+/** Startet die Bewertung nach einer hinterlegten KI-Anweisung. Antwortet sofort; der Stand steht danach in `objekte.bewertung`. */
+export async function starteObjektBewertung(objektId: string, vorlageId: string, zusatz = ''): Promise<void> {
+  await callAuthenticated({ action: 'objekt_bewertung_start', objektId, vorlageId, zusatz })
+}
+
+/** Stößt eine hängen gebliebene Bewertung ab dem letzten fertigen Schritt wieder an. */
+export async function setzeObjektBewertungFort(objektId: string): Promise<void> {
+  await callAuthenticated({ action: 'objekt_bewertung_schritt', objektId, wiederaufnehmen: true })
+}
+
+/** Entfernt Stand und Ergebnis der Bewertung dieses Objekts. */
+export async function verwerfeObjektBewertung(objektId: string): Promise<void> {
+  await callAuthenticated({ action: 'objekt_bewertung_verwerfen', objektId })
+}
+
+/** Liest den aktuellen Stand der Bewertung direkt aus der Datenbank (für die Fortschrittsanzeige). */
+export async function ladeObjektBewertung(objektId: string): Promise<import('../types').ObjektBewertung | null> {
+  if (!supabase) return null
+  const { data, error } = await supabase.from('objekte').select('bewertung').eq('id', objektId).maybeSingle()
+  if (error) throw new Error(error.message)
+  return ((data as { bewertung?: import('../types').ObjektBewertung | null } | null)?.bewertung ?? null) as import('../types').ObjektBewertung | null
 }

@@ -27,6 +27,7 @@ import type {
   Wochenplan,
   Weitergabe,
   ObjektAbrechnung,
+  TrefferMeldung,
   ToDoEintrag,
   ToDoFreigabe,
   Verbindlichkeit,
@@ -112,6 +113,8 @@ export type AppData = {
   wochenplaene: Wochenplan[]
   weitergaben: Weitergabe[]
   abrechnungen: ObjektAbrechnung[]
+  /** Vom Server gemeldete neue Treffer Gesuch ↔ Objekt. Nur gelesen, nie von hier geschrieben. */
+  trefferMeldungen: TrefferMeldung[]
   todos: ToDoEintrag[]
   todoFreigaben: ToDoFreigabe[]
   verbindlichkeiten: Verbindlichkeit[]
@@ -181,6 +184,7 @@ function leereGeteilteEntities(data: AppData): AppData {
     wochenplaene: [],
     weitergaben: [],
     abrechnungen: [],
+    trefferMeldungen: [],
     todos: [],
     todoFreigaben: [],
     verbindlichkeiten: [],
@@ -227,6 +231,7 @@ function buildSeed(): AppData {
     wochenplaene: [],
     weitergaben: [],
     abrechnungen: [],
+    trefferMeldungen: [],
     todos: [],
     todoFreigaben: [],
     verbindlichkeiten: [],
@@ -283,6 +288,7 @@ function loadInitial(): AppData {
         if (!Array.isArray(parsed.wochenplaene)) parsed.wochenplaene = []
         if (!Array.isArray(parsed.weitergaben)) parsed.weitergaben = []
         if (!Array.isArray(parsed.abrechnungen)) parsed.abrechnungen = []
+        if (!Array.isArray(parsed.trefferMeldungen)) parsed.trefferMeldungen = []
         if (!Array.isArray(parsed.todos)) parsed.todos = []
         if (!Array.isArray(parsed.todoFreigaben)) parsed.todoFreigaben = []
         if (!Array.isArray(parsed.verbindlichkeiten)) parsed.verbindlichkeiten = []
@@ -320,6 +326,8 @@ type Action =
   // Browser-Stand neu gespeichert — und dabei alles überschrieben, was Server oder Telegram-Bot
   // inzwischen in dieselbe Akte geschrieben haben.
   | { type: 'KUNDE_VOM_SERVER'; bereich: KundeBereich; id: string; patch: Partial<Kunde> }
+  // Stand eines Objekts, den der Server geschrieben hat (Bewertung, abgelegte Dateien): nur anzeigen, nicht zurückspeichern.
+  | { type: 'OBJEKT_VOM_SERVER'; id: string; patch: Partial<Objekt> }
   | { type: 'ADD_KUNDE_IN_BEREICH'; bereich: KundeBereich; kunde: Kunde }
   | { type: 'MOVE_KUNDE_BEREICH'; von: KundeBereich; nach: KundeBereich; id: string; patch?: Partial<Kunde> }
   | { type: 'SET_KUNDE_STATUS'; id: string; status: string; followUp?: FollowUp }
@@ -565,6 +573,7 @@ function reducer(state: AppData, action: Action): AppData {
     }
     case 'ADD_OBJEKT':
       return { ...state, objekte: [action.objekt, ...state.objekte] }
+    case 'OBJEKT_VOM_SERVER':
     case 'UPDATE_OBJEKT':
       return {
         ...state,
@@ -1133,6 +1142,7 @@ function reducer(state: AppData, action: Action): AppData {
         wochenplaene: action.data.wochenplaene,
         weitergaben: action.data.weitergaben,
         abrechnungen: action.data.abrechnungen,
+        trefferMeldungen: action.data.trefferMeldungen,
         todos: action.data.todos,
         todoFreigaben: action.data.todoFreigaben,
         verbindlichkeiten: action.data.verbindlichkeiten,
@@ -1257,7 +1267,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const next = reducer(prev, action)
     stateRef.current = next
     dispatchRaw(action)
-    if (action.type !== 'HYDRATE_SUPABASE' && action.type !== 'KUNDE_VOM_SERVER') syncAfterDispatch(prev, next, uebernimmServerStand)
+    if (action.type !== 'HYDRATE_SUPABASE' && action.type !== 'KUNDE_VOM_SERVER' && action.type !== 'OBJEKT_VOM_SERVER') {
+      syncAfterDispatch(prev, next, uebernimmServerStand, (id, stand) => dispatch({ type: 'OBJEKT_VOM_SERVER', id, patch: stand }))
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 

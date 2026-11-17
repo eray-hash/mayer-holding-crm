@@ -483,6 +483,74 @@ export type Objekt = {
   // Automatisch per KI erstelltes 1-Seiten-Exposé (Whitelabel) direkt bei Objektanlage, siehe
   // ObjektListe.tsx. undefined solange die Generierung noch läuft oder fehlgeschlagen ist.
   exposeText?: string
+  // Bewertung per Knopf: läuft auf dem Server in mehreren Schritten und wird NUR vom Server geschrieben
+  // (das Fenster liest sie, speichert sie aber nie zurück — siehe objektToRow in crmSync.ts).
+  bewertung?: ObjektBewertung
+  // Wann welche Unterlagen beim Eigentümer angefordert wurden (neueste zuerst).
+  unterlagenAnforderungen?: UnterlagenAnforderung[]
+}
+
+/** Stand und Ergebnis der Bewertung eines Objekts nach einer hinterlegten KI-Anweisung. */
+export type ObjektBewertung = {
+  status: 'laeuft' | 'fertig' | 'fehler'
+  /** Anzeigetext des laufenden Schritts, z. B. „Unterlagen lesen". */
+  schritt?: string
+  schrittNr?: number
+  schritteGesamt?: number
+  gestartetAm: string
+  gestartetVon?: string
+  aktualisiertAm?: string
+  abgeschlossenAm?: string
+  /** Die verwendete KI-Anweisung (Vorlage der Rubrik „KI-Anweisungen"). */
+  vorlageId?: string
+  vorlageName?: string
+  zusatz?: string
+  /** Welche Unterlagen gelesen wurden (Dateinamen) und welche wegen Größe oder Art nicht. */
+  gelesen?: string[]
+  nichtGelesen?: string[]
+  /** Der fertige Bewertungstext. */
+  bericht?: string
+  /** Aus dem Bericht herausgezogene Werte — nur was dort wirklich steht, sonst leer. */
+  kennzahlen?: {
+    marktwertVon?: number
+    marktwertBis?: number
+    marktwert?: number
+    preisProQm?: number
+    mieteProQm?: number
+    kaufpreisfaktor?: number
+    rendite?: number
+  }
+  /** Fundstellen der Marktrecherche. */
+  quellen?: { titel: string; url: string }[]
+  fehler?: string
+}
+
+/** Eine Anforderung fehlender Unterlagen beim Eigentümer per E-Mail. */
+export type UnterlagenAnforderung = {
+  id: string
+  datum: string
+  /** E-Mail-Adresse, an die die Anforderung ging. */
+  an: string
+  anName?: string
+  von: string
+  /** Angeforderte Ordner (Unterlagen-Arten). */
+  ordner: DokumentOrdnerName[]
+  /** Weitere, frei beschriebene Unterlagen. */
+  weitere?: string
+  art: 'anforderung' | 'erinnerung'
+}
+
+/** Vom Server gemeldeter neuer Treffer zwischen einem Gesuch und einem Objekt (abteilung_eintraege, art „treffer"). id = `treffer|${gesuchId}|${objektId}`. */
+export type TrefferMeldung = {
+  id: string
+  gesuchId: string
+  kundeId: string
+  objektId: string
+  /** „treffer" = alle Angaben passen, „pruefen" = ein Wert fehlt noch am Objekt. */
+  art: 'treffer' | 'pruefen'
+  entdecktAm: string
+  /** Wer per Telegram benachrichtigt wurde (Namen); leer = niemand erreichbar oder stiller Erststand. */
+  gemeldetAn: string[]
 }
 
 /** Verkaufsdatenblatt (Papiervorlage „Verkaufsdaten", Version 3 vom 14.8.26): die Zusammenfassung eines Objekts auf einer Seite. */
