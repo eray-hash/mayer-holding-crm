@@ -512,8 +512,12 @@ async function retteAbgebrocheneEingaenge(supabase: Supa): Promise<string[]> {
   return zeilen
 }
 
+// Eine eingegangene Datei, egal woher: aus Telegram oder im Assistenten-Fenster des CRM hochgeladen.
+// `bytes` ist null, wenn Telegram die Datei nicht herausgegeben hat.
+type DateiEingang = { bytes: Uint8Array | null; dateiname: string; contentType: string; caption: string; stempel: number }
+
 // deno-lint-ignore no-explicit-any
-async function verarbeiteDateiEingang(supabase: Supa, message: any): Promise<string> {
+async function ladeTelegramEingang(message: any): Promise<DateiEingang> {
   const photo = message.photo?.at(-1) // höchste Auflösung ist der letzte Eintrag
   // Alles, was Telegram als Datei schickt — nicht nur Dokumente und Fotos. Sprachnachrichten, Audio
   // und Videos lassen sich (noch) nicht auswerten, aber sie werden gespeichert und abgelegt.
@@ -525,6 +529,11 @@ async function verarbeiteDateiEingang(supabase: Supa, message: any): Promise<str
     (message.voice ? `sprachnachricht_${stempel}.ogg` : message.audio ? `audio_${stempel}.mp3` : message.video || message.video_note ? `video_${stempel}.mp4` : `foto_${stempel}.jpg`)
   const contentType: string = medium?.mime_type ?? (message.voice ? 'audio/ogg' : message.audio ? 'audio/mpeg' : message.video || message.video_note ? 'video/mp4' : 'image/jpeg')
   const bytes = await telegramDateiHerunterladen(medium?.file_id ?? photo.file_id)
+  return { bytes, dateiname, contentType, caption, stempel }
+}
+
+async function verarbeiteDateiEingang(supabase: Supa, eingangsDatei: DateiEingang): Promise<string> {
+  const { bytes, dateiname, contentType, caption, stempel } = eingangsDatei
   if (!bytes) {
     return `[Datei-Eingang per Telegram — Systemmeldung] Die Datei „${dateiname}" konnte NICHT von Telegram heruntergeladen werden und ist deshalb nicht gespeichert. Häufigster Grund: Sie ist größer als 20 MB; so große Dateien gibt Telegram nicht heraus. Sag dem Mitarbeiter das klar und dass er sie im CRM direkt in der Akte hochladen soll.`
   }
@@ -754,6 +763,9 @@ type AgentState = {
   mail_start?: string
   // Abschlussmeldung des letzten Versands — das CRM-Fenster fragt sie ab, Telegram bekommt sie zugestellt.
   mail_ergebnis?: { id: string; text: string; z: string }
+  // Ergebnisse der letzten Datei-Eingänge (Antwort auf eine im CRM-Fenster hochgeladene Datei, Bericht
+  // einer Sammelsendung) — das CRM-Fenster fragt sie ab.
+  datei_ergebnisse?: { id: string; text: string; z: string }[]
 }
 
 type MailEmpfaenger = { kunde_id: string; bereich: string; name: string; firma: string; email: string; status: string }
@@ -780,6 +792,7 @@ export function ladeState(raw: unknown): AgentState {
     mail_anfrage: r?.mail_anfrage,
     mail_auftrag: r?.mail_auftrag,
     mail_ergebnis: r?.mail_ergebnis,
+    datei_ergebnisse: Array.isArray(r?.datei_ergebnisse) ? r.datei_ergebnisse.slice(-6) : undefined,
   }
 }
 
@@ -2345,6 +2358,11 @@ async function speichereZustand(supabase: Supa, mitarbeiterId: string, state: Ag
   if (f) {
     if (state.mail_auftrag && state.mail_auftrag.id !== mailStart && f.mail_auftrag?.id !== state.mail_auftrag.id) state.mail_auftrag = undefined
     if (f.mail_ergebnis && (!state.mail_ergebnis || String(f.mail_ergebnis.z) > state.mail_ergebnis.z)) state.mail_ergebnis = f.mail_ergebnis
+    if (Array.isArray(f.datei_ergebnisse)) {
+      const bekannteErgebnisse = new Set((state.datei_ergebnisse ?? []).map((e) => e.id))
+      // deno-lint-ignore no-explicit-any
+      state.datei_ergebnisse = [...(state.datei_ergebnisse ?? []), ...f.datei_ergebnisse.filter((e: any) => e?.id && !bekannteErgebnisse.has(e.id))].sort((a, b) => String(a.z).localeCompare(String(b.z))).slice(-6)
+    }
     // Schickt jemand mehrere Dateien kurz hintereinander, laufen ihre Züge gleichzeitig. Jeder hat den
     // Stand vom eigenen Beginn geladen; ohne Zusammenführen würde der letzte die anderen überschreiben.
     const frischeZuege = ladeState(f).zuege
@@ -2385,7 +2403,7 @@ async function webAnfrage(req: Request, body: any, headers: Record<string, strin
   if (nutzerFehler || !nutzer.user?.email) return json({ error: 'Anmeldung ungültig oder abgelaufen. Bitte neu anmelden.' }, 401)
   const { data: mitarbeiter } = await supabase
     .from('mitarbeiter')
-    .select('id, name, email, aktiv, rolle, ist_admin, bereiche, telegram_pending')
+    .select('id, name, email, aktiv, rolle, ist_admin, bereiche, telegram_pending, datei_lauf_seit')
     .eq('email', nutzer.user.email)
     .maybeSingle()
   if (!mitarbeiter || !mitarbeiter.aktiv) return json({ error: 'Kein aktiver Mitarbeiter-Zugang.' }, 403)
@@ -2396,6 +2414,47 @@ async function webAnfrage(req: Request, body: any, headers: Record<string, strin
     return json({ laeuft: !!z.mail_auftrag, ergebnis: z.mail_ergebnis ?? null })
   }
   if (body.web === 'faehigkeiten') return json({ abhoeren: kannAbhoeren() })
+
+  // --- Dateien und Fotos direkt im Assistenten-Fenster abgeben (statt über Telegram) ---
+  if (body.web === 'datei_ziel') {
+    if ((Number(body.groesse) || 0) > WEB_DATEI_HOECHSTENS) {
+      return json({ error: `Die Datei ist zu groß (höchstens ${Math.round(WEB_DATEI_HOECHSTENS / 1024 / 1024)} MB). Lade sie bitte direkt in der Akte unter „Dokumente" hoch.` }, 413)
+    }
+    const name = sicheresPfadsegment(String(body.name ?? 'datei')).slice(-120) || 'datei'
+    const pfad = `${WEB_EINGANG}/${mitarbeiter.id}/${Date.now()}_${crypto.randomUUID().slice(0, 8)}_${name}`
+    const { data: ziel, error: zielFehler } = await supabase.storage.from(BUCKET).createSignedUploadUrl(pfad)
+    if (zielFehler || !ziel?.token) return json({ error: 'Der Platz für die Datei ließ sich nicht vorbereiten. Bitte noch einmal versuchen.' }, 502)
+    return json({ pfad, token: ziel.token })
+  }
+  if (body.web === 'datei_status') {
+    // deno-lint-ignore no-explicit-any
+    const z = (mitarbeiter.telegram_pending as any) ?? {}
+    const { count } = await supabase.from('telegram_warteschlange').select('id', { count: 'exact', head: true }).eq('mitarbeiter_id', String(mitarbeiter.id))
+    const seit = mitarbeiter.datei_lauf_seit ? new Date(mitarbeiter.datei_lauf_seit).getTime() : 0
+    return json({ wartend: count ?? 0, laeuft: Date.now() - seit < 170000, ergebnisse: Array.isArray(z.datei_ergebnisse) ? z.datei_ergebnisse : [] })
+  }
+  if (body.web === 'datei') {
+    const pfad = typeof body.pfad === 'string' ? body.pfad : ''
+    if (!pfad.startsWith(`${WEB_EINGANG}/${mitarbeiter.id}/`) || pfad.includes('..')) return json({ error: 'Unbekannte Datei.' }, 400)
+    const auftrag = crypto.randomUUID()
+    const { count: wartend } = await supabase.from('telegram_warteschlange').select('id', { count: 'exact', head: true }).eq('mitarbeiter_id', String(mitarbeiter.id))
+    // Wie in Telegram: Die erste Datei wird sofort ausgewertet und beantwortet; kommt währenddessen
+    // eine weitere (oder sind es viele auf einmal), wandert sie in die Warteschlange.
+    const dateiLauf = body.sammel !== true && (wartend ?? 0) === 0 && (await belegeDateiLauf(supabase, mitarbeiter.id))
+    const arbeit = verarbeiteWebDatei(supabase, mitarbeiter as Mitarbeiter, {
+      pfad,
+      dateiname: String(body.name ?? '').trim().slice(0, 160) || 'datei',
+      typ: typeof body.typ === 'string' ? body.typ.slice(0, 120) : '',
+      caption: typeof body.text === 'string' ? body.text.trim().slice(0, 1500) : '',
+      auftrag,
+      dateiLauf,
+    })
+    // deno-lint-ignore no-explicit-any
+    const laufzeit = (globalThis as any).EdgeRuntime
+    if (laufzeit?.waitUntil) laufzeit.waitUntil(arbeit)
+    else await arbeit
+    return json({ auftrag, wartet: !dateiLauf })
+  }
   if (body.web === 'transkribiere') {
     if (!kannAbhoeren()) return json({ error: 'Die Abschrift von Aufnahmen ist noch nicht eingerichtet.' }, 503)
     if (typeof body.audio_base64 !== 'string' || body.audio_base64.length < 100) return json({ error: 'Keine Aufnahme mitgeschickt.' }, 400)
@@ -2455,17 +2514,8 @@ async function gebeDateiLaufFrei(supabase: Supa, mitarbeiterId: string): Promise
 }
 
 // Nur speichern, nichts auswerten: für Dateien, die in die Warteschlange kommen.
-// deno-lint-ignore no-explicit-any
-async function speichereNurDatei(supabase: Supa, message: any): Promise<string> {
-  const photo = message.photo?.at(-1)
-  const medium = message.document ?? message.audio ?? message.voice ?? message.video ?? message.video_note ?? message.animation
-  const caption: string = message.caption?.trim() ?? ''
-  const stempel = Date.now()
-  const dateiname: string =
-    medium?.file_name ??
-    (message.voice ? `sprachnachricht_${stempel}.ogg` : message.audio ? `audio_${stempel}.mp3` : message.video || message.video_note ? `video_${stempel}.mp4` : `foto_${stempel}.jpg`)
-  const contentType: string = medium?.mime_type ?? (message.voice ? 'audio/ogg' : message.audio ? 'audio/mpeg' : message.video || message.video_note ? 'video/mp4' : 'image/jpeg')
-  const bytes = await telegramDateiHerunterladen(medium?.file_id ?? photo.file_id)
+async function speichereNurDatei(supabase: Supa, eingangsDatei: DateiEingang): Promise<string> {
+  const { bytes, dateiname, contentType, caption, stempel } = eingangsDatei
   if (!bytes) return `NICHT gespeichert: „${dateiname}" — Telegram gibt die Datei nicht heraus (meist, weil sie größer als 20 MB ist). Sag dem Mitarbeiter, dass er sie im CRM direkt in der Akte hochladen soll.`
   const pfad = `${ORDNER}/${stempel}_h${await inhaltsHash(bytes)}_${sicheresPfadsegment(dateiname)}`
   const { error } = await supabase.storage.from(BUCKET).upload(pfad, bytes, { contentType, upsert: true })
@@ -2547,12 +2597,92 @@ export async function fuehreSortierSchrittAus(mitarbeiterId: string, selbstWeite
       return 'weiter'
     }
     await supabase.from('mitarbeiter').update({ datei_bericht: null }).eq('id', mitarbeiterId)
+    await meldeDateiErgebnis(supabase, mitarbeiterId, crypto.randomUUID(), sortierBericht(bericht))
+    // Im CRM-Fenster hochgeladene Dateien tragen statt eines Chats die Marke "web": Ihr Bericht
+    // erscheint dort, nicht in Telegram.
     const chat = Number(stapel[0].chat_id ?? m.telegram_chat_id)
     if (chat) await sendTelegramMessage(chat, sortierBericht(bericht))
     return 'fertig'
   } finally {
     await gebeDateiLaufFrei(supabase, mitarbeiterId)
     if (weiter && selbstWeiter) await stosseSortierSchrittAn(mitarbeiterId)
+  }
+}
+
+// Hält das Ergebnis eines Datei-Eingangs für das CRM-Fenster fest (die letzten sechs).
+async function meldeDateiErgebnis(supabase: Supa, mitarbeiterId: string, id: string, text: string): Promise<void> {
+  const { data: frisch } = await supabase.from('mitarbeiter').select('telegram_pending').eq('id', mitarbeiterId).maybeSingle()
+  // deno-lint-ignore no-explicit-any
+  const zustand = { ...((frisch?.telegram_pending as any) ?? { v: 3, zuege: [], aktionen: [] }) }
+  zustand.datei_ergebnisse = [...(Array.isArray(zustand.datei_ergebnisse) ? zustand.datei_ergebnisse : []), { id, text, z: new Date().toISOString() }].slice(-6)
+  await supabase.from('mitarbeiter').update({ telegram_pending: zustand }).eq('id', mitarbeiterId)
+}
+
+// Im Assistenten-Fenster des CRM hochgeladene Datei: derselbe Weg wie eine Datei aus Telegram, nur
+// ohne Telegram dazwischen. Der Browser lädt sie direkt in die Ablage (Ordner WEB_EINGANG); hier
+// wird sie ausgewertet und einsortiert. Läuft im Hintergrund — das Fenster fragt das Ergebnis ab,
+// es muss dafür nicht offen bleiben.
+const WEB_EINGANG = 'crm-eingang'
+const WEB_DATEI_HOECHSTENS = 30 * 1024 * 1024
+
+async function verarbeiteWebDatei(
+  supabase: Supa,
+  mitarbeiter: Mitarbeiter,
+  a: { pfad: string; dateiname: string; typ: string; caption: string; auftrag: string; dateiLauf: boolean },
+): Promise<void> {
+  const mid = String(mitarbeiter.id)
+  try {
+    const { data: blob, error } = await supabase.storage.from(BUCKET).download(a.pfad)
+    if (error || !blob) {
+      await meldeDateiErgebnis(supabase, mid, a.auftrag, `„${a.dateiname}" ist nicht angekommen. Bitte noch einmal hochladen.`)
+      return
+    }
+    const bytes = new Uint8Array(await blob.arrayBuffer())
+    const datei: DateiEingang = { bytes, dateiname: a.dateiname, contentType: a.typ || blob.type || 'application/octet-stream', caption: a.caption, stempel: Date.now() }
+    if (!a.dateiLauf) {
+      // Es läuft schon ein Datei-Lauf (oder es kommen viele auf einmal): speichern und in die Warteschlange.
+      let zeile = await speichereNurDatei(supabase, datei)
+      if (zeile.startsWith('pfad=')) zeile += ' | im CRM-Fenster hochgeladen'
+      await supabase.from('telegram_warteschlange').insert({ mitarbeiter_id: mid, chat_id: 'web', zeile })
+      await supabase.from('mitarbeiter').update({ datei_bericht: [] }).eq('id', mid).is('datei_bericht', null)
+      if (zeile.startsWith('pfad=')) await supabase.storage.from(BUCKET).remove([a.pfad])
+      await stosseSortierSchrittAn(mid)
+      return
+    }
+    let eingang = await verarbeiteDateiEingang(supabase, datei)
+    eingang += '\nDie Datei wurde im Assistenten-Fenster des CRM hochgeladen, nicht über Telegram.'
+    if (/pfad=telegram\//.test(eingang) || /NICHT noch einmal gespeichert/.test(eingang)) await supabase.storage.from(BUCKET).remove([a.pfad])
+    const { data: frisch } = await supabase.from('mitarbeiter').select('telegram_pending').eq('id', mid).maybeSingle()
+    const state = ladeState(frisch?.telegram_pending)
+    let antwort: string
+    try {
+      antwort = await agentAntwort(supabase, mitarbeiter, state, eingang, 'web')
+    } catch (err) {
+      console.error('Assistent (Datei aus dem CRM-Fenster) fehlgeschlagen:', err)
+      const notAblage = await stelleAblageSicher(supabase, mitarbeiter.name, eingang).catch(() => [] as string[])
+      const dateiHinweis = notAblage.length > 0 ? ` Deine Datei liegt unter „Ungeklärte Eingänge": ${notAblage.join(', ')}.` : ' Deine Datei ist gespeichert.'
+      await meldeDateiErgebnis(supabase, mid, a.auftrag, `Da ist gerade etwas schiefgelaufen (${err instanceof Error ? err.message : 'unbekannter Fehler'}).${dateiHinweis}`)
+      return
+    }
+    const nachgelegt = await stelleAblageSicher(supabase, mitarbeiter.name, eingang).catch((err) => {
+      console.error('Sicherheitsnetz fehlgeschlagen:', err)
+      return [] as string[]
+    })
+    if (nachgelegt.length > 0) {
+      antwort = `${antwort}\n\nUnter „Ungeklärte Eingänge" abgelegt, weil nicht erkennbar war, zu wem es gehört: ${nachgelegt.join(', ')}. Sag mir einfach, wohin es soll, dann verschiebe ich es.`
+      state.aktionen.push({ z: new Date().toISOString(), text: `${nachgelegt.length} Datei(en) unter Ungeklärte Eingänge abgelegt: ${nachgelegt.join(', ')}` })
+    }
+    const mailStart = await speichereZustand(supabase, mid, state)
+    await meldeDateiErgebnis(supabase, mid, a.auftrag, antwort)
+    if (mailStart) await stosseMailSchrittAn(mid, mailStart, {}, 0)
+  } catch (err) {
+    console.error('Datei aus dem CRM-Fenster: Verarbeitung fehlgeschlagen:', err)
+    await meldeDateiErgebnis(supabase, mid, a.auftrag, `„${a.dateiname}" konnte nicht verarbeitet werden (${err instanceof Error ? err.message : 'unbekannter Fehler'}). Die Datei ist hochgeladen; schick sie bitte noch einmal oder lade sie direkt in der Akte hoch.`).catch(() => undefined)
+  } finally {
+    if (a.dateiLauf) {
+      await gebeDateiLaufFrei(supabase, mid)
+      await stosseSortierSchrittAn(mid)
+    }
   }
 }
 
@@ -2654,7 +2784,7 @@ async function verarbeiteUpdate(update: any): Promise<void> {
     const { count: wartend } = await supabase.from('telegram_warteschlange').select('id', { count: 'exact', head: true }).eq('mitarbeiter_id', String(mitarbeiter.id))
     dateiLauf = (wartend ?? 0) === 0 && (await belegeDateiLauf(supabase, mitarbeiter.id))
     if (!dateiLauf) {
-      let zeile = await speichereNurDatei(supabase, message)
+      let zeile = await speichereNurDatei(supabase, await ladeTelegramEingang(message))
       if (weitergeleitet && vonWem && zeile.startsWith('pfad=')) zeile += ` | weitergeleitet, ursprünglich von ${vonWem}`
       await supabase.from('telegram_warteschlange').insert({ mitarbeiter_id: String(mitarbeiter.id), chat_id: String(chatId), zeile })
       // Genau eine Rückmeldung je Sammelsendung: Nur wer den Bericht als Erster eröffnet, schreibt.
@@ -2667,7 +2797,7 @@ async function verarbeiteUpdate(update: any): Promise<void> {
       return
     }
     try {
-      eingang = await verarbeiteDateiEingang(supabase, message)
+      eingang = await verarbeiteDateiEingang(supabase, await ladeTelegramEingang(message))
     } catch (err) {
       await gebeDateiLaufFrei(supabase, mitarbeiter.id)
       throw err

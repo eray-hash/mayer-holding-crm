@@ -70,3 +70,52 @@ export async function schreibeAb(aufnahme: Blob, hinweis = ''): Promise<string> 
   const r = await anfrage<{ text: string }>({ web: 'transkribiere', audio_base64: await alsBase64(aufnahme), mime: aufnahme.type, hinweis })
   return r.text ?? ''
 }
+
+// ---------- Dateien und Fotos an den Assistenten geben (ohne Telegram) ----------
+
+export const DATEI_HOECHSTENS = 30 * 1024 * 1024
+/** Welche Dateien der Auswahldialog anbietet. Mit "image/*" liefert das Handy Fotos als JPEG. */
+export const DATEI_ARTEN =
+  'image/*,application/pdf,audio/*,video/*,.doc,.docx,.xls,.xlsx,.csv,.txt,.rtf,.odt,.ods,.ppt,.pptx,.eml,.msg,.zip'
+
+/** Handy-Fotos sind oft 5–12 MB groß. Für die Ablage und fürs Lesen reicht eine Kantenlänge von
+ *  2600 Punkten (gut lesbares A4) — das spart Wartezeit und Speicher. Alles andere bleibt unverändert. */
+export async function verkleinereBild(datei: File): Promise<File> {
+  if (!datei.type.startsWith('image/') || /gif|svg/.test(datei.type)) return datei
+  if (datei.size < 1_500_000 && /jpe?g|png|webp/.test(datei.type)) return datei
+  try {
+    const bild = await createImageBitmap(datei)
+    const faktor = Math.min(1, 2600 / Math.max(bild.width, bild.height))
+    const flaeche = document.createElement('canvas')
+    flaeche.width = Math.round(bild.width * faktor)
+    flaeche.height = Math.round(bild.height * faktor)
+    const stift = flaeche.getContext('2d')
+    if (!stift) return datei
+    stift.drawImage(bild, 0, 0, flaeche.width, flaeche.height)
+    bild.close()
+    const blob = await new Promise<Blob | null>((fertig) => flaeche.toBlob(fertig, 'image/jpeg', 0.86))
+    if (!blob || blob.size >= datei.size) return datei
+    return new File([blob], datei.name.replace(/\.[a-z0-9]+$/i, '') + '.jpg', { type: 'image/jpeg' })
+  } catch {
+    return datei // lässt sich das Bild hier nicht öffnen, geht es so, wie es ist
+  }
+}
+
+/** Lädt eine Datei direkt in die Ablage und übergibt sie dem Assistenten zum Einsortieren. Die Arbeit
+ *  läuft auf dem Server weiter; das Ergebnis kommt über dateiStatus(). `sammel`: viele Dateien auf
+ *  einmal — dann wird nur gespeichert und der Reihe nach einsortiert. */
+export async function schickeDatei(datei: File, text: string, sammel: boolean): Promise<{ auftrag: string; wartet: boolean }> {
+  if (!supabase) throw new Error('Der Assistent ist nicht eingerichtet.')
+  if (datei.size > DATEI_HOECHSTENS) throw new Error('zu groß (höchstens 30 MB). Lade sie bitte direkt in der Akte unter „Dokumente" hoch.')
+  const typ = datei.type || 'application/octet-stream'
+  const ziel = await anfrage<{ pfad: string; token: string }>({ web: 'datei_ziel', name: datei.name, groesse: datei.size })
+  const { error } = await supabase.storage.from('email-anhaenge').uploadToSignedUrl(ziel.pfad, ziel.token, datei, { contentType: typ })
+  if (error) throw new Error(`Hochladen fehlgeschlagen (${error.message}).`)
+  return anfrage({ web: 'datei', pfad: ziel.pfad, name: datei.name, typ, text, sammel })
+}
+
+export type DateiStatus = { wartend: number; laeuft: boolean; ergebnisse: { id: string; text: string; z: string }[] }
+
+export function dateiStatus(): Promise<DateiStatus> {
+  return anfrage<DateiStatus>({ web: 'datei_status' })
+}

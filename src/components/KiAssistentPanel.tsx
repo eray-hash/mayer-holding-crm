@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { Mic, Square, Sparkles, AlertTriangle, Send, X, Volume2, VolumeX, Bot, ImagePlus, Phone, Wrench, Check, BookOpen } from 'lucide-react'
+import { Mic, Square, Sparkles, AlertTriangle, Send, X, Volume2, VolumeX, Bot, ImagePlus, Phone, Wrench, Check, BookOpen, Paperclip } from 'lucide-react'
 import { useApp } from '../context/AppContext'
-import { frageAssistent, istServerAssistentVerfuegbar, mailStatus } from '../lib/assistentServer'
+import { DATEI_ARTEN, dateiStatus, frageAssistent, istServerAssistentVerfuegbar, mailStatus, schickeDatei, verkleinereBild } from '../lib/assistentServer'
 import { useAuth } from '../context/AuthContext'
 import { isSupabaseConfigured } from '../lib/supabaseClient'
 import { useSpeechRecognition } from '../lib/useSpeechRecognition'
@@ -111,6 +111,9 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
   // Schreiboperation, daher kein erhöhtes Risiko.
   const [firmenwissenModus, setFirmenwissenModus] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
+  const dateiWahl = useRef<HTMLInputElement>(null)
+  // Zeile über dem Eingabefeld, solange Dateien hochgeladen oder einsortiert werden.
+  const [dateiHinweis, setDateiHinweis] = useState('')
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' })
@@ -432,6 +435,82 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
         addMessage('assistant', 'Zum E-Mail-Versand habe ich noch keine Abschlussmeldung. Frag mich später, ob alles raus ist.')
       }
     }, 5000)
+  }
+
+  // Dateien und Fotos direkt hier abgeben — derselbe Weg wie über Telegram, nur ohne Telegram: Die
+  // Datei geht in die eigene Ablage, der Assistent auf dem Server liest sie und legt sie in die
+  // richtige Akte. Das läuft dort weiter, auch wenn dieses Fenster zugeht.
+  async function dateienSchicken(liste: File[]) {
+    if (liste.length === 0) return
+    if (!istServerAssistentVerfuegbar || !session) {
+      addMessage('assistant', 'Dateien kann ich hier erst annehmen, wenn du angemeldet bist.')
+      return
+    }
+    const text = (interim ? `${transcript} ${interim}` : transcript).trim()
+    setTranscript('')
+    setInterim('')
+    const namen = liste.length <= 4 ? liste.map((f) => f.name).join(', ') : `${liste.slice(0, 3).map((f) => f.name).join(', ')} und ${liste.length - 3} weitere`
+    addMessage('user', `${liste.length === 1 ? 'Datei' : `${liste.length} Dateien`} geschickt: ${namen}${text ? `\n${text}` : ''}`)
+    const sammel = liste.length > 3
+    setVerarbeiten(true)
+    const bekannt = new Set<string>()
+    try {
+      ;(await dateiStatus()).ergebnisse.forEach((e) => bekannt.add(e.id))
+    } catch {
+      // Dann zeigen wir schlimmstenfalls eine ältere Meldung noch einmal.
+    }
+    let geschickt = 0
+    for (const [i, datei] of liste.entries()) {
+      setDateiHinweis(liste.length === 1 ? `„${datei.name}" wird hochgeladen …` : `Datei ${i + 1} von ${liste.length} wird hochgeladen …`)
+      try {
+        await schickeDatei(await verkleinereBild(datei), text, sammel)
+        geschickt++
+      } catch (err) {
+        addMessage('assistant', `„${datei.name}": ${err instanceof Error ? err.message : 'Hochladen fehlgeschlagen.'}`)
+      }
+    }
+    if (geschickt === 0) {
+      setDateiHinweis('')
+      setVerarbeiten(false)
+      return
+    }
+    if (sammel) {
+      // Viele Dateien: nicht darauf warten — das Gespräch bleibt frei, die Meldung kommt nach.
+      addMessage('assistant', `${geschickt} Dateien sind gespeichert. Ich sortiere sie der Reihe nach ein und melde mich hier, wenn alles liegt. Das Fenster muss dafür nicht offen bleiben.`)
+      setVerarbeiten(false)
+    }
+    setDateiHinweis(geschickt === 1 ? 'Die Datei wird gelesen und einsortiert …' : `${geschickt} Dateien werden gelesen und einsortiert …`)
+    let runden = 0
+    let gezeigt = 0
+    let ruhig = 0
+    const timer = window.setInterval(async () => {
+      runden++
+      try {
+        const st = await dateiStatus()
+        for (const e of st.ergebnisse) {
+          if (bekannt.has(e.id)) continue
+          bekannt.add(e.id)
+          gezeigt++
+          addMessage('assistant', e.text)
+          if (!sammel) setVerarbeiten(false)
+          await neuLaden().catch(() => undefined)
+        }
+        ruhig = !st.laeuft && st.wartend === 0 ? ruhig + 1 : 0
+        if (st.wartend > 0) setDateiHinweis(`Noch ${st.wartend} ${st.wartend === 1 ? 'Datei wartet' : 'Dateien warten'} auf das Einsortieren …`)
+      } catch {
+        // Verbindung kurz weg — beim nächsten Mal wieder fragen.
+      }
+      // Fertig, wenn zweimal hintereinander nichts mehr läuft oder wartet (höchstens 20 Minuten).
+      if ((ruhig >= 2 && runden >= 3) || runden >= 300) {
+        window.clearInterval(timer)
+        setDateiHinweis('')
+        setVerarbeiten(false)
+        if (gezeigt === 0) {
+          addMessage('assistant', runden >= 300 ? 'Das Einsortieren läuft noch. Die Dateien sind gespeichert; das Ergebnis siehst du in den Akten oder unter „Ungeklärte Eingänge".' : 'Die Dateien sind gespeichert. Wohin sie gekommen sind, siehst du in den Akten oder unter „Ungeklärte Eingänge".')
+          await neuLaden().catch(() => undefined)
+        }
+      }
+    }, 4000)
   }
 
   async function senden() {
@@ -786,7 +865,29 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
               </button>
             </div>
           )}
+          {dateiHinweis && <p className="mb-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">{dateiHinweis}</p>}
+          <input
+            ref={dateiWahl}
+            type="file"
+            multiple
+            accept={DATEI_ARTEN}
+            className="hidden"
+            onChange={(e) => {
+              const liste = Array.from(e.target.files ?? [])
+              e.target.value = ''
+              void dateienSchicken(liste)
+            }}
+          />
           <div className="flex items-end gap-2">
+            <button
+              onClick={() => dateiWahl.current?.click()}
+              disabled={verarbeiten || !istServerAssistentVerfuegbar || !session}
+              className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500 hover:bg-slate-200 disabled:opacity-50"
+              title="Datei oder Foto schicken — ich lege sie in die richtige Akte"
+              aria-label="Datei oder Foto schicken"
+            >
+              <Paperclip size={16} />
+            </button>
             <button
               onClick={() => {
                 if (recording) {
@@ -830,7 +931,7 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
                     ? 'z.B. „X ist kein Kunde" oder „verschiebe X zu Erben" …'
                     : firmenwissenModus
                       ? 'z.B. „Wo liegt das Exposé Musterstraße 17?" …'
-                      : 'Nachricht eingeben, Mikro nutzen oder Bild einfügen …'
+                      : 'Nachricht, Mikro oder Datei (Büroklammer) …'
               }
               title="Bilder per Strg/Cmd+V aus der Zwischenablage einfügen"
             />
