@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { Building2, Landmark, FileText, ChevronDown, ChevronLeft, ChevronRight, ScrollText, Sun, LayoutGrid, UserCog, ListTodo, Users } from 'lucide-react'
+import { Building2, Landmark, FileText, ChevronDown, ChevronLeft, ChevronRight, ScrollText, Sun, LayoutGrid, UserCog, ListTodo, Users, Search } from 'lucide-react'
 import { UngeklaertSideLink } from './UngeklaertSideLink'
 import { useApp } from '../context/AppContext'
 import { OBJEKT_GRUPPEN } from '../data/constants'
@@ -32,6 +32,7 @@ export function SidebarImmobilien({ collapsed, onToggle }: { collapsed: boolean;
       <div className="space-y-1 px-2">
         <SideLink to="/heute" icon={<Sun size={17} />} label="Heute" collapsed={collapsed} active={isActive('/heute')} />
         <SideLink to="/immobilien/kunden" icon={<Users size={17} />} label="Kunden" collapsed={collapsed} active={isActive('/immobilien/kunden')} />
+        <SideLink to="/immobilien/gesuche" icon={<Search size={17} />} label="Gesuche" collapsed={collapsed} active={isActive('/immobilien/gesuche')} />
         <SideLink to="/immobilien/projekte" icon={<LayoutGrid size={17} />} label="Projekte" collapsed={collapsed} active={isActive('/immobilien/projekte')} />
         <div>
           <button

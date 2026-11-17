@@ -93,6 +93,8 @@ function kundeToRow(bereich: KundeBereich, k: Kunde) {
     unterlagen_checkliste: k.unterlagenCheckliste ?? null,
     signaturen: k.signaturen ?? null,
     kaeuferprofil: k.kaeuferprofil ?? null,
+    immo_stammdaten: k.immoStammdaten ?? null,
+    gesuche: k.gesuche ?? null,
     unternehmensbewertung: k.unternehmensbewertung ?? null,
     selbstauskunft: k.selbstauskunft ?? null,
     dokumente: k.dokumente ?? null,
@@ -124,6 +126,8 @@ function rowToKunde(row: any): Kunde {
     unterlagenCheckliste: row.unterlagen_checkliste ?? undefined,
     signaturen: row.signaturen ?? undefined,
     kaeuferprofil: row.kaeuferprofil ?? undefined,
+    immoStammdaten: row.immo_stammdaten ?? undefined,
+    gesuche: row.gesuche ?? undefined,
     unternehmensbewertung: row.unternehmensbewertung ?? undefined,
     selbstauskunft: row.selbstauskunft ?? undefined,
     dokumente: row.dokumente ?? undefined,
@@ -154,6 +158,7 @@ function objektToRow(o: Objekt) {
     immo_radar_link: o.immoRadarLink ?? null,
     lukrativitaet: o.lukrativitaet ?? null,
     zugewiesener_kunde: o.zugewiesenerKunde ?? null,
+    off_market: o.offMarket ?? false,
     eigentuemer: o.eigentuemer ?? null,
     expose_text: o.exposeText ?? null,
   }
@@ -177,6 +182,7 @@ function rowToObjekt(row: any): Objekt {
     immoRadarLink: row.immo_radar_link ?? undefined,
     lukrativitaet: row.lukrativitaet ?? undefined,
     zugewiesenerKunde: row.zugewiesener_kunde ?? undefined,
+    offMarket: row.off_market ?? false,
     eigentuemer: row.eigentuemer ?? undefined,
     exposeText: row.expose_text ?? undefined,
   }
@@ -648,7 +654,7 @@ function syncSimpleCollection(client: NonNullable<typeof supabase>, prev: AppDat
 // andere bleibt so, wie es in der Datenbank steht.
 
 type ListenEintrag = { id: string }
-const LISTEN_FELDER = ['activities', 'dokumente', 'signaturen'] as const
+const LISTEN_FELDER = ['activities', 'dokumente', 'signaturen', 'gesuche'] as const
 type ListenFeld = (typeof LISTEN_FELDER)[number]
 
 /** Was die Datenbank gegenüber dem Stand dieses Fensters zusätzlich weiß — je Liste der Akte. */

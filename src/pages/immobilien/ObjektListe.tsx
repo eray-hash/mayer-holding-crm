@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { Plus, List, LayoutGrid, ArrowRight, Radar } from 'lucide-react'
+import { Plus, List, LayoutGrid, ArrowRight, Radar, EyeOff, Share2 } from 'lucide-react'
 import { useApp, useAdvanceStatus } from '../../context/AppContext'
 import { IMMOBILIEN_STATUS } from '../../data/statusNetworks'
 import { holeImmoRadarTopListings, generateExpose, isEmailGatewayConfigured, type ImmoRadarTreffer } from '../../lib/emailGateway'
@@ -16,6 +16,9 @@ import {
 } from '../../data/constants'
 import { PriorityBadge, StatusBadge, SecondaryButton, PrimaryButton, Modal, Field, inputClass } from '../../components/ui'
 import { StatusBoard } from '../../components/StatusBoard'
+import { ObjektlisteWeitergeben } from '../../components/ObjektlisteWeitergeben'
+import { useAuth } from '../../context/AuthContext'
+import { CURRENT_USER } from '../../data/constants'
 import { fmtDate, isOverdue, today, uid, fmtEUR } from '../../lib/dates'
 import type { Objekt, Prioritaet, ObjektGruppe, ObjektTyp } from '../../types'
 
@@ -44,6 +47,11 @@ export function ObjektListe() {
   const [fPrio, setFPrio] = useState('')
   const [fVerantwortlich, setFVerantwortlich] = useState('')
   const [fOverdue, setFOverdue] = useState(false)
+  // Objektliste zum Weitergeben: Objekte ankreuzen, als „nicht öffentlich" kennzeichnen, Auswahl ausgeben.
+  const { mitarbeiter } = useAuth()
+  const [fMarkt, setFMarkt] = useState<'' | 'nicht-oeffentlich' | 'oeffentlich'>('')
+  const [auswahl, setAuswahl] = useState<Set<string>>(new Set())
+  const [weitergebenOpen, setWeitergebenOpen] = useState(false)
 
   const filtered = useMemo(() => {
     return state.objekte
@@ -52,8 +60,25 @@ export function ObjektListe() {
       .filter((o) => !fPrio || o.prioritaet === fPrio)
       .filter((o) => !fVerantwortlich || o.verantwortlich === fVerantwortlich)
       .filter((o) => !fOverdue || isOverdue(o.followUp.date, o.followUp.done))
+      .filter((o) => !fMarkt || (fMarkt === 'nicht-oeffentlich' ? !!o.offMarket : !o.offMarket))
       .sort((a, b) => PRIORITAET_ORDER[a.prioritaet] - PRIORITAET_ORDER[b.prioritaet])
-  }, [state.objekte, gruppe, fStatus, fPrio, fVerantwortlich, fOverdue])
+  }, [state.objekte, gruppe, fStatus, fPrio, fVerantwortlich, fOverdue, fMarkt])
+
+  const gewaehlt = state.objekte.filter((o) => auswahl.has(o.id))
+  const alleSichtbarenGewaehlt = filtered.length > 0 && filtered.every((o) => auswahl.has(o.id))
+
+  function schalte(id: string) {
+    setAuswahl((alt) => {
+      const neu = new Set(alt)
+      if (neu.has(id)) neu.delete(id)
+      else neu.add(id)
+      return neu
+    })
+  }
+
+  function kennzeichne(nichtOeffentlich: boolean) {
+    for (const o of gewaehlt) if (!!o.offMarket !== nichtOeffentlich) dispatch({ type: 'UPDATE_OBJEKT', id: o.id, patch: { offMarket: nichtOeffentlich } })
+  }
 
   return (
     <div>
@@ -101,17 +126,49 @@ export function ObjektListe() {
           <option value="">Alle Verantwortlichen</option>
           {MITARBEITER.map((m) => <option key={m} value={m}>{m}</option>)}
         </select>
+        <select value={fMarkt} onChange={(e) => setFMarkt(e.target.value as typeof fMarkt)} className={`${inputClass} w-auto`} aria-label="Öffentlich oder nicht öffentlich">
+          <option value="">Öffentlich und nicht öffentlich</option>
+          <option value="nicht-oeffentlich">Nur nicht öffentliche (Off-Market)</option>
+          <option value="oeffentlich">Nur öffentliche</option>
+        </select>
         <label className="flex items-center gap-1.5 text-sm text-slate-600">
           <input type="checkbox" checked={fOverdue} onChange={(e) => setFOverdue(e.target.checked)} className="rounded" />
           nur überfällige Follow-ups
         </label>
       </div>
 
+      {view === 'liste' && auswahl.size > 0 && (
+        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-accent-200 bg-accent-50 px-3 py-2 text-sm">
+          <span className="font-medium text-accent-800">
+            {auswahl.size} {auswahl.size === 1 ? 'Objekt' : 'Objekte'} ausgewählt
+          </span>
+          <PrimaryButton onClick={() => setWeitergebenOpen(true)}>
+            <Share2 size={14} /> Liste zum Weitergeben
+          </PrimaryButton>
+          <SecondaryButton onClick={() => kennzeichne(true)}>
+            <EyeOff size={14} /> Als nicht öffentlich kennzeichnen
+          </SecondaryButton>
+          <SecondaryButton onClick={() => kennzeichne(false)}>Kennzeichen entfernen</SecondaryButton>
+          <button onClick={() => setAuswahl(new Set())} className="ml-auto text-xs font-medium text-accent-700 hover:underline">
+            Auswahl aufheben
+          </button>
+        </div>
+      )}
+
       {view === 'liste' ? (
         <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-slate-100 bg-slate-50 text-left text-xs font-medium uppercase tracking-wide text-slate-400">
+                <th className="w-8 py-3 pl-4">
+                  <input
+                    type="checkbox"
+                    className="rounded"
+                    checked={alleSichtbarenGewaehlt}
+                    onChange={() => setAuswahl(alleSichtbarenGewaehlt ? new Set() : new Set(filtered.map((o) => o.id)))}
+                    aria-label="Alle angezeigten Objekte auswählen"
+                  />
+                </th>
                 <th className="px-4 py-3">Objekt</th>
                 <th className="px-4 py-3">Gruppe</th>
                 <th className="px-4 py-3">Typ</th>
@@ -129,10 +186,18 @@ export function ObjektListe() {
                 const node = IMMOBILIEN_STATUS[o.status]
                 return (
                   <tr key={o.id} onClick={() => navigate(`/immobilien/objekte/${o.id}`)} className="cursor-pointer border-b border-slate-50 last:border-0 hover:bg-slate-50/60">
+                    <td className="py-3 pl-4" onClick={(e) => e.stopPropagation()}>
+                      <input type="checkbox" className="rounded" checked={auswahl.has(o.id)} onChange={() => schalte(o.id)} aria-label={`${o.bezeichnung} auswählen`} />
+                    </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1.5">
                         <span className="font-medium text-slate-800">{o.bezeichnung}</span>
                         {o.quelle === 'immoradar' && <Radar size={12} className="text-accent-500" />}
+                        {o.offMarket && (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600" title="Wird nicht öffentlich angeboten (Off-Market)">
+                            <EyeOff size={10} /> nicht öffentlich
+                          </span>
+                        )}
                       </div>
                       <div className="text-xs text-slate-400">{o.adresse}</div>
                       {o.lukrativitaet && (
@@ -161,7 +226,7 @@ export function ObjektListe() {
                   </tr>
                 )
               })}
-              {filtered.length === 0 && <tr><td colSpan={9} className="px-4 py-10 text-center text-sm text-slate-400">Keine Objekte gefunden.</td></tr>}
+              {filtered.length === 0 && <tr><td colSpan={10} className="px-4 py-10 text-center text-sm text-slate-400">Keine Objekte gefunden.</td></tr>}
             </tbody>
           </table>
         </div>
@@ -174,6 +239,9 @@ export function ObjektListe() {
         />
       )}
 
+      {weitergebenOpen && (
+        <ObjektlisteWeitergeben open={weitergebenOpen} onClose={() => setWeitergebenOpen(false)} objekte={gewaehlt} absender={mitarbeiter?.name ?? CURRENT_USER} />
+      )}
       {addOpen && (
         <NeuesObjektModal open={addOpen} onClose={() => setAddOpen(false)} onCreate={erstelleObjektMitExpose} />
       )}

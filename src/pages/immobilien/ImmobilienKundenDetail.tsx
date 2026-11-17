@@ -21,10 +21,12 @@ import { DokumenteSection } from '../../components/DokumenteSection'
 import { KommunikationSection } from '../../components/KommunikationSection'
 import { LoeschenKundeButton } from '../../components/LoeschenKundeButton'
 import { AktenReiter } from '../../components/AktenReiter'
+import { ImmoStammdatenblatt } from '../../components/ImmoStammdatenblatt'
 import type { Prioritaet } from '../../types'
 
 const TABS = [
   { id: 'uebersicht', label: 'Übersicht' },
+  { id: 'stammdatenblatt', label: 'Stammdatenblatt' },
   { id: 'protokolle', label: 'Gesprächsprotokolle' },
   { id: 'potenzial', label: 'Potenzial-Analyse' },
   { id: 'kaeuferprofil', label: 'Käuferprofil' },
@@ -132,6 +134,8 @@ export function ImmobilienKundenDetail() {
           <ZugewieseneObjekte bereich="immobilienkunden" kundeId={kunde.id} />
         </div>
       )}
+
+      {tab === 'stammdatenblatt' && <ImmoStammdatenblatt key={kunde.id} kunde={kunde} />}
 
       {tab === 'protokolle' && <GespraechsprotokolleSection bereich="immobilienkunden" kundeId={kunde.id} kundeName={kunde.ansprechpartner} />}
 

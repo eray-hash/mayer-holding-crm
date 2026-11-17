@@ -230,6 +230,44 @@ export type PruefHinweis = {
   vorschlagBereich?: KundeBereich
 }
 
+// ---------- Stammdatenblatt der Immobilienabteilung (Papiervorlage "Stammdaten", Version 21.10.26) ----------
+
+export type ImmoRolle = 'vermittler' | 'eigentuemer' | 'makler' | 'empfehler'
+export type ImmoAuftragsart = 'alleinauftrag' | 'qualifizierter_alleinauftrag' | 'einfacher_maklerauftrag' | 'vermittlungsauftrag'
+
+/** Was über den reinen Kontakt hinaus auf dem Stammdatenblatt steht. Name, Telefon und E-Mail bleiben in den Stammdaten der Akte. */
+export type ImmoStammdaten = {
+  startdatum?: string
+  prio?: 'A' | 'B' | 'C'
+  rollen: ImmoRolle[]
+  auftragsart?: ImmoAuftragsart
+  position?: string
+  adresse?: string
+  telefonBuero?: string
+  emailDirekt?: string
+  webseite?: string
+  bonitaet?: string
+  bearbeiter?: string
+  /** "Angebotene Objekte": was die Person selbst anbietet. */
+  bietetAn: string
+  sonstiges: string
+}
+
+/** Ein Gesuch ("Suchende Objekte"): Eine Person kann mehrere haben. Grundlage für den Abgleich mit dem Objektbestand. */
+export type Gesuch = {
+  id: string
+  erstelltAm: string
+  titel: string
+  objekttypen: ObjektTyp[]
+  /** Orte oder Regionen, durch Komma getrennt ("Ulm, Neu-Ulm"). Leer = Lage egal. */
+  lage: string
+  budgetMin?: number
+  budgetMax?: number
+  nutzung: 'Eigennutz' | 'Kapitalanlage' | 'Unklar'
+  notizen: string
+  erledigt?: boolean
+}
+
 export type Kunde = {
   id: string
   firma: string
@@ -253,6 +291,8 @@ export type Kunde = {
   unterlagenCheckliste?: Record<string, boolean>
   signaturen?: Signatur[]
   kaeuferprofil?: Kaeuferprofil
+  immoStammdaten?: ImmoStammdaten
+  gesuche?: Gesuch[]
   selbstauskunft?: Selbstauskunft
   dokumente?: Dokument[]
   unternehmensbewertung?: Unternehmensbewertung
@@ -432,6 +472,8 @@ export type Objekt = {
   immoRadarLink?: string
   lukrativitaet?: string
   zugewiesenerKunde?: { bereich: KundeBereich; kundeId: string; kundeName: string }
+  // Nicht öffentlich angeboten ("Off-Market") — Kennzeichen für die Objektliste zum Weitergeben.
+  offMarket?: boolean
   // Vom Eigentümer selbst über das öffentliche Formular (/formular/eigentuemer/:objektId)
   // bestätigt/gepflegt — siehe PublicEigentuemerPortal.tsx.
   eigentuemer?: ObjektEigentuemer
