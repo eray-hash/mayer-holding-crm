@@ -17,11 +17,13 @@ import { classifyObjektDokument, generateExpose, isEmailGatewayConfigured } from
 import type { Objekt } from '../../types'
 import { ObjektVerkaufsdatenblatt } from '../../components/ObjektVerkaufsdatenblatt'
 import { ObjektKurzpruefungBlatt } from '../../components/ObjektKurzpruefungBlatt'
+import { ObjektFragenSection } from '../../components/ObjektFragenSection'
 
 const TABS = [
   { id: 'uebersicht', label: 'Übersicht' },
   { id: 'verkaufsdaten', label: 'Verkaufsdatenblatt' },
   { id: 'kurzpruefung', label: 'Kurzprüfung' },
+  { id: 'fragen', label: 'Fragen' },
   { id: 'dokumente', label: 'Dokumente' },
   { id: 'finanzierung', label: 'Finanzierung' },
   { id: 'vorschlaege', label: 'Gesuche & Vorschläge' },
@@ -374,6 +376,8 @@ export function ObjektDetail() {
       {tab === 'verkaufsdaten' && <ObjektVerkaufsdatenblatt key={objekt.id} objekt={objekt} />}
 
       {tab === 'kurzpruefung' && <ObjektKurzpruefungBlatt key={objekt.id} objekt={objekt} />}
+
+      {tab === 'fragen' && <ObjektFragenSection key={objekt.id} objekt={objekt} />}
 
       {tab === 'finanzierung' && (
         <div>

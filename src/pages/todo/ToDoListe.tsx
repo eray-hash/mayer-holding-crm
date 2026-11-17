@@ -5,7 +5,7 @@ import { useApp } from '../../context/AppContext'
 import { useAuth } from '../../context/AuthContext'
 import { supabase, isSupabaseConfigured } from '../../lib/supabaseClient'
 import { Modal, Field, inputClass, PrimaryButton, SecondaryButton, EmptyState } from '../../components/ui'
-import { uid, today } from '../../lib/dates'
+import { uid, today, fmtDate, fmtEURCent, isOverdue } from '../../lib/dates'
 import { CURRENT_USER } from '../../data/constants'
 import { ALLE_BEREICHE } from '../../data/bereiche'
 import type { ToDoEintrag, Bereich } from '../../types'
@@ -38,12 +38,77 @@ function zahlWert(v: unknown): number | undefined {
   return Number.isNaN(n) ? undefined : n
 }
 
+// Excel-Datum → lokales yyyy-mm-dd. Datumszellen kommen (cellDates) als Date, von Hand getippte als
+// Text ("17.11.2026", "17.11.26", "2026-11-17"). Bewusst über die lokalen Datumsteile, nie toISOString().
+// Die halbe Minute Zugabe fängt die Sekunden-Abweichung ab, mit der die Bibliothek Mitternacht teils
+// knapp vor dem Tageswechsel liefert. Nicht lesbare Werte werden weggelassen statt falsch übernommen.
+function datumWert(v: unknown): string | undefined {
+  if (v === null || v === undefined || v === '') return undefined
+  const zwei = (n: number) => String(n).padStart(2, '0')
+  if (v instanceof Date) {
+    if (Number.isNaN(v.getTime())) return undefined
+    const d = new Date(v.getTime() + 30_000)
+    return `${d.getFullYear()}-${zwei(d.getMonth() + 1)}-${zwei(d.getDate())}`
+  }
+  const s = String(v).trim()
+  const iso = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/)
+  if (iso) return `${iso[1]}-${zwei(Number(iso[2]))}-${zwei(Number(iso[3]))}`
+  const deutsch = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{2}|\d{4})$/)
+  if (deutsch) {
+    const jahr = deutsch[3].length === 2 ? 2000 + Number(deutsch[3]) : Number(deutsch[3])
+    return `${jahr}-${zwei(Number(deutsch[2]))}-${zwei(Number(deutsch[1]))}`
+  }
+  return undefined
+}
+
+// Die vier Zusatzfelder haben in der bisherigen Excel-Vorlage keine feste Spalte. Sie werden deshalb
+// an der Überschrift erkannt (in den Kopfzeilen über den Daten), z.B. "warten auf", "Aufgabe erhalten
+// am", "Aufgabe zu erledigen bis". Die feste Spaltenzuordnung der übrigen Felder bleibt unberührt.
+type ZusatzFeld = 'wartenAuf' | 'erhaltenAm' | 'erledigenBis' | 'stundensatz'
+const ZUSATZ_KOPF: [string, ZusatzFeld][] = [
+  ['warten auf', 'wartenAuf'],
+  ['erhalten am', 'erhaltenAm'],
+  ['erledigen bis', 'erledigenBis'],
+  ['stundensatz', 'stundensatz'],
+]
+
+function findeZusatzSpalten(kopfzeilen: unknown[][]): Partial<Record<ZusatzFeld, number>> {
+  const spalten: Partial<Record<ZusatzFeld, number>> = {}
+  for (const zeile of kopfzeilen) {
+    zeile.forEach((zelle, i) => {
+      if (typeof zelle !== 'string') return
+      const kopf = zelle.toLowerCase().replace(/\s+/g, ' ').trim()
+      for (const [stichwort, feld] of ZUSATZ_KOPF) {
+        if (spalten[feld] === undefined && kopf.includes(stichwort)) spalten[feld] = i
+      }
+    })
+  }
+  return spalten
+}
+
+/** Zeitaufwandskosten in Euro: Ist-Zeit (Minuten) / 60 × Stundensatz. Nur wenn beides eingetragen ist. */
+function zeitaufwandskosten(t: Pick<ToDoEintrag, 'istZeit' | 'stundensatz'>): number | undefined {
+  if (t.istZeit === undefined || t.istZeit === null || t.stundensatz === undefined || t.stundensatz === null) return undefined
+  return (t.istZeit / 60) * t.stundensatz
+}
+
+function fmtStunden(minuten: number): string {
+  return `${(minuten / 60).toLocaleString('de-DE', { maximumFractionDigits: 2 })} Std.`
+}
+
+// Kommazahl in deutscher Schreibweise, damit Excel sie in der CSV als Zahl liest.
+function csvZahl(n: number | undefined): string | undefined {
+  return n === undefined || n === null ? undefined : n.toFixed(2).replace('.', ',')
+}
+
 function parseExcelDatei(workbookBuffer: ArrayBuffer, sheetName: string): Omit<ToDoEintrag, 'id' | 'besitzerEmail' | 'bereich' | 'reihenfolge' | 'erstelltAm'>[] {
   const wb = read(workbookBuffer, { type: 'array', cellDates: true })
   const sheet = wb.Sheets[sheetName] ?? wb.Sheets[wb.SheetNames[0]]
   if (!sheet) return []
   const rows = zuExcelZeile(utils.sheet_to_json(sheet, { header: 1, raw: true, defval: null }))
   const out: ReturnType<typeof parseExcelDatei> = []
+  const zusatz = findeZusatzSpalten(rows.slice(0, 4))
+  const zusatzZelle = (row: unknown[], feld: ZusatzFeld) => (zusatz[feld] === undefined ? undefined : row[zusatz[feld]])
   for (const row of rows.slice(4)) {
     const aufgabe = textWert(row[4])
     if (!aufgabe) continue
@@ -63,6 +128,10 @@ function parseExcelDatei(workbookBuffer: ArrayBuffer, sheetName: string): Omit<T
       umsatzWert: zahlWert(row[12]),
       geplanteWiedervorlage: textWert(row[13]),
       erledigtAm: textWert(row[15]),
+      wartenAuf: textWert(zusatzZelle(row, 'wartenAuf')),
+      erhaltenAm: datumWert(zusatzZelle(row, 'erhaltenAm')),
+      erledigenBis: datumWert(zusatzZelle(row, 'erledigenBis')),
+      stundensatz: zahlWert(zusatzZelle(row, 'stundensatz')),
     })
   }
   return out
@@ -73,9 +142,9 @@ function csvZeile(werte: (string | number | undefined)[]): string {
 }
 
 function exportiereCsv(liste: ToDoEintrag[], dateiname: string) {
-  const header = csvZeile(['Start', 'Prio', 'Unter', 'Kunde/Projekt', 'Aufgabe', 'Abt.', 'aktueller Stand', 'welche Fragen', 'nächste Schritte', 'zuständig', 'geplante Zeit', 'Ist-Zeit', 'Umsatz', 'Wiedervorlage', 'Erledigt am'])
+  const header = csvZeile(['Start', 'Prio', 'Unter', 'Kunde/Projekt', 'Aufgabe', 'Abt.', 'aktueller Stand', 'welche Fragen', 'nächste Schritte', 'zuständig', 'geplante Zeit', 'Ist-Zeit', 'Umsatz', 'Wiedervorlage', 'Erledigt am', 'Warten auf', 'Erhalten am', 'Erledigen bis', 'Stundensatz (€)', 'Zeitaufwandskosten (€)'])
   const zeilen = liste.map((t) =>
-    csvZeile([t.startDatum, t.prio, t.unterPrio, t.kundeProjekt, t.aufgabe, t.abteilung, t.aktuellerStand, t.welcheFragen, t.naechsteSchritte, t.zustaendig, t.geplanteZeit, t.istZeit, t.umsatzWert, t.geplanteWiedervorlage, t.erledigtAm]),
+    csvZeile([t.startDatum, t.prio, t.unterPrio, t.kundeProjekt, t.aufgabe, t.abteilung, t.aktuellerStand, t.welcheFragen, t.naechsteSchritte, t.zustaendig, t.geplanteZeit, t.istZeit, t.umsatzWert, t.geplanteWiedervorlage, t.erledigtAm, t.wartenAuf, t.erhaltenAm, t.erledigenBis, csvZahl(t.stundensatz), csvZahl(zeitaufwandskosten(t))]),
   )
   const csv = '﻿' + [header, ...zeilen].join('\r\n')
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
@@ -89,6 +158,7 @@ function exportiereCsv(liste: ToDoEintrag[], dateiname: string) {
 
 type Mitarbeiterkurz = { name: string; email: string }
 type Recht = 'eigentuemer' | 'lesen' | 'schreiben'
+type Sortierung = 'reihenfolge' | 'prio' | 'faellig'
 type Scope = { kind: 'privat' } | { kind: 'bereich'; bereich: Bereich; label: string }
 
 export function ToDoListe() {
@@ -106,7 +176,7 @@ function ToDoListeKern({ scope }: { scope: Scope }) {
   const eigenerName = mitarbeiter?.name ?? CURRENT_USER
 
   const [ansicht, setAnsicht] = useState<'offen' | 'erledigt'>('offen')
-  const [sortierung, setSortierung] = useState<'reihenfolge' | 'prio'>('reihenfolge')
+  const [sortierung, setSortierung] = useState<Sortierung>('reihenfolge')
   const [aktiveListe, setAktiveListe] = useState<string>(eigeneEmail)
   const [addOpen, setAddOpen] = useState(false)
   const [editEintrag, setEditEintrag] = useState<ToDoEintrag | null>(null)
@@ -158,11 +228,25 @@ function ToDoListeKern({ scope }: { scope: Scope }) {
         if (prioA !== prioB) return prioA.localeCompare(prioB)
         return (a.unterPrio ?? 99) - (b.unterPrio ?? 99)
       }
+      if (sortierung === 'faellig') {
+        // Früheste Frist zuerst, Aufgaben ohne Frist ans Ende; bei Gleichstand die gewohnte Reihenfolge.
+        const bisA = a.erledigenBis || '9999-99-99'
+        const bisB = b.erledigenBis || '9999-99-99'
+        if (bisA !== bisB) return bisA.localeCompare(bisB)
+        return (a.reihenfolge ?? 99999) - (b.reihenfolge ?? 99999)
+      }
       if (ansicht === 'erledigt') return (b.erledigtAm ?? '').localeCompare(a.erledigtAm ?? '')
       return (a.reihenfolge ?? 99999) - (b.reihenfolge ?? 99999)
     })
 
   const sichtbar = sortiere(ansicht === 'offen' ? offen : erledigt)
+
+  // Summen über die gerade angezeigten Aufgaben. Kosten zählen nur, wo Ist-Zeit UND Stundensatz stehen —
+  // wie viele Aufgaben mit Ist-Zeit deshalb fehlen, wird daneben ausgewiesen statt verschwiegen.
+  const summeIstMinuten = sichtbar.reduce((s, t) => s + (t.istZeit ?? 0), 0)
+  const summeKosten = sichtbar.reduce((s, t) => s + (zeitaufwandskosten(t) ?? 0), 0)
+  const ohneStundensatz = sichtbar.filter((t) => t.istZeit && zeitaufwandskosten(t) === undefined).length
+  const ueberfaelligAnzahl = offen.filter((t) => isOverdue(t.erledigenBis ?? '', false)).length
 
   function naechsteReihenfolge() {
     return 1 + Math.max(0, ...listenEintraege.map((t) => t.reihenfolge ?? 0))
@@ -220,6 +304,7 @@ function ToDoListeKern({ scope }: { scope: Scope }) {
           <h1 className="text-xl font-semibold text-slate-800">{titel}</h1>
           <p className="text-sm text-slate-500">
             {offen.length} offen · {erledigt.length} erledigt
+            {ueberfaelligAnzahl > 0 && <span className="font-medium text-rose-600"> · {ueberfaelligAnzahl} überfällig</span>}
             {scope.kind === 'bereich' && ' · für alle Mitarbeiter sichtbar'}
           </p>
         </div>
@@ -240,9 +325,10 @@ function ToDoListeKern({ scope }: { scope: Scope }) {
               <ChevronDown size={14} className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
             </div>
           )}
-          <select value={sortierung} onChange={(e) => setSortierung(e.target.value as 'reihenfolge' | 'prio')} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm">
+          <select value={sortierung} onChange={(e) => setSortierung(e.target.value as Sortierung)} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm">
             <option value="reihenfolge">Reihenfolge (wie Excel)</option>
             <option value="prio">Nach Priorität</option>
+            <option value="faellig">Nach Frist (Erledigen bis)</option>
           </select>
           {scope.kind === 'privat' && aktiveListe === eigeneEmail && isSupabaseConfigured && (
             <SecondaryButton onClick={() => setFreigabenOpen(true)}>
@@ -302,10 +388,18 @@ function ToDoListeKern({ scope }: { scope: Scope }) {
               {(t.kundeProjekt || t.zustaendig) && (
                 <p className="mt-0.5 text-xs text-slate-500">{[t.kundeProjekt, t.zustaendig].filter(Boolean).join(' · ')}</p>
               )}
-              {(t.startDatum || t.geplanteWiedervorlage || (ansicht === 'erledigt' && t.erledigtAm)) && (
+              {t.wartenAuf && <p className="mt-0.5 text-xs text-amber-700">Warten auf: {t.wartenAuf}</p>}
+              {(t.startDatum || t.geplanteWiedervorlage || t.erledigenBis || zeitaufwandskosten(t) !== undefined || (ansicht === 'erledigt' && t.erledigtAm)) && (
                 <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-400">
                   {t.startDatum && <span>Start: {t.startDatum}</span>}
+                  {t.erledigenBis && (
+                    <span className={isOverdue(t.erledigenBis, !!t.erledigtAm) ? 'font-medium text-rose-600' : ''}>
+                      Erledigen bis: {fmtDate(t.erledigenBis)}
+                      {isOverdue(t.erledigenBis, !!t.erledigtAm) && ' · überfällig'}
+                    </span>
+                  )}
                   {t.geplanteWiedervorlage && <span>Wiedervorlage: {t.geplanteWiedervorlage}</span>}
+                  {zeitaufwandskosten(t) !== undefined && <span>Zeitkosten: {fmtEURCent(zeitaufwandskosten(t)!)}</span>}
                   {ansicht === 'erledigt' && t.erledigtAm && <span>Erledigt: {t.erledigtAm}</span>}
                 </div>
               )}
@@ -354,6 +448,8 @@ function ToDoListeKern({ scope }: { scope: Scope }) {
               <th className="sticky left-[146px] z-10 border-r border-slate-200 bg-slate-50 px-3 py-3 w-[56px] shadow-[2px_0_4px_-2px_rgba(0,0,0,0.08)]">Unter</th>
               <th className="px-3 py-3 whitespace-nowrap">Kunde/Projekt</th>
               <th className="px-3 py-3 whitespace-nowrap">Aufgabe</th>
+              <th className="px-3 py-3 whitespace-nowrap">Erledigen bis</th>
+              <th className="px-3 py-3 whitespace-nowrap">Warten auf</th>
               <th className="px-3 py-3 whitespace-nowrap">Abt.</th>
               <th className="px-3 py-3 whitespace-nowrap">Aktueller Stand</th>
               <th className="px-3 py-3 whitespace-nowrap">Welche Fragen</th>
@@ -361,6 +457,7 @@ function ToDoListeKern({ scope }: { scope: Scope }) {
               <th className="px-3 py-3 whitespace-nowrap">Zuständig</th>
               <th className="px-3 py-3 whitespace-nowrap">Geplante Zeit</th>
               <th className="px-3 py-3 whitespace-nowrap">Ist-Zeit</th>
+              <th className="px-3 py-3 whitespace-nowrap">Zeitkosten</th>
               <th className="px-3 py-3 whitespace-nowrap">Umsatz</th>
               <th className="px-3 py-3 whitespace-nowrap">Wiedervorlage</th>
               {ansicht === 'erledigt' && <th className="px-3 py-3 whitespace-nowrap">Erledigt am</th>}
@@ -368,7 +465,10 @@ function ToDoListeKern({ scope }: { scope: Scope }) {
             </tr>
           </thead>
           <tbody>
-            {sichtbar.map((t) => (
+            {sichtbar.map((t) => {
+              const ueberfaellig = isOverdue(t.erledigenBis ?? '', !!t.erledigtAm)
+              const kosten = zeitaufwandskosten(t)
+              return (
               <tr key={t.id} className="group border-b border-slate-50 last:border-0 hover:bg-slate-50/60">
                 <td onClick={() => setEditEintrag(t)} className="sticky left-0 z-10 cursor-pointer whitespace-nowrap bg-white px-3 py-3 text-slate-500 group-hover:bg-slate-50">
                   {t.startDatum ?? ''}
@@ -381,6 +481,11 @@ function ToDoListeKern({ scope }: { scope: Scope }) {
                 </td>
                 <td onClick={() => setEditEintrag(t)} className="cursor-pointer px-3 py-3 text-slate-600">{t.kundeProjekt ?? ''}</td>
                 <td onClick={() => setEditEintrag(t)} className="cursor-pointer px-3 py-3 max-w-xs text-slate-800">{t.aufgabe}</td>
+                <td onClick={() => setEditEintrag(t)} className={`cursor-pointer px-3 py-3 whitespace-nowrap ${ueberfaellig ? 'font-medium text-rose-600' : 'text-slate-500'}`}>
+                  {t.erledigenBis ? fmtDate(t.erledigenBis) : ''}
+                  {ueberfaellig && ' · überfällig'}
+                </td>
+                <td onClick={() => setEditEintrag(t)} className="cursor-pointer px-3 py-3 max-w-[12rem] text-slate-500">{t.wartenAuf ?? ''}</td>
                 <td onClick={() => setEditEintrag(t)} className="cursor-pointer px-3 py-3 text-slate-500">{t.abteilung ?? ''}</td>
                 <td onClick={() => setEditEintrag(t)} className="cursor-pointer px-3 py-3 max-w-xs text-slate-500">{t.aktuellerStand ?? ''}</td>
                 <td onClick={() => setEditEintrag(t)} className="cursor-pointer px-3 py-3 max-w-xs text-slate-500">{t.welcheFragen ?? ''}</td>
@@ -388,6 +493,7 @@ function ToDoListeKern({ scope }: { scope: Scope }) {
                 <td onClick={() => setEditEintrag(t)} className="cursor-pointer px-3 py-3 text-slate-500">{t.zustaendig ?? ''}</td>
                 <td onClick={() => setEditEintrag(t)} className="cursor-pointer px-3 py-3 whitespace-nowrap text-slate-500">{t.geplanteZeit ?? ''}</td>
                 <td onClick={() => setEditEintrag(t)} className="cursor-pointer px-3 py-3 text-slate-500">{t.istZeit ?? ''}</td>
+                <td onClick={() => setEditEintrag(t)} className="cursor-pointer px-3 py-3 whitespace-nowrap text-slate-500">{kosten !== undefined ? fmtEURCent(kosten) : ''}</td>
                 <td onClick={() => setEditEintrag(t)} className="cursor-pointer px-3 py-3 whitespace-nowrap text-slate-500">{t.umsatzWert ?? ''}</td>
                 <td onClick={() => setEditEintrag(t)} className="cursor-pointer px-3 py-3 whitespace-nowrap text-slate-500">{t.geplanteWiedervorlage ?? ''}</td>
                 {ansicht === 'erledigt' && <td className="px-3 py-3 whitespace-nowrap text-slate-400">{t.erledigtAm}</td>}
@@ -418,10 +524,11 @@ function ToDoListeKern({ scope }: { scope: Scope }) {
                   </div>
                 </td>
               </tr>
-            ))}
+              )
+            })}
             {sichtbar.length === 0 && (
               <tr>
-                <td colSpan={16} className="px-4 py-10">
+                <td colSpan={19} className="px-4 py-10">
                   <EmptyState text={ansicht === 'offen' ? 'Keine offenen Aufgaben.' : 'Noch keine Aufgabe erledigt.'} />
                 </td>
               </tr>
@@ -429,6 +536,20 @@ function ToDoListeKern({ scope }: { scope: Scope }) {
           </tbody>
         </table>
       </div>
+
+      {sichtbar.length > 0 && (
+        <p className="mt-2 px-1 text-xs text-slate-500">
+          Ist-Zeit gesamt: <span className="font-medium text-slate-700">{fmtStunden(summeIstMinuten)}</span>
+          {' · '}
+          Zeitaufwandskosten gesamt: <span className="font-medium text-slate-700">{fmtEURCent(summeKosten)}</span>
+          {ohneStundensatz > 0 && (
+            <span className="text-slate-400">
+              {' '}
+              ({ohneStundensatz} {ohneStundensatz === 1 ? 'Aufgabe' : 'Aufgaben'} mit Ist-Zeit ohne Stundensatz nicht eingerechnet)
+            </span>
+          )}
+        </p>
+      )}
 
       {addOpen && (
         <ToDoModal
@@ -575,6 +696,16 @@ function ToDoModal({
   const [istZeit, setIstZeit] = useState(initial?.istZeit?.toString() ?? '')
   const [umsatzWert, setUmsatzWert] = useState(initial?.umsatzWert?.toString() ?? '')
   const [geplanteWiedervorlage, setGeplanteWiedervorlage] = useState(initial?.geplanteWiedervorlage ?? '')
+  const [wartenAuf, setWartenAuf] = useState(initial?.wartenAuf ?? '')
+  // Neue Aufgabe: "Erhalten am" ist heute vorbelegt. Beim Bearbeiten bleibt ein leeres Feld leer.
+  const [erhaltenAm, setErhaltenAm] = useState(initial ? initial.erhaltenAm ?? '' : today())
+  const [erledigenBis, setErledigenBis] = useState(initial?.erledigenBis ?? '')
+  const [stundensatz, setStundensatz] = useState(initial?.stundensatz?.toString() ?? '')
+
+  const kostenVorschau = zeitaufwandskosten({
+    istZeit: istZeit ? Number(istZeit) : undefined,
+    stundensatz: stundensatz ? Number(stundensatz) : undefined,
+  })
 
   function submit() {
     if (!aufgabe.trim()) return
@@ -594,6 +725,10 @@ function ToDoModal({
       umsatzWert: umsatzWert ? Number(umsatzWert) : undefined,
       geplanteWiedervorlage: geplanteWiedervorlage || undefined,
       erledigtAm: initial?.erledigtAm,
+      wartenAuf: wartenAuf.trim() || undefined,
+      erhaltenAm: erhaltenAm || undefined,
+      erledigenBis: erledigenBis || undefined,
+      stundensatz: stundensatz ? Number(stundensatz) : undefined,
     })
   }
 
@@ -623,6 +758,11 @@ function ToDoModal({
           <Field label="Abteilung"><input className={inputClass} value={abteilung} onChange={(e) => setAbteilung(e.target.value)} /></Field>
           <Field label="Zuständig"><input className={inputClass} value={zustaendig} onChange={(e) => setZustaendig(e.target.value)} /></Field>
         </div>
+        <div className="grid grid-cols-1 gap-x-4 sm:grid-cols-3">
+          <Field label="Erhalten am"><input type="date" className={inputClass} value={erhaltenAm} onChange={(e) => setErhaltenAm(e.target.value)} /></Field>
+          <Field label="Erledigen bis"><input type="date" className={inputClass} value={erledigenBis} onChange={(e) => setErledigenBis(e.target.value)} /></Field>
+          <Field label="Warten auf"><input className={inputClass} value={wartenAuf} onChange={(e) => setWartenAuf(e.target.value)} /></Field>
+        </div>
         <Field label="Aktueller Stand"><textarea className={inputClass} rows={2} value={aktuellerStand} onChange={(e) => setAktuellerStand(e.target.value)} /></Field>
         <Field label="Welche Fragen gibt es / welche Infos werden benötigt"><textarea className={inputClass} rows={2} value={welcheFragen} onChange={(e) => setWelcheFragen(e.target.value)} /></Field>
         <Field label="Was ist als nächstes zu tun"><textarea className={inputClass} rows={2} value={naechsteSchritte} onChange={(e) => setNaechsteSchritte(e.target.value)} /></Field>
@@ -630,6 +770,13 @@ function ToDoModal({
           <Field label="Geplante Zeit (z.B. 180 std)"><input className={inputClass} value={geplanteZeit} onChange={(e) => setGeplanteZeit(e.target.value)} /></Field>
           <Field label="Ist-Zeit (min)"><input type="number" className={inputClass} value={istZeit} onChange={(e) => setIstZeit(e.target.value)} /></Field>
           <Field label="Umsatz (€)"><input type="number" className={inputClass} value={umsatzWert} onChange={(e) => setUmsatzWert(e.target.value)} /></Field>
+        </div>
+        <div className="grid grid-cols-1 gap-x-4 sm:grid-cols-3">
+          <Field label="Stundensatz (€)"><input type="number" min="0" step="0.01" className={inputClass} value={stundensatz} onChange={(e) => setStundensatz(e.target.value)} /></Field>
+          <div className="mb-3 sm:col-span-2">
+            <span className="mb-1 block text-xs font-medium text-slate-500">Zeitaufwandskosten (Ist-Zeit × Stundensatz)</span>
+            <p className="px-1 py-2 text-sm text-slate-700">{kostenVorschau !== undefined ? fmtEURCent(kostenVorschau) : '– (Ist-Zeit und Stundensatz eintragen)'}</p>
+          </div>
         </div>
         <Field label="Geplante Wiedervorlage"><input type="date" className={inputClass} value={geplanteWiedervorlage} onChange={(e) => setGeplanteWiedervorlage(e.target.value)} /></Field>
       </fieldset>

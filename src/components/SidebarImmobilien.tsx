@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { Building2, Landmark, FileText, ChevronDown, ChevronLeft, ChevronRight, ScrollText, Sun, LayoutGrid, UserCog, ListTodo, Users, Search } from 'lucide-react'
+import { Building2, Landmark, FileText, ChevronDown, ChevronLeft, ChevronRight, ScrollText, Sun, LayoutGrid, UserCog, ListTodo, Users, Search, MessageCircleQuestion } from 'lucide-react'
 import { UngeklaertSideLink } from './UngeklaertSideLink'
 import { useApp } from '../context/AppContext'
 import { OBJEKT_GRUPPEN } from '../data/constants'
@@ -22,6 +22,8 @@ export function SidebarImmobilien({ collapsed, onToggle }: { collapsed: boolean;
   const isActive = (path: string) => location.pathname === path || location.pathname.startsWith(path + '/')
   const search = new URLSearchParams(location.search)
   const activeGruppe = search.get('gruppe')
+
+  const offeneFragen = state.immoFragen.filter((f) => !f.antwort?.trim()).length
 
   function countFor(id: string) {
     return state.objekte.filter((o) => o.gruppe === id).length
@@ -87,6 +89,13 @@ export function SidebarImmobilien({ collapsed, onToggle }: { collapsed: boolean;
         />
         <UngeklaertSideLink collapsed={collapsed} />
         <SideLink to="/immobilien/todo" icon={<ListTodo size={17} />} label="To-Do-Liste" collapsed={collapsed} active={isActive('/immobilien/todo')} />
+        <SideLink
+          to="/immobilien/fragen"
+          icon={<MessageCircleQuestion size={17} />}
+          label={`Fragen an die GF${offeneFragen > 0 ? ` (${offeneFragen})` : ''}`}
+          collapsed={collapsed}
+          active={isActive('/immobilien/fragen')}
+        />
 
         <div>
           <button
