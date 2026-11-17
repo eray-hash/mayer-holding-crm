@@ -931,7 +931,7 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
                     ? 'z.B. „X ist kein Kunde" oder „verschiebe X zu Erben" …'
                     : firmenwissenModus
                       ? 'z.B. „Wo liegt das Exposé Musterstraße 17?" …'
-                      : 'Nachricht, Mikro oder Datei (Büroklammer) …'
+                      : 'Nachricht oder Datei …'
               }
               title="Bilder per Strg/Cmd+V aus der Zwischenablage einfügen"
             />
