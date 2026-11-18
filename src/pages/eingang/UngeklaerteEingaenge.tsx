@@ -679,7 +679,7 @@ export function UngeklaerteEingaenge() {
 
                       {!wahl && (vorschlaege[d.id]?.length ?? 0) > 0 && (
                         <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2">
-                          <span className="text-xs text-slate-500">Vorschlag — mit einem Klick ablegen bei:</span>
+                          <span className="text-xs text-slate-500">Vorschlag (antippen, dann „Ablegen“):</span>
                           {vorschlaege[d.id].map((k) => {
                             const ordner = ordnerFuer(d)
                             return (
@@ -687,9 +687,9 @@ export function UngeklaerteEingaenge() {
                                 key={kennung(k)}
                                 type="button"
                                 disabled={arbeitet}
-                                onClick={() => void ablegen([d.id], { kandidat: k, ordner })}
+                                onClick={() => setZiele((alt) => ({ ...alt, [d.id]: { kandidat: k, ordner } }))}
                                 className="inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full border border-accent-200 bg-accent-50 px-3 py-1 text-left text-xs font-medium text-accent-700 hover:bg-accent-100 disabled:cursor-not-allowed disabled:opacity-50"
-                                title={k.art === 'objekt' ? `Beim Objekt ${k.name} im Ordner ${ordner} ablegen` : `Bei ${k.name} ablegen`}
+                                title={k.art === 'objekt' ? `Objekt ${k.name}, Ordner ${ordner} als Ziel übernehmen` : `${k.name} als Ziel übernehmen`}
                               >
                                 <ZielZeichen kandidat={k} />
                                 <span className="min-w-0 break-words">

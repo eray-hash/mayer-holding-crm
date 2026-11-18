@@ -2264,7 +2264,10 @@ Regeln, die über der Arbeitsanweisung stehen:
       const text = String(z.zwischen?.text ?? '').trim()
       if (text.length < 200) throw new Error('Die KI hat keinen verwertbaren Bewertungstext geliefert.')
       const fakten = [z.zwischen?.unterlagen, z.zwischen?.unterlagen2].filter(Boolean).join('\n\n')
-      const pruefung = await callClaudeTool<Record<string, unknown>>(
+      // Freie Textantwort mit einem JSON-Block statt eines erzwungenen Werkzeugs: Das Modell denkt bei dieser
+      // Aufgabe (nachrechnen) lange vor der Antwort nach, und beim Werkzeug-Aufruf war das Kontingent dafür
+      // schon verbraucht, bevor überhaupt eine Antwort kam.
+      const antwort = await callClaudeResearch(
         `Du prüfst als zweite, unabhängige Stelle den Entwurf einer Immobilienbewertung für das Objekt „${o.bezeichnung}". Du schreibst die Bewertung nicht neu.
 
 Prüfe: Stimmen die Rechenwege (rechne nach)? Stammen die verwendeten Zahlen aus dem Faktenblatt oder der Marktrecherche, oder sind sie als Annahme gekennzeichnet? Gibt es Widersprüche im Text oder zu den Grundlagen? Ist die genannte Wertspanne durch die Rechnung gedeckt?
@@ -2279,31 +2282,16 @@ ${String(z.zwischen?.markt ?? '').trim().slice(0, 8_000) || '(nichts gefunden)'}
 ${text.slice(0, 60_000)}
 === Ende ===
 
-Rufe das Werkzeug pruefergebnis auf. Die Ergebniswerte übernimmst du aus dem Entwurf (bei einem Rechenfehler den richtig gerechneten Wert, und nenne den Fehler in „befunde"). Was im Entwurf nicht belastbar ermittelt wurde, lässt du weg — nichts schätzen.`,
-        {
-          name: 'pruefergebnis',
-          description: 'Ergebnis der Zweitprüfung und die Ergebniswerte der Bewertung.',
-          input_schema: {
-            type: 'object',
-            properties: {
-              urteil: { type: 'string', description: 'Ein bis drei Sätze: Ist der Entwurf in sich stimmig und wie belastbar ist das Ergebnis?' },
-              befunde: { type: 'array', items: { type: 'string' }, description: 'Konkrete Befunde: Rechenfehler mit richtiger Rechnung, unbelegte Zahlen, Widersprüche. Leer, wenn nichts auffällt. Höchstens acht.' },
-              marktwertVon: { type: 'number', description: 'Untere Grenze des Marktwerts in Euro' },
-              marktwertBis: { type: 'number', description: 'Obere Grenze des Marktwerts in Euro' },
-              marktwert: { type: 'number', description: 'Mittelwert oder wahrscheinlichster Marktwert in Euro' },
-              preisProQm: { type: 'number', description: 'Marktwert je m² Wohn-/Nutzfläche in Euro' },
-              mieteProQm: { type: 'number', description: 'Angesetzte Miete je m² und Monat in Euro' },
-              kaufpreisfaktor: { type: 'number', description: 'Kaufpreisfaktor (Marktwert geteilt durch Jahresnettokaltmiete)' },
-              rendite: { type: 'number', description: 'Rendite in Prozent' },
-            },
-            required: ['urteil', 'befunde'],
-          },
-        },
-        2500,
-        'claude-sonnet-5-5',
-        'auto',
-        timeoutMs,
+Antworte NUR mit einem Block in genau dieser Form, ohne Text davor oder danach:
+\`\`\`json
+{"urteil": "ein bis drei Sätze: Ist der Entwurf in sich stimmig und wie belastbar ist das Ergebnis?", "befunde": ["konkreter Befund: Rechenfehler mit richtiger Rechnung, unbelegte Zahl oder Widerspruch — höchstens acht, leere Liste wenn nichts auffällt"], "marktwertVon": null, "marktwertBis": null, "marktwert": null, "preisProQm": null, "mieteProQm": null, "kaufpreisfaktor": null, "rendite": null}
+\`\`\`
+Die Ergebniswerte übernimmst du als reine Zahlen aus dem Entwurf (bei einem Rechenfehler den richtig gerechneten Wert, und nenne den Fehler in „befunde"): Marktwerte in Euro, preisProQm in Euro je m² Wohn-/Nutzfläche, mieteProQm in Euro je m² und Monat, kaufpreisfaktor als Vielfaches der Jahresnettokaltmiete, rendite in Prozent. Was im Entwurf nicht belastbar ermittelt wurde, bleibt null — nichts schätzen.`,
+        { model: 'claude-sonnet-5-5', maxSearches: 0, maxTokens: 3000, timeoutMs, ohneNachdenken: true },
       )
+      const block = antwort.match(/```json\s*([\s\S]*?)```/) ?? antwort.match(/(\{[\s\S]*\})/)
+      if (!block) throw new Error('Die Zweitprüfung hat kein auswertbares Ergebnis geliefert.')
+      const pruefung = JSON.parse(block[1]) as Record<string, unknown>
       const kennzahlen: Record<string, number> = {}
       for (const feld of ['marktwertVon', 'marktwertBis', 'marktwert', 'preisProQm', 'mieteProQm', 'kaufpreisfaktor', 'rendite']) {
         const wert = Number(pruefung[feld])
@@ -2311,7 +2299,7 @@ Rufe das Werkzeug pruefergebnis auf. Die Ergebniswerte übernimmst du aus dem En
       }
       const befunde = (Array.isArray(pruefung.befunde) ? pruefung.befunde : []).map((b) => String(b).trim()).filter(Boolean).slice(0, 8)
       const abgebrochen = (z.zwischen?.fortsetzungen ?? 0) >= 2 && !/[.!?]\s*$/.test(text)
-      const bericht = `${text}${abgebrochen ? '\n\n(Der Text wurde an dieser Stelle aus Platzgründen beendet.)' : ''}\n\nZWEITPRÜFUNG\n\n${String(pruefung.urteil ?? '').trim()}${befunde.length > 0 ? `\n\n${befunde.map((b) => `- ${b}`).join('\n')}` : '\n\n- Keine Auffälligkeiten bei Rechenwegen und Zahlenherkunft.'}`
+      const bericht = `${text}${abgebrochen ? '\n\n(Der Text wurde an dieser Stelle aus Platzgründen beendet.)' : ''}\n\nUNABHÄNGIGE GEGENPRÜFUNG DER RECHENWEGE UND ZAHLEN\n\n${String(pruefung.urteil ?? '').trim()}${befunde.length > 0 ? `\n\n${befunde.map((b) => `- ${b}`).join('\n')}` : '\n\n- Keine Auffälligkeiten bei Rechenwegen und Zahlenherkunft.'}`
       await schreibe({ status: 'fertig', schritt: 'Fertig', schrittNr: undefined, laeuftSeit: null, bericht, kennzahlen, zwischen: undefined, protokoll: undefined, abgeschlossenAm: new Date().toISOString() })
       return
     }
