@@ -7,6 +7,7 @@ import { CURRENT_USER } from '../data/constants'
 import { analysierePotenzial, rechercheKundenUmfeld, holeDokumentInhalte, type DokumentInhaltInfo } from '../lib/emailGateway'
 import { akteWissen } from '../lib/akteWissen'
 import { SteuerAnalyseSection } from './SteuerAnalyseSection'
+import { BonitaetSection } from './BonitaetSection'
 import { Card, PrimaryButton, PriorityBadge, EmptyState } from './ui'
 import { fmtDate, fmtDateTime, fmtEURCent, addDays, today } from '../lib/dates'
 import type { KundeBereich, PotenzialAnalyse, PotenzialQuelle } from '../types'
@@ -342,6 +343,7 @@ export function PotenzialAnalyseSection({ bereich, kundeId, kundeName }: { berei
       {!analyse && !loading && !error && <EmptyState text="Noch keine Analyse durchgeführt." />}
 
       <SteuerAnalyseSection bereich={bereich} kundeId={kundeId} />
+      <BonitaetSection bereich={bereich} kundeId={kundeId} />
     </div>
   )
 }

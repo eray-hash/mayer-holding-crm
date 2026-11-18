@@ -233,6 +233,7 @@ import { loescheTermin, sendeErinnerungen, sendeTelegram, speichereTermin } from
 import { ordneMailObjektZu } from './objektMail.ts'
 import { legeEingaengeAb, macheAblageRueckgaengig, nimmEingaengeHeraus } from './eingang.ts'
 import { pruefeNeueTreffer } from './gesuchTreffer.ts'
+import { pruefeBonitaet } from './bonitaet.ts'
 import { kiAufruf, mitAnlass, setzeAnlass } from '../_shared/kiVerbrauch.ts'
 
 const ALLOWED_ORIGINS = [
@@ -3820,6 +3821,25 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       }
       const ergebnis = await ordneMailObjektZu(admin, String(body.mailId ?? ''), String(body.objektId ?? ''), { name: aufrufer.name || aufrufer.email })
       if (!ergebnis.ok) return new Response(JSON.stringify({ error: ergebnis.fehler }), { status: 400, headers })
+      return new Response(JSON.stringify(ergebnis), { headers })
+    }
+
+    // Interne Bonitätseinschätzung eines Kunden (siehe bonitaet.ts) — nur mit eigenem Login, antwortet nach höchstens rund 100 Sekunden.
+    if (body.action === 'bonitaet_pruefen') {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const aufrufer = await ermittleAufrufer(req, admin, body)
+      if (!aufrufer) {
+        return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
+      }
+      const ergebnis = await pruefeBonitaet(admin, { bereich: body.bereich, kundeId: body.kundeId, art: body.art }, { name: aufrufer.name || aufrufer.email, email: aufrufer.email }, {
+        callClaudeResearch,
+        callClaudeTool,
+        dokumentSchluessel,
+        lesbareArt,
+        stosseDokumentLesenAn: (ref) => stosseDokumentLesenAn(ref),
+        restMs: () => WORKER_LEBENSDAUER_MS - (Date.now() - WORKER_GEBOOTET),
+      })
+      if (!ergebnis.ok) return new Response(JSON.stringify({ error: ergebnis.fehler }), { status: ergebnis.status, headers })
       return new Response(JSON.stringify(ergebnis), { headers })
     }
 

@@ -5,6 +5,7 @@ import { useApp } from '../context/AppContext'
 import { Card, EmptyState, Field, inputClass, Modal, PrimaryButton, SecondaryButton } from './ui'
 import { GesuchFormular } from './GesuchFormular'
 import { budgetText, eckdatenTexte, passendeObjekte } from '../lib/gesuche'
+import { bonitaetKurztext } from '../lib/bonitaet'
 import { fmtDate, fmtEUR, today } from '../lib/dates'
 import type { Gesuch, ImmoAuftragsart, ImmoRolle, ImmoStammdaten, Kunde } from '../types'
 
@@ -132,6 +133,12 @@ export function ImmoStammdatenblatt({ kunde }: { kunde: Kunde }) {
           </Field>
           <Field label="Bonität">
             <input className={inputClass} value={entwurf.bonitaet ?? ''} onChange={(e) => setze('bonitaet', e.target.value)} />
+            {/* Nur auf Klick in den Entwurf übernehmen — gespeichert wird erst mit „Stammdatenblatt speichern". */}
+            {kunde.bonitaet && (entwurf.bonitaet ?? '') !== bonitaetKurztext(kunde.bonitaet) && (
+              <button type="button" onClick={() => setze('bonitaet', bonitaetKurztext(kunde.bonitaet!))} className="mt-1 text-xs font-medium text-accent-600 hover:underline">
+                aus der Bonitätseinschätzung übernehmen
+              </button>
+            )}
           </Field>
           <Field label="Bearbeiter">
             <input className={inputClass} value={entwurf.bearbeiter ?? ''} onChange={(e) => setze('bearbeiter', e.target.value)} placeholder={kunde.verantwortlich} />

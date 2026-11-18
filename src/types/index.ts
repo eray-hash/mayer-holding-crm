@@ -307,6 +307,37 @@ export type Kunde = {
   unternehmensbewertungRecherche?: UnternehmensbewertungRecherche
   potenzialAnalyse?: PotenzialAnalyse
   steuerAnalyse?: SteuerAnalyse
+  bonitaet?: Bonitaetseinschaetzung
+}
+
+export type BonitaetPunkt = {
+  text: string
+  /** Name der Unterlage, „Selbstauskunft" oder die Adresse der öffentlichen Quelle. */
+  quelle: string
+  url?: string
+  art: 'dokument' | 'selbstauskunft' | 'oeffentlich'
+}
+
+// Interne Bonitätseinschätzung (keine Auskunft einer Auskunftei). Schreibt nur der Server
+// (email-gateway „bonitaet_pruefen", supabase/functions/email-gateway/bonitaet.ts) in kunden.bonitaet.
+export type Bonitaetseinschaetzung = {
+  version: 1
+  ampel: 'gruen' | 'gelb' | 'rot' | 'nicht_beurteilbar'
+  begruendung: string
+  positiv: BonitaetPunkt[]
+  negativ: BonitaetPunkt[]
+  /** Was für eine bessere Einschätzung fehlt. */
+  fehlt: string[]
+  /** Womit geprüft wurde (von der Mitarbeiterin bestätigt) und was das Programm aus der Akte vorgeschlagen hatte. */
+  art: 'person' | 'firma'
+  artErkannt: 'person' | 'firma'
+  artGrund: string
+  /** Bei Privatpersonen immer 'nicht_erlaubt'. */
+  webRecherche: 'nicht_erlaubt' | 'ok' | 'fehlgeschlagen' | 'kein_firmenname'
+  dokumente: { name: string; url?: string; stand: 'verwendet' | 'wird_eingelesen' | 'nicht_lesbar' | 'nicht_verwendet'; hinweis?: string }[]
+  selbstauskunftVerwendet: boolean
+  erstelltAm: string
+  erstelltVon: string
 }
 
 export type SteuerVorschlag = {

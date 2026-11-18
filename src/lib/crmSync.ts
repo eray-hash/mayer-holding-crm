@@ -113,6 +113,9 @@ function kundeToRow(bereich: KundeBereich, k: Kunde) {
     // Nur mitschicken, wenn vorhanden: so überschreibt ein Tab mit altem Stand eine inzwischen
     // gespeicherte Analyse nicht mit "leer".
     ...(k.potenzialAnalyse ? { potenzial_analyse: k.potenzialAnalyse } : {}),
+    // Gleiches Muster für die Bonitätseinschätzung (schreibt der Server, siehe bonitaet_pruefen): nur
+    // mitschicken, wenn vorhanden — ein Fenster ohne Einschätzung leert die Spalte nie.
+    ...(k.bonitaet ? { bonitaet: k.bonitaet } : {}),
   }
 }
 
@@ -142,6 +145,7 @@ function rowToKunde(row: any): Kunde {
     verknuepfteKunden: row.verknuepfte_kunden ?? undefined,
     unternehmensbewertungRecherche: row.unternehmensbewertung_recherche ?? undefined,
     potenzialAnalyse: row.potenzial_analyse ?? undefined,
+    bonitaet: row.bonitaet ?? undefined,
     // Nur lesen: steuer_analyse gehört dem Server (siehe email-gateway "steuer_analyse_schritt").
     steuerAnalyse: row.steuer_analyse ?? undefined,
   }
