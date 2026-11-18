@@ -235,6 +235,7 @@ import { ordneMailObjektZu } from './objektMail.ts'
 import { legeEingaengeAb, macheAblageRueckgaengig, nimmEingaengeHeraus } from './eingang.ts'
 import { pruefeNeueTreffer } from './gesuchTreffer.ts'
 import { pruefeBonitaet } from './bonitaet.ts'
+import { lieseKontoauszug } from './kontoauszug.ts'
 import { kiAufruf, mitAnlass, setzeAnlass } from '../_shared/kiVerbrauch.ts'
 
 const ALLOWED_ORIGINS = [
@@ -3915,6 +3916,25 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       return new Response(JSON.stringify(ergebnis), { headers })
     }
 
+    // Einen Kontoauszug auslesen (siehe kontoauszug.ts) — nur mit eigenem Login, eine Datei je Aufruf,
+    // schreibt nichts; die Oberfläche speichert das geprüfte Ergebnis selbst.
+    if (body.action === 'kontoauszug_auslesen') {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const aufrufer = await ermittleAufrufer(req, admin, body)
+      if (!aufrufer) {
+        return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
+      }
+      if (!(await darfKundeServer(admin, aufrufer.email, body.kundeId))) return keinRecht(headers)
+      const ergebnis = await lieseKontoauszug(admin, { kundeId: body.kundeId, bereich: body.bereich, datei: body.datei }, {
+        callClaudeResearch,
+        ladeDokumentBytes,
+        restMs: () => WORKER_LEBENSDAUER_MS - (Date.now() - WORKER_GEBOOTET),
+        hoechstensMs: SCHRITT_HOECHSTENS_MS,
+      })
+      if (!ergebnis.ok) return new Response(JSON.stringify({ error: ergebnis.fehler }), { status: ergebnis.status, headers })
+      return new Response(JSON.stringify({ ok: true, buchungen: ergebnis.buchungen, datei: ergebnis.datei }), { headers })
+    }
+
     if (body.action === 'objekt_daten_vorschlag' || body.action === 'objekt_text_nach_anweisung') {
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
       const aufrufer = await ermittleAufrufer(req, admin, body)
@@ -4081,7 +4101,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       return new Response(JSON.stringify({ ok: true }), { headers })
     }
 
-    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "bewertung_recherche_start", "bewertung_recherche_schritt", "kunden_umfeld_recherche", "steuer_analyse_start", "steuer_analyse_schritt", "dokument_lesen", "dokument_inhalte", "postfaecher_liste", "postfach_verbinden", "postfach_trennen", "postfach_abruf", "postfach_ordner", "mail_zuordnen", "mail_freigeben", "mail_anhang_url", "termin_speichern", "termin_loeschen", "termin_erinnerungen" oder "firmenwissen_answer"' }), { status: 400, headers })
+    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "bewertung_recherche_start", "bewertung_recherche_schritt", "kunden_umfeld_recherche", "steuer_analyse_start", "steuer_analyse_schritt", "dokument_lesen", "dokument_inhalte", "postfaecher_liste", "postfach_verbinden", "postfach_trennen", "postfach_abruf", "postfach_ordner", "mail_zuordnen", "mail_freigeben", "mail_anhang_url", "termin_speichern", "termin_loeschen", "termin_erinnerungen", "kontoauszug_auslesen" oder "firmenwissen_answer"' }), { status: 400, headers })
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }
