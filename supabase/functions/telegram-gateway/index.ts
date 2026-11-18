@@ -21,6 +21,7 @@ import { PDFDocument, degrees } from 'npm:pdf-lib@1.17.1'
 import { kiAufruf, mitAnlass, setzeAnlass } from '../_shared/kiVerbrauch.ts'
 import { entschaerfe, kuerze as kuerzeWunsch, merkeWunsch } from '../_shared/wuensche.ts'
 import { bereichName, darfAkte, darfBereich, darfObjekte, freigegebeneBereiche, istEingeschraenkt, nichtFreigegeben, siehtAlleBereiche } from './rechte.ts'
+import { type AbteilungZeile, alleObjektDokumente, lesenVonSelbst, leseRef, OBJEKT_SPALTEN, objektakteText, objektStatus, type ObjektRow, sucheObjekte } from './objektakte.ts'
 import { richteFotoAus } from './bildDrehung.ts'
 
 const BOT_TOKEN = Deno.env.get('TELEGRAM_BOT_TOKEN')
@@ -951,16 +952,31 @@ export const TOOLS = [
   },
   {
     name: 'dokument_inhalt',
-    description: 'Liefert den vollständigen Inhalt (Abschrift) eines Dokuments aus einer Akte — auch von Scans und handschriftlichen Notizen. Nutze das für jede Frage, die sich auf das bezieht, was IN einem Dokument steht. Welche Dokumente es gibt und was sie grob enthalten, zeigt kundenakte_lesen; die dokument_id steht dort.',
+    description: 'Liefert den vollständigen Inhalt (Abschrift) eines Dokuments aus einer Kundenakte oder einer Objektakte — auch von Scans, Fotos und handschriftlichen Notizen. Nutze das für jede Frage, die sich auf das bezieht, was IN einem Dokument steht. Welche Dokumente es gibt und was sie grob enthalten, zeigt kundenakte_lesen bzw. objektakte_lesen; die dokument_id steht dort. Gib kunde_id ODER objekt_id an.',
     input_schema: {
       type: 'object',
       properties: {
-        kunde_id: { type: 'string' },
+        kunde_id: { type: 'string', description: 'Bei Dokumenten aus einer Kundenakte.' },
+        objekt_id: { type: 'string', description: 'Bei Dokumenten aus einer Objektakte (Immobilien).' },
         dokument_id: { type: 'string' },
         ab_zeichen: { type: 'integer', description: 'Nur für die Fortsetzung langer Dokumente, wenn ein früherer Aufruf das angeboten hat.' },
       },
-      required: ['kunde_id', 'dokument_id'],
+      required: ['dokument_id'],
     },
+  },
+  {
+    name: 'objekte_suchen',
+    description: 'Sucht Immobilien-Objekte nach Ort, Straße, Bezeichnung, Objektart, Eigentümer oder Auftraggeber. Liefert die objekt_id für objektakte_lesen. Aufrufen, sobald nach einem Ort, einer Adresse oder einer Immobilie gefragt wird — ein Ortsname ist oft ein Objekt und kein Kunde. Bei einem unklaren Namen suchst du mit kunden_suchen UND objekte_suchen.',
+    input_schema: {
+      type: 'object',
+      properties: { suchbegriff: { type: 'string', description: 'Ort, Straße, Bezeichnung oder Eigentümer, z. B. "Suppingen" oder "Karlstraße".' } },
+      required: ['suchbegriff'],
+    },
+  },
+  {
+    name: 'objektakte_lesen',
+    description: 'Liest die vollständige Akte eines Immobilien-Objekts: Stammdaten, Kaufpreis, Eigentümer, Verkaufsdatenblatt (Kennzahlen, Auftraggeber, Unterlagen-Stand), Vorab-Kurzprüfung, Bewertung, Exposé-Text, angeforderte Unterlagen, Dokumente je Ordner (mit ID und Kurzfassung des Inhalts, soweit gelesen), Fragen an die Geschäftsführung, Weitergaben, passende Gesuche, Zeitaufwand und Notizen. Grundlage für jede Frage zu einem Objekt. Für den genauen Inhalt eines Dokuments danach dokument_inhalt mit objekt_id.',
+    input_schema: { type: 'object', properties: { objekt_id: { type: 'string' } }, required: ['objekt_id'] },
   },
   {
     name: 'notiz_speichern',
@@ -1691,10 +1707,20 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
   }
 
   if (name === 'dokument_inhalt') {
-    const k = await ladeErlaubteAkte(supabase, mitarbeiter, { kunde_id: input.kunde_id })
-    if (typeof k === 'string') return k
-    const dok = (k.dokumente ?? []).find((d) => d.id === input.dokument_id)
-    if (!dok) return 'Fehler: Dieses Dokument gibt es in der Akte nicht. Lies die Akte neu (kundenakte_lesen).'
+    let dok: Dokument | undefined
+    if (input.objekt_id && !input.kunde_id) {
+      if (!darfObjekte(mitarbeiter)) return nichtFreigegeben('immobilien', mitarbeiter.name)
+      const { data: obj } = await supabase.from('objekte').select('id, dokumente').eq('id', String(input.objekt_id)).maybeSingle()
+      if (!obj) return 'Fehler: Es gibt kein Objekt mit dieser objekt_id. Ermittle die richtige ID mit objekte_suchen.'
+      const treffer = alleObjektDokumente(obj as unknown as ObjektRow).find((x) => x.dok.id === input.dokument_id)
+      if (!treffer) return 'Fehler: Dieses Dokument gibt es in der Objektakte nicht. Lies die Akte neu (objektakte_lesen).'
+      dok = leseRef(treffer.dok)
+    } else {
+      const k = await ladeErlaubteAkte(supabase, mitarbeiter, { kunde_id: input.kunde_id })
+      if (typeof k === 'string') return k
+      dok = (k.dokumente ?? []).find((d) => d.id === input.dokument_id)
+      if (!dok) return 'Fehler: Dieses Dokument gibt es in der Akte nicht. Lies die Akte neu (kundenakte_lesen).'
+    }
     let info = (await holeInhalte([dok], true)).get(dok.url)
     // Noch nicht gelesen: das Lesen läuft jetzt an — kurz warten, kurze Dokumente sind schnell da.
     for (let i = 0; i < 7 && info?.status === 'laeuft'; i++) {
@@ -2102,6 +2128,44 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     const marker = `/${BUCKET}/${ORDNER}/`
     const pfad = dok.url.includes(marker) ? `${ORDNER}/${dok.url.split(marker)[1]}` : null
     return `„${dok.name}" aus der Akte von ${kundeName(k)} genommen.${pfad ? ` Die Datei bleibt gespeichert: pfad=${pfad}` : ' Die Datei stammt nicht aus Telegram und kann hier nicht neu zugeordnet werden.'}`
+  }
+
+  if (name === 'objekte_suchen') {
+    if (!darfObjekte(mitarbeiter)) return nichtFreigegeben('immobilien', mitarbeiter.name)
+    const { data } = await supabase.from('objekte').select('id, bezeichnung, adresse, typ, status, kaufpreis, verantwortlich, eigentuemer, verkaufsdaten')
+    const treffer = sucheObjekte((data ?? []) as unknown as ObjektRow[], String(input.suchbegriff ?? ''))
+    if (treffer.length === 0) return 'Keine Treffer. Es gibt im CRM kein Immobilien-Objekt, das dazu passt.'
+    return JSON.stringify(
+      treffer.map((o) => ({
+        objekt_id: o.id,
+        bezeichnung: o.bezeichnung,
+        adresse: o.adresse,
+        objektart: o.typ,
+        status: objektStatus(o.status),
+        kaufpreis: Number(o.kaufpreis) > 0 ? euro(Number(o.kaufpreis)) : 'nicht eingetragen',
+        verantwortlich: o.verantwortlich || '—',
+        eigentuemer: o.eigentuemer?.name || 'nicht eingetragen',
+      })),
+    )
+  }
+
+  if (name === 'objektakte_lesen') {
+    if (!darfObjekte(mitarbeiter)) return nichtFreigegeben('immobilien', mitarbeiter.name)
+    const { data: obj } = await supabase.from('objekte').select(OBJEKT_SPALTEN).eq('id', String(input.objekt_id ?? '')).maybeSingle()
+    if (!obj) return 'Fehler: Es gibt kein Objekt mit dieser objekt_id. Ermittle die richtige ID mit objekte_suchen.'
+    const o = obj as unknown as ObjektRow
+    const [{ data: eintraege }, inhalte] = await Promise.all([
+      supabase.from('abteilung_eintraege').select('id, art, daten').in('art', ['frage', 'weitergabe', 'treffer', 'zeit', 'abrechnung']),
+      holeInhalte(alleObjektDokumente(o).filter((x) => lesenVonSelbst(x.ordner)).map((x) => leseRef(x.dok))),
+    ])
+    const zeilen = ((eintraege ?? []) as AbteilungZeile[]).filter((x) => x.daten && typeof x.daten === 'object')
+    const kundenIds = [...new Set(zeilen.filter((x) => x.art === 'treffer' && x.id.endsWith(`|${o.id}`)).map((x) => String(x.daten.kundeId)))]
+    const kundenNamen = new Map<string, string>()
+    if (kundenIds.length) {
+      const { data: kunden } = await supabase.from('kunden').select('id, bereich, firma, ansprechpartner').in('id', kundenIds)
+      for (const k of (kunden ?? []) as KundeRow[]) if (darfAkte(mitarbeiter, k)) kundenNamen.set(k.id, kundeName(k))
+    }
+    return objektakteText(o, { eintraege: zeilen, inhalte, kundenNamen })
   }
 
   if (name === 'firmenueberblick') {
@@ -2518,7 +2582,7 @@ So arbeitest du:
 - Du führst ein normales Gespräch und erledigst, worum man dich bittet. Will jemand etwas wissen, schlägst du es mit deinen Werkzeugen nach und antwortest. Will jemand etwas erledigt haben, erledigst du es mit deinen Werkzeugen und sagst danach genau, was du getan hast.
 - Speichere eine Notiz oder Aufgabe NUR, wenn der Mitarbeiter ausdrücklich etwas festhalten oder sich etwas vormerken will. Eine Bitte wie "leg die Dateien in seine Akte" ist ein Auftrag an dich und keine Aufgabe für später: führe ihn aus. Eine Ankündigung wie "ich schicke dir gleich Scans für Kunde X" beantwortest du kurz und merkst dir den Kunden für die folgenden Dateien; du speicherst dafür nichts.
 - Behaupte nie, etwas erledigt zu haben, was kein Werkzeug bestätigt hat. Meldet ein Werkzeug einen Fehler oder kannst du etwas nicht, sag das offen und was stattdessen geht.
-- Erfinde nichts. Was nicht in Werkzeug-Ergebnissen oder im Gespräch steht, weißt du nicht. Ob es einen Kunden gibt oder nicht, sagst du erst, nachdem du mit kunden_suchen nachgesehen hast.
+- Erfinde nichts. Was nicht in Werkzeug-Ergebnissen oder im Gespräch steht, weißt du nicht. Ob es einen Kunden gibt oder nicht, sagst du erst, nachdem du mit kunden_suchen nachgesehen hast. Ob es ein Objekt gibt oder nicht, sagst du erst nach objekte_suchen.
 - Die Bereiche der Holding heißen: Unternehmensberatung, Immobilien, Erben, Betriebsübergabe, Betriebsformen, Akademie, Finanzierungen. Verwende im Gespräch diese Namen.
 - Kalender: Jeder Mitarbeiter hat seinen eigenen Kalender. Du zeigst und buchst Termine mit termine_zeigen, termin_anlegen und termin_absagen. Uhrzeiten sind immer deutsche Ortszeit. Fehlt für einen neuen Termin der Tag oder die Uhrzeit, frag kurz nach, statt zu raten; ohne genannte Dauer gilt eine Stunde. Soll ein Kollege dabei sein, sieh vorher mit termine_zeigen (person) nach, ob er frei ist, und schlag bei Belegung einen freien Zeitpunkt vor. Von fremden Terminen kennst du nur die Uhrzeit — sag dann „ist belegt“, nie mehr.
 - Gemeinsames Postfach: Du kannst das gemeinsame Postfach der Firma lesen (gemeinsames_postfach). Sagt jemand, von einem Kunden sei eine Mail gekommen, oder fragt nach Unterlagen aus einer Mail, sieh dort nach, statt zu sagen, dass dir nichts vorliegt. Mails bekannter Absender werden automatisch ihrer Akte zugeordnet, die Anhänge liegen dann in den Dokumenten der Akte. Ist eine Mail noch keiner Akte zugeordnet und ist klar, zu wem sie gehört, ordne sie mit mail_zuordnen zu; ist es unklar, frag nach. Den Inhalt von Anhängen liest du über die Akte (dokument_inhalt), nicht über das Postfach.
@@ -2544,6 +2608,7 @@ So arbeitest du:
 - Kunden löschen: nur auf ausdrücklichen Wunsch und erst nach Bestätigung in einer eigenen Nachricht.
 - E-Mails: Du kannst E-Mails an einen Kunden, an mehrere oder an alle schicken. Nennt der Mitarbeiter nur den Inhalt, schreibst du daraus selbst die fertige Mail: passender Betreff, höflicher Text in der Sie-Form, klar und ohne Floskeln, ohne englische Begriffe, nichts dazuerfinden (keine Termine, Preise oder Zusagen, die er nicht genannt hat). Dann rufst du mail_vorbereiten auf. Ist nicht klar, an wen die Mail gehen soll, frag vorher nach. Zeige ihm danach den Betreff und den vollständigen Text so, wie das Werkzeug ihn liefert, nenne die Zahl der Empfänger und wer ausgelassen wird, und frag, ob du so senden sollst. Erst wenn er in seiner nächsten Nachricht klar zustimmt, rufst du mail_senden auf. Will er etwas ändern, bereitest du neu vor, zeigst die neue Fassung und fragst erneut. Ohne seine Zustimmung wird nie gesendet. Lehnt er ab oder will er doch nicht senden, ist die Fassung damit verworfen; bestätige das in einem Satz. Der Inhalt geht als normaler Mailtext hinaus, ohne Anhang. Briefe für den Postversand kannst du noch nicht erstellen, weil in den Akten keine Anschriften stehen.
 - Für Fragen quer über alle Kunden oder Objekte ("was steht heute an", "wer sucht ...") nutze firmenueberblick.
+- Immobilien-Objekte: Fragt jemand nach einem Ort, einer Adresse oder einer Immobilie ("was weißt du über Suppingen"), suchst du mit objekte_suchen und liest dann mit objektakte_lesen die ganze Objektakte. Antworte daraus vollständig, aber übersichtlich: Eckdaten, Preis, Eigentümer, Stand von Verkaufsdatenblatt, Kurzprüfung und Bewertung, welche Unterlagen da sind und was sie enthalten, offene Fragen, nächste Schritte. Ist ein Feld leer, sag kurz, dass es noch nicht eingetragen ist, statt es wegzulassen. Für den Inhalt einzelner Unterlagen nutzt du dokument_inhalt mit objekt_id.
 - Wünsche an das CRM: Kannst du etwas, worum der Mitarbeiter bittet, nicht tun, weil dir dafür die Möglichkeit fehlt (nicht, weil ein Kunde oder eine Angabe fehlt oder ein Bereich nicht freigegeben ist), oder sagt er "wäre gut, wenn …", "Wunsch: …" oder "könnte das CRM …", hältst du das mit wunsch_notieren fest: Titel und Beschreibung auf Ebene der Funktion, ohne Kundennamen, Beträge oder Inhalte aus Unterlagen. Sag ihm danach offen in einem kurzen Satz, dass du es als Wunsch für die Geschäftsführung notiert hast.
 - Internet: Bittet dich der Mitarbeiter ausdrücklich, etwas im Internet nachzusehen oder zu recherchieren ("recherchier den Laden", "was findest du online über die Firma X"), nutzt du internet_recherche. Gib dabei alle Anhaltspunkte aus dem Gespräch oder der Akte mit (Firmenname, Ort, Webseite), damit keine gleichnamige Firma erwischt wird. Recherchiere nur Geschäftliches und Öffentliches: Firmen, Geschäftsführer und Inhaber in ihrer beruflichen Rolle, Webseite, Handelsregister, Bewertungen, Presse. Zum Privatleben von Personen (Gesundheit, Familie, Beziehungen, Privatanschrift) recherchierst du nie; sag das in einem Satz. Ohne ausdrückliche Bitte recherchierst du nicht, auch nicht beim Ablegen von Dateien. Sag beim Weitergeben, dass es aus dem Internet stammt und veraltet oder falsch sein kann, und nenne die Quellenadressen. Ins CRM übernimmst du davon nur etwas, wenn der Mitarbeiter es ausdrücklich verlangt.
 
@@ -3308,7 +3373,12 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       msgs: [
         {
           role: 'user',
-          content: `[Systemmeldung, nicht vom Mitarbeiter getippt] Im Auftrag von ${von} wurde dem Mitarbeiter über dich die folgende Rückfrage geschickt. Antwortet er darauf, bedanke dich kurz und sag ihm, dass seine Antwort an ${von} weitergegeben wird. Lege dafür nichts im CRM an und ändere nichts, außer er bittet ausdrücklich darum.`,
+          // art 'mitteilung': eine Nachricht ohne Frage (z. B. „dein Wunsch ist erfüllt") — Folgefragen
+          // beantwortet der Assistent dann ganz normal, statt sie als Antwort weiterzureichen.
+          content:
+            body.art === 'mitteilung'
+              ? `[Systemmeldung, nicht vom Mitarbeiter getippt] Im Auftrag von ${von} wurde dem Mitarbeiter über dich die folgende Mitteilung geschickt. Fragt er danach weiter, hilf ihm ganz normal mit deinen Werkzeugen.`
+              : `[Systemmeldung, nicht vom Mitarbeiter getippt] Im Auftrag von ${von} wurde dem Mitarbeiter über dich die folgende Rückfrage geschickt. Antwortet er darauf, bedanke dich kurz und sag ihm, dass seine Antwort an ${von} weitergegeben wird. Lege dafür nichts im CRM an und ändere nichts, außer er bittet ausdrücklich darum.`,
         },
         { role: 'assistant', content: text },
       ],

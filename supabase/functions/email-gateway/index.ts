@@ -1244,7 +1244,12 @@ type DokumentInhaltZeile = {
   aktualisiert_am: string
 }
 
+// Objekt-Dokumente liegen im privaten Bucket "objekt-dokumente"; ihre url ist dort der Pfad. Damit sie
+// nicht mit Kundendokumenten verwechselt werden, kommen sie mit diesem Vorsatz herein (Telegram-Assistent).
+const OBJEKT_DOKUMENT_PRAEFIX = 'objekt-dokumente:'
+
 function dokumentSchluessel(url: string): string {
+  if (url.startsWith(OBJEKT_DOKUMENT_PRAEFIX)) return `objekt-dokumente/${url.slice(OBJEKT_DOKUMENT_PRAEFIX.length)}`
   const marker = '/object/public/'
   if (/^https?:\/\//i.test(url)) return url.includes(marker) ? decodeURIComponent(url.split(marker)[1].split('?')[0]) : url
   return `kunden-dokumente/${url}`
@@ -1255,6 +1260,11 @@ async function ladeDokumentBytes(admin: any, url: string): Promise<Uint8Array> {
   // Gemeinsame Ablage: nicht mehr offen abrufbar, also mit den Rechten der Funktion lesen.
   const gemeinsam = gemeinsamerAblagePfad(url)
   if (gemeinsam) return await ladeGemeinsameDatei(admin, gemeinsam)
+  if (url.startsWith(OBJEKT_DOKUMENT_PRAEFIX)) {
+    const { data, error } = await admin.storage.from('objekt-dokumente').download(url.slice(OBJEKT_DOKUMENT_PRAEFIX.length))
+    if (error || !data) throw new Error(`Datei nicht abrufbar (${error?.message ?? 'unbekannt'})`)
+    return new Uint8Array(await data.arrayBuffer())
+  }
   if (/^https?:\/\//i.test(url)) {
     const res = await fetch(url, { signal: AbortSignal.timeout(25_000) })
     if (!res.ok) throw new Error(`Datei nicht abrufbar (${res.status})`)
