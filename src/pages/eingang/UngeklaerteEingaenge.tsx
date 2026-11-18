@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Building2, CheckCircle2, ExternalLink, File as FileIcon, FileText, Home, Image as ImageIcon, RefreshCw, Search, Trash2, TriangleAlert, X } from 'lucide-react'
+import { Building2, CheckCircle2, ChevronDown, ExternalLink, File as FileIcon, FileText, History, Home, Image as ImageIcon, RefreshCw, Search, Trash2, TriangleAlert, Undo2, X } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { Card, EmptyState, inputClass, PrimaryButton, SecondaryButton } from '../../components/ui'
 import { KUNDEN_BEREICHE, kundeBereichLabel, kundeDetailPfad } from '../../data/kundenBereiche'
 import { AKTE_INTERN, AKTE_UNGEKLAERT, istSammelakte } from '../../data/sammelakten'
 import { MITARBEITER } from '../../data/constants'
-import { fmtDate } from '../../lib/dates'
+import { fmtDate, fmtDateTime } from '../../lib/dates'
 import { brauchtDateiLink, holeAnhangUrl, holeDokumentInhalte } from '../../lib/emailGateway'
-import { ladeUngeklaerteEingaenge, legeEingaengeAb, nimmEingaengeHeraus, type AblageZiel } from '../../lib/eingang'
+import { ladeLetzteAblagen, ladeUngeklaerteEingaenge, legeEingaengeAb, macheAblageRueckgaengig, nimmEingaengeHeraus, type AblageErgebnis, type AblageProtokoll, type AblageZiel } from '../../lib/eingang'
 import { erzeugeKundenDownloadUrl } from '../../lib/kundenDokumenteStorage'
 import { DOKUMENT_ORDNER, type ActivityEntry, type Dokument, type DokumentOrdnerName, type KundeBereich } from '../../types'
 
@@ -27,7 +27,11 @@ type Meldung = {
   titel: string
   zeilen: string[]
   link?: { zu: string; text: string }
+  /** Knopf „Rückgängig" direkt nach dem Ablegen. */
+  rueckgaengig?: string
 }
+
+type ZielStand = AblageErgebnis['ziel']
 
 const SAMMEL_BEREICH: KundeBereich = 'beratung' // die Sammelakte liegt in der Liste der Unternehmensberatung
 const AUFFANG_ORDNER: DokumentOrdnerName = 'Sonstiges'
@@ -305,6 +309,20 @@ function alsZiel(wahl: Wahl): AblageZiel {
   return wahl.kandidat.art === 'kunde' ? { art: 'kunde', id: wahl.kandidat.id } : { art: 'objekt', id: wahl.kandidat.id, ordner: wahl.ordner }
 }
 
+// Wohin führt der Link zum Ziel einer Ablage?
+function zielPfad(ziel: AblageProtokoll['ziel'] | ZielStand): string {
+  return ziel.art === 'kunde' ? kundeDetailPfad(ziel.bereich, ziel.id) : `/immobilien/objekte/${ziel.id}?tab=dokumente&ordner=${encodeURIComponent(ziel.ordner)}`
+}
+
+function zielText(ziel: AblageProtokoll['ziel'] | ZielStand): string {
+  if (ziel.art === 'objekt') return `Objekt ${ziel.name}, Ordner ${ziel.ordner}`
+  return `${ziel.name}, ${ziel.id === AKTE_INTERN ? 'eigene Unterlagen des Hauses' : `Bereich ${kundeBereichLabel(ziel.bereich)}`}`
+}
+
+function ablageNamen(p: AblageProtokoll): string[] {
+  return [...p.dateien.map((f) => f.zielName || f.original.name), ...(p.uebersprungen ?? []).map((d) => d.name)]
+}
+
 // ---------- Die Seite ----------
 
 /** Ungeklärte Eingänge abarbeiten: Was der Assistent keiner Akte zuordnen konnte, liegt hier. Je Datei
@@ -324,6 +342,9 @@ export function UngeklaerteEingaenge() {
   const meldungRef = useRef<HTMLDivElement>(null)
   const gefragt = useRef(new Set<string>())
   const [runde, setRunde] = useState(0)
+  const [ablagen, setAblagen] = useState<AblageProtokoll[]>([])
+  const [ablagenFehler, setAblagenFehler] = useState('')
+  const [ablagenOffen, setAblagenOffen] = useState(false)
   const stateRef = useRef(state)
   useEffect(() => {
     stateRef.current = state
@@ -349,9 +370,20 @@ export function UngeklaerteEingaenge() {
     }
   }, [dispatch])
 
+  // Die zuletzt abgelegten Dateien (zum Rückgängigmachen) — ein Fehler hier stört die Liste oben nicht.
+  const ladeAblagen = useCallback(async () => {
+    try {
+      setAblagen(await ladeLetzteAblagen(14))
+      setAblagenFehler('')
+    } catch (err) {
+      setAblagenFehler(err instanceof Error ? err.message : 'Die zuletzt abgelegten Dateien ließen sich nicht laden.')
+    }
+  }, [])
+
   useEffect(() => {
     void laden()
-  }, [laden])
+    void ladeAblagen()
+  }, [laden, ladeAblagen])
 
   const dokumente = useMemo(() => {
     // Neueste zuerst; bei gleichem Datum bleibt die Reihenfolge der Akte (dort steht Neues vorn).
@@ -448,6 +480,12 @@ export function UngeklaerteEingaenge() {
     setZiele((alt) => Object.fromEntries(Object.entries(alt).filter(([id]) => noch.has(id))))
   }
 
+  // Stand des Ziels vom Server ins Fenster übernehmen — nichts davon wird noch einmal geschrieben.
+  function uebernimmZiel(ziel: ZielStand) {
+    if (ziel.art === 'kunde') dispatch({ type: 'KUNDE_VOM_SERVER', bereich: ziel.bereich, id: ziel.id, patch: { dokumente: ziel.dokumente, activities: ziel.activities, letzteAktivitaet: ziel.letzteAktivitaet } })
+    else dispatch({ type: 'OBJEKT_VOM_SERVER', id: ziel.id, patch: { dokumente: ziel.dokumente, activities: ziel.activities } })
+  }
+
   async function ablegen(ids: string[], wahl: Wahl, ausSammelleiste = false) {
     if (ids.length === 0 || arbeitet) return
     setArbeitetAn(ids)
@@ -457,34 +495,66 @@ export function UngeklaerteEingaenge() {
       // Den Stand vom Server ins Fenster übernehmen — nichts davon wird noch einmal geschrieben.
       uebernimmSammelakte(ergebnis.sammelDokumente)
       const ziel = ergebnis.ziel
-      let ort: string
-      let link: Meldung['link']
-      if (ziel.art === 'kunde') {
-        dispatch({ type: 'KUNDE_VOM_SERVER', bereich: ziel.bereich, id: ziel.id, patch: { dokumente: ziel.dokumente, activities: ziel.activities, letzteAktivitaet: ziel.letzteAktivitaet } })
-        ort = `bei ${ziel.name || wahl.kandidat.name}, ${ziel.id === AKTE_INTERN ? 'eigene Unterlagen des Hauses' : `Bereich ${kundeBereichLabel(ziel.bereich)}`}`
-        link = { zu: kundeDetailPfad(ziel.bereich, ziel.id), text: 'Zur Akte' }
-      } else {
-        dispatch({ type: 'OBJEKT_VOM_SERVER', id: ziel.id, patch: { dokumente: ziel.dokumente, activities: ziel.activities } })
-        ort = `beim Objekt ${ziel.name || wahl.kandidat.name}, Ordner ${ziel.ordner}`
-        link = { zu: `/immobilien/objekte/${ziel.id}?tab=dokumente&ordner=${encodeURIComponent(ziel.ordner)}`, text: 'Zum Objekt' }
-      }
+      uebernimmZiel(ziel)
+      const ort =
+        ziel.art === 'kunde'
+          ? `bei ${ziel.name || wahl.kandidat.name}, ${ziel.id === AKTE_INTERN ? 'eigene Unterlagen des Hauses' : `Bereich ${kundeBereichLabel(ziel.bereich)}`}`
+          : `beim Objekt ${ziel.name || wahl.kandidat.name}, Ordner ${ziel.ordner}`
       const zeilen: string[] = []
       if (ergebnis.abgelegt.length > 0) zeilen.push(`Abgelegt: ${aufzaehlung(ergebnis.abgelegt)}`)
       if (ergebnis.uebersprungen.length > 0) zeilen.push(`Lag dort schon und wurde deshalb nur aus dieser Liste genommen: ${aufzaehlung(ergebnis.uebersprungen)}`)
       zeilen.push(...ergebnis.nichtAbgelegt.map((satz) => `Nicht abgelegt — ${satz}`))
+      zeilen.push(...ergebnis.hinweise)
       zeige({
         art: ergebnis.abgelegt.length > 0 || ergebnis.nichtAbgelegt.length === 0 ? 'erfolg' : 'fehler',
         titel: ergebnis.abgelegt.length > 0 ? `${dateienText(ergebnis.abgelegt.length)} abgelegt ${ort}` : `Nichts Neues abgelegt ${ort}`,
         zeilen,
-        link,
+        link: { zu: zielPfad(ziel), text: ziel.art === 'kunde' ? 'Zur Akte' : 'Zum Objekt' },
+        rueckgaengig: ergebnis.ablageId ?? undefined,
       })
       if (ausSammelleiste) setSammelZiel(null)
+      void ladeAblagen()
     } catch (err) {
       zeige({ art: 'fehler', titel: 'Das Ablegen hat nicht geklappt', zeilen: [err instanceof Error ? err.message : 'Unbekannter Fehler.'] })
       void laden() // der Stand im Fenster kann veraltet sein (jemand anderes war schneller)
     } finally {
       setArbeitetAn(null)
     }
+  }
+
+  async function rueckgaengig(ablageId: string) {
+    if (arbeitet) return
+    setArbeitetAn([])
+    setMeldung(null)
+    try {
+      const ergebnis = await macheAblageRueckgaengig(ablageId)
+      uebernimmSammelakte(ergebnis.sammelDokumente)
+      if (ergebnis.ziel) uebernimmZiel(ergebnis.ziel)
+      const zurueck = [...ergebnis.zurueck, ...ergebnis.wiederInListe]
+      const zeilen: string[] = []
+      if (ergebnis.zurueck.length > 0) zeilen.push(`Wieder in dieser Liste${ergebnis.ziel ? ` und nicht mehr bei ${zielText(ergebnis.ziel)}` : ''}: ${aufzaehlung(ergebnis.zurueck)}`)
+      if (ergebnis.wiederInListe.length > 0) zeilen.push(`Lag beim Ablegen schon dort und steht jetzt wieder in dieser Liste: ${aufzaehlung(ergebnis.wiederInListe)}`)
+      if (ergebnis.nichtMehrDort.length > 0) zeilen.push(`Nicht mehr dort, bleibt wie es ist: ${aufzaehlung(ergebnis.nichtMehrDort)}`)
+      zeige({
+        art: zurueck.length > 0 ? 'erfolg' : 'fehler',
+        titel: zurueck.length > 0 ? `Ablage rückgängig gemacht — ${dateienText(zurueck.length)} wieder in der Liste` : 'Nichts zurückgenommen',
+        zeilen,
+        link: ergebnis.ziel ? { zu: zielPfad(ergebnis.ziel), text: ergebnis.ziel.art === 'kunde' ? 'Zur Akte' : 'Zum Objekt' } : undefined,
+      })
+    } catch (err) {
+      zeige({ art: 'fehler', titel: 'Das Rückgängigmachen hat nicht geklappt', zeilen: [err instanceof Error ? err.message : 'Unbekannter Fehler.'] })
+      void laden()
+    } finally {
+      setArbeitetAn(null)
+      void ladeAblagen()
+    }
+  }
+
+  function rueckgaengigMitFrage(p: AblageProtokoll) {
+    const namen = ablageNamen(p)
+    const liste = namen.slice(0, 15).map((n) => `• ${n}`).join('\n') + (namen.length > 15 ? `\n… und ${namen.length - 15} weitere` : '')
+    const frage = `Diese Ablage rückgängig machen?\n\nZiel: ${zielText(p.ziel)}\nAbgelegt am ${fmtDateTime(p.am)} von ${p.von}\n\n${liste}\n\nDie Einträge kommen dort heraus und wieder in die Liste der ungeklärten Eingänge. Was dort inzwischen verschoben oder gelöscht wurde, bleibt, wie es ist.`
+    if (window.confirm(frage)) void rueckgaengig(p.id)
   }
 
   async function herausnehmen(ids: string[]) {
@@ -542,6 +612,7 @@ export function UngeklaerteEingaenge() {
             gefragt.current.clear()
             setRunde((r) => r + 1)
             void laden()
+            void ladeAblagen()
           }}
           disabled={laedt || arbeitet}
         >
@@ -567,10 +638,24 @@ export function UngeklaerteEingaenge() {
                   {zeile}
                 </div>
               ))}
-              {meldung.link && (
-                <Link to={meldung.link.zu} className="mt-1 inline-flex items-center gap-1 font-medium underline">
-                  {meldung.link.text} <ExternalLink size={13} />
-                </Link>
+              {(meldung.link || meldung.rueckgaengig) && (
+                <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-2">
+                  {meldung.link && (
+                    <Link to={meldung.link.zu} className="inline-flex items-center gap-1 font-medium underline">
+                      {meldung.link.text} <ExternalLink size={13} />
+                    </Link>
+                  )}
+                  {meldung.rueckgaengig && (
+                    <button
+                      type="button"
+                      onClick={() => meldung.rueckgaengig && void rueckgaengig(meldung.rueckgaengig)}
+                      disabled={arbeitet}
+                      className="inline-flex items-center gap-1 rounded-md border border-emerald-300 bg-white px-2.5 py-1 text-xs font-medium text-emerald-800 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <Undo2 size={13} /> Rückgängig
+                    </button>
+                  )}
+                </div>
               )}
             </div>
             <button type="button" onClick={() => setMeldung(null)} className="shrink-0 rounded p-0.5 opacity-70 hover:opacity-100" title="Meldung schließen" aria-label="Meldung schließen">
@@ -724,6 +809,53 @@ export function UngeklaerteEingaenge() {
             })}
           </Card>
         </>
+      )}
+
+      {(ablagen.length > 0 || ablagenFehler) && (
+        <Card className="mt-6">
+          <button
+            type="button"
+            onClick={() => setAblagenOffen((o) => !o)}
+            className="flex w-full items-center gap-2 px-3 py-3 text-left text-sm font-medium text-slate-700 hover:bg-slate-50 sm:px-4"
+            aria-expanded={ablagenOffen}
+          >
+            <History size={16} className="shrink-0 text-slate-400" />
+            <span className="min-w-0 flex-1">
+              Zuletzt abgelegt
+              <span className="font-normal text-slate-500"> · {ablagen.length === 0 ? 'letzte 14 Tage' : `${ablagen.length} in den letzten 14 Tagen`}</span>
+            </span>
+            <ChevronDown size={16} className={`shrink-0 text-slate-400 transition ${ablagenOffen ? 'rotate-180' : ''}`} />
+          </button>
+          {ablagenOffen && (
+            <div className="border-t border-slate-100">
+              {ablagenFehler && <p className="px-3 py-2 text-sm text-rose-600 sm:px-4">{ablagenFehler}</p>}
+              <ul className="divide-y divide-slate-100">
+                {ablagen.map((p) => {
+                  const namen = ablageNamen(p)
+                  return (
+                    <li key={p.id} className="flex flex-col gap-2 px-3 py-3 sm:flex-row sm:items-start sm:justify-between sm:px-4">
+                      <div className="min-w-0 flex-1 text-sm">
+                        <div className="text-xs text-slate-500">
+                          {fmtDateTime(p.am)} · {p.von}
+                        </div>
+                        <div className="mt-0.5 break-words text-slate-700 [overflow-wrap:anywhere]">{aufzaehlung(namen, 4)}</div>
+                        <div className="mt-0.5 break-words text-xs text-slate-500">
+                          nach{' '}
+                          <Link to={zielPfad(p.ziel)} className="font-medium text-accent-600 hover:underline">
+                            {zielText(p.ziel)}
+                          </Link>
+                        </div>
+                      </div>
+                      <SecondaryButton onClick={() => rueckgaengigMitFrage(p)} disabled={arbeitet} className="shrink-0 self-start px-2.5 py-1.5 text-xs">
+                        <Undo2 size={13} /> Rückgängig
+                      </SecondaryButton>
+                    </li>
+                  )
+                })}
+              </ul>
+            </div>
+          )}
+        </Card>
       )}
     </div>
   )
