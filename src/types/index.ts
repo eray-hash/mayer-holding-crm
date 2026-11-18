@@ -263,6 +263,14 @@ export type Gesuch = {
   lage: string
   budgetMin?: number
   budgetMax?: number
+  /** Höchster Kaufpreisfaktor (Kaufpreis ÷ Jahresnettokaltmiete). Leer = egal. */
+  faktorMax?: number
+  /** Zahl der Einheiten (Wohnungen/Gewerbe), von–bis. Leer = egal. */
+  einheitenMin?: number
+  einheitenMax?: number
+  /** Baujahr von–bis (vierstellig). Leer = egal. */
+  baujahrMin?: number
+  baujahrMax?: number
   nutzung: 'Eigennutz' | 'Kapitalanlage' | 'Unklar'
   notizen: string
   erledigt?: boolean

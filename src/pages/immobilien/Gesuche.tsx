@@ -5,7 +5,7 @@ import { useApp } from '../../context/AppContext'
 import { useAuth } from '../../context/AuthContext'
 import { Card, EmptyState, Field, inputClass, Modal, PrimaryButton } from '../../components/ui'
 import { GesuchFormular } from '../../components/GesuchFormular'
-import { alleGesuche, budgetText, passendeObjekte, pruefe } from '../../lib/gesuche'
+import { alleGesuche, budgetText, eckdatenTexte, passendeObjekte, pruefe } from '../../lib/gesuche'
 import { entdecktText, neueTrefferMeldungen, NEU_TAGE, paarSchluessel } from '../../lib/trefferMeldungen'
 import { kundeBereichLabel, kundeDetailPfad } from '../../data/kundenBereiche'
 import { CURRENT_USER } from '../../data/constants'
@@ -145,7 +145,7 @@ export function Gesuche() {
                   <div className="min-w-48 flex-1">
                     <div className="text-sm font-medium text-slate-800">{g.titel}</div>
                     <div className="text-xs text-slate-500">
-                      {[g.objekttypen.join(', ') || 'Objektart egal', g.lage || 'Lage egal', budgetText(g)].filter((x) => x !== '–').join(' · ')}
+                      {[g.objekttypen.join(', ') || 'Objektart egal', g.lage || 'Lage egal', budgetText(g), ...eckdatenTexte(g)].filter((x) => x !== '–').join(' · ')}
                     </div>
                   </div>
                   <div className="min-w-40 text-sm">

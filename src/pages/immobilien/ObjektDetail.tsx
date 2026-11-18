@@ -6,7 +6,7 @@ import { StatusWidget } from '../../components/StatusWidget'
 import { Card, Modal, Field, inputClass, PrimaryButton, SecondaryButton, EmptyState, StatusBadge } from '../../components/ui'
 import { FormularLinkButtons } from '../../components/FormularLink'
 import { KUNDEN_BEREICHE, kundeBereichLabel, kundeDetailPfad } from '../../data/kundenBereiche'
-import { alleGesuche, budgetText, passendeGesuche } from '../../lib/gesuche'
+import { alleGesuche, budgetText, eckdatenTexte, passendeGesuche } from '../../lib/gesuche'
 import { fmtDate, isOverdue, today, uid, fmtEUR } from '../../lib/dates'
 import { PRIORITAETEN, gruppeLabel, LUKRATIVITAET_COLOR } from '../../data/constants'
 import { DOKUMENT_ORDNER } from '../../types'
@@ -443,7 +443,7 @@ export function ObjektDetail() {
                     </a>
                     <span className="text-slate-600"> sucht: {t.gesuch.titel}</span>
                     <div className="text-xs text-slate-500">
-                      {[t.gesuch.objekttypen.join(', '), t.gesuch.lage, budgetText(t.gesuch)].filter((x) => x && x !== '–').join(' · ')} · passt: {t.passt.join(', ')}
+                      {[t.gesuch.objekttypen.join(', '), t.gesuch.lage, budgetText(t.gesuch), ...eckdatenTexte(t.gesuch)].filter((x) => x && x !== '–').join(' · ')} · passt: {t.passt.join(', ')}
                       {t.offen.length > 0 && <span className="text-amber-600"> · {t.offen.join(', ')}</span>}
                     </div>
                   </li>

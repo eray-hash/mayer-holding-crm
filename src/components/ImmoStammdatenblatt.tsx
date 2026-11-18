@@ -4,7 +4,7 @@ import { Check, Pencil, Plus, Search, Trash2 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { Card, EmptyState, Field, inputClass, Modal, PrimaryButton, SecondaryButton } from './ui'
 import { GesuchFormular } from './GesuchFormular'
-import { budgetText, passendeObjekte } from '../lib/gesuche'
+import { budgetText, eckdatenTexte, passendeObjekte } from '../lib/gesuche'
 import { fmtDate, fmtEUR, today } from '../lib/dates'
 import type { Gesuch, ImmoAuftragsart, ImmoRolle, ImmoStammdaten, Kunde } from '../types'
 
@@ -184,7 +184,7 @@ export function ImmoStammdatenblatt({ kunde }: { kunde: Kunde }) {
                       {g.titel} {g.erledigt && <span className="ml-1 rounded bg-slate-100 px-1.5 py-0.5 text-xs font-normal text-slate-500">erledigt</span>}
                     </div>
                     <div className="text-xs text-slate-500">
-                      {[g.objekttypen.join(', ') || 'Objektart egal', g.lage || 'Lage egal', budgetText(g), g.nutzung !== 'Unklar' ? g.nutzung : '']
+                      {[g.objekttypen.join(', ') || 'Objektart egal', g.lage || 'Lage egal', budgetText(g), ...eckdatenTexte(g), g.nutzung !== 'Unklar' ? g.nutzung : '']
                         .filter((x) => x && x !== '–')
                         .join(' · ')}
                       <span className="text-slate-400"> · erfasst {fmtDate(g.erstelltAm)}</span>

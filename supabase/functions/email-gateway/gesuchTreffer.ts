@@ -25,7 +25,8 @@ export type KundenZeile = {
   firma?: string | null
   ansprechpartner?: string | null
   verantwortlich?: string | null
-  /** jsonb: Liste der Gesuche, Feldnamen wie im Browser (objekttypen, lage, budgetMin, budgetMax, erledigt). */
+  /** jsonb: Liste der Gesuche, Feldnamen wie im Browser (objekttypen, lage, budgetMin, budgetMax, faktorMax,
+   *  einheitenMin, einheitenMax, baujahrMin, baujahrMax, erledigt). */
   gesuche?: unknown
   /** jsonb: älteres Käuferprofil (objekttypen, bevorzugteLage, budgetMin, budgetMax). */
   kaeuferprofil?: unknown
@@ -66,7 +67,7 @@ export type BerechneterTreffer = {
   /** Wortgleich zu `passt` / `offen` in src/lib/gesuche.ts. */
   passt: string[]
   offen: string[]
-  /** Dasselbe in Kurzform für die Nachricht („Objektart“, „Lage“, „Preis im Budget“). */
+  /** Dasselbe in Kurzform für die Nachricht („Objektart“, „Lage“, „Preis im Budget“, „Faktor“, „Einheiten“, „Baujahr“). */
   passtKurz: string[]
   gesuchTitel: string
   kundeName: string
@@ -95,6 +96,11 @@ type Gesuch = {
   lage: string
   budgetMin?: number | null
   budgetMax?: number | null
+  faktorMax?: number | null
+  einheitenMin?: number | null
+  einheitenMax?: number | null
+  baujahrMin?: number | null
+  baujahrMax?: number | null
   erledigt?: boolean
 }
 
@@ -108,6 +114,8 @@ type Objekt = {
   zugewiesen: boolean
   verantwortlich: string
   artUngeprueft: boolean
+  /** verkaufsdaten.kennzahlen (Baujahr, Einheiten, Jahresnettokaltmiete, Kaufpreisvorstellung). */
+  kennzahlen: Record<string, unknown> | undefined
 }
 
 // Verkaufte, abgebrochene und archivierte Objekte stehen nicht mehr zur Vermittlung.
@@ -153,6 +161,7 @@ function objektAusZeile(zeile: ObjektZeile): Objekt {
     zugewiesen: !!zeile.zugewiesener_kunde,
     verantwortlich: text(zeile.verantwortlich),
     artUngeprueft: artUngeprueft(zeile),
+    kennzahlen: alsObjekt(alsObjekt(zeile.verkaufsdaten)?.kennzahlen) ?? undefined,
   }
 }
 
@@ -166,6 +175,11 @@ function gesuchAusJson(wert: unknown): Gesuch | null {
     lage: text(g.lage),
     budgetMin: g.budgetMin as number | null | undefined,
     budgetMax: g.budgetMax as number | null | undefined,
+    faktorMax: g.faktorMax as number | null | undefined,
+    einheitenMin: g.einheitenMin as number | null | undefined,
+    einheitenMax: g.einheitenMax as number | null | undefined,
+    baujahrMin: g.baujahrMin as number | null | undefined,
+    baujahrMax: g.baujahrMax as number | null | undefined,
     erledigt: !!g.erledigt,
   }
 }
@@ -193,6 +207,43 @@ function gesucheDesKontakts(kunde: KundenZeile): Gesuch[] {
     }
   }
   return liste
+}
+
+// ---- Eckdaten aus dem Verkaufsdatenblatt (Kaufpreisfaktor, Einheiten, Baujahr) ----
+// Die Werte stehen dort teils als Freitext („ca. 1965“, „6 WE + 1 Gewerbe“). Gelesen wird nur, was
+// eindeutig ist; alles andere gilt als unbekannt und macht das Paar „zu prüfen“ — nie zum Ausschluss.
+
+/** Positive Zahl aus einem gespeicherten Wert, sonst 0. */
+function positiv(wert: unknown): number {
+  const n = typeof wert === 'number' ? wert : typeof wert === 'string' && wert.trim() !== '' ? Number(wert) : NaN
+  return Number.isFinite(n) && n > 0 ? n : 0
+}
+
+function freitext(wert: unknown): string {
+  return typeof wert === 'string' ? wert.trim() : typeof wert === 'number' && Number.isFinite(wert) ? String(wert) : ''
+}
+
+/** Genau eine Jahreszahl im Text („ca. 1965“ → 1965). undefined = leer, null = keine oder mehrere Jahreszahlen. */
+function jahrAusText(wert: unknown): number | null | undefined {
+  const t = freitext(wert)
+  if (!t) return undefined
+  const jahre = new Set(t.match(/\b(1[6-9]\d\d|20\d\d)\b/g) ?? [])
+  return jahre.size === 1 ? Number([...jahre][0]) : null
+}
+
+/** Genau eine ganze Zahl im Text („8 WE“ → 8). undefined = leer, null = keine, mehrere („6 WE + 1 Gewerbe“) oder keine ganze Zahl. */
+function anzahlAusText(wert: unknown): number | null | undefined {
+  const t = freitext(wert)
+  if (!t) return undefined
+  const zahlen = t.match(/\d+(?:[.,]\d+)?/g) ?? []
+  if (zahlen.length !== 1 || !/^\d+$/.test(zahlen[0])) return null
+  const n = Number(zahlen[0])
+  return n > 0 ? n : null
+}
+
+/** 18.5 → „18,5“, 20 → „20“. */
+function kommazahl(n: number): string {
+  return n.toFixed(1).replace('.', ',').replace(/,0$/, '')
 }
 
 /** Prüft ein Objekt gegen ein Gesuch. null = passt nicht. */
@@ -230,6 +281,48 @@ function pruefe(gesuch: Gesuch, o: Objekt): { passt: string[]; passtKurz: string
       passtKurz.push('Preis im Budget')
     } else {
       offen.push('Kaufpreis beim Objekt nicht hinterlegt')
+    }
+  }
+
+  const kennzahlen = o.kennzahlen
+
+  // Kaufpreisfaktor = Preis ÷ Jahresnettokaltmiete. Preis: der Kaufpreis des Objekts, fehlt er, die
+  // Kaufpreisvorstellung aus dem Verkaufsdatenblatt. Verglichen wird der auf eine Stelle gerundete Wert.
+  if (gesuch.faktorMax != null) {
+    const ausVorstellung = !(o.kaufpreis > 0)
+    const preis = o.kaufpreis > 0 ? o.kaufpreis : positiv(kennzahlen?.kaufpreisvorstellung)
+    const miete = positiv(kennzahlen?.jahresnettokaltmiete)
+    if (preis > 0 && miete > 0) {
+      const faktor = Math.round((preis / miete) * 10) / 10
+      if (faktor > gesuch.faktorMax) return null
+      passt.push(`Faktor ${kommazahl(faktor)}${ausVorstellung ? ' (aus Kaufpreisvorstellung)' : ''}`)
+      passtKurz.push('Faktor')
+    } else {
+      offen.push(`Faktor nicht berechenbar (${preis > 0 ? 'Jahresmiete fehlt' : miete > 0 ? 'Kaufpreis fehlt' : 'Kaufpreis und Jahresmiete fehlen'})`)
+    }
+  }
+
+  if (gesuch.einheitenMin != null || gesuch.einheitenMax != null) {
+    const anzahl = anzahlAusText(kennzahlen?.einheiten)
+    if (anzahl == null) {
+      offen.push(anzahl === undefined ? 'Einheiten beim Objekt nicht hinterlegt' : 'Einheiten beim Objekt nicht eindeutig')
+    } else {
+      if (gesuch.einheitenMin != null && anzahl < gesuch.einheitenMin) return null
+      if (gesuch.einheitenMax != null && anzahl > gesuch.einheitenMax) return null
+      passt.push(anzahl === 1 ? '1 Einheit' : `${anzahl} Einheiten`)
+      passtKurz.push('Einheiten')
+    }
+  }
+
+  if (gesuch.baujahrMin != null || gesuch.baujahrMax != null) {
+    const jahr = jahrAusText(kennzahlen?.baujahr)
+    if (jahr == null) {
+      offen.push(jahr === undefined ? 'Baujahr beim Objekt nicht hinterlegt' : 'Baujahr beim Objekt nicht eindeutig')
+    } else {
+      if (gesuch.baujahrMin != null && jahr < gesuch.baujahrMin) return null
+      if (gesuch.baujahrMax != null && jahr > gesuch.baujahrMax) return null
+      passt.push(`Baujahr ${jahr}`)
+      passtKurz.push('Baujahr')
     }
   }
 

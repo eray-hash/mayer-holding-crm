@@ -3,6 +3,7 @@ import { Check, ChevronLeft, ChevronRight, Plus, Trash2 } from 'lucide-react'
 import { useApp, type AppData } from '../../context/AppContext'
 import { useAuth } from '../../context/AuthContext'
 import { isSupabaseConfigured } from '../../lib/supabaseClient'
+import { ladeTermine, type Termin } from '../../lib/kalenderDb'
 import { Card, EmptyState, Field, inputClass, PrimaryButton, SecondaryButton } from '../../components/ui'
 import { CURRENT_USER, MITARBEITER } from '../../data/constants'
 import { addDays, fmtDate, fmtDateTime, today, uid } from '../../lib/dates'
@@ -142,7 +143,15 @@ type Vorschlag = {
   rang: number
   /** Für die Reihenfolge der nicht fälligen Vorschläge: „erledigen bis“, sonst ganz hinten. */
   spaeter: string
+  /** Nur bei Terminen aus dem Kalender: die feste Zeit, die beim Übernehmen in die Zeile kommt. */
+  termin?: Zeitangabe
 }
+
+/** Zeitfelder einer Zeile im Tagesablauf („ca. Min.“ und „bis Uhrzeit“). */
+type Zeitangabe = { dauerMin?: number; bisUhr?: string }
+
+/** Ein Vorschlag, wie er in den Tagesablauf übernommen wird. */
+type Uebernahme = { text: string; block: VorschlagBlock; zeit?: Zeitangabe }
 
 type VorschlagDaten = Pick<AppData, 'todos' | 'objekte' | 'immobilienKunden' | 'projekte'>
 
@@ -291,6 +300,102 @@ function sammleVorschlaege(daten: VorschlagDaten, ich: string, email: string, da
     gesehen.add(schluessel)
     return true
   })
+}
+
+// ── Termine aus dem Kalender als Vorschläge ──────────────────────────────────────────────────────
+
+const zwei = (n: number) => String(n).padStart(2, '0')
+const uhrzeit = (d: Date) => `${zwei(d.getHours())}:${zwei(d.getMinutes())}`
+const lokalerTag = (d: Date) => `${d.getFullYear()}-${zwei(d.getMonth() + 1)}-${zwei(d.getDate())}`
+
+/** Beginn und Ende des Kalendertags (lokale Zeit; auch an Tagen der Zeitumstellung richtig). */
+function tagesGrenzen(datum: string): { beginn: Date; ende: Date } {
+  const beginn = new Date(datum + 'T00:00:00')
+  return { beginn, ende: new Date(beginn.getFullYear(), beginn.getMonth(), beginn.getDate() + 1) }
+}
+
+/** Die Termine des Tags als Vorschläge — nur die eigenen und die, bei denen man Teilnehmer ist. Die
+ *  Datenbank liefert ohnehin nur solche; hier wird es trotzdem noch einmal geprüft, damit von einem
+ *  fremden Termin nie etwas erscheint. Titel, Zeit und Kunde — keine Beschreibung. */
+function terminVorschlaege(termine: Termin[], email: string, datum: string): Vorschlag[] {
+  const ich = email.trim().toLowerCase()
+  if (!ich) return []
+  const tag = tagesGrenzen(datum)
+  return termine
+    .filter((t) => t.besitzerEmail.toLowerCase() === ich || t.teilnehmer.some((p) => p.toLowerCase() === ich))
+    .map((t) => {
+      const beginn = new Date(t.beginn)
+      const ende = new Date(t.ende)
+      const beginntHeute = beginn >= tag.beginn
+      const endetHeute = ende < tag.ende
+      let spanne = 'ganztägig'
+      let zeit: Zeitangabe = {}
+      if (!t.ganztags && (beginntHeute || endetHeute)) {
+        spanne = beginntHeute && endetHeute ? `${uhrzeit(beginn)}–${uhrzeit(ende)} Uhr` : beginntHeute ? `ab ${uhrzeit(beginn)} Uhr` : `bis ${uhrzeit(ende)} Uhr`
+        // Dauer nur, wenn der Termin ganz an diesem Tag liegt; die Endzeit, wenn er an diesem Tag endet.
+        const minuten = Math.round((ende.getTime() - beginn.getTime()) / 60000)
+        zeit = { ...(beginntHeute && endetHeute && minuten > 0 ? { dauerMin: minuten } : {}), ...(endetHeute ? { bisUhr: uhrzeit(ende) } : {}) }
+      }
+      const titel = (t.titel ?? '').trim() || 'Termin'
+      const kunde = (t.kundeName ?? '').trim()
+      const ort = (t.ort ?? '').trim()
+      const hinweise: string[] = []
+      // Mehrtägige Termine: von wann bis wann sie insgesamt gehen (Ende um Mitternacht zählt zum Vortag).
+      if (!beginntHeute) hinweise.push(`seit ${fmtDate(lokalerTag(beginn))}`)
+      if (ende > tag.ende) hinweise.push(`bis ${fmtDate(lokalerTag(new Date(ende.getTime() - 1)))}`)
+      if (ort) hinweise.push(`Ort: ${ort}`)
+      if (t.teilnehmer.length > 0) hinweise.push('gemeinsamer Termin')
+      return {
+        id: `termin-${t.id}`,
+        text: `${spanne}: ${titel}${kunde ? ` (${kunde})` : ''}`,
+        quelle: 'Termin',
+        hinweis: hinweise.join(' · '),
+        faellig: datum,
+        ueberfaellig: false,
+        block: 'frist' as const,
+        rang: 0,
+        // Reihenfolge: ganztägige, dann die schon vor dem Tag begonnenen, dann nach Beginn.
+        spaeter: t.ganztags || (!beginntHeute && !endetHeute) ? '' : beginntHeute ? `2${beginn.toISOString()}` : `1${ende.toISOString()}`,
+        termin: zeit,
+      }
+    })
+    .sort((a, b) => a.spaeter.localeCompare(b.spaeter) || a.text.localeCompare(b.text, 'de'))
+}
+
+const KEINE_TERMINE: Termin[] = []
+
+type TerminStand = { laedt: boolean; fehler: boolean; termine: Termin[]; erneut: () => void }
+
+/** Lädt die Termine des Tags einmal je Tag (und auf Wunsch erneut). aktiv = false: lädt nichts — für
+ *  fremde Tagesabläufe und ohne Anmeldung. */
+function useTermineDesTags(datum: string, email: string, aktiv: boolean): TerminStand {
+  const [versuch, setVersuch] = useState(0)
+  const schluessel = `${email}|${datum}|${versuch}`
+  const [ergebnis, setErgebnis] = useState<{ schluessel: string; termine: Termin[]; fehler: boolean } | null>(null)
+
+  useEffect(() => {
+    if (!aktiv) return
+    let abgebrochen = false
+    const tag = tagesGrenzen(datum)
+    ladeTermine(tag.beginn, tag.ende)
+      .then((termine) => {
+        if (!abgebrochen) setErgebnis({ schluessel, termine, fehler: false })
+      })
+      .catch(() => {
+        if (!abgebrochen) setErgebnis({ schluessel, termine: [], fehler: true })
+      })
+    return () => {
+      abgebrochen = true
+    }
+  }, [aktiv, schluessel, datum])
+
+  const aktuell = aktiv && ergebnis?.schluessel === schluessel ? ergebnis : null
+  return {
+    laedt: aktiv && !aktuell,
+    fehler: !!aktuell?.fehler,
+    termine: aktuell?.termine ?? KEINE_TERMINE,
+    erneut: () => setVersuch((v) => v + 1),
+  }
 }
 
 // ── Wochenplan: Zellen ───────────────────────────────────────────────────────────────────────────
@@ -533,10 +638,21 @@ function MeinTagesablauf({ ich, datum, onUngespeichert }: { ich: string; datum: 
   const offenVomLetzten = letzterPlan ? (letzterPlan.zeilen ?? []).filter((z) => z.was.trim() !== '' && !z.erledigt) : []
 
   const { todos, objekte, immobilienKunden, projekte } = state
-  const vorschlaege = useMemo(
-    () => sammleVorschlaege({ todos, objekte, immobilienKunden, projekte }, ich, meineEmail, datum),
-    [todos, objekte, immobilienKunden, projekte, ich, meineEmail, datum],
-  )
+  // Termine aus dem Kalender: nur hier im eigenen Tagesablauf und nur mit Anmeldung (die Tagesabläufe
+  // der Kollegen bekommen keine Terminvorschläge).
+  const kalenderEmail = isSupabaseConfigured ? (session?.user?.email ?? '').trim().toLowerCase() : ''
+  const termineDesTags = useTermineDesTags(datum, kalenderEmail, kalenderEmail !== '')
+  const termine = termineDesTags.termine
+  const vorschlaege = useMemo(() => {
+    // Termine zuerst (nach Uhrzeit) — sie haben eine feste Zeit. Gleicher Text ergäbe dieselbe Zeile: nur der erste bleibt.
+    const gesehen = new Set<string>()
+    return [...terminVorschlaege(termine, kalenderEmail, datum), ...sammleVorschlaege({ todos, objekte, immobilienKunden, projekte }, ich, meineEmail, datum)].filter((v) => {
+      const schluessel = textSchluessel(v.text)
+      if (gesehen.has(schluessel)) return false
+      gesehen.add(schluessel)
+      return true
+    })
+  }, [termine, kalenderEmail, todos, objekte, immobilienKunden, projekte, ich, meineEmail, datum])
 
   const zahlen = kennzahlen(entwurf.zeilen)
 
@@ -588,17 +704,24 @@ function MeinTagesablauf({ ich, datum, onUngespeichert }: { ich: string; datum: 
   }
 
   /** Vorschläge als Zeilen in den Tagesablauf legen: in die erste leere Zeile des Blocks, sonst als neue
-   *  Zeile dahinter. Was mit demselben Text schon im Plan steht, kommt nicht doppelt. Gespeichert wird
-   *  dabei nichts — das bleibt bei „Tagesablauf speichern“. */
-  function uebernehmeVorschlaege(auswahl: { text: string; block: VorschlagBlock }[]) {
+   *  Zeile dahinter. Was mit demselben Text schon im Plan steht, kommt nicht doppelt. Ein Termin bringt
+   *  seine Zeit mit: Dauer in „ca. Min.“, Ende in „bis Uhrzeit“ (nur wo die Zeile dort noch nichts hat).
+   *  Gespeichert wird dabei nichts — das bleibt bei „Tagesablauf speichern“. */
+  function uebernehmeVorschlaege(auswahl: Uebernahme[]) {
     let zeilen = entwurf.zeilen
     const schonDa = new Set(zeilen.map((z) => textSchluessel(z.was)).filter(Boolean))
-    for (const { text, block } of auswahl) {
+    for (const { text, block, zeit } of auswahl) {
       const schluessel = textSchluessel(text)
       if (!schluessel || schonDa.has(schluessel)) continue
       schonDa.add(schluessel)
+      const fuelle = (z: TagesplanZeile): TagesplanZeile => ({
+        ...z,
+        was: text,
+        ...(zeit?.dauerMin && !z.dauerMin ? { dauerMin: zeit.dauerMin } : {}),
+        ...(zeit?.bisUhr && !z.bisUhr ? { bisUhr: zeit.bisUhr } : {}),
+      })
       const leer = zeilen.find((z) => z.block === block && z.was.trim() === '')
-      zeilen = leer ? zeilen.map((z) => (z.id === leer.id ? { ...z, was: text } : z)) : [...zeilen, { ...leereZeile(block), was: text }]
+      zeilen = leer ? zeilen.map((z) => (z.id === leer.id ? fuelle(z) : z)) : [...zeilen, fuelle(leereZeile(block))]
     }
     if (zeilen !== entwurf.zeilen) aendere({ ...entwurf, zeilen })
   }
@@ -623,7 +746,13 @@ function MeinTagesablauf({ ich, datum, onUngespeichert }: { ich: string; datum: 
 
   return (
     <>
-      <VorschlaegeKarte datum={datum} vorschlaege={vorschlaege} zeilen={entwurf.zeilen} onUebernehmen={uebernehmeVorschlaege} />
+      <VorschlaegeKarte
+        datum={datum}
+        vorschlaege={vorschlaege}
+        zeilen={entwurf.zeilen}
+        onUebernehmen={uebernehmeVorschlaege}
+        termine={kalenderEmail ? termineDesTags : undefined}
+      />
       <Card className="mb-5 p-4 sm:p-5">
         <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -791,11 +920,14 @@ function VorschlaegeKarte({
   vorschlaege,
   zeilen,
   onUebernehmen,
+  termine,
 }: {
   datum: string
   vorschlaege: Vorschlag[]
   zeilen: TagesplanZeile[]
-  onUebernehmen: (auswahl: { text: string; block: VorschlagBlock }[]) => void
+  onUebernehmen: (auswahl: Uebernahme[]) => void
+  /** Ladezustand der Kalendertermine; fehlt, wenn keine Termine geladen werden (ohne Anmeldung). */
+  termine?: TerminStand
 }) {
   const [alleZeigen, setAlleZeigen] = useState(false)
   const istHeute = datum === today()
@@ -818,16 +950,28 @@ function VorschlaegeKarte({
         <div className="min-w-0">
           <h3 className="text-sm font-semibold text-slate-700">{istHeute ? 'Vorschläge für heute' : `Vorschläge für ${wochentag(datum)}, ${fmtDate(datum)}`}</h3>
           <p className="text-xs text-slate-400">
-            Aus To-do-Liste, Follow-ups und Projektaufgaben. Mit Frist, A, B oder C legst du fest, in welchen Block eine Aufgabe kommt – der farbige Knopf ist der Vorschlag. Gespeichert
-            wird erst mit „Tagesablauf speichern“.
+            Aus {termine ? 'Kalender, ' : ''}To-do-Liste, Follow-ups und Projektaufgaben. Mit Frist, A, B oder C legst du fest, in welchen Block eine Aufgabe kommt – der farbige Knopf ist
+            der Vorschlag.{termine ? ' Ein Termin bringt Dauer und Endzeit gleich mit.' : ''} Gespeichert wird erst mit „Tagesablauf speichern“.
           </p>
         </div>
         {offeneFristen.length > 0 && (
-          <SecondaryButton onClick={() => onUebernehmen(offeneFristen.map((v) => ({ text: v.text, block: 'frist' as const })))}>Alle Fristen übernehmen ({offeneFristen.length})</SecondaryButton>
+          <SecondaryButton onClick={() => onUebernehmen(offeneFristen.map((v) => ({ text: v.text, block: 'frist' as const, zeit: v.termin })))}>
+            Alle Fristen übernehmen ({offeneFristen.length})
+          </SecondaryButton>
         )}
       </div>
 
-      {offen.length === 0 && (
+      {termine?.laedt && <p className="mb-2 text-xs text-slate-400">Termine aus dem Kalender werden geladen …</p>}
+      {termine?.fehler && (
+        <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+          <span className="min-w-0 flex-1">Die Termine aus dem Kalender konnten nicht geladen werden. Die übrigen Vorschläge stehen trotzdem hier.</span>
+          <button onClick={termine.erneut} className="rounded-md border border-rose-300 bg-white px-2 py-1 font-medium hover:bg-rose-100">
+            Erneut versuchen
+          </button>
+        </div>
+      )}
+
+      {offen.length === 0 && !termine?.laedt && (
         <p className="text-sm text-slate-400">{istHeute ? 'Für heute liegt nichts an, das nicht schon in deinem Plan steht.' : 'Für diesen Tag liegt nichts an, das nicht schon in deinem Plan steht.'}</p>
       )}
 
@@ -841,11 +985,15 @@ function VorschlaegeKarte({
                 <div className="min-w-0 basis-full sm:flex-1">
                   <p className={`break-words text-sm ${blockImPlan ? 'text-slate-400' : 'text-slate-800'}`}>{v.text}</p>
                   <p className="text-xs text-slate-400">
-                    <span className="font-medium text-slate-500">{v.quelle}</span>
+                    {v.termin ? (
+                      <span className={`mr-0.5 inline-block rounded px-1.5 py-px text-[11px] font-semibold ${blockImPlan ? 'bg-slate-200 text-slate-500' : 'bg-accent-100 text-accent-700'}`}>Termin</span>
+                    ) : (
+                      <span className="font-medium text-slate-500">{v.quelle}</span>
+                    )}
                     {v.hinweis && (
                       <>
-                        {' · '}
-                        <span className={blockImPlan ? '' : v.ueberfaellig ? 'font-medium text-rose-600' : v.faellig ? 'font-medium text-amber-600' : ''}>{v.hinweis}</span>
+                        {v.termin ? ' ' : ' · '}
+                        <span className={blockImPlan || v.termin ? '' : v.ueberfaellig ? 'font-medium text-rose-600' : v.faellig ? 'font-medium text-amber-600' : ''}>{v.hinweis}</span>
                       </>
                     )}
                   </p>
@@ -862,7 +1010,7 @@ function VorschlaegeKarte({
                       return (
                         <button
                           key={b.id}
-                          onClick={() => onUebernehmen([{ text: v.text, block: b.id }])}
+                          onClick={() => onUebernehmen([{ text: v.text, block: b.id, zeit: v.termin }])}
                           className={`min-w-9 rounded-md px-2.5 py-1.5 text-xs ${
                             vorgeschlagen ? 'bg-accent-600 font-semibold text-white hover:bg-accent-700' : 'border border-slate-200 bg-white font-medium text-slate-600 hover:bg-slate-100'
                           }`}

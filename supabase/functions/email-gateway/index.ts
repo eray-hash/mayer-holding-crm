@@ -591,11 +591,13 @@ async function callClaudeResearch(
     },
     body: JSON.stringify({
       model: opts.model,
-      max_tokens: opts.maxTokens ?? 4096,
+      max_tokens: opts.model === 'claude-haiku-5-5' ? Math.max(opts.maxTokens ?? 4096, 12_000) : (opts.maxTokens ?? 4096),
       // Sonnet denkt von sich aus vor der Antwort nach, und das zählt gegen max_tokens. Bei langen,
       // strukturierten Antworten war das Kontingent schon fürs Nachdenken verbraucht — es kam gar kein
       // Text zurück (stop_reason max_tokens). Damit steht das ganze Kontingent der Antwort zur Verfügung.
       ...(opts.ohneNachdenken ? { thinking: { type: 'between_tools' } } : {}),
+      // Haiku 5.5 denkt vor der Antwort nach (Standard). Ohne Nachdenken suchte es in der Probe nur
+      // zweimal und übersah weitere Firmen der Geschäftsführer — deshalb an, mit genug Platz dafür.
       ...(opts.maxSearches > 0
         ? { tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: opts.maxSearches }] }
         : {}),
@@ -904,6 +906,8 @@ Finde vor allem heraus:
 3. Zu jeder gefundenen Firma: Rechtsform, Sitz, Registergericht und Registernummer, Unternehmensgegenstand/Branche, Gründungsjahr, veröffentlichte Größenangaben (Bilanzsumme, Mitarbeiter), Status (aktiv, in Liquidation, gelöscht, Insolvenz).
 4. Auffälliges: Insolvenz- oder Löschungsbekanntmachungen, Wechsel in Geschäftsführung oder Gesellschafterkreis, Sitzverlegungen.
 
+Vorgehen: Nutze die Websuche mehrmals und hör nicht nach den ersten Treffern auf. Suche zuerst die Firma (Register, Impressum), dann JEDE dabei gefundene Person aus Geschäftsführung, Inhaberschaft oder Gesellschafterkreis einzeln nach weiteren Firmen (Punkt 1 gilt für sie genauso wie für die Person aus der Akte).
+
 Suche gezielt in öffentlichen Handelsregister-Auskünften und Firmenverzeichnissen (z. B. northdata.de, unternehmensregister.de, handelsregister.de, bundesanzeiger.de, firmenwissen.de, implisense.com, companyhouse.de), im Impressum der Firmenwebseiten und in der Wirtschaftspresse. Suche sowohl nach dem Namen der Person als auch nach jeder Firma, die dabei auftaucht.
 
 Namensgleichheit: Viele Namen gibt es mehrfach. Prüfe bei jedem Fund anhand von Ort, Branche, bekannten Firmen und Mitgeschäftsführern, ob es wirklich dieselbe Person ist, und gib an, wie sicher die Zuordnung ist (gesichert / wahrscheinlich / unsicher). Lieber einen unsicheren Fund als unsicher kennzeichnen als ihn weglassen oder als sicher ausgeben.
@@ -926,7 +930,7 @@ Antworte auf Deutsch. Gib GANZ AM ENDE einen einzelnen Codeblock mit reinem JSON
 [{"text": "…", "quelle_url": "https://…", "sicherheit": "gesichert", "bereits_bekannt": false}]
 \`\`\`
 "bereits_bekannt" ist true, wenn der Fund schon aus der Akte hervorgeht, sonst false. Findest du nichts Belastbares, gib eine leere Liste zurück.`,
-    { model: 'claude-haiku-4-5-20251001', maxSearches: 8, maxTokens: 4096, timeoutMs: Math.max(20_000, Math.min(70_000, rest - 8_000)) },
+    { model: 'claude-haiku-5-5', maxSearches: 8, maxTokens: 4096, timeoutMs: Math.max(20_000, Math.min(70_000, rest - 8_000)) },
   )
   const m = text.match(/```json\s*([\s\S]*?)```/)
   let funde: UmfeldFund[] = []
@@ -1050,7 +1054,7 @@ async function fuehreRechercheSchrittAus(bereich: string, kundeId: string, umlei
     if (schritt.nr === 1) {
       const ergebnis = await callClaudeResearch(
         `Öffne die Webseite ${input.webseite} der Firma "${input.firma}" sowie deren Impressum. Halte fest: exakter Firmenname, Rechtsform, Sitz, Registergericht und HRB-/HRA-Nummer, Geschäftsführung, USt-ID. Antworte als kurzer Fließtext auf Deutsch, nur Fakten die du auf den geöffneten Seiten tatsächlich gefunden hast, fehlende Angaben als "nicht gefunden" kennzeichnen.`,
-        { model: 'claude-haiku-4-5-20251001', maxSearches: 3, maxTokens: 2048, timeoutMs },
+        { model: 'claude-haiku-5-5', maxSearches: 3, maxTokens: 2048, timeoutMs },
       )
       await schreibe({ zwischen: { ...z.zwischen, identifikation: ergebnis }, schrittNr: 2, versuch: 0, laeuftSeit: null })
     } else if (schritt.nr === 2) {
@@ -1082,7 +1086,7 @@ async function fuehreRechercheSchrittAus(bereich: string, kundeId: string, umlei
       })
       const agentErgebnisse = await Promise.all(
         agentAuftraege.map((a) =>
-          callClaudeResearch(a.prompt, { model: 'claude-haiku-4-5-20251001', maxSearches: a.key.startsWith('Inhaber') ? 8 : 4, maxTokens: 4096, timeoutMs })
+          callClaudeResearch(a.prompt, { model: 'claude-haiku-5-5', maxSearches: a.key.startsWith('Inhaber') ? 8 : 4, maxTokens: 4096, timeoutMs })
             .then((text) => `### ${a.key}\n${text}`)
             .catch((err) => `### ${a.key}\nRecherche fehlgeschlagen: ${err instanceof Error ? err.message : String(err)}`),
         ),
@@ -1721,18 +1725,18 @@ async function fuehreSteuerSchrittAus(bereich: string, kundeId: string, umleitun
           webseite: kunde.unternehmensbewertung?.webseite,
           bekannt: [...notizen, ...dokumente.slice(0, 40).map((d) => `- Dokument: ${d.name}`), z.zwischen?.unterlagen ? `\nAus gelesenen Unterlagen der Akte:\n${z.zwischen.unterlagen.slice(0, 3000)}` : ''].join('\n'),
         })}\n\nAntworte auf Deutsch als Liste der Firmen. Je Firma: genauer Name, Rechtsform, Sitz, Registernummer, Rolle der Person (Geschäftsführer, Gesellschafter mit Anteil falls bekannt), Branche, Status, Quelle (URL), Sicherheit der Zuordnung, und [NEU] oder [BEKANNT laut Akte].`,
-        { model: 'claude-haiku-4-5-20251001', maxSearches: 8, maxTokens: 4096, timeoutMs },
+        { model: 'claude-haiku-5-5', maxSearches: 8, maxTokens: 4096, timeoutMs },
       )
       await schreibe({ zwischen: { ...z.zwischen, firmen }, schrittNr: 3, versuch: 0, laeuftSeit: null })
     } else if (schritt.nr === 3) {
       const [zahlen, rechtsstand] = await Promise.all([
         callClaudeResearch(
           `Für die folgenden Firmen eines Kunden sollen die öffentlich und kostenlos einsehbaren Finanzdaten zusammengetragen werden.\n\nFirmen:\n${z.zwischen?.firmen ?? '(keine ermittelt)'}\n\nSuche je Firma nach offengelegten Jahresabschlüssen und Kennzahlen in kostenlos zugänglichen Quellen: Unternehmensregister (unternehmensregister.de), Bundesanzeiger (bundesanzeiger.de), Handelsregister-Bekanntmachungen sowie frei einsehbare Firmenprofile (z. B. northdata.de, companyhouse.de, openregister.de, implisense.com). Keine kostenpflichtigen Abrufe. Erfasse je Firma und Geschäftsjahr, soweit veröffentlicht: Bilanzsumme, Anlagevermögen, Umlaufvermögen, Eigenkapital, Gewinn- oder Verlustvortrag, Jahresüberschuss/-fehlbetrag, Rückstellungen, Verbindlichkeiten, Umsatz, Mitarbeiterzahl, Größenklasse (Kleinst/klein/mittel), sowie ob überhaupt ein Abschluss veröffentlicht ist. Kleine Gesellschaften veröffentlichen oft nur eine verkürzte Bilanz — das vermerken, nicht als Lücke werten. Jede Zahl mit Quelle (URL) und Geschäftsjahr. Was du nicht findest, als "nicht veröffentlicht/nicht gefunden" kennzeichnen — nichts schätzen. Antworte auf Deutsch, je Firma ein Abschnitt.`,
-          { model: 'claude-haiku-4-5-20251001', maxSearches: 10, maxTokens: 4096, timeoutMs },
+          { model: 'claude-haiku-5-5', maxSearches: 10, maxTokens: 4096, timeoutMs },
         ).catch((err) => `Öffentliche Finanzdaten konnten nicht abgerufen werden: ${err instanceof Error ? err.message : String(err)}`),
         callClaudeResearch(
           `Prüfe den zum ${heute} in Deutschland geltenden Rechtsstand für diese steuerlichen Gestaltungsmittel und nenne je Mittel die aktuellen Werte, Grenzen und Fristen mit Quelle (URL, möglichst Gesetzestext, BMF, IHK, Steuerberaterkammer oder Haufe/DATEV):\n1. Investitionsabzugsbetrag nach § 7g EStG (Prozentsatz, Höchstbetrag, Gewinngrenze, Investitionsfrist, Rückgängigmachung) und Sonderabschreibung nach § 7g Abs. 5 EStG.\n2. Geringwertige Wirtschaftsgüter und Sammelposten (Grenzen).\n3. Degressive Abschreibung für bewegliche Wirtschaftsgüter (gilt sie aktuell, für welche Anschaffungszeiträume, welcher Satz) und Sonderregeln für Elektrofahrzeuge sowie die Dienstwagenbesteuerung von Elektro- und Hybridfahrzeugen.\n4. Steuerfreie oder pauschal versteuerte Arbeitgeberleistungen: Sachbezugsfreigrenze, Aufmerksamkeiten, Essenszuschuss, Jobticket/Deutschlandticket, Kindergartenzuschuss, Gesundheitsförderung, Erholungsbeihilfe, Internetpauschale, Überlassung von Fahrrädern und Elektrogeräten.\n5. Betriebliche Altersversorgung für Gesellschafter-Geschäftsführer: Direktversicherung (steuer- und sozialversicherungsfreie Höchstbeträge, aktuelle Beitragsbemessungsgrenze), Pensionszusage (Anerkennungsvoraussetzungen wie Erdienbarkeit, Probezeit, Angemessenheit), Unterstützungskasse, Pensionsfonds.\n6. Thesaurierung und Ausschüttung: Körperschaftsteuersatz (auch beschlossene künftige Änderungen), Thesaurierungsbegünstigung § 34a EStG, Option zur Körperschaftsbesteuerung § 1a KStG, Steuerfreistellung von Beteiligungserträgen und Veräußerungsgewinnen § 8b KStG.\n7. Rücklage nach § 6b EStG, Gewerbesteuer-Freibetrag und Anrechnung nach § 35 EStG, Verlustrücktrag und -vortrag (aktuelle Höchstbeträge).\nKennzeichne ausdrücklich, was du nicht sicher belegen konntest. Antworte auf Deutsch als nummerierte Liste.`,
-          { model: 'claude-haiku-4-5-20251001', maxSearches: 10, maxTokens: 4096, timeoutMs },
+          { model: 'claude-haiku-5-5', maxSearches: 10, maxTokens: 4096, timeoutMs },
         ).catch((err) => `Der aktuelle Rechtsstand konnte nicht geprüft werden: ${err instanceof Error ? err.message : String(err)}`),
       ])
       await schreibe({ zwischen: { ...z.zwischen, zahlen, rechtsstand }, schrittNr: 4, versuch: 0, laeuftSeit: null })
