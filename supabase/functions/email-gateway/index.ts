@@ -917,7 +917,7 @@ Antworte auf Deutsch. Gib GANZ AM ENDE einen einzelnen Codeblock mit reinem JSON
 //
 // Jeder der vier Schritte läuft als EIGENER Funktionsaufruf; Zwischenergebnisse stehen in
 // kunden.unternehmensbewertung_recherche, das das Frontend pollt. Grund: Die Plattform beendet jeden
-// Worker hart nach WORKER_LEBENSDAUER_MS ab seinem Start (150 s im aktuellen Tarif) — gezählt ab
+// Worker hart nach WORKER_LEBENSDAUER_MS ab seinem Start — gezählt ab
 // Worker-Start, nicht ab Eingang der Anfrage. Die frühere Fassung ließ alle vier Schritte in einem
 // Hintergrund-Task laufen (~2 Minuten). Traf die Anfrage einen schon 70 Sekunden alten Worker, wurde
 // er mitten in Schritt 3 beendet, ohne dass der catch-Block lief: der Status blieb für immer
@@ -930,7 +930,14 @@ Antworte auf Deutsch. Gib GANZ AM ENDE einen einzelnen Codeblock mit reinem JSON
 // wiederholt werden kann.
 const WORKER_GEBOOTET = Date.now()
 const WORKER_KENNUNG = crypto.randomUUID().slice(0, 8)
-const WORKER_LEBENSDAUER_MS = Number(Deno.env.get('WORKER_WALL_CLOCK_MS') ?? '150000')
+// Gemessen am 18.11.2026 im bezahlten Tarif: Ein Worker nimmt bis zum Alter von rund 200 s neue Anfragen
+// an und wird nach rund 400 s beendet (im kostenlosen Tarif waren es 75 s und 150 s). Mit dem alten Wert
+// von 150 s bekam jeder Schritt auf einem Worker, der älter als etwa 110 s war, nur noch 20 Sekunden für
+// seinen KI-Aufruf und scheiterte — obwohl der Worker noch minutenlang gelebt hätte.
+const WORKER_LEBENSDAUER_MS = Number(Deno.env.get('WORKER_WALL_CLOCK_MS') ?? '390000')
+// So lange darf ein einzelner Schritt höchstens laufen. Danach gilt ein als „läuft" markierter Schritt als
+// abgebrochen und darf neu angestoßen werden — unabhängig davon, wie lange ein Worker lebt.
+const SCHRITT_HOECHSTENS_MS = 150_000
 
 const RECHERCHE_SCHRITTE = [
   { nr: 1, titel: 'Firmenidentifikation', bedarfMs: 45_000 },
@@ -983,7 +990,7 @@ async function fuehreRechercheSchrittAus(bereich: string, kundeId: string, umlei
   const schritt = RECHERCHE_SCHRITTE.find((x) => x.nr === z.schrittNr)
   if (!schritt) return
   // Derselbe Schritt läuft gerade schon woanders (z. B. doppelter Klick auf "Fortsetzen").
-  if (z.laeuftSeit && Date.now() - new Date(z.laeuftSeit).getTime() < WORKER_LEBENSDAUER_MS) return
+  if (z.laeuftSeit && Date.now() - new Date(z.laeuftSeit).getTime() < SCHRITT_HOECHSTENS_MS) return
 
   async function schreibe(patch: Partial<RechercheZustand>) {
     Object.assign(z!, patch, { aktualisiertAm: new Date().toISOString() })
@@ -997,7 +1004,7 @@ async function fuehreRechercheSchrittAus(bereich: string, kundeId: string, umlei
     await stosseRechercheSchrittAn(bereich, kundeId, umleitungen + 1)
     return
   }
-  const timeoutMs = Math.max(20_000, rest - 12_000)
+  const timeoutMs = Math.min(SCHRITT_HOECHSTENS_MS - 12_000, Math.max(20_000, rest - 12_000))
 
   const input = { firma: z.eingabe.firma, webseite: z.eingabe.webseite, anlass: z.anlass, stichtag: z.stichtag, vorhandeneZahlen: z.eingabe.vorhandeneZahlen ?? {} }
   const vorhandeneZahlenText = Object.keys(input.vorhandeneZahlen ?? {}).length
@@ -1242,7 +1249,7 @@ async function leseDokument(ref: DokumentRef, teil: number, umleitungen: number)
     await stosseDokumentLesenAn(ref, { teil, umleitungen: umleitungen + 1 })
     return
   }
-  const timeoutMs = Math.max(20_000, rest - 12_000)
+  const timeoutMs = Math.min(SCHRITT_HOECHSTENS_MS - 12_000, Math.max(20_000, rest - 12_000))
 
   try {
     if (teil === 0) {
@@ -1581,7 +1588,7 @@ async function fuehreSteuerSchrittAus(bereich: string, kundeId: string, umleitun
   if (!kunde || !z || z.status !== 'laeuft' || !z.schrittNr) return
   const schritt = STEUER_SCHRITTE.find((x) => x.nr === z.schrittNr)
   if (!schritt) return
-  if (z.laeuftSeit && Date.now() - new Date(z.laeuftSeit).getTime() < WORKER_LEBENSDAUER_MS) return
+  if (z.laeuftSeit && Date.now() - new Date(z.laeuftSeit).getTime() < SCHRITT_HOECHSTENS_MS) return
 
   async function schreibe(patch: Partial<SteuerZustand>) {
     Object.assign(z!, patch, { aktualisiertAm: new Date().toISOString() })
@@ -1595,7 +1602,7 @@ async function fuehreSteuerSchrittAus(bereich: string, kundeId: string, umleitun
     await stosseRechercheSchrittAn(bereich, kundeId, umleitungen + 1, 'steuer_analyse_schritt')
     return
   }
-  const timeoutMs = Math.max(20_000, rest - 12_000)
+  const timeoutMs = Math.min(SCHRITT_HOECHSTENS_MS - 12_000, Math.max(20_000, rest - 12_000))
   const heute = new Date().toISOString().slice(0, 10)
   const person = kunde.ansprechpartner || kunde.firma
   // deno-lint-ignore no-explicit-any
@@ -2117,7 +2124,7 @@ async function fuehreObjektBewertungAus(objektId: string, umleitungen: number, w
   const z = o?.bewertung as ObjektBewertungZustand | null
   // Nach einem Fehler oder einem Hänger ab dem offenen Schritt weitermachen, statt die fertigen Schritte zu wiederholen.
   if (z && wiederaufnehmen && z.schrittNr && (z.status === 'fehler' || z.status === 'laeuft')) {
-    if (z.status === 'laeuft' && z.laeuftSeit && Date.now() - new Date(z.laeuftSeit).getTime() < WORKER_LEBENSDAUER_MS) return
+    if (z.status === 'laeuft' && z.laeuftSeit && Date.now() - new Date(z.laeuftSeit).getTime() < SCHRITT_HOECHSTENS_MS) return
     z.status = 'laeuft'
     z.versuch = 0
     z.fehler = undefined
@@ -2128,7 +2135,7 @@ async function fuehreObjektBewertungAus(objektId: string, umleitungen: number, w
   const schritt = OBJEKT_BEWERTUNG_SCHRITTE.find((x) => x.nr === z.schrittNr)
   if (!schritt) return
   // Derselbe Schritt läuft gerade schon woanders (z. B. doppelter Klick auf „Fortsetzen").
-  if (z.laeuftSeit && Date.now() - new Date(z.laeuftSeit).getTime() < WORKER_LEBENSDAUER_MS) return
+  if (z.laeuftSeit && Date.now() - new Date(z.laeuftSeit).getTime() < SCHRITT_HOECHSTENS_MS) return
 
   async function schreibe(patch: Partial<ObjektBewertungZustand>) {
     // Wurde die Bewertung inzwischen verworfen oder neu gestartet, schreibt dieser Lauf nichts mehr.
@@ -2146,7 +2153,7 @@ async function fuehreObjektBewertungAus(objektId: string, umleitungen: number, w
     await stosseObjektBewertungAn(objektId, umleitungen + 1)
     return
   }
-  const timeoutMs = Math.max(20_000, rest - 12_000)
+  const timeoutMs = Math.min(SCHRITT_HOECHSTENS_MS - 12_000, Math.max(20_000, rest - 12_000))
   const ort = [o.verkaufsdaten?.uebersicht?.strasse, o.verkaufsdaten?.uebersicht?.plzOrt].filter(Boolean).join(', ') || o.adresse || o.bezeichnung
   const crmDaten = JSON.stringify({ bezeichnung: o.bezeichnung, adresse: o.adresse, objektart: o.verkaufsdaten?.uebersicht?.objektart || o.typ, kaufpreisvorstellung: o.kaufpreis || undefined, verkaufsdatenblatt: o.verkaufsdaten ?? undefined, kurzpruefung: o.kurzpruefung ?? undefined }, null, 1)
 
@@ -3696,21 +3703,6 @@ Deno.serve(async (req: Request) => {
     // Mail aus dem gemeinsamen Postfach einem Immobilien-Objekt zuordnen (Anhänge in die Objektakte) — nur mit eigenem Login.
     // Nur zur Messung: Alter und Kennung des Prozesses, der diese Anfrage beantwortet.
     if (body.action === 'worker_stand') {
-      return new Response(JSON.stringify({ kennung: WORKER_KENNUNG, alterMs: Date.now() - WORKER_GEBOOTET }), { headers })
-    }
-
-    // Nur zur Messung: schreibt im Hintergrund alle vier Sekunden sein Alter, bis der Prozess beendet wird.
-    if (body.action === 'worker_puls') {
-      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
-      // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
-      EdgeRuntime.waitUntil(
-        (async () => {
-          for (;;) {
-            await admin.from('abteilung_eintraege').upsert({ id: 'worker_puls', art: 'worker_puls', daten: { kennung: WORKER_KENNUNG, alterMs: Date.now() - WORKER_GEBOOTET }, updated_at: new Date().toISOString() })
-            await new Promise((r) => setTimeout(r, 4000))
-          }
-        })(),
-      )
       return new Response(JSON.stringify({ kennung: WORKER_KENNUNG, alterMs: Date.now() - WORKER_GEBOOTET }), { headers })
     }
 

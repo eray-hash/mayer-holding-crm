@@ -5,6 +5,7 @@ import { useApp } from '../../context/AppContext'
 import { Card, EmptyState, inputClass, PrimaryButton, SecondaryButton } from '../../components/ui'
 import { KUNDEN_BEREICHE, kundeBereichLabel, kundeDetailPfad } from '../../data/kundenBereiche'
 import { AKTE_INTERN, AKTE_UNGEKLAERT, istSammelakte } from '../../data/sammelakten'
+import { MITARBEITER } from '../../data/constants'
 import { fmtDate } from '../../lib/dates'
 import { brauchtDateiLink, holeAnhangUrl, holeDokumentInhalte } from '../../lib/emailGateway'
 import { ladeUngeklaerteEingaenge, legeEingaengeAb, nimmEingaengeHeraus, type AblageZiel } from '../../lib/eingang'
@@ -402,7 +403,9 @@ export function UngeklaerteEingaenge() {
   const vorschlagGrundlage = useMemo(() => {
     // Der eigene Firmenname steht in fast jedem Schriftstück — er taugt nicht zum Unterscheiden.
     const intern = state.kunden.find((k) => k.id === AKTE_INTERN)
-    const sperre = new Set(intern ? woerter(`${intern.firma} ${intern.ansprechpartner}`) : [])
+    // Ebenso die Namen der Mitarbeiter: Sie stehen als Absender im Dateinamen („Sprachnachricht … von <Name>")
+    // und würden sonst auf einen Kunden gleichen Nachnamens zeigen.
+    const sperre = new Set(woerter(`${intern ? `${intern.firma} ${intern.ansprechpartner}` : ''} ${MITARBEITER.join(' ')}`))
     const kundeNachId = new Map(KUNDEN_BEREICHE.flatMap((b) => b.get(state)).map((k) => [k.id, k]))
     const objektNachId = new Map(state.objekte.map((o) => [o.id, o]))
     const merkmale: Merkmale[] = []
