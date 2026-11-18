@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { Camera, CheckCircle2, FileText } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { KUNDEN_BEREICHE } from '../data/kundenBereiche'
+import { useBereichsRechte } from '../lib/bereichsRechte'
 import { suggestKunde } from '../lib/matchKunde'
 import { Modal, Field, inputClass, PrimaryButton, SecondaryButton } from './ui'
 import { uid, today } from '../lib/dates'
@@ -17,6 +18,8 @@ export function DokumentenImportModal({ open, onClose }: { open: boolean; onClos
   const [kundeId, setKundeId] = useState('')
   const [saved, setSaved] = useState(false)
 
+  // Nur Bereiche mit Freigabe zur Auswahl (die Liste enthält ohnehin nur sichtbare Kunden).
+  const { kundenBereiche } = useBereichsRechte()
   const suggestion = suggestKunde(state, `${erkannterText} ${dateiname}`)
   const kundenListe = bereich ? KUNDEN_BEREICHE.find((b) => b.id === bereich)!.get(state) : []
 
@@ -149,7 +152,7 @@ export function DokumentenImportModal({ open, onClose }: { open: boolean; onClos
               }}
             >
               <option value="">– später zuweisen –</option>
-              {KUNDEN_BEREICHE.map((b) => (
+              {kundenBereiche.map((b) => (
                 <option key={b.id} value={b.id}>{b.label}</option>
               ))}
             </select>

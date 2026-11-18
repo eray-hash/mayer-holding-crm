@@ -21,7 +21,8 @@ import { DokumenteSection } from '../../components/DokumenteSection'
 import { KommunikationSection } from '../../components/KommunikationSection'
 import { LoeschenKundeButton } from '../../components/LoeschenKundeButton'
 import { AktenReiter, type Reiter } from '../../components/AktenReiter'
-import { KUNDEN_BEREICHE, kundeDetailPfad } from '../../data/kundenBereiche'
+import { kundeDetailPfad } from '../../data/kundenBereiche'
+import { useBereichsRechte } from '../../lib/bereichsRechte'
 import { getHauptpfad } from '../../data/statusNetworks'
 import { uid, today } from '../../lib/dates'
 import type { KundeBereich, Prioritaet } from '../../types'
@@ -46,7 +47,11 @@ export function PrivatDetail() {
   const { state, dispatch } = useApp()
   const [editFollowUp, setEditFollowUp] = useState(false)
   const [uebernehmen, setUebernehmen] = useState(false)
-  const [zielBereich, setZielBereich] = useState<KundeBereich>('beratung')
+  const [zielGewaehlt, setZielBereich] = useState<KundeBereich>('beratung')
+  // Übernehmen nur in einen Bereich mit Freigabe — sonst lehnt die Datenbank das Verschieben ab und
+  // der Kontakt wäre danach für den Mitarbeiter selbst nicht mehr sichtbar.
+  const { oeffentlicheKundenBereiche } = useBereichsRechte()
+  const zielBereich: KundeBereich | undefined = oeffentlicheKundenBereiche.some((b) => b.id === zielGewaehlt) ? zielGewaehlt : oeffentlicheKundenBereiche[0]?.id
 
   const kontakt = state.privatKunden.find((k) => k.id === id)
 
@@ -146,15 +151,21 @@ export function PrivatDetail() {
         <p className="mb-3 text-sm text-slate-600">
           <strong>{kontakt.firma}</strong> wird mit allem, was in dieser Akte liegt (Notizen, Protokolle, Dokumente, Rechnungen), in den gewählten Bereich verschoben. Danach sehen ihn alle Mitarbeiter dieses Bereichs.
         </p>
-        <select className="mb-4 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" value={zielBereich} onChange={(e) => setZielBereich(e.target.value as KundeBereich)}>
-          {KUNDEN_BEREICHE.filter((b) => b.id !== 'privat').map((b) => (
-            <option key={b.id} value={b.id}>{b.label}</option>
-          ))}
-        </select>
+        {zielBereich ? (
+          <select className="mb-4 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" value={zielBereich} onChange={(e) => setZielBereich(e.target.value as KundeBereich)}>
+            {oeffentlicheKundenBereiche.map((b) => (
+              <option key={b.id} value={b.id}>{b.label}</option>
+            ))}
+          </select>
+        ) : (
+          <p className="mb-4 text-sm text-amber-700">Du bist für keinen Bereich freigegeben. Bitte die Geschäftsführung fragen.</p>
+        )}
         <div className="flex justify-end gap-2">
           <button onClick={() => setUebernehmen(false)} className="rounded-lg px-3 py-2 text-sm text-slate-500 hover:bg-slate-50">Abbrechen</button>
           <button
+            disabled={!zielBereich}
             onClick={() => {
+              if (!zielBereich) return
               dispatch({
                 type: 'MOVE_KUNDE_BEREICH',
                 von: 'privat',
@@ -169,7 +180,7 @@ export function PrivatDetail() {
               })
               navigate(kundeDetailPfad(zielBereich, kontakt.id))
             }}
-            className="rounded-lg bg-accent-600 px-3 py-2 text-sm font-medium text-white hover:bg-accent-700"
+            className="rounded-lg bg-accent-600 px-3 py-2 text-sm font-medium text-white hover:bg-accent-700 disabled:opacity-50"
           >
             Übernehmen
           </button>

@@ -11,6 +11,7 @@ import { isEmailGatewayConfigured, classifyNewLeads } from '../../lib/emailGatew
 import { ordneMailObjektZu } from '../../lib/objektMail'
 import { matchKundeByEmail, suggestKunde } from '../../lib/matchKunde'
 import { KUNDEN_BEREICHE, kundeBereichLabel } from '../../data/kundenBereiche'
+import { useBereichsRechte } from '../../lib/bereichsRechte'
 import { getHauptpfad } from '../../data/statusNetworks'
 import { uid, today, addDays, fmtDateTime } from '../../lib/dates'
 import { MITARBEITER } from '../../data/constants'
@@ -562,6 +563,9 @@ function LeadDetail({
 }) {
   const { state } = useApp()
   const bestehenderTreffer = matchKundeByEmail(state, lead.email)
+  // Nur Bereiche mit Freigabe anbieten — in einem anderen würde die Datenbank das Anlegen ablehnen.
+  const { kundenBereiche } = useBereichsRechte()
+  const wahl = kundenBereiche.some((b) => b.id === bereichWahl) ? bereichWahl : (kundenBereiche[0]?.id ?? 'privat')
 
   return (
     <div>
@@ -587,15 +591,15 @@ function LeadDetail({
       ) : (
         <div className="rounded-lg border border-slate-200 p-3">
           <label className="mb-1.5 block text-xs font-medium text-slate-500">Bereich</label>
-          <select className={`${inputClass} mb-3 w-auto`} value={bereichWahl} onChange={(e) => onBereichChange(e.target.value as KundeBereich)}>
-            {KUNDEN_BEREICHE.map((b) => (
+          <select className={`${inputClass} mb-3 w-auto`} value={wahl} onChange={(e) => onBereichChange(e.target.value as KundeBereich)}>
+            {kundenBereiche.map((b) => (
               <option key={b.id} value={b.id}>
                 {b.label}
               </option>
             ))}
           </select>
           <div className="flex items-center gap-2">
-            <PrimaryButton onClick={() => onUebernehmen(bereichWahl)} className="text-xs">
+            <PrimaryButton onClick={() => onUebernehmen(wahl)} className="text-xs">
               <UserPlus size={13} /> Als Kunde/Mandant anlegen
             </PrimaryButton>
             <button onClick={onVerwerfen} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-50 hover:text-slate-600" title="Verwerfen">
@@ -628,17 +632,22 @@ function ZuordnungsZeile({
   onIgnorieren: () => void
 }) {
   const { state } = useApp()
-  const bereich = bereichWahl[mail.id] ?? mail.vorschlag?.bereich ?? KUNDEN_BEREICHE[0].id
+  // Nur Bereiche mit Freigabe. Ein Vorschlag aus einem Bereich ohne Freigabe zählt nicht — die Akte
+  // ist für diesen Mitarbeiter ohnehin nicht sichtbar.
+  const { kundenBereiche, darf } = useBereichsRechte()
+  const vorschlag = mail.vorschlag && darf(mail.vorschlag.bereich) ? mail.vorschlag : undefined
+  const gewuenscht = bereichWahl[mail.id] ?? vorschlag?.bereich ?? kundenBereiche[0]?.id ?? 'privat'
+  const bereich = kundenBereiche.some((b) => b.id === gewuenscht) ? gewuenscht : (kundenBereiche[0]?.id ?? 'privat')
   const kundenListe = KUNDEN_BEREICHE.find((b) => b.id === bereich)!.get(state)
   // Ohne automatischen Vorschlag UND ohne eigene Auswahl bewusst NICHT den erstbesten Kunden der
   // Liste vorauswählen (sonst wirkt "Zuweisen" sofort klickbar, obwohl de facto kein Treffer
   // vorliegt — echter Fehlzuordnungs-Fund beim Bugfixing-Durchgang 2026-11-03).
-  const kundeId = kundeWahl[mail.id] ?? mail.vorschlag?.kundeId ?? ''
+  const kundeId = kundeWahl[mail.id] ?? vorschlag?.kundeId ?? ''
 
   return (
     <div className="rounded-lg border border-slate-200 p-3">
       <p className="mb-2 text-xs font-medium text-slate-500">
-        {mail.vorschlag ? `Vorschlag: ${mail.vorschlag.kundeName} (${kundeBereichLabel(mail.vorschlag.bereich)})` : 'Kein automatischer Vorschlag gefunden.'}
+        {vorschlag ? `Vorschlag: ${vorschlag.kundeName} (${kundeBereichLabel(vorschlag.bereich)})` : 'Kein automatischer Vorschlag gefunden.'}
       </p>
       <div className="flex flex-wrap items-center gap-2">
         <select
@@ -646,7 +655,7 @@ function ZuordnungsZeile({
           value={bereich}
           onChange={(e) => setBereichWahl((s) => ({ ...s, [mail.id]: e.target.value as KundeBereich }))}
         >
-          {KUNDEN_BEREICHE.map((b) => (
+          {kundenBereiche.map((b) => (
             <option key={b.id} value={b.id}>
               {b.label}
             </option>

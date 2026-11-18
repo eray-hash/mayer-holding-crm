@@ -28,6 +28,7 @@ import type { Bereich } from '../types'
 import { useApp } from '../context/AppContext'
 import { useAuth } from '../context/AuthContext'
 import { isSupabaseConfigured } from '../lib/supabaseClient'
+import { darfBereich } from '../lib/bereichsRechte'
 import { collectPriorityEntries } from '../lib/todayPriorities'
 import { collectFollowUpPriorities, followUpDetailPfad } from '../lib/followUpPriorities'
 import { collectFehlendeStammdaten } from '../lib/stammdatenWarnungen'
@@ -88,15 +89,15 @@ export function Layout({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.pathname])
 
-  const aktuellerBereich = BEREICHE.find((b) => b.id === state.bereich) ?? BEREICHE[0]
   // Rollenbasierte Bereichs-Einschränkung (Beschluss 2026-11-02): Geschäftsführung und Admins sehen
   // immer alles, ein eingeschränkter Mitarbeiter nur die ihm zugewiesenen Bereiche.
   // Privat ist keine von der GF zuteilbare Berechtigung (siehe ALLE_BEREICHE), sondern für jeden
   // Mitarbeiter immer verfügbar — deshalb hier unabhängig von der Rollen-Einschränkung durchgelassen.
-  const sichtbareBereiche =
-    isSupabaseConfigured && session && mitarbeiter && mitarbeiter.rolle !== 'geschaeftsfuehrung' && !mitarbeiter.ist_admin
-      ? BEREICHE.filter((b) => b.id === 'privat' || mitarbeiter.bereiche.includes(b.id))
-      : BEREICHE
+  const sichtbareBereiche = isSupabaseConfigured && session ? BEREICHE.filter((b) => darfBereich(mitarbeiter, b.id)) : BEREICHE
+  // Der gemerkte Bereich kann einer sein, für den es (inzwischen) keine Freigabe gibt — z.B. nach
+  // dem Öffnen einer Sammelakte unter /beratung/… oder wenn die Geschäftsführung Bereiche entzogen
+  // hat. Dann zeigt die Seitenleiste den ersten freigegebenen Bereich statt Links ins Leere.
+  const aktuellerBereich = sichtbareBereiche.find((b) => b.id === state.bereich) ?? sichtbareBereiche[0] ?? BEREICHE[0]
   const { prioritaeten } = collectPriorityEntries(state.projekte)
   const followUps = collectFollowUpPriorities(state)
   const fehlendeStammdaten = collectFehlendeStammdaten(state)
@@ -374,7 +375,7 @@ export function Layout({ children }: { children: ReactNode }) {
                   Blick untereinander, ohne Scrollen. */}
               <ul className="space-y-0.5">
                 {sichtbareBereiche.map((b) => {
-                  const aktiv = state.bereich === b.id
+                  const aktiv = aktuellerBereich.id === b.id
                   return (
                     <li key={b.id}>
                       <button

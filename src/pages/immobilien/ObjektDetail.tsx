@@ -6,6 +6,7 @@ import { StatusWidget } from '../../components/StatusWidget'
 import { Card, Modal, Field, inputClass, PrimaryButton, SecondaryButton, EmptyState, StatusBadge } from '../../components/ui'
 import { FormularLinkButtons } from '../../components/FormularLink'
 import { KUNDEN_BEREICHE, kundeBereichLabel, kundeDetailPfad } from '../../data/kundenBereiche'
+import { useBereichsRechte } from '../../lib/bereichsRechte'
 import { alleGesuche, budgetText, eckdatenTexte, passendeGesuche } from '../../lib/gesuche'
 import { fmtDate, isOverdue, today, uid, fmtEUR } from '../../lib/dates'
 import { PRIORITAETEN, gruppeLabel, LUKRATIVITAET_COLOR } from '../../data/constants'
@@ -664,7 +665,9 @@ function VorschlagForm({
   state: AppData
   onSubmit: (v: { kundeBereich: KundeBereich; kundeId: string; kundeName: string; steuerBegruendung: string; erstelltVon: string }) => void
 }) {
-  const [bereich, setBereich] = useState<KundeBereich>(KUNDEN_BEREICHE[0].id)
+  // Nur Bereiche mit Freigabe — einen Vorschlag an einen Kunden ohne Freigabe würde die Datenbank ablehnen.
+  const { kundenBereiche } = useBereichsRechte()
+  const [bereich, setBereich] = useState<KundeBereich>(kundenBereiche[0]?.id ?? 'privat')
   const kundenListe = KUNDEN_BEREICHE.find((b) => b.id === bereich)!.get(state)
   const [kundeId, setKundeId] = useState(kundenListe[0]?.id ?? '')
   const [steuerBegruendung, setSteuerBegruendung] = useState('')
@@ -686,7 +689,7 @@ function VorschlagForm({
     <div>
       <Field label="Bereich">
         <select className={inputClass} value={bereich} onChange={(e) => changeBereich(e.target.value as KundeBereich)}>
-          {KUNDEN_BEREICHE.map((b) => <option key={b.id} value={b.id}>{b.label}</option>)}
+          {kundenBereiche.map((b) => <option key={b.id} value={b.id}>{b.label}</option>)}
         </select>
       </Field>
       <Field label="Kunde/Mandant">

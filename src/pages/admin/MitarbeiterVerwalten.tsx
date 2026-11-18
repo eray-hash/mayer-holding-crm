@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { PostfaecherVerwaltung } from '../../components/PostfachEinstellungen'
-import { Mail, Plus, UserCheck, UserX, Pencil, Save, XCircle, ShieldCheck, Link2, Copy, Check, AtSign } from 'lucide-react'
+import { Mail, Plus, UserCheck, UserX, Pencil, Save, XCircle, ShieldCheck, Link2, Copy, Check, AtSign, Eye } from 'lucide-react'
 import { supabase, isSupabaseConfigured } from '../../lib/supabaseClient'
 import { inviteMitarbeiter, generateLoginLink, updateMitarbeiterEmail } from '../../lib/emailGateway'
 import { ALLE_BEREICHE, bereichLabel } from '../../data/bereiche'
@@ -18,6 +18,31 @@ type MitarbeiterRow = {
 }
 
 const ALLE_BEREICH_IDS = ALLE_BEREICHE.map((b) => b.id)
+
+// Was zu einem Bereich gehört — damit die Geschäftsführung beim Anhaken weiß, was sie freigibt.
+const BEREICH_INHALT: Partial<Record<Bereich, string>> = {
+  beratung: 'Kunden, Rechnungen, Mahnwesen, Verbindlichkeiten',
+  immobilien: 'Objekte, Immobilien-Kunden, Gesuche, Zeiterfassung',
+  erben: 'Mandanten',
+  betriebsuebergabe: 'Mandanten',
+  betriebsformen: 'Mandanten',
+  akademie: 'Teilnehmer',
+  finanzierungen: 'Mandanten',
+}
+
+// In fester Reihenfolge speichern, damit die Anzeige überall gleich aussieht.
+function sortiert(auswahl: Set<Bereich>): Bereich[] {
+  return ALLE_BEREICH_IDS.filter((b) => auswahl.has(b))
+}
+
+function sichtText(m: Pick<MitarbeiterRow, 'rolle' | 'ist_admin' | 'bereiche'>): string {
+  if (m.rolle === 'geschaeftsfuehrung') return 'sieht alles (Geschäftsführung)'
+  if (m.ist_admin) return 'sieht alles (Admin)'
+  const liste = ALLE_BEREICHE.filter((b) => m.bereiche.includes(b.id))
+  if (liste.length === 0) return 'kein Bereich freigegeben'
+  if (liste.length === ALLE_BEREICHE.length) return 'alle Bereiche'
+  return liste.map((b) => b.label).join(', ')
+}
 
 // Mitarbeiter-Verwaltung "von innen" (Geschäftsführungs-Anforderung): neue Mitarbeiter anlegen,
 // Bereiche zuweisen, Einladungs-Mail auslösen (Supabase Auth — Mitarbeiter setzt sein eigenes
@@ -100,7 +125,7 @@ export function MitarbeiterVerwalten() {
         name: name.trim(),
         email: email.trim(),
         rolle,
-        bereiche: rolle === 'geschaeftsfuehrung' ? ALLE_BEREICH_IDS : Array.from(bereiche),
+        bereiche: rolle === 'geschaeftsfuehrung' ? ALLE_BEREICH_IDS : sortiert(bereiche),
         ist_admin: istAdmin,
         aktiv: true,
       })
@@ -200,7 +225,7 @@ export function MitarbeiterVerwalten() {
         .from('mitarbeiter')
         .update({
           rolle: editRolle,
-          bereiche: editRolle === 'geschaeftsfuehrung' ? ALLE_BEREICH_IDS : Array.from(editBereiche),
+          bereiche: editRolle === 'geschaeftsfuehrung' ? ALLE_BEREICH_IDS : sortiert(editBereiche),
           ist_admin: editAdmin,
         })
         .eq('id', editingId)
@@ -221,7 +246,9 @@ export function MitarbeiterVerwalten() {
   return (
     <div className="mx-auto max-w-3xl">
       <h1 className="mb-1 text-xl font-semibold text-slate-800">Mitarbeiter verwalten</h1>
-      <p className="mb-5 text-sm text-slate-500">Neue Mitarbeiter anlegen, Bereiche zuweisen, Zugänge sperren/entsperren.</p>
+      <p className="mb-4 text-sm text-slate-500">Neue Mitarbeiter anlegen, Bereiche zuweisen, Zugänge sperren/entsperren.</p>
+
+      <WerSiehtWas />
 
       <PostfaecherVerwaltung />
 
@@ -241,19 +268,14 @@ export function MitarbeiterVerwalten() {
             <option value="geschaeftsfuehrung">Geschäftsführung</option>
           </select>
         </Field>
-        {rolle === 'mitarbeiter' && (
-          <Field label="Bereiche">
-            <div className="flex flex-wrap gap-3">
-              {ALLE_BEREICHE.map((b) => (
-                <label key={b.id} className="flex items-center gap-1.5 text-sm text-slate-600">
-                  <input type="checkbox" className="rounded" checked={bereiche.has(b.id)} onChange={() => toggleBereich(b.id)} />
-                  {b.label}
-                </label>
-              ))}
-            </div>
-          </Field>
-        )}
-        {rolle === 'geschaeftsfuehrung' && <p className="mb-3 text-xs text-slate-400">Geschäftsführung sieht automatisch alle Bereiche.</p>}
+        <BereichAuswahl
+          rolle={rolle}
+          istAdmin={istAdmin}
+          auswahl={bereiche}
+          onToggle={toggleBereich}
+          onAlle={() => setBereiche(new Set(ALLE_BEREICH_IDS))}
+          onKeine={() => setBereiche(new Set())}
+        />
 
         <Field label="Admin">
           <label className="flex items-center gap-1.5 text-sm text-slate-600">
@@ -278,8 +300,8 @@ export function MitarbeiterVerwalten() {
         <div className="space-y-2">
           {mitarbeiter.map((m) => (
             <Card key={m.id} className="p-3">
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0 flex-1 basis-56">
                   <p className="truncate text-sm font-medium text-slate-800">
                     {m.name} {!m.aktiv && <span className="ml-1 text-xs font-normal text-rose-500">(gesperrt)</span>}
                     {m.ist_admin && (
@@ -290,11 +312,14 @@ export function MitarbeiterVerwalten() {
                   </p>
                   <p className="truncate text-xs text-slate-500">
                     <Mail size={11} className="mr-1 inline" />
-                    {m.email} · {m.rolle === 'geschaeftsfuehrung' ? 'Geschäftsführung' : 'Mitarbeiter'} ·{' '}
-                    {m.rolle === 'geschaeftsfuehrung' ? 'alle Bereiche' : m.bereiche.map(bereichLabel).join(', ') || 'kein Bereich'}
+                    {m.email} · {m.rolle === 'geschaeftsfuehrung' ? 'Geschäftsführung' : 'Mitarbeiter'}
+                  </p>
+                  <p className="mt-0.5 flex items-start gap-1 text-xs text-slate-500">
+                    <Eye size={11} className="mt-0.5 flex-shrink-0" />
+                    <span>{sichtText(m)}</span>
                   </p>
                 </div>
-                <div className="flex flex-shrink-0 items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <button
                     onClick={() => (emailBearbeitenId === m.id ? setEmailBearbeitenId(null) : emailBearbeitenStarten(m))}
                     className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
@@ -373,26 +398,14 @@ export function MitarbeiterVerwalten() {
                       <option value="geschaeftsfuehrung">Geschäftsführung</option>
                     </select>
                   </Field>
-                  {editRolle === 'mitarbeiter' && (
-                    <Field label="Bereiche">
-                      <div className="flex flex-wrap gap-3">
-                        {ALLE_BEREICHE.map((b) => (
-                          <label key={b.id} className="flex items-center gap-1.5 text-sm text-slate-600">
-                            <input
-                              type="checkbox"
-                              className="rounded"
-                              checked={editBereiche.has(b.id)}
-                              onChange={() => toggleEditBereich(b.id)}
-                            />
-                            {b.label}
-                          </label>
-                        ))}
-                      </div>
-                    </Field>
-                  )}
-                  {editRolle === 'geschaeftsfuehrung' && (
-                    <p className="mb-3 text-xs text-slate-400">Geschäftsführung sieht automatisch alle Bereiche.</p>
-                  )}
+                  <BereichAuswahl
+                    rolle={editRolle}
+                    istAdmin={editAdmin}
+                    auswahl={editBereiche}
+                    onToggle={toggleEditBereich}
+                    onAlle={() => setEditBereiche(new Set(ALLE_BEREICH_IDS))}
+                    onKeine={() => setEditBereiche(new Set())}
+                  />
                   <Field label="Admin">
                     <label className="flex items-center gap-1.5 text-sm text-slate-600">
                       <input type="checkbox" className="rounded" checked={editAdmin} onChange={(e) => setEditAdmin(e.target.checked)} />
@@ -411,5 +424,89 @@ export function MitarbeiterVerwalten() {
         </div>
       )}
     </div>
+  )
+}
+
+function WerSiehtWas() {
+  return (
+    <Card className="mb-6 p-4">
+      <h3 className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-slate-700">
+        <Eye size={15} /> Wer sieht was?
+      </h3>
+      <ul className="list-disc space-y-1 pl-5 text-sm text-slate-600">
+        <li>
+          <strong>Geschäftsführung und Admins</strong> sehen immer alles — die Häkchen bei den Bereichen spielen für sie keine Rolle.
+        </li>
+        <li>
+          <strong>Mitarbeiter</strong> sehen nur die Bereiche, die hier angehakt sind: deren Kunden und Mandanten, Vorlagen und Projekte. Das gilt
+          für die gespeicherten Daten selbst, nicht nur für das Menü.
+        </li>
+        <li>
+          Die <strong>„Ungeklärten Eingänge“</strong> und die <strong>interne Akte der Holding</strong> sehen alle Mitarbeiter, egal welche
+          Bereiche angehakt sind.
+        </li>
+        <li>
+          Ebenfalls für alle gleich: das gemeinsame Postfach, der Kalender und die eigenen Aufgaben. Private Kontakte sieht nur, wem sie gehören.
+        </li>
+        <li>Eine Änderung wirkt, sobald der Mitarbeiter das CRM neu lädt.</li>
+      </ul>
+    </Card>
+  )
+}
+
+function BereichAuswahl({
+  rolle,
+  istAdmin,
+  auswahl,
+  onToggle,
+  onAlle,
+  onKeine,
+}: {
+  rolle: MitarbeiterRow['rolle']
+  istAdmin: boolean
+  auswahl: Set<Bereich>
+  onToggle: (b: Bereich) => void
+  onAlle: () => void
+  onKeine: () => void
+}) {
+  if (rolle === 'geschaeftsfuehrung' || istAdmin) {
+    return (
+      <p className="mb-3 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">
+        {rolle === 'geschaeftsfuehrung' ? 'Geschäftsführung' : 'Admins'} sehen automatisch alle Bereiche.
+      </p>
+    )
+  }
+  return (
+    <Field label="Diese Bereiche darf der Mitarbeiter sehen">
+      <div className="mb-2 flex gap-2">
+        <button type="button" onClick={onAlle} className="rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50">
+          Alle anhaken
+        </button>
+        <button type="button" onClick={onKeine} className="rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50">
+          Keine
+        </button>
+      </div>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {ALLE_BEREICHE.map((b) => (
+          <label
+            key={b.id}
+            className={`flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-2 text-sm ${
+              auswahl.has(b.id) ? 'border-accent-300 bg-accent-50 text-slate-800' : 'border-slate-200 text-slate-600'
+            }`}
+          >
+            <input type="checkbox" className="mt-0.5 rounded" checked={auswahl.has(b.id)} onChange={() => onToggle(b.id)} />
+            <span className="min-w-0">
+              <span className="block font-medium">{bereichLabel(b.id)}</span>
+              {BEREICH_INHALT[b.id] && <span className="block text-xs text-slate-400">{BEREICH_INHALT[b.id]}</span>}
+            </span>
+          </label>
+        ))}
+      </div>
+      {auswahl.size === 0 && (
+        <p className="mt-2 text-xs text-amber-700">
+          Ohne Bereich sieht der Mitarbeiter nur seine privaten Kontakte, das Postfach, den Kalender, die Ungeklärten Eingänge und die interne Akte.
+        </p>
+      )}
+    </Field>
   )
 }

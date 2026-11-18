@@ -1,5 +1,5 @@
 import { type ReactNode } from 'react'
-import { HashRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
+import { HashRouter, Routes, Route, Navigate, useLocation, useParams } from 'react-router-dom'
 import { AppProvider, useApp } from './context/AppContext'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import { PortalAuthProvider, usePortalAuth } from './context/PortalAuthContext'
@@ -7,6 +7,7 @@ import { RollenAuswahl } from './pages/auth/RollenAuswahl'
 import { LoginScreen } from './pages/auth/LoginScreen'
 import { PasswortFestlegen } from './pages/auth/PasswortFestlegen'
 import { isSupabaseConfigured } from './lib/supabaseClient'
+import { darfBereich, istFuerAlleSichtbar } from './lib/bereichsRechte'
 import { Layout } from './components/Layout'
 import { PortalLayout } from './components/PortalLayout'
 import { KundenListe } from './pages/beratung/KundenListe'
@@ -98,7 +99,7 @@ function AdminRoutesContent() {
         <Route path="/privat/todo" element={<ToDoListe />} />
 
         <Route path="/beratung" element={<RequireBereich bereich="beratung"><KundenListe /></RequireBereich>} />
-        <Route path="/beratung/kunden/:id" element={<RequireBereich bereich="beratung"><KundenDetail /></RequireBereich>} />
+        <Route path="/beratung/kunden/:id" element={<RequireBereich bereich="beratung" sammelakteErlaubt><KundenDetail /></RequireBereich>} />
         <Route path="/beratung/vorlagen/:kind" element={<RequireBereich bereich="beratung"><VorlagenPage /></RequireBereich>} />
         <Route path="/beratung/mahnwesen" element={<RequireBereich bereich="beratung"><Mahnwesen /></RequireBereich>} />
         <Route path="/beratung/rechnungen" element={<RequireBereich bereich="beratung"><Rechnungen /></RequireBereich>} />
@@ -218,10 +219,14 @@ function AdminRoutes() {
 // Setzt mitarbeiter.bereiche/ist_admin tatsächlich am Routing durch (Beschluss 2026-11-02) — bis
 // dahin sah ein eingeloggter Mitarbeiter trotz gesetzter Felder jeden Bereich. Im Demo-Modus (ohne
 // Supabase) gibt es keine Mitarbeiter-Zugriffssteuerung, also ungefiltert durchlassen.
-function RequireBereich({ bereich, children }: { bereich: Bereich; children: ReactNode }) {
+// Seit 18.11.2026 setzt auch die Datenbank dieselbe Regel durch (darf_bereich); diese Prüfung hier
+// verhindert nur, dass jemand eine leere Seite sieht. Die beiden Sammelakten ("Ungeklärte Eingänge",
+// interne Akte) liegen unter /beratung/kunden/…, sind aber für jeden aktiven Mitarbeiter da.
+function RequireBereich({ bereich, sammelakteErlaubt, children }: { bereich: Bereich; sammelakteErlaubt?: boolean; children: ReactNode }) {
   const { mitarbeiter } = useAuth()
+  const { id } = useParams()
   if (!isSupabaseConfigured) return <>{children}</>
-  const erlaubt = !mitarbeiter || mitarbeiter.rolle === 'geschaeftsfuehrung' || mitarbeiter.ist_admin || mitarbeiter.bereiche.includes(bereich)
+  const erlaubt = darfBereich(mitarbeiter, bereich) || (!!sammelakteErlaubt && istFuerAlleSichtbar(id))
   if (!erlaubt) return <Navigate to="/heute" replace />
   return <>{children}</>
 }

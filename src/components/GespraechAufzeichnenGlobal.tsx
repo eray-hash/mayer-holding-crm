@@ -6,6 +6,7 @@ import { Modal, Field, inputClass, PrimaryButton, SecondaryButton } from './ui'
 import { CallRecorder, type CallRecorderSave } from './CallRecorder'
 import { suggestKundeByTelefon, suggestKundeKandidaten, type KundeMatch } from '../lib/matchKunde'
 import { KUNDEN_BEREICHE } from '../data/kundenBereiche'
+import { useBereichsRechte } from '../lib/bereichsRechte'
 import { getHauptpfad } from '../data/statusNetworks'
 import { today, uid } from '../lib/dates'
 import type { Kunde, KundeBereich } from '../types'
@@ -215,14 +216,17 @@ function NeuerKundeSchritt({
   verantwortlich: string
 }) {
   const { dispatch } = useApp()
-  const [bereich, setBereich] = useState<KundeBereich>(NEUER_KUNDE_BEREICHE[0].id)
+  // Neue Kunden nur in Bereichen mit Freigabe — sonst lehnt die Datenbank das Anlegen ab.
+  const { darf } = useBereichsRechte()
+  const erlaubte = NEUER_KUNDE_BEREICHE.filter((b) => darf(b.id))
+  const [bereich, setBereich] = useState<KundeBereich>(erlaubte[0]?.id ?? NEUER_KUNDE_BEREICHE[0].id)
   const [firma, setFirma] = useState('')
   const [ansprechpartner, setAnsprechpartner] = useState('')
   const [telefon, setTelefon] = useState('')
   const [email, setEmail] = useState('')
 
   function submit() {
-    if (!firma.trim()) return
+    if (!firma.trim() || !darf(bereich)) return
     const id = uid('k')
     const kunde: Kunde = {
       id,
@@ -252,8 +256,9 @@ function NeuerKundeSchritt({
     <div>
       <Field label="Bereich">
         <select className={inputClass} value={bereich} onChange={(e) => setBereich(e.target.value as KundeBereich)}>
-          {NEUER_KUNDE_BEREICHE.map((b) => <option key={b.id} value={b.id}>{b.label}</option>)}
+          {erlaubte.map((b) => <option key={b.id} value={b.id}>{b.label}</option>)}
         </select>
+        {erlaubte.length === 0 && <p className="mt-1 text-xs text-amber-700">Du bist für keinen Bereich freigegeben. Bitte die Geschäftsführung fragen oder als privaten Kontakt anlegen.</p>}
       </Field>
       <Field label="Firma/Name"><input className={inputClass} value={firma} onChange={(e) => setFirma(e.target.value)} autoFocus /></Field>
       <Field label="Ansprechpartner"><input className={inputClass} value={ansprechpartner} onChange={(e) => setAnsprechpartner(e.target.value)} /></Field>
@@ -263,7 +268,7 @@ function NeuerKundeSchritt({
         <SecondaryButton onClick={onZurueck}>
           <ArrowLeft size={14} /> Zurück
         </SecondaryButton>
-        <PrimaryButton onClick={submit} disabled={!firma.trim()}>Anlegen & Notiz speichern</PrimaryButton>
+        <PrimaryButton onClick={submit} disabled={!firma.trim() || !darf(bereich)}>Anlegen & Notiz speichern</PrimaryButton>
       </div>
     </div>
   )

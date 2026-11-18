@@ -5,6 +5,7 @@ import { useApp } from '../context/AppContext'
 import { kundeBereichLabel, kundeDetailPfad } from '../data/kundenBereiche'
 import { Modal, PrimaryButton, SecondaryButton } from './ui'
 import { uid } from '../lib/dates'
+import { useBereichsRechte } from '../lib/bereichsRechte'
 import type { Kunde, KundeBereich } from '../types'
 
 // Rotes "!" neben dem Kunden, sichtbar wenn kunde.pruefHinweis gesetzt ist (z.B. "Dokumente zeigen
@@ -17,9 +18,12 @@ import type { Kunde, KundeBereich } from '../types'
 // - Hier lassen: Hinweis wird einfach gelöscht, nichts wandert.
 export function PruefHinweisBadge({ bereich, kunde }: { bereich: KundeBereich; kunde: Kunde }) {
   const { dispatch } = useApp()
+  const { darf } = useBereichsRechte()
   const [offen, setOffen] = useState(false)
   const hinweis = kunde.pruefHinweis
   if (!hinweis) return null
+  // Verschieben/Kopieren in einen Bereich ohne Freigabe würde die Datenbank ablehnen.
+  const zielErlaubt = !!hinweis.vorschlagBereich && darf(hinweis.vorschlagBereich)
 
   function schliessen() {
     setOffen(false)
@@ -82,10 +86,15 @@ export function PruefHinweisBadge({ bereich, kunde }: { bereich: KundeBereich; k
       <Modal open={offen} onClose={schliessen} title="Zu prüfen" width="max-w-md">
         <p className="mb-4 text-sm text-slate-600">{hinweis.text}</p>
         <div className="flex flex-col gap-2">
-          {hinweis.vorschlagBereich && (
+          {hinweis.vorschlagBereich && !zielErlaubt && (
+            <p className="text-xs text-amber-700">
+              Für {kundeBereichLabel(hinweis.vorschlagBereich)} hast du keine Freigabe. Bitte die Geschäftsführung bitten, die Akte dorthin zu verschieben.
+            </p>
+          )}
+          {hinweis.vorschlagBereich && zielErlaubt && (
             <PrimaryButton onClick={verschieben}>Nach {kundeBereichLabel(hinweis.vorschlagBereich)} verschieben</PrimaryButton>
           )}
-          {hinweis.vorschlagBereich && (
+          {hinweis.vorschlagBereich && zielErlaubt && (
             <SecondaryButton onClick={inBeidenFuehren}>
               In beiden Bereichen führen ({kundeBereichLabel(bereich)} + {kundeBereichLabel(hinweis.vorschlagBereich)})
             </SecondaryButton>

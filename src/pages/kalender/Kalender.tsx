@@ -642,9 +642,12 @@ function TerminDetail({
   onGeloescht: () => void
 }) {
   const navigate = useNavigate()
+  const { state } = useApp()
   const [laeuft, setLaeuft] = useState(false)
   const [fehler, setFehler] = useState('')
   const meiner = termin.besitzerEmail === ich
+  const aktenBereich = KUNDEN_BEREICHE.find((x) => x.id === termin.kundeBereich)
+  const aktenPfad = termin.kundeId && aktenBereich?.get(state).some((k) => k.id === termin.kundeId) ? kundeDetailPfad(aktenBereich.id, termin.kundeId) : null
   const v = new Date(termin.beginn)
   const b = new Date(termin.ende)
 
@@ -681,11 +684,14 @@ function TerminDetail({
         {[termin.besitzerEmail, ...termin.teilnehmer].map((p) => (p === ich ? 'ich' : (namen.get(p) ?? p))).join(', ')}
         {termin.teilnehmer.length === 0 && ' (nur für mich)'}
       </p>
-      {termin.kundeId && (
-        <button onClick={() => navigate(kundeDetailPfad(termin.kundeBereich as KundeBereich, termin.kundeId!))} className="mt-2 text-sm text-accent-600 hover:underline">
+      {/* Die Akte kann für diesen Teilnehmer unsichtbar sein (anderer Bereich ohne Freigabe) — dann
+          nur den Namen zeigen statt eines Links, der ins Leere führt. */}
+      {termin.kundeId && aktenPfad && (
+        <button onClick={() => navigate(aktenPfad)} className="mt-2 text-sm text-accent-600 hover:underline">
           Zur Akte: {termin.kundeName}
         </button>
       )}
+      {termin.kundeId && !aktenPfad && termin.kundeName && <p className="mt-2 text-sm text-slate-500">Kunde: {termin.kundeName}</p>}
       {termin.beschreibung && <p className="mt-3 whitespace-pre-wrap rounded-lg bg-slate-50 p-3 text-sm text-slate-700">{termin.beschreibung}</p>}
       {fehler && <p className="mt-3 text-xs text-rose-600">{fehler}</p>}
       <div className="mt-5 flex justify-end gap-2">
