@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { read, utils } from 'xlsx'
 import { Plus, Check, RotateCcw, Trash2, Share2, Upload, Download, ChevronDown, ArrowRightLeft } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { useAuth } from '../../context/AuthContext'
@@ -9,6 +8,8 @@ import { uid, today, fmtDate, fmtEURCent, isOverdue } from '../../lib/dates'
 import { CURRENT_USER } from '../../data/constants'
 import { ALLE_BEREICHE } from '../../data/bereiche'
 import type { ToDoEintrag, Bereich } from '../../types'
+import { analysiereToDoDatei, toDoCsvText, zeitaufwandskosten } from '../../lib/todoExcelImport'
+import type { ToDoImportVorschau, ToDoImportWert } from '../../lib/todoExcelImport'
 
 // Zwei Arten von Listen teilen sich dieselbe Tabelle/Komponente:
 // - Privat: eigene, isolierte Liste pro Mitarbeiter (RLS: besitzer_email), optional mit Lese-/
@@ -19,135 +20,12 @@ import type { ToDoEintrag, Bereich } from '../../types'
 // Bereichs-Liste verschieben ("Bereich zuweisen" / "In private Liste verschieben") — Nutzer-
 // Entscheidung 2026-11-06. Standard-Sortierung ist die ursprüngliche Reihenfolge (reihenfolge-
 // Spalte), nicht automatisch nach Prio — genau wie in der Excel-Vorlage.
-type ExcelSpalten = [string, string, string, string, string, string, string, string, string, string, string, string, string, string, string, string]
-
-function zuExcelZeile(rows: unknown[][]): ExcelSpalten[] {
-  return rows as ExcelSpalten[]
-}
-
-function textWert(v: unknown): string | undefined {
-  if (v === null || v === undefined) return undefined
-  if (typeof v === 'number') return String(v)
-  const s = String(v).trim()
-  return s || undefined
-}
-
-function zahlWert(v: unknown): number | undefined {
-  if (v === null || v === undefined || v === '') return undefined
-  const n = Number(v)
-  return Number.isNaN(n) ? undefined : n
-}
-
-// Excel-Datum → lokales yyyy-mm-dd. Datumszellen kommen (cellDates) als Date, von Hand getippte als
-// Text ("17.11.2026", "17.11.26", "2026-11-17"). Bewusst über die lokalen Datumsteile, nie toISOString().
-// Die halbe Minute Zugabe fängt die Sekunden-Abweichung ab, mit der die Bibliothek Mitternacht teils
-// knapp vor dem Tageswechsel liefert. Nicht lesbare Werte werden weggelassen statt falsch übernommen.
-function datumWert(v: unknown): string | undefined {
-  if (v === null || v === undefined || v === '') return undefined
-  const zwei = (n: number) => String(n).padStart(2, '0')
-  if (v instanceof Date) {
-    if (Number.isNaN(v.getTime())) return undefined
-    const d = new Date(v.getTime() + 30_000)
-    return `${d.getFullYear()}-${zwei(d.getMonth() + 1)}-${zwei(d.getDate())}`
-  }
-  const s = String(v).trim()
-  const iso = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/)
-  if (iso) return `${iso[1]}-${zwei(Number(iso[2]))}-${zwei(Number(iso[3]))}`
-  const deutsch = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{2}|\d{4})$/)
-  if (deutsch) {
-    const jahr = deutsch[3].length === 2 ? 2000 + Number(deutsch[3]) : Number(deutsch[3])
-    return `${jahr}-${zwei(Number(deutsch[2]))}-${zwei(Number(deutsch[1]))}`
-  }
-  return undefined
-}
-
-// Die vier Zusatzfelder haben in der bisherigen Excel-Vorlage keine feste Spalte. Sie werden deshalb
-// an der Überschrift erkannt (in den Kopfzeilen über den Daten), z.B. "warten auf", "Aufgabe erhalten
-// am", "Aufgabe zu erledigen bis". Die feste Spaltenzuordnung der übrigen Felder bleibt unberührt.
-type ZusatzFeld = 'wartenAuf' | 'erhaltenAm' | 'erledigenBis' | 'stundensatz'
-const ZUSATZ_KOPF: [string, ZusatzFeld][] = [
-  ['warten auf', 'wartenAuf'],
-  ['erhalten am', 'erhaltenAm'],
-  ['erledigen bis', 'erledigenBis'],
-  ['stundensatz', 'stundensatz'],
-]
-
-function findeZusatzSpalten(kopfzeilen: unknown[][]): Partial<Record<ZusatzFeld, number>> {
-  const spalten: Partial<Record<ZusatzFeld, number>> = {}
-  for (const zeile of kopfzeilen) {
-    zeile.forEach((zelle, i) => {
-      if (typeof zelle !== 'string') return
-      const kopf = zelle.toLowerCase().replace(/\s+/g, ' ').trim()
-      for (const [stichwort, feld] of ZUSATZ_KOPF) {
-        if (spalten[feld] === undefined && kopf.includes(stichwort)) spalten[feld] = i
-      }
-    })
-  }
-  return spalten
-}
-
-/** Zeitaufwandskosten in Euro: Ist-Zeit (Minuten) / 60 × Stundensatz. Nur wenn beides eingetragen ist. */
-function zeitaufwandskosten(t: Pick<ToDoEintrag, 'istZeit' | 'stundensatz'>): number | undefined {
-  if (t.istZeit === undefined || t.istZeit === null || t.stundensatz === undefined || t.stundensatz === null) return undefined
-  return (t.istZeit / 60) * t.stundensatz
-}
-
 function fmtStunden(minuten: number): string {
   return `${(minuten / 60).toLocaleString('de-DE', { maximumFractionDigits: 2 })} Std.`
 }
 
-// Kommazahl in deutscher Schreibweise, damit Excel sie in der CSV als Zahl liest.
-function csvZahl(n: number | undefined): string | undefined {
-  return n === undefined || n === null ? undefined : n.toFixed(2).replace('.', ',')
-}
-
-function parseExcelDatei(workbookBuffer: ArrayBuffer, sheetName: string): Omit<ToDoEintrag, 'id' | 'besitzerEmail' | 'bereich' | 'reihenfolge' | 'erstelltAm'>[] {
-  const wb = read(workbookBuffer, { type: 'array', cellDates: true })
-  const sheet = wb.Sheets[sheetName] ?? wb.Sheets[wb.SheetNames[0]]
-  if (!sheet) return []
-  const rows = zuExcelZeile(utils.sheet_to_json(sheet, { header: 1, raw: true, defval: null }))
-  const out: ReturnType<typeof parseExcelDatei> = []
-  const zusatz = findeZusatzSpalten(rows.slice(0, 4))
-  const zusatzZelle = (row: unknown[], feld: ZusatzFeld) => (zusatz[feld] === undefined ? undefined : row[zusatz[feld]])
-  for (const row of rows.slice(4)) {
-    const aufgabe = textWert(row[4])
-    if (!aufgabe) continue
-    out.push({
-      startDatum: textWert(row[0]),
-      prio: textWert(row[1]),
-      unterPrio: zahlWert(row[2]),
-      kundeProjekt: textWert(row[3]),
-      aufgabe,
-      abteilung: textWert(row[5]),
-      aktuellerStand: textWert(row[6]),
-      welcheFragen: textWert(row[7]),
-      naechsteSchritte: textWert(row[8]),
-      zustaendig: textWert(row[9]),
-      geplanteZeit: textWert(row[10]),
-      istZeit: zahlWert(row[11]),
-      umsatzWert: zahlWert(row[12]),
-      geplanteWiedervorlage: textWert(row[13]),
-      erledigtAm: textWert(row[15]),
-      wartenAuf: textWert(zusatzZelle(row, 'wartenAuf')),
-      erhaltenAm: datumWert(zusatzZelle(row, 'erhaltenAm')),
-      erledigenBis: datumWert(zusatzZelle(row, 'erledigenBis')),
-      stundensatz: zahlWert(zusatzZelle(row, 'stundensatz')),
-    })
-  }
-  return out
-}
-
-function csvZeile(werte: (string | number | undefined)[]): string {
-  return werte.map((w) => `"${(w ?? '').toString().replace(/"/g, '""')}"`).join(';')
-}
-
 function exportiereCsv(liste: ToDoEintrag[], dateiname: string) {
-  const header = csvZeile(['Start', 'Prio', 'Unter', 'Kunde/Projekt', 'Aufgabe', 'Abt.', 'aktueller Stand', 'welche Fragen', 'nächste Schritte', 'zuständig', 'geplante Zeit', 'Ist-Zeit', 'Umsatz', 'Wiedervorlage', 'Erledigt am', 'Warten auf', 'Erhalten am', 'Erledigen bis', 'Stundensatz (€)', 'Zeitaufwandskosten (€)'])
-  const zeilen = liste.map((t) =>
-    csvZeile([t.startDatum, t.prio, t.unterPrio, t.kundeProjekt, t.aufgabe, t.abteilung, t.aktuellerStand, t.welcheFragen, t.naechsteSchritte, t.zustaendig, t.geplanteZeit, t.istZeit, t.umsatzWert, t.geplanteWiedervorlage, t.erledigtAm, t.wartenAuf, t.erhaltenAm, t.erledigenBis, csvZahl(t.stundensatz), csvZahl(zeitaufwandskosten(t))]),
-  )
-  const csv = '﻿' + [header, ...zeilen].join('\r\n')
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+  const blob = new Blob([toDoCsvText(liste)], { type: 'text/csv;charset=utf-8;' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
@@ -183,6 +61,7 @@ function ToDoListeKern({ scope }: { scope: Scope }) {
   const [freigabenOpen, setFreigabenOpen] = useState(false)
   const [alleMitarbeiter, setAlleMitarbeiter] = useState<Mitarbeiterkurz[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const [importVorschau, setImportVorschau] = useState<{ dateiname: string; vorschau?: ToDoImportVorschau; fehler?: string } | null>(null)
 
   useEffect(() => {
     if (!supabase) return
@@ -273,25 +152,30 @@ function ToDoListeKern({ scope }: { scope: Scope }) {
     dispatch({ type: 'UPDATE_TODO', id: t.id, patch: { bereich: undefined, besitzerEmail: eigeneEmail, reihenfolge: naechsteReihenfolgeFuer(ziel) } })
   }
 
+  // Import in zwei Schritten: Datei lesen und Vorschau zeigen, übernommen wird erst nach dem Klick.
   function importDatei(datei: File) {
-    datei.arrayBuffer().then((buffer) => {
-      const importiert = parseExcelDatei(buffer, 'to Do')
-      let n = naechsteReihenfolge()
-      for (const eintrag of importiert) {
-        dispatch({
-          type: 'ADD_TODO',
-          todo: {
-            ...eintrag,
-            id: uid('todo'),
-            besitzerEmail: eigeneEmail,
-            bereich: scope.kind === 'bereich' ? scope.bereich : undefined,
-            reihenfolge: n++,
-            erstelltAm: today(),
-          },
-        })
-      }
-      alert(`${importiert.length} Aufgaben importiert.`)
-    })
+    datei
+      .arrayBuffer()
+      .then((buffer) => setImportVorschau({ dateiname: datei.name, vorschau: analysiereToDoDatei(buffer, datei.name, today()) }))
+      .catch(() => setImportVorschau({ dateiname: datei.name, fehler: 'Die Datei ließ sich nicht lesen. Bitte als Excel-Datei (.xlsx) oder als CSV-Datei speichern und erneut wählen.' }))
+  }
+
+  function importUebernehmen(eintraege: ToDoImportWert[]) {
+    let n = naechsteReihenfolge()
+    for (const eintrag of eintraege) {
+      dispatch({
+        type: 'ADD_TODO',
+        todo: {
+          ...eintrag,
+          id: uid('todo'),
+          besitzerEmail: eigeneEmail,
+          bereich: scope.kind === 'bereich' ? scope.bereich : undefined,
+          reihenfolge: n++,
+          erstelltAm: today(),
+        },
+      })
+    }
+    setImportVorschau(null)
   }
 
   const titel = scope.kind === 'bereich' ? `To-Do-Liste — ${scope.label}` : 'To-Do-Liste'
@@ -337,7 +221,18 @@ function ToDoListeKern({ scope }: { scope: Scope }) {
           )}
           {darfSchreiben && (
             <>
-              <input ref={fileInputRef} type="file" accept=".xlsx" className="hidden" onChange={(e) => e.target.files?.[0] && importDatei(e.target.files[0])} />
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                className="hidden"
+                onChange={(e) => {
+                  const datei = e.target.files?.[0]
+                  // Zurücksetzen, damit dieselbe Datei nach "Abbrechen" erneut gewählt werden kann.
+                  e.target.value = ''
+                  if (datei) importDatei(datei)
+                }}
+              />
               <SecondaryButton onClick={() => fileInputRef.current?.click()}>
                 <Upload size={14} /> Excel importieren
               </SecondaryButton>
@@ -583,6 +478,15 @@ function ToDoListeKern({ scope }: { scope: Scope }) {
           }}
         />
       )}
+      {importVorschau && (
+        <ImportVorschauModal
+          dateiname={importVorschau.dateiname}
+          vorschau={importVorschau.vorschau}
+          fehler={importVorschau.fehler}
+          onClose={() => setImportVorschau(null)}
+          onUebernehmen={importUebernehmen}
+        />
+      )}
       {freigabenOpen && (
         <FreigabenModal
           besitzerEmail={eigeneEmail}
@@ -591,6 +495,124 @@ function ToDoListeKern({ scope }: { scope: Scope }) {
         />
       )}
     </div>
+  )
+}
+
+// Vorschau vor dem Import: je Tabellenblatt Anzahl der erkannten Aufgaben, welche Spalte in welches Feld
+// geht und welche Spalten nicht übernommen werden. Erst der Knopf übernimmt die Aufgaben.
+function ImportVorschauModal({
+  dateiname,
+  vorschau,
+  fehler,
+  onClose,
+  onUebernehmen,
+}: {
+  dateiname: string
+  vorschau?: ToDoImportVorschau
+  fehler?: string
+  onClose: () => void
+  onUebernehmen: (eintraege: ToDoImportWert[]) => void
+}) {
+  const blaetter = vorschau?.blaetter ?? []
+  const [auswahl, setAuswahl] = useState<Record<string, boolean>>(() => Object.fromEntries(blaetter.map((b) => [b.blatt, b.eintraege.length > 0])))
+  const gewaehlt = blaetter.filter((b) => auswahl[b.blatt])
+  const anzahl = gewaehlt.reduce((s, b) => s + b.eintraege.length, 0)
+  const mehrere = blaetter.length > 1
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="Excel-Datei prüfen"
+      width="max-w-2xl"
+      aktionen={
+        <>
+          <SecondaryButton onClick={onClose}>Abbrechen</SecondaryButton>
+          {!fehler && (
+            <PrimaryButton onClick={() => onUebernehmen(gewaehlt.flatMap((b) => b.eintraege))} disabled={anzahl === 0}>
+              {anzahl === 1 ? '1 Aufgabe übernehmen' : `${anzahl} Aufgaben übernehmen`}
+            </PrimaryButton>
+          )}
+        </>
+      }
+    >
+      <p className="mb-3 break-words text-xs text-slate-500">{dateiname}</p>
+      {fehler && <p className="text-sm text-rose-600">{fehler}</p>}
+      {!fehler && blaetter.length === 0 && (
+        <p className="text-sm text-slate-600">Keine Aufgaben erkannt: In der Datei wurde keine Spalte „Aufgabe“ gefunden.</p>
+      )}
+      <div className="space-y-3">
+        {blaetter.map((b) => (
+          <div key={b.blatt} className={`rounded-lg border p-3 ${mehrere && !auswahl[b.blatt] ? 'border-slate-100 opacity-60' : 'border-slate-200'}`}>
+            {mehrere && (
+              <label className="mb-1 flex items-center gap-2 text-sm font-medium text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={!!auswahl[b.blatt]}
+                  disabled={b.eintraege.length === 0}
+                  onChange={(e) => setAuswahl((a) => ({ ...a, [b.blatt]: e.target.checked }))}
+                />
+                <span className="break-words">Blatt „{b.blatt}“</span>
+              </label>
+            )}
+            <p className="text-sm font-semibold text-slate-800">
+              {b.eintraege.length === 1 ? '1 Aufgabe erkannt' : `${b.eintraege.length} Aufgaben erkannt`}
+              <span className="font-normal text-slate-400">
+                {' · '}
+                {b.kopfVon === b.kopfBis ? `Überschrift in Zeile ${b.kopfVon}` : `Überschrift in Zeile ${b.kopfVon}–${b.kopfBis}`}
+              </span>
+            </p>
+
+            <p className="mt-2 text-xs font-medium text-slate-500">Spalten zugeordnet:</p>
+            <ul className="mt-1 flex flex-wrap gap-1">
+              {b.zugeordnet.map((z) => (
+                <li key={z.spalte + z.feld} className="max-w-full break-words rounded-md bg-emerald-50 px-2 py-0.5 text-xs text-emerald-800">
+                  {z.spalte} → {z.feld}
+                </li>
+              ))}
+            </ul>
+
+            <p className="mt-2 text-xs font-medium text-slate-500">Nicht zugeordnet (wird nicht übernommen):</p>
+            {b.nichtUebernommen.length === 0 ? (
+              <p className="mt-1 text-xs text-slate-400">keine</p>
+            ) : (
+              <ul className="mt-1 space-y-0.5">
+                {b.nichtUebernommen.map((n) => (
+                  <li key={n.spalte} className="break-words text-xs text-slate-600">
+                    <span className="font-medium">{n.spalte}</span> – {n.grund}
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {b.hinweise.length > 0 && (
+              <ul className="mt-2 space-y-0.5">
+                {b.hinweise.map((h) => (
+                  <li key={h} className="break-words text-xs text-amber-700">
+                    {h}
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {b.eintraege.length > 0 && (
+              <>
+                <p className="mt-2 text-xs font-medium text-slate-500">Erste Aufgaben:</p>
+                <ul className="mt-1 list-disc space-y-0.5 pl-4">
+                  {b.eintraege.slice(0, 3).map((e, i) => (
+                    <li key={i} className="break-words text-xs text-slate-700">
+                      {e.aufgabe}
+                      {e.erledigtAm && <span className="text-slate-400"> (erledigt)</span>}
+                    </li>
+                  ))}
+                </ul>
+                {b.eintraege.length > 3 && <p className="mt-0.5 text-xs text-slate-400">… und {b.eintraege.length - 3} weitere</p>}
+              </>
+            )}
+          </div>
+        ))}
+      </div>
+    </Modal>
   )
 }
 
