@@ -975,3 +975,53 @@ export type FondsInvestor = {
   ausschuettungen: FondsAusschuettung[]
   dokumente: FondsDokument[]
 }
+
+// ---------- Kontoauszüge auswerten (aus dem früheren Einzelprogramm „Kontoauszug → Excel“) ----------
+// Gespeichert in der Tabelle kontoauszug_auswertungen (eine Zeile je Auswertung, Rechte wie die Akte);
+// wird nicht beim Start geladen, sondern erst, wenn jemand die Auswertungen einer Akte öffnet.
+
+/** Eine Buchung aus einem Kontoauszug. Ausgaben negativ, Einnahmen positiv. */
+export type KontoBuchung = {
+  id: string
+  /** Buchungsdatum JJJJ-MM-TT. */
+  datum: string
+  wertstellung?: string | null
+  /** Buchungstext / Verwendungszweck. */
+  text: string
+  /** Empfänger oder Auftraggeber. */
+  gegenpartei?: string | null
+  betrag: number
+  waehrung: string
+  kategorie: string
+  /** Konto / IBAN, aus dem die Buchung stammt. */
+  konto?: string | null
+  /** Name der Datei, aus der die Buchung stammt. */
+  quelle?: string
+}
+
+/** Was aus einer Datei herausgelesen wurde. */
+export type KontoauszugDatei = {
+  name: string
+  /** Verweis auf die Datei in der Akte, falls sie von dort stammt. */
+  url?: string
+  bank?: string | null
+  iban?: string | null
+  kontoinhaber?: string | null
+  von?: string | null
+  bis?: string | null
+  anzahl: number
+  /** Gesetzt, wenn die Datei (oder ein Teil davon) nicht ausgelesen werden konnte. */
+  fehler?: string
+}
+
+export type KontoauszugAuswertung = {
+  id: string
+  kundeId: string
+  bereich: KundeBereich
+  titel: string
+  erstelltAm: string
+  erstelltVon?: string
+  geaendertAm: string
+  buchungen: KontoBuchung[]
+  dateien: KontoauszugDatei[]
+}
