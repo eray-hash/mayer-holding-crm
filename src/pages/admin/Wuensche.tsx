@@ -157,7 +157,7 @@ export function Wuensche() {
           </h1>
           <p className="text-sm text-slate-500">
             Was Mitarbeiter im CRM oder beim Assistenten wollten und nicht ging, und Fehler, die das System bemerkt hat. Ohne Kundendaten. Ein Bericht
-            geht täglich um 18 Uhr per Telegram an die Admins.
+            geht täglich um 18 Uhr per Telegram an die Geschäftsführung.
           </p>
         </div>
         <div className="flex gap-2">
