@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
-import { ArrowLeft, Folder, FolderOpen, File, Upload, Plus, Radar, ExternalLink, Users, Sparkles, CheckCircle2, XCircle, Trash2 } from 'lucide-react'
+import { ArrowLeft, Folder, FolderOpen, File, Upload, Plus, Radar, ExternalLink, Users, Sparkles, CheckCircle2, XCircle, Trash2, Send } from 'lucide-react'
 import { useApp, type AppData } from '../../context/AppContext'
 import { StatusWidget } from '../../components/StatusWidget'
 import { Card, Modal, Field, inputClass, PrimaryButton, SecondaryButton, EmptyState, StatusBadge } from '../../components/ui'
@@ -23,6 +23,8 @@ import { ObjektWeitergabenSection } from '../../components/ObjektWeitergabenSect
 import { ObjektAbrechnungSection } from '../../components/ObjektAbrechnungSection'
 import { ObjektUnterlagenAnfordern } from '../../components/ObjektUnterlagenAnfordern'
 import { ObjektBewertungSection } from '../../components/ObjektBewertungSection'
+import { ExposePdfKnopf } from '../../components/ExposePdf'
+import { ObjektAnGesucheSenden } from '../../components/ObjektAnGesucheSenden'
 
 const TABS = [
   { id: 'uebersicht', label: 'Übersicht' },
@@ -52,6 +54,7 @@ export function ObjektDetail() {
   const [finOpen, setFinOpen] = useState(false)
   const [vorschlagOpen, setVorschlagOpen] = useState(false)
   const [uploadOpen, setUploadOpen] = useState(false)
+  const [anGesucheOpen, setAnGesucheOpen] = useState(false)
   const [oeffneFehler, setOeffneFehler] = useState('')
 
   const objekt = state.objekte.find((o) => o.id === id)
@@ -432,7 +435,12 @@ export function ObjektDetail() {
       {tab === 'vorschlaege' && (
         <div>
           <Card className="mb-4 p-4">
-            <h3 className="mb-1 text-sm font-semibold text-slate-700">Passende Gesuche</h3>
+            <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+              <h3 className="text-sm font-semibold text-slate-700">Passende Gesuche</h3>
+              {gesuchTreffer.length > 0 && (
+                <SecondaryButton onClick={() => setAnGesucheOpen(true)}><Send size={13} /> An passende Gesuche schicken</SecondaryButton>
+              )}
+            </div>
             {gesuchTreffer.length === 0 ? (
               <p className="text-sm text-slate-500">Zurzeit sucht niemand ein solches Objekt. Gesuche erfasst du unter „Gesuche" in der Seitenleiste.</p>
             ) : (
@@ -476,6 +484,8 @@ export function ObjektDetail() {
           </div>
         </div>
       )}
+
+      {anGesucheOpen && <ObjektAnGesucheSenden objekt={objekt} treffer={gesuchTreffer} onClose={() => setAnGesucheOpen(false)} />}
 
       <Modal open={finOpen} onClose={() => setFinOpen(false)} title="Finanzierung anlegen">
         <FinanzierungForm
@@ -780,13 +790,16 @@ function ExposeSection({ objekt }: { objekt: Objekt }) {
 
   return (
     <Card className="p-5 lg:col-span-3">
-      <div className="mb-3 flex items-center justify-between">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-sm font-semibold text-slate-700">Exposé (automatisch erstellt, Whitelabel)</h3>
-        {isEmailGatewayConfigured && (
-          <SecondaryButton onClick={neuGenerieren} disabled={generiert}>
-            <Sparkles size={13} className={generiert ? 'animate-pulse' : ''} /> {generiert ? 'Erstellt …' : 'Neu generieren'}
-          </SecondaryButton>
-        )}
+        <div className="flex flex-wrap items-center gap-2">
+          <ExposePdfKnopf objekt={objekt} beschreibung={entwurf} />
+          {isEmailGatewayConfigured && (
+            <SecondaryButton onClick={neuGenerieren} disabled={generiert}>
+              <Sparkles size={13} className={generiert ? 'animate-pulse' : ''} /> {generiert ? 'Erstellt …' : 'Neu generieren'}
+            </SecondaryButton>
+          )}
+        </div>
       </div>
       {isEmailGatewayConfigured && anweisungen.length > 0 && (
         <div className="mb-3 rounded-lg border border-accent-100 bg-accent-50/60 p-3">
