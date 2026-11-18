@@ -8,6 +8,7 @@ import { analysierePotenzial, rechercheKundenUmfeld, holeDokumentInhalte, type D
 import { akteWissen } from '../lib/akteWissen'
 import { SteuerAnalyseSection } from './SteuerAnalyseSection'
 import { BonitaetSection } from './BonitaetSection'
+import { KontoauszuegeSection } from './KontoauszuegeSection'
 import { Card, PrimaryButton, PriorityBadge, EmptyState } from './ui'
 import { fmtDate, fmtDateTime, fmtEURCent, addDays, today } from '../lib/dates'
 import type { KundeBereich, PotenzialAnalyse, PotenzialQuelle } from '../types'
@@ -344,6 +345,7 @@ export function PotenzialAnalyseSection({ bereich, kundeId, kundeName }: { berei
 
       <SteuerAnalyseSection bereich={bereich} kundeId={kundeId} />
       <BonitaetSection bereich={bereich} kundeId={kundeId} />
+      <KontoauszuegeSection bereich={bereich} kundeId={kundeId} />
     </div>
   )
 }

@@ -623,3 +623,23 @@ export async function holeKalenderAbo(neu = false): Promise<KalenderAbo> {
   const data = await callAuthenticated({ action: 'kalender_abo_link', neu })
   return { https: data.https, webcal: data.webcal }
 }
+
+// ---------- Kontoauszüge auswerten (Kundenakte) ----------
+
+/** Liest EINE Datei (Kontoauszug als PDF oder Bild) auf dem Server aus; dauert etwa 40–130 Sekunden.
+ *  `datei.url` ist der Verweis aus der Akte (kunde.dokumente[].url) oder der Speicherpfad
+ *  `<kundeId>/…` einer eben mit ladeKundenDokumentHoch() abgelegten Datei — alles andere lehnt der
+ *  Server ab (403). Kategorien kommen aus den 26 Privatkategorien; für Geschäftskonten setzt die
+ *  Oberfläche sie um (siehe kontoauszugAuswertung.ts). `datei.fehler` kann auch bei Erfolg gesetzt sein. */
+export async function leseKontoauszug(
+  kundeId: string,
+  bereich: import('../types').KundeBereich,
+  datei: { url: string; name: string; typ?: string },
+): Promise<{ buchungen: import('../types').KontoBuchung[]; datei: import('../types').KontoauszugDatei }> {
+  const data = await callAuthenticated({ action: 'kontoauszug_auslesen', kundeId, bereich, datei })
+  if (data?.error && !data?.ok) throw new Error(String(data.error))
+  return {
+    buchungen: Array.isArray(data?.buchungen) ? data.buchungen : [],
+    datei: data?.datei ?? { name: datei.name, url: datei.url, anzahl: 0 },
+  }
+}
