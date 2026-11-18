@@ -105,7 +105,8 @@ export async function findeAnforderung(
   const { data, error } = await admin
     .from('kunden')
     .select('id, firma, ansprechpartner, unterlagen_anforderungen, sa_eingereicht:selbstauskunft->>eingereichtAm')
-    .contains('unterlagen_anforderungen', [{ token }])
+    // Bei jsonb muss der Wert als JSON-Text kommen; .contains() würde ihn als Postgres-Array-Literal schicken.
+    .filter('unterlagen_anforderungen', 'cs', JSON.stringify([{ token }]))
     .limit(2)
   if (error) throw new Error(`Akte nicht lesbar: ${error.message}`)
   const zeilen = (Array.isArray(data) ? data : []) as KundenZeile[]
