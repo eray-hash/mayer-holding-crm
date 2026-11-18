@@ -42,6 +42,9 @@ export type Aufgabe = RohAufgabe & {
   lage: Lage
 }
 
+/** Objekte in diesen Status sind abgeschlossen; ihre Follow-ups sind keine offenen Aufgaben mehr. */
+export const OBJEKT_ABGESCHLOSSEN: readonly string[] = ['archiv', 'abgebrochen', 'verkauft']
+
 export const OHNE_ZUSTAENDIGEN = 'Ohne Zuständigen'
 export const NICHT_IM_TEAM = '(nicht im Team)'
 

@@ -1,6 +1,6 @@
 import type { AppData } from '../context/AppContext'
 import { KUNDEN_BEREICHE } from '../data/kundenBereiche'
-import type { RohAufgabe } from '../../supabase/functions/_shared/aufgabenKern.ts'
+import { OBJEKT_ABGESCHLOSSEN, type RohAufgabe } from '../../supabase/functions/_shared/aufgabenKern.ts'
 import { followUpDetailPfad } from './followUpPriorities'
 
 // Sammelt für die Seite „Aufgaben nach Mitarbeiter“ alle offenen Aufgaben aus dem geladenen Stand.
@@ -60,7 +60,7 @@ export function sammleAufgaben(state: AppData, nameZuEmail: Map<string, string>)
 
   for (const o of state.objekte) {
     const fu = o.followUp
-    if (!fu || fu.done || !(fu.note?.trim() || fu.date)) continue
+    if (!fu || fu.done || !(fu.note?.trim() || fu.date) || OBJEKT_ABGESCHLOSSEN.includes(o.status)) continue
     out.push({
       id: `fu:objekt:${o.id}`,
       art: 'followup',
