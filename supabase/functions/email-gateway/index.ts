@@ -2272,7 +2272,7 @@ Regeln: Zu jeder Zahl die Quelle mit Adresse und Stand nennen. Keine Zahl ohne F
 der alle verwendeten Fundstellen nennt.`,
         // Haiku 5.5 statt 4.5: neueres Modell zu einem Zehntel des Preises.
         // Mehr Platz als bei Haiku 4.5: Das neuere Modell schreibt ausführlicher und lief bei 4096 an die Grenze.
-        { model: 'claude-haiku-5-5', maxSearches: 8, maxTokens: 12_000, timeoutMs, ohneNachdenken: true, meldeVerbrauch: zaehle },
+        { model: 'claude-haiku-5-5', maxSearches: 8, maxTokens: 12_000, timeoutMs, meldeVerbrauch: zaehle },
       )
       let quellen: { titel: string; url: string }[] = []
       const m = markt.match(/```json\s*([\s\S]*?)```/)
