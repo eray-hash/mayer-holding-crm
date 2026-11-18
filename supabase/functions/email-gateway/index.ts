@@ -242,6 +242,39 @@ const ALLOWED_ORIGINS = [
   'http://localhost:5174',
 ]
 
+// ---------- Bereichsrechte auf dem Server ----------
+// Der Server arbeitet mit Dienstrechten und umgeht damit die Regeln der Datenbank. Aktionen im Auftrag
+// eines angemeldeten Mitarbeiters prüfen deshalb selbst, was public.darf_bereich in der Datenbank prüft:
+// Geschäftsführung und Admins dürfen alles, sonst nur die freigegebenen Bereiche; die zwei Sammelakten
+// und private Kontakte (eigene Regeln) sind davon ausgenommen.
+const AKTEN_FUER_ALLE = new Set(['k_eingang_ungeklaert', 'k_intern_holding'])
+
+// deno-lint-ignore no-explicit-any
+async function darfBereichServer(admin: any, email: string, bereich: string | null | undefined): Promise<boolean> {
+  if (!bereich || bereich === 'privat' || bereich === 'intern') return true
+  const { data } = await admin.from('mitarbeiter').select('rolle, ist_admin, aktiv, bereiche, email').eq('aktiv', true)
+  // deno-lint-ignore no-explicit-any
+  const m = ((data ?? []) as any[]).find((x) => String(x.email ?? '').toLowerCase() === email.toLowerCase())
+  if (!m) return false
+  if (m.rolle === 'geschaeftsfuehrung' || m.ist_admin) return true
+  const kennung = bereich === 'immobilienkunden' ? 'immobilien' : bereich
+  return Array.isArray(m.bereiche) && m.bereiche.includes(kennung)
+}
+
+// deno-lint-ignore no-explicit-any
+async function darfKundeServer(admin: any, email: string, kundeId: unknown): Promise<boolean> {
+  const id = String(kundeId ?? '')
+  if (!id || AKTEN_FUER_ALLE.has(id)) return true
+  const { data } = await admin.from('kunden').select('bereich').eq('id', id).maybeSingle()
+  // Gibt es die Akte nicht, meldet das die Aktion selbst.
+  if (!data) return true
+  return await darfBereichServer(admin, email, data.bereich)
+}
+
+function keinRecht(headers: Record<string, string>): Response {
+  return new Response(JSON.stringify({ error: 'Dieser Bereich ist für dich nicht freigegeben.' }), { status: 403, headers })
+}
+
 function corsHeaders(origin: string | null) {
   const allow = origin && ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0]
   return {
@@ -3152,6 +3185,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
         return new Response(JSON.stringify({ ok: true, neu: ergebnis.neu, offen: ergebnis.offen }), { headers })
       }
       if (body.action === 'mail_zuordnen') {
+        if (!(await darfKundeServer(admin, aufrufer.email, body.kundeId))) return keinRecht(headers)
         const ergebnis = await ordneMailZu(admin, String(body.mailId ?? ''), String(body.kundeId ?? ''), aufrufer.name || aufrufer.email)
         if (!ergebnis.ok) return new Response(JSON.stringify({ error: ergebnis.fehler }), { status: 400, headers })
         return new Response(JSON.stringify(ergebnis), { headers })
@@ -3794,6 +3828,12 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       if (!aufrufer) {
         return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
       }
+      if (body.action === 'eingang_ablegen') {
+        // deno-lint-ignore no-explicit-any
+        const ziel = (body.ziel ?? {}) as any
+        const erlaubt = ziel.art === 'objekt' ? await darfBereichServer(admin, aufrufer.email, 'immobilien') : await darfKundeServer(admin, aufrufer.email, ziel.id)
+        if (!erlaubt) return keinRecht(headers)
+      }
       const dokumentIds = Array.isArray(body.dokumentIds) ? body.dokumentIds.map(String) : []
       const wer = { name: aufrufer.name || aufrufer.email }
       const ergebnis = body.action === 'eingang_ablegen' ? await legeEingaengeAb(admin, { dokumentIds, ziel: body.ziel }, wer) : await nimmEingaengeHeraus(admin, dokumentIds, wer)
@@ -3808,6 +3848,15 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       if (!aufrufer) {
         return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
       }
+      {
+        const { data: log } = await admin.from('abteilung_eintraege').select('daten').eq('id', String(body.ablageId ?? '')).maybeSingle()
+        // deno-lint-ignore no-explicit-any
+        const ziel = (log as any)?.daten?.ziel
+        if (ziel) {
+          const erlaubt = ziel.art === 'objekt' ? await darfBereichServer(admin, aufrufer.email, 'immobilien') : await darfKundeServer(admin, aufrufer.email, ziel.id)
+          if (!erlaubt) return keinRecht(headers)
+        }
+      }
       const ergebnis = await macheAblageRueckgaengig(admin, String(body.ablageId ?? ''), { name: aufrufer.name || aufrufer.email })
       if (!ergebnis.ok) return new Response(JSON.stringify({ error: ergebnis.fehler }), { status: 400, headers })
       return new Response(JSON.stringify(ergebnis), { headers })
@@ -3819,6 +3868,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       if (!aufrufer) {
         return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
       }
+      if (!(await darfBereichServer(admin, aufrufer.email, 'immobilien'))) return keinRecht(headers)
       const ergebnis = await ordneMailObjektZu(admin, String(body.mailId ?? ''), String(body.objektId ?? ''), { name: aufrufer.name || aufrufer.email })
       if (!ergebnis.ok) return new Response(JSON.stringify({ error: ergebnis.fehler }), { status: 400, headers })
       return new Response(JSON.stringify(ergebnis), { headers })
@@ -3831,6 +3881,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       if (!aufrufer) {
         return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
       }
+      if (!(await darfKundeServer(admin, aufrufer.email, body.kundeId))) return keinRecht(headers)
       const ergebnis = await pruefeBonitaet(admin, { bereich: body.bereich, kundeId: body.kundeId, art: body.art }, { name: aufrufer.name || aufrufer.email, email: aufrufer.email }, {
         callClaudeResearch,
         callClaudeTool,
@@ -3849,6 +3900,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       if (!aufrufer) {
         return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
       }
+      if (!(await darfBereichServer(admin, aufrufer.email, 'immobilien'))) return keinRecht(headers)
       if (typeof body.objektId !== 'string' || !body.objektId) {
         return new Response(JSON.stringify({ error: 'objektId fehlt.' }), { status: 400, headers })
       }
@@ -3870,6 +3922,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       if (!aufrufer) {
         return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
       }
+      if (!(await darfBereichServer(admin, aufrufer.email, 'immobilien'))) return keinRecht(headers)
       const objektId = typeof body.objektId === 'string' ? body.objektId : ''
       const { data: objekt } = await admin.from('objekte').select('id, bezeichnung, adresse, verkaufsdaten, dokumente, bewertung').eq('id', objektId).maybeSingle()
       if (!objekt) return new Response(JSON.stringify({ error: 'Dieses Objekt gibt es nicht (mehr).' }), { status: 404, headers })
