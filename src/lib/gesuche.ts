@@ -88,17 +88,21 @@ export function pruefe(gesuch: Gesuch, o: Objekt): ObjektTreffer | null {
     passt.push(`Lage ${o.adresse || o.bezeichnung}`)
   }
 
+  const kennzahlen: Record<string, unknown> | undefined = o.verkaufsdaten?.kennzahlen
+
+  // Budget: verglichen wird der Kaufpreis des Objekts, fehlt er, die Kaufpreisvorstellung aus dem
+  // Verkaufsdatenblatt (wie beim Faktor; Quirins Wunsch vom 18.11.2026).
   if (gesuch.budgetMin != null || gesuch.budgetMax != null) {
-    if (o.kaufpreis > 0) {
-      if (gesuch.budgetMin != null && o.kaufpreis < gesuch.budgetMin) return null
-      if (gesuch.budgetMax != null && o.kaufpreis > gesuch.budgetMax) return null
-      passt.push('Preis im Budget')
+    const ausVorstellung = !(o.kaufpreis > 0)
+    const preis = o.kaufpreis > 0 ? o.kaufpreis : positiv(kennzahlen?.kaufpreisvorstellung)
+    if (preis > 0) {
+      if (gesuch.budgetMin != null && preis < gesuch.budgetMin) return null
+      if (gesuch.budgetMax != null && preis > gesuch.budgetMax) return null
+      passt.push(`Preis im Budget${ausVorstellung ? ' (aus Kaufpreisvorstellung)' : ''}`)
     } else {
-      offen.push('Kaufpreis beim Objekt nicht hinterlegt')
+      offen.push('Kaufpreis und Kaufpreisvorstellung nicht hinterlegt')
     }
   }
-
-  const kennzahlen: Record<string, unknown> | undefined = o.verkaufsdaten?.kennzahlen
 
   // Kaufpreisfaktor = Preis ÷ Jahresnettokaltmiete. Preis: der Kaufpreis des Objekts, fehlt er, die
   // Kaufpreisvorstellung aus dem Verkaufsdatenblatt. Verglichen wird der auf eine Stelle gerundete Wert.

@@ -198,7 +198,12 @@ export const FELD_NAME: Record<Ziel, string> = {
 }
 
 // Überschriften je Feld, bereits vereinfacht geschrieben (klein, ä→ae usw., Satzzeichen als Leerzeichen).
+// Bei gleichen Punkten gewinnt das weiter oben stehende Feld. „Erhalten am“ steht deshalb vorn: In Quirins
+// Vorlage ist „Datum“ (Blatt „to Do“) bzw. „Tag ToDo's“ (Blatt „erledigt“) der Tag, an dem die Aufgabe
+// reinkam, und „geplant am / bekom am“ heißt „erhalten am“ (seine Auskunft vom 18.11.2026). Hat eine Datei
+// zusätzlich eine eigene Spalte „Erhalten am“, rutscht „Datum“ auf „Start“.
 const STICHWORTE: [Ziel, string[]][] = [
+  ['erhaltenAm', ['erhalten am', 'aufgabe erhalten am', 'bekommen am', 'bekom am', 'geplant am bekom am', 'eingang am', 'datum', 'tag todo', 'tag todos']],
   ['startDatum', ['start', 'startdatum', 'start datum', 'datum', 'tag', 'beginn']],
   ['prio', ['prio', 'pri', 'prioritaet']],
   ['unterPrio', ['unter', 'unterprio', 'unter prio', 'unterprioritaet']],
@@ -212,11 +217,10 @@ const STICHWORTE: [Ziel, string[]][] = [
   ['geplanteZeit', ['geplante zeit', 'geplante', 'soll zeit', 'soll', 'zeit geplant']],
   ['istZeit', ['ist zeit', 'istzeit', 'ist', 'zeit ist']],
   ['umsatzWert', ['umsatz', 'umsatz wert', 'wert', 'auftragswert', 'auftrags wert', 'euro wert']],
-  ['geplanteWiedervorlage', ['wiedervorlage', 'geplante wiedervorlage', 'geplant am', 'wv']],
+  ['geplanteWiedervorlage', ['wiedervorlage', 'geplante wiedervorlage', 'geplant am', 'wv', 'wiedervorl', 'geplante wiedervorl', 'geplante wiedervorl datum']],
   ['erledigtAm', ['erledigt am']],
   ['erledigtZeichen', ['erledigt', 'erl']],
   ['wartenAuf', ['warten auf', 'wartet auf']],
-  ['erhaltenAm', ['erhalten am', 'aufgabe erhalten am', 'bekommen am', 'bekom am', 'eingang am']],
   ['erledigenBis', ['erledigen bis', 'zu erledigen bis', 'aufgabe zu erledigen bis', 'faellig', 'faellig am', 'frist']],
   ['stundensatz', ['stundensatz']],
   ['zeitaufwandskosten', ['zeitaufwandskosten', 'zeitkosten', 'kosten']],
