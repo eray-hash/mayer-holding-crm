@@ -308,6 +308,29 @@ export type Kunde = {
   potenzialAnalyse?: PotenzialAnalyse
   steuerAnalyse?: SteuerAnalyse
   bonitaet?: Bonitaetseinschaetzung
+  // Wann welche Unterlagen beim Kunden angefordert wurden (neueste zuerst), siehe KundeUnterlagenAnfordern.tsx.
+  unterlagenAnforderungen?: KundenUnterlagenAnforderung[]
+}
+
+/** Eine Anforderung von Unterlagen beim Kunden per E-Mail, mit Link zur Hochlade-Seite
+ *  /formular/unterlagen/:token. Der Server (email-gateway, kundenUnterlagen.ts) findet die Akte nur
+ *  über `token` und trägt jeden Eingang unter `eingang` ein. */
+export type KundenUnterlagenAnforderung = {
+  id: string
+  datum: string
+  /** E-Mail-Adresse, an die die Anforderung ging. */
+  an: string
+  anName?: string
+  von: string
+  /** Angeforderte Unterlagen (Wörter aus data/kundenUnterlagen.ts oder frei). */
+  punkte: string[]
+  /** Weitere, frei beschriebene Unterlagen. */
+  weitere?: string
+  art: 'anforderung' | 'erinnerung'
+  /** Geheime Kennung im Link (32 Zufallsbytes, base64url). 60 Tage gültig ab `datum`. */
+  token: string
+  /** Vom Server eingetragen: was der Kunde über diesen Link hochgeladen hat. */
+  eingang?: { punkt: string; datum: string; dokumentId: string; name: string }[]
 }
 
 export type BonitaetPunkt = {

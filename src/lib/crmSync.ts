@@ -102,6 +102,7 @@ function kundeToRow(bereich: KundeBereich, k: Kunde) {
     kaeuferprofil: k.kaeuferprofil ?? null,
     immo_stammdaten: k.immoStammdaten ?? null,
     gesuche: k.gesuche ?? null,
+    unterlagen_anforderungen: k.unterlagenAnforderungen ?? null,
     unternehmensbewertung: k.unternehmensbewertung ?? null,
     selbstauskunft: k.selbstauskunft ?? null,
     dokumente: k.dokumente ?? null,
@@ -138,6 +139,7 @@ function rowToKunde(row: any): Kunde {
     kaeuferprofil: row.kaeuferprofil ?? undefined,
     immoStammdaten: row.immo_stammdaten ?? undefined,
     gesuche: row.gesuche ?? undefined,
+    unterlagenAnforderungen: row.unterlagen_anforderungen ?? undefined,
     unternehmensbewertung: row.unternehmensbewertung ?? undefined,
     selbstauskunft: row.selbstauskunft ?? undefined,
     dokumente: row.dokumente ?? undefined,
@@ -693,7 +695,8 @@ function syncSimpleCollection(client: NonNullable<typeof supabase>, prev: AppDat
 // andere bleibt so, wie es in der Datenbank steht.
 
 type ListenEintrag = { id: string }
-const LISTEN_FELDER = ['activities', 'dokumente', 'signaturen', 'gesuche'] as const
+// unterlagen_anforderungen: Der Server trägt dort Eingänge vom Hochlade-Link ein (kundenUnterlagen.ts).
+const LISTEN_FELDER = ['activities', 'dokumente', 'signaturen', 'gesuche', 'unterlagen_anforderungen'] as const
 type ListenFeld = (typeof LISTEN_FELDER)[number]
 
 /** Was die Datenbank gegenüber dem Stand dieses Fensters zusätzlich weiß — je Liste der Akte. */

@@ -234,8 +234,10 @@ import { aboLink, kalenderAboAntwort } from './kalenderAbo.ts'
 import { ordneMailObjektZu } from './objektMail.ts'
 import { legeEingaengeAb, macheAblageRueckgaengig, nimmEingaengeHeraus } from './eingang.ts'
 import { pruefeNeueTreffer } from './gesuchTreffer.ts'
+import { istDienstSchluessel, sendeTagesmeldungen, tagesmeldungTest } from './tagesmeldung.ts'
 import { pruefeBonitaet } from './bonitaet.ts'
 import { lieseKontoauszug } from './kontoauszug.ts'
+import { beantworteKundenUnterlagen } from './kundenUnterlagen.ts'
 import { kiAufruf, mitAnlass, setzeAnlass } from '../_shared/kiVerbrauch.ts'
 
 const ALLOWED_ORIGINS = [
@@ -3064,6 +3066,10 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       // Gesuchen und Objekten erkennen und den Zuständigen per Telegram melden.
       const treffer = body.ohneTreffer === true ? { gelaufen: false, neu: 0, benachrichtigt: 0 } : await pruefeNeueTreffer(admin, sendeTelegram)
       if (treffer.gelaufen && treffer.neu > 0) console.log(`Gesuch-Treffer: ${treffer.neu} neu, ${treffer.benachrichtigt} Nachricht(en).`)
+      // Morgen-Übersicht (Werktage ab 8 Uhr) und Wochenbericht (freitags ab 16 Uhr) — siehe tagesmeldung.ts.
+      // Außerhalb der Zeitfenster ohne Datenbankzugriff; höchstens einmal je Person und Tag; wirft nie.
+      const tagesmeldung = await sendeTagesmeldungen(admin, sendeTelegram)
+      if (tagesmeldung.morgen > 0 || tagesmeldung.woche > 0) console.log(`Tagesmeldung: ${tagesmeldung.morgen} Morgen-Übersicht(en), ${tagesmeldung.woche} Wochenbericht(e).`)
       // Derselbe Minutentakt hält auch die Warteschlange für Sammelsendungen per Telegram in Gang
       // (falls ein Schritt abgebrochen ist oder an der Mengengrenze des KI-Dienstes warten musste).
       try {
@@ -3079,6 +3085,19 @@ Deno.serve((req: Request) => mitAnlass(async () => {
         console.error('Anstoß der Telegram-Warteschlange fehlgeschlagen:', err)
       }
       return new Response(JSON.stringify({ ok: true, gesendet: ergebnis.gesendet }), { headers })
+    }
+    if (body.action === 'tagesmeldung_test') {
+      // Probelauf für EINE Person, sofort (ohne 8-Uhr-Fenster, Wochentag und Einstellungen) und ohne die
+      // Buchhaltung „heute schon gesendet“ anzufassen. Nur mit dem Dienst-Schlüssel — das geteilte Secret
+      // steckt im öffentlichen Seiten-Code. Gibt den Text zurück; gesendet wird nur mit `senden: true`.
+      const token = (req.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '').trim()
+      if (!istDienstSchluessel(token)) {
+        return new Response(JSON.stringify({ error: 'Nur mit dem Dienst-Schlüssel.' }), { status: 401, headers })
+      }
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const ergebnis = await tagesmeldungTest(admin, sendeTelegram, { email: body.email, art: body.art, senden: body.senden, jetzt: body.jetzt })
+      if (!ergebnis.ok) return new Response(JSON.stringify({ error: ergebnis.fehler }), { status: ergebnis.status, headers })
+      return new Response(JSON.stringify(ergebnis), { headers })
     }
     if (body.action === 'termin_speichern' || body.action === 'termin_loeschen') {
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
@@ -3649,6 +3668,14 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       return new Response(JSON.stringify({ ok: true, id }), { headers })
     }
 
+    // Unterlagen vom Kunden über den Hochlade-Link /formular/unterlagen/:token (siehe kundenUnterlagen.ts):
+    // Schlüssel ist allein die geheime Kennung der Anforderung, nie die Kunden-Kennung.
+    if (body.action === 'public_get_unterlagen' || body.action === 'public_unterlagen_upload_url' || body.action === 'public_unterlagen_eingang') {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const antwort = await beantworteKundenUnterlagen(admin, body.action, body)
+      return new Response(JSON.stringify(antwort.body), { status: antwort.status, headers })
+    }
+
     if (body.action === 'public_get_objekt') {
       const { objektId } = body
       if (!objektId) {
@@ -4101,7 +4128,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       return new Response(JSON.stringify({ ok: true }), { headers })
     }
 
-    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "bewertung_recherche_start", "bewertung_recherche_schritt", "kunden_umfeld_recherche", "steuer_analyse_start", "steuer_analyse_schritt", "dokument_lesen", "dokument_inhalte", "postfaecher_liste", "postfach_verbinden", "postfach_trennen", "postfach_abruf", "postfach_ordner", "mail_zuordnen", "mail_freigeben", "mail_anhang_url", "termin_speichern", "termin_loeschen", "termin_erinnerungen", "kontoauszug_auslesen" oder "firmenwissen_answer"' }), { status: 400, headers })
+    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "bewertung_recherche_start", "bewertung_recherche_schritt", "kunden_umfeld_recherche", "steuer_analyse_start", "steuer_analyse_schritt", "dokument_lesen", "dokument_inhalte", "postfaecher_liste", "postfach_verbinden", "postfach_trennen", "postfach_abruf", "postfach_ordner", "mail_zuordnen", "mail_freigeben", "mail_anhang_url", "termin_speichern", "termin_loeschen", "termin_erinnerungen", "tagesmeldung_test", "kontoauszug_auslesen" oder "firmenwissen_answer"' }), { status: 400, headers })
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }

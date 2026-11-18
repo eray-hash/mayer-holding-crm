@@ -3,6 +3,7 @@ import { FileText, Upload } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { KUNDEN_BEREICHE } from '../data/kundenBereiche'
 import { Card, EmptyState } from './ui'
+import { KundeUnterlagenAnfordern } from './KundeUnterlagenAnfordern'
 import { erzeugeKundenDownloadUrl, ladeKundenDokumentHoch } from '../lib/kundenDokumenteStorage'
 import { brauchtDateiLink, holeAnhangUrl } from '../lib/emailGateway'
 import { uid, today } from '../lib/dates'
@@ -68,6 +69,7 @@ export function DokumenteSection({ bereich, kundeId }: { bereich: KundeBereich; 
 
   return (
     <div>
+      {kunde && <KundeUnterlagenAnfordern bereich={bereich} kunde={kunde} />}
       {fehler && <p className="mb-2 text-sm text-rose-600">{fehler}</p>}
 
       <label className="mb-3 flex w-fit cursor-pointer items-center gap-1.5 rounded-md border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50">

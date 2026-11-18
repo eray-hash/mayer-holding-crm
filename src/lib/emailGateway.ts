@@ -643,3 +643,37 @@ export async function leseKontoauszug(
     datei: data?.datei ?? { name: datei.name, url: datei.url, anzahl: 0 },
   }
 }
+
+// ---------- Unterlagen vom Kunden (öffentliche Hochlade-Seite /formular/unterlagen/:token) ----------
+
+/** Was die Hochlade-Seite über die Anforderung erfährt — bewusst nur das (siehe kundenUnterlagen.ts). */
+export type PublicUnterlagen = {
+  vorname: string | null
+  firma: string | null
+  punkte: { name: string; erledigt: boolean }[]
+  weitere: string | null
+}
+
+/** null = Link unbekannt oder abgelaufen. */
+export async function holePublicUnterlagen(token: string): Promise<PublicUnterlagen | null> {
+  const data = await call({ action: 'public_get_unterlagen', token })
+  return (data?.unterlagen ?? null) as PublicUnterlagen | null
+}
+
+/** Einmalige Hochlade-Adresse für genau eine Datei in der Akte, die zu `token` gehört. */
+export async function holeUnterlagenUploadUrl(token: string, punkt: string, dateiname: string, groesse: number): Promise<{ pfad: string; token: string }> {
+  const data = await call({ action: 'public_unterlagen_upload_url', token, punkt, dateiname, groesse })
+  return { pfad: data.pfad, token: data.token }
+}
+
+/** Lädt die Datei mit der einmaligen Adresse in die geschützte Ablage — ohne Login. */
+export async function ladeKundenUnterlageHoch(pfad: string, uploadToken: string, datei: Blob, typ: string): Promise<void> {
+  if (!supabase) throw new Error('Die Ablage ist gerade nicht erreichbar.')
+  const { error } = await supabase.storage.from('kunden-dokumente').uploadToSignedUrl(pfad, uploadToken, datei, { contentType: typ })
+  if (error) throw new Error(error.message)
+}
+
+/** Meldet die hochgeladene Datei; der Server prüft sie und legt sie in der Akte ab. */
+export async function meldeKundenUnterlage(token: string, punkt: string, dokument: { pfad: string; name: string }): Promise<void> {
+  await call({ action: 'public_unterlagen_eingang', token, punkt, dokument })
+}

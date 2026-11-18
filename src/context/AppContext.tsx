@@ -1285,6 +1285,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (stand.dokumente) patch.dokumente = wendeServerStandAn(kunde.dokumente, stand.dokumente)
       if (stand.signaturen) patch.signaturen = wendeServerStandAn(kunde.signaturen, stand.signaturen)
       if (stand.gesuche) patch.gesuche = wendeServerStandAn(kunde.gesuche, stand.gesuche)
+      if (stand.unterlagen_anforderungen) patch.unterlagenAnforderungen = wendeServerStandAn(kunde.unterlagenAnforderungen, stand.unterlagen_anforderungen)
       dispatch({ type: 'KUNDE_VOM_SERVER', bereich: def.id, id, patch })
       return
     }

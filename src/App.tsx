@@ -71,6 +71,7 @@ import { PublicVollmachtBeratung } from './pages/formulare/PublicVollmachtBeratu
 import { PublicSelbstauskunft } from './pages/formulare/PublicSelbstauskunft'
 import { PublicEigentuemerPortal } from './pages/formulare/PublicEigentuemerPortal'
 import { PublicNda } from './pages/formulare/PublicNda'
+import { PublicKundenUnterlagen } from './pages/formulare/PublicKundenUnterlagen'
 import type { Bereich } from './types'
 
 function RootRedirect() {
@@ -313,6 +314,7 @@ function AppRoutes() {
         <Route path="/formular/selbstauskunft/:bereich/:kundeId" element={<PublicSelbstauskunft />} />
         <Route path="/formular/eigentuemer/:objektId" element={<PublicEigentuemerPortal />} />
         <Route path="/formular/nda/:bereich/:kundeId" element={<PublicNda />} />
+        <Route path="/formular/unterlagen/:token" element={<PublicKundenUnterlagen />} />
       </Routes>
     )
   }

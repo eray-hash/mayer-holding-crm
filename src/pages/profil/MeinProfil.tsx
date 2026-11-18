@@ -140,6 +140,92 @@ function PasswortSetzen() {
 
 const TELEGRAM_BOT_USERNAME = import.meta.env.VITE_TELEGRAM_BOT_USERNAME as string | undefined
 
+// Morgen-Übersicht und Wochenbericht per Telegram an- oder abschalten (verschickt vom Server, siehe
+// supabase/functions/email-gateway/tagesmeldung.ts). Gespeichert in der eigenen Zeile von
+// kalender_einstellungen — wie die Kalender-Einstellungen nur mit den eigenen Spalten, damit
+// Erinnerungen, Sichtbarkeit und Abo-Kennung unberührt bleiben. Keine Zeile = beides an.
+type MeldungSpalte = 'morgen_uebersicht' | 'wochenbericht'
+
+function TelegramMeldungen() {
+  const { session, mitarbeiter } = useAuth()
+  const email = (session?.user?.email ?? '').toLowerCase()
+  const gf = mitarbeiter?.rolle === 'geschaeftsfuehrung' || !!mitarbeiter?.ist_admin
+  const [werte, setWerte] = useState<Record<MeldungSpalte, boolean> | null>(null)
+  const [fehler, setFehler] = useState('')
+
+  useEffect(() => {
+    if (!supabase || !email) return
+    let aktiv = true
+    supabase
+      .from('kalender_einstellungen')
+      .select('morgen_uebersicht, wochenbericht')
+      .eq('email', email)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (!aktiv) return
+        if (error) {
+          setFehler('Die Einstellungen konnten nicht geladen werden.')
+          return
+        }
+        setWerte({ morgen_uebersicht: data?.morgen_uebersicht !== false, wochenbericht: data?.wochenbericht !== false })
+      })
+    return () => {
+      aktiv = false
+    }
+  }, [email])
+
+  async function speichern(spalte: MeldungSpalte, wert: boolean) {
+    if (!supabase || !email || !werte) return
+    const vorher = werte
+    setWerte({ ...werte, [spalte]: wert })
+    setFehler('')
+    try {
+      const aenderung = { [spalte]: wert, geaendert_am: new Date().toISOString() }
+      const { data, error } = await supabase.from('kalender_einstellungen').update(aenderung).eq('email', email).select('email')
+      if (error) throw new Error(error.message)
+      if (!data || data.length === 0) {
+        // Noch keine eigene Zeile: mit denselben Grundwerten anlegen wie der Kalender.
+        const { error: anlegeFehler } = await supabase.from('kalender_einstellungen').insert({ email, erinnerungen: [60], sichtbar: true, ...aenderung })
+        if (anlegeFehler && anlegeFehler.code !== '23505') throw new Error(anlegeFehler.message)
+        if (anlegeFehler) {
+          // Gleichzeitig angelegt (z. B. im Kalender): dann nur die eigene Spalte ändern.
+          const { data: zweite, error: zweiter } = await supabase.from('kalender_einstellungen').update(aenderung).eq('email', email).select('email')
+          if (zweiter || !zweite?.length) throw new Error(zweiter?.message ?? 'nicht gespeichert')
+        }
+      }
+    } catch {
+      setWerte(vorher)
+      setFehler('Die Einstellung konnte nicht gespeichert werden. Bitte später noch einmal versuchen.')
+    }
+  }
+
+  if (!werte) return fehler ? <p className="mt-3 text-xs font-medium text-rose-600">{fehler}</p> : null
+
+  return (
+    <div className="mt-4 border-t border-slate-100 pt-3">
+      <label className="flex items-start gap-2 text-sm text-slate-700">
+        <input type="checkbox" className="mt-0.5" checked={werte.morgen_uebersicht} onChange={(e) => speichern('morgen_uebersicht', e.target.checked)} />
+        <span>
+          Morgen-Übersicht um 8 Uhr per Telegram
+          <span className="block text-xs text-slate-500">
+            Montag bis Freitag: deine Termine, fälligen Wiedervorlagen und Aufgaben des Tages. Steht nichts an, kommt keine Nachricht.
+          </span>
+        </span>
+      </label>
+      {gf && (
+        <label className="mt-2 flex items-start gap-2 text-sm text-slate-700">
+          <input type="checkbox" className="mt-0.5" checked={werte.wochenbericht} onChange={(e) => speichern('wochenbericht', e.target.checked)} />
+          <span>
+            Wochenbericht freitags um 16 Uhr
+            <span className="block text-xs text-slate-500">Neue Akten, Rechnungen, Objekte, Treffer und offene Fragen der Woche in Zahlen.</span>
+          </span>
+        </label>
+      )}
+      {fehler && <p className="mt-2 text-xs font-medium text-rose-600">{fehler}</p>}
+    </div>
+  )
+}
+
 // Verknüpfung mit dem Telegram-Bot (zusätzlicher Kanal für den KI-Assistenten, siehe
 // supabase/functions/telegram-gateway) — Mitarbeiter erzeugen sich hier einen Einmal-Code, schicken
 // ihn per Telegram-Deep-Link an den Bot ("/start <code>"), der Webhook verknüpft dann chat_id <->
@@ -251,14 +337,17 @@ function TelegramVerbinden() {
         Kunden, genau wie im KI-Chat hier.
       </p>
       {chatId ? (
-        <div className="flex items-center justify-between">
-          <p className="flex items-center gap-1.5 text-sm font-medium text-emerald-600">
-            <CheckCircle2 size={15} /> Verbunden
-          </p>
-          <button onClick={trennen} className="text-sm font-medium text-rose-600 hover:underline">
-            Verbindung trennen
-          </button>
-        </div>
+        <>
+          <div className="flex items-center justify-between">
+            <p className="flex items-center gap-1.5 text-sm font-medium text-emerald-600">
+              <CheckCircle2 size={15} /> Verbunden
+            </p>
+            <button onClick={trennen} className="text-sm font-medium text-rose-600 hover:underline">
+              Verbindung trennen
+            </button>
+          </div>
+          <TelegramMeldungen />
+        </>
       ) : code ? (
         <div>
           <ol className="mb-3 list-decimal space-y-2 pl-5 text-sm text-slate-600">
