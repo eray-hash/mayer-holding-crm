@@ -523,6 +523,12 @@ export type ObjektBewertung = {
   /** Fundstellen der Marktrecherche. */
   quellen?: { titel: string; url: string }[]
   fehler?: string
+  /** KI-Kosten dieses Laufs in US-Dollar (alle Aufrufe, auch wiederholte). */
+  kostenUsd?: number
+  /** Aus dem vorigen Lauf übernommen statt neu gelesen bzw. neu recherchiert (Zeitpunkt der Grundlage). */
+  wiederverwendet?: { unterlagenVom?: string; marktVom?: string }
+  /** Vom Server für den nächsten Lauf aufgehoben (Faktenblatt, Marktrecherche) — hier nur durchgereicht. */
+  grundlage?: { unterlagenAm: string; marktAm: string }
 }
 
 /** Eine Anforderung fehlender Unterlagen beim Eigentümer per E-Mail. */

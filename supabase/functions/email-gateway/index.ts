@@ -231,7 +231,7 @@ import {
 } from './postfach.ts'
 import { loescheTermin, sendeErinnerungen, sendeTelegram, speichereTermin } from './kalender.ts'
 import { ordneMailObjektZu } from './objektMail.ts'
-import { legeEingaengeAb, nimmEingaengeHeraus } from './eingang.ts'
+import { legeEingaengeAb, macheAblageRueckgaengig, nimmEingaengeHeraus } from './eingang.ts'
 import { pruefeNeueTreffer } from './gesuchTreffer.ts'
 
 const ALLOWED_ORIGINS = [
@@ -498,7 +498,7 @@ async function summarizeTranscript(transcript: string): Promise<Zusammenfassung>
 }
 
 type ClaudeContentBlock =
-  | { type: 'text'; text: string }
+  | { type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }
   | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }
   | { type: 'document'; source: { type: 'base64'; media_type: string; data: string } }
 
@@ -553,9 +553,25 @@ async function callClaudeTool<T>(
 // Anthropic-API nicht zuverlässig. Gibt den reinen Antworttext (alle text-Blöcke konkateniert)
 // zurück; etwaige Quellenangaben/strukturierte Zahlen bittet der jeweilige Prompt selbst als Teil
 // des Fließtexts aus (siehe z.B. abschließender ```json-Block der Bewertungssynthese).
+// Verbrauch eines KI-Aufrufs, wie ihn die API meldet — für die Kostenanzeige der mehrstufigen Läufe.
+type KiVerbrauch = { modell: string; ein: number; aus: number; cacheSchreiben: number; cacheLesen: number; suchen: number }
+
+// Preise in US-Dollar je Million Token (Preisliste, abgerufen am 18.11.2026) und je Websuche.
+const KI_PREISE: Record<string, { ein: number; aus: number; cacheSchreiben: number; cacheLesen: number }> = {
+  'claude-sonnet-5-5': { ein: 2, aus: 10, cacheSchreiben: 2.5, cacheLesen: 0.1 },
+  'claude-haiku-5-5': { ein: 0.1, aus: 0.5, cacheSchreiben: 0.125, cacheLesen: 0.01 },
+  'claude-haiku-4-5-20251001': { ein: 1, aus: 5, cacheSchreiben: 1.25, cacheLesen: 0.1 },
+}
+const PREIS_JE_SUCHE = 0.01
+
+function kostenUsd(v: KiVerbrauch): number {
+  const p = KI_PREISE[v.modell] ?? KI_PREISE['claude-sonnet-5-5']
+  return (v.ein * p.ein + v.aus * p.aus + v.cacheSchreiben * p.cacheSchreiben + v.cacheLesen * p.cacheLesen) / 1_000_000 + v.suchen * PREIS_JE_SUCHE
+}
+
 async function callClaudeResearch(
   prompt: string | ClaudeContentBlock[],
-  opts: { model: 'claude-haiku-4-5-20251001' | 'claude-sonnet-5-5'; maxSearches: number; maxTokens?: number; timeoutMs?: number; ohneNachdenken?: boolean; meldeStopp?: (grund: string) => void },
+  opts: { model: 'claude-haiku-4-5-20251001' | 'claude-haiku-5-5' | 'claude-sonnet-5-5'; maxSearches: number; maxTokens?: number; timeoutMs?: number; ohneNachdenken?: boolean; meldeStopp?: (grund: string) => void; meldeVerbrauch?: (v: KiVerbrauch) => void },
 ): Promise<string> {
   const apiKey = env('ANTHROPIC_API_KEY')
   const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -587,6 +603,15 @@ async function callClaudeResearch(
   }
   const data = await res.json()
   opts.meldeStopp?.(String(data.stop_reason ?? ''))
+  const u = data.usage ?? {}
+  opts.meldeVerbrauch?.({
+    modell: opts.model,
+    ein: Number(u.input_tokens) || 0,
+    aus: Number(u.output_tokens) || 0,
+    cacheSchreiben: Number(u.cache_creation_input_tokens) || 0,
+    cacheLesen: Number(u.cache_read_input_tokens) || 0,
+    suchen: Number(u.server_tool_use?.web_search_requests) || 0,
+  })
   const text = (data.content ?? [])
     .filter((c: { type: string }) => c.type === 'text')
     .map((c: { text: string }) => c.text)
@@ -1929,12 +1954,20 @@ async function ladeObjektUnterlagen(admin: any, dokumente: Record<string, any[]>
       ausgelassen.push(`${name} (${ordner}, zu groß für einen Durchgang)`)
       continue
     }
-    const { data: datei, error } = await admin.storage.from('objekt-dokumente').download(d.url)
-    if (error || !datei) {
+    // Aus den ungeklärten Eingängen abgelegte Dateien liegen in der gemeinsamen Ablage, alle anderen im Objekt-Speicher.
+    let bytes: Uint8Array
+    try {
+      const gemeinsam = gemeinsamerAblagePfad(String(d.url))
+      if (gemeinsam) bytes = await ladeGemeinsameDatei(admin, gemeinsam)
+      else {
+        const { data: datei, error } = await admin.storage.from('objekt-dokumente').download(d.url)
+        if (error || !datei) throw new Error('nicht abrufbar')
+        bytes = new Uint8Array(await datei.arrayBuffer())
+      }
+    } catch {
       ausgelassen.push(`${name} (${ordner}, nicht abrufbar)`)
       continue
     }
-    const bytes = new Uint8Array(await datei.arrayBuffer())
     summe += alsText ? 0 : bytes.length
     const typ = String(d.typ ?? '')
     bloecke.push({ type: 'text', text: `--- Unterlage „${name}" aus dem Ordner „${ordner}" ---` })
@@ -2083,6 +2116,13 @@ type ObjektBewertungZustand = {
   nichtGelesen?: string[]
   zwischen?: { unterlagen?: string; unterlagen2?: string; markt?: string; text?: string; fortsetzungen?: number }
   protokoll?: string[]
+  /** Verbrauch je KI-Aufruf dieses Laufs (auch gescheiterte Versuche) und die Summe in US-Dollar. */
+  verbrauch?: (KiVerbrauch & { schritt: number })[]
+  kostenUsd?: number
+  /** Was aus einem früheren Lauf übernommen wurde, statt es neu zu lesen oder zu recherchieren. */
+  wiederverwendet?: { unterlagenVom?: string; marktVom?: string }
+  /** Grundlage für den nächsten Lauf: Faktenblatt und Marktrecherche samt dem Stand, aus dem sie stammen. */
+  grundlage?: { unterlagenKennung: string; fakten: string; fakten2?: string; gelesen: string[]; nichtGelesen: string[]; unterlagenAm: string; ort: string; markt: string; quellen: { titel: string; url: string }[]; marktAm: string }
   bericht?: string
   kennzahlen?: Record<string, number>
   quellen?: { titel: string; url: string }[]
@@ -2115,6 +2155,25 @@ const FAKTEN_AUFTRAG = `Du bereitest die Bewertung einer Immobilie vor. Lies die
 Gliederung: Lage und Anschrift · Objektart, Baujahr, Bauweise · Grundstück (Fläche, Flurstück, Erbbaurecht, Lasten und Beschränkungen laut Grundbuch) · Flächen (Wohn-, Nutz-, Gewerbefläche) · Einheiten und Aufteilung · Vermietung (Mieter, Ist-Miete je Einheit und gesamt, Soll-Miete, Leerstand, Laufzeiten, Staffeln) · Bewirtschaftungskosten, Hausgeld, Rücklagen · Zustand, Sanierungen mit Jahr, bekannte Mängel, anstehende Arbeiten · Energie (Ausweis, Kennwert, Heizung) · Preisangaben (Kaufpreisvorstellung, Werte aus Gutachten mit Stichtag und Verfahren) · Besonderheiten und Risiken · Widersprüche zwischen den Unterlagen.
 
 Regeln: Nur was ausdrücklich in den Unterlagen steht. Nichts schätzen, nichts ergänzen. Zahlen genau übernehmen, mit Einheit. Zu einem Punkt ohne Angabe schreibst du „keine Angabe". Betrifft eine Unterlage erkennbar ein anderes Objekt, verwende sie nicht und sag das. Kein Vorwort, kein Schlusswort.`
+
+/** Welche lesbaren Unterlagen das Objekt hat — gleich, solange keine Datei dazukommt, wegfällt oder ersetzt wird. */
+// deno-lint-ignore no-explicit-any
+function objektUnterlagenKennung(dokumente: Record<string, any[]>): string {
+  return Object.entries(dokumente ?? {})
+    .filter(([ordner]) => ordner !== 'Bilder')
+    // deno-lint-ignore no-explicit-any
+    .flatMap(([ordner, liste]) => (liste ?? []).filter((d: any) => d?.url && lesbareArt(String(d.name ?? ''), d.typ)).map((d: any) => `${ordner}|${d.id}|${d.url}`))
+    .sort()
+    .join('\n')
+}
+
+// deno-lint-ignore no-explicit-any
+function objektOrt(o: any): string {
+  return [o.verkaufsdaten?.uebersicht?.strasse, o.verkaufsdaten?.uebersicht?.plzOrt].filter(Boolean).join(', ') || o.adresse || o.bezeichnung
+}
+
+/** Marktdaten aus einem früheren Lauf gelten so lange, danach wird neu recherchiert. */
+const MARKT_GILT_TAGE = 30
 
 async function fuehreObjektBewertungAus(objektId: string, umleitungen: number, wiederaufnehmen = false): Promise<void> {
   const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
@@ -2154,7 +2213,15 @@ async function fuehreObjektBewertungAus(objektId: string, umleitungen: number, w
     return
   }
   const timeoutMs = Math.min(SCHRITT_HOECHSTENS_MS - 12_000, Math.max(20_000, rest - 12_000))
-  const ort = [o.verkaufsdaten?.uebersicht?.strasse, o.verkaufsdaten?.uebersicht?.plzOrt].filter(Boolean).join(', ') || o.adresse || o.bezeichnung
+  const verbrauchJetzt: (KiVerbrauch & { schritt: number })[] = []
+  const zaehle = (v: KiVerbrauch) => {
+    verbrauchJetzt.push({ ...v, schritt: schritt.nr })
+  }
+  const mitVerbrauch = (): Partial<ObjektBewertungZustand> => {
+    const verbrauch = [...(z.verbrauch ?? []), ...verbrauchJetzt.splice(0)]
+    return { verbrauch, kostenUsd: Math.round(verbrauch.reduce((s, v) => s + kostenUsd(v), 0) * 10000) / 10000 }
+  }
+  const ort = objektOrt(o)
   const crmDaten = JSON.stringify({ bezeichnung: o.bezeichnung, adresse: o.adresse, objektart: o.verkaufsdaten?.uebersicht?.objektart || o.typ, kaufpreisvorstellung: o.kaufpreis || undefined, verkaufsdatenblatt: o.verkaufsdaten ?? undefined, kurzpruefung: o.kurzpruefung ?? undefined }, null, 1)
 
   try {
@@ -2167,7 +2234,7 @@ async function fuehreObjektBewertungAus(objektId: string, umleitungen: number, w
       if (gelesen.length > 0) {
         fakten = await callClaudeResearch(
           [{ type: 'text', text: `${FAKTEN_AUFTRAG}\n\nObjekt laut CRM: „${o.bezeichnung}"${o.adresse ? `, ${o.adresse}` : ''}.${schritt.nr === 2 && z.zwischen?.unterlagen ? `\n\nAus früheren Unterlagen ist schon bekannt (nicht wiederholen, nur Neues und Abweichendes nennen):\n${z.zwischen.unterlagen.slice(0, 12_000)}` : ''}` }, ...bloecke],
-          { model: 'claude-sonnet-5-5', maxSearches: 0, maxTokens: 5000, timeoutMs, ohneNachdenken: true },
+          { model: 'claude-sonnet-5-5', maxSearches: 0, maxTokens: 5000, timeoutMs, ohneNachdenken: true, meldeVerbrauch: zaehle },
         )
       }
       const zwischen = { ...(z.zwischen ?? {}) }
@@ -2177,7 +2244,7 @@ async function fuehreObjektBewertungAus(objektId: string, umleitungen: number, w
       // Ein zweiter Durchgang lohnt nur, wenn noch lesbare Unterlagen übrig sind, die nicht an der Größe scheitern.
       const nochOffen = ausgelassen.filter((a) => !/zu groß|nicht abrufbar/.test(a))
       const weiter = schritt.nr === 1 && nochOffen.length > 0 ? 2 : 3
-      await schreibe({ zwischen, gelesen: alleGelesen, nichtGelesen: weiter === 2 ? ausgelassen.filter((a) => /zu groß|nicht abrufbar/.test(a)) : ausgelassen, schrittNr: weiter, versuch: 0, laeuftSeit: null, schritt: OBJEKT_BEWERTUNG_SCHRITTE[weiter - 1].titel })
+      await schreibe({ ...mitVerbrauch(), zwischen, gelesen: alleGelesen, nichtGelesen: weiter === 2 ? ausgelassen.filter((a) => /zu groß|nicht abrufbar/.test(a)) : ausgelassen, schrittNr: weiter, versuch: 0, laeuftSeit: null, schritt: OBJEKT_BEWERTUNG_SCHRITTE[weiter - 1].titel })
     }
 
     if (schritt.nr === 3) {
@@ -2199,7 +2266,8 @@ Regeln: Zu jeder Zahl die Quelle mit Adresse und Stand nennen. Keine Zahl ohne F
 {"quellen": [{"titel": "…", "url": "https://…"}]}
 \`\`\`
 der alle verwendeten Fundstellen nennt.`,
-        { model: 'claude-haiku-4-5-20251001', maxSearches: 8, maxTokens: 4096, timeoutMs },
+        // Haiku 5.5 statt 4.5: neueres Modell zu einem Zehntel des Preises.
+        { model: 'claude-haiku-5-5', maxSearches: 8, maxTokens: 4096, timeoutMs, meldeVerbrauch: zaehle },
       )
       let quellen: { titel: string; url: string }[] = []
       const m = markt.match(/```json\s*([\s\S]*?)```/)
@@ -2213,7 +2281,7 @@ der alle verwendeten Fundstellen nennt.`,
           // Die Fundstellen stehen dann weiterhin im Text der Recherche.
         }
       }
-      await schreibe({ zwischen: { ...(z.zwischen ?? {}), markt: markt.replace(/```json[\s\S]*?```/, '').trim() }, quellen, schrittNr: 4, versuch: 0, laeuftSeit: null, schritt: OBJEKT_BEWERTUNG_SCHRITTE[3].titel })
+      await schreibe({ ...mitVerbrauch(), zwischen: { ...(z.zwischen ?? {}), markt: markt.replace(/```json[\s\S]*?```/, '').trim() }, quellen, schrittNr: 4, versuch: 0, laeuftSeit: null, schritt: OBJEKT_BEWERTUNG_SCHRITTE[3].titel })
     }
 
     if (schritt.nr === 4 || schritt.nr === 5) {
@@ -2222,8 +2290,9 @@ der alle verwendeten Fundstellen nennt.`,
       const fakten = [z.zwischen?.unterlagen, z.zwischen?.unterlagen2].filter(Boolean).join('\n\n')
       const bisher = schritt.nr === 5 ? String(z.zwischen?.text ?? '') : ''
       let stopp = ''
-      const antwort = await callClaudeResearch(
-        `Du arbeitest für die Immobilienabteilung der Andreas Mayer Holding. Führe die folgende, von der Abteilung hinterlegte Arbeitsanweisung für das Objekt „${o.bezeichnung}" aus und erstelle daraus eine Bewertung.
+      // Der lange Anfang (Anweisung, Daten, Faktenblatt, Markt) ist in Schritt 4 und 5 gleich: Er wird
+      // zwischengespeichert, die Fortsetzung zahlt ihn dann nur zu einem Zwanzigstel.
+      const anfang = `Du arbeitest für die Immobilienabteilung der Andreas Mayer Holding. Führe die folgende, von der Abteilung hinterlegte Arbeitsanweisung für das Objekt „${o.bezeichnung}" aus und erstelle daraus eine Bewertung.
 
 === Arbeitsanweisung „${v.name}" ===
 ${String(v.text).slice(0, 45_000)}
@@ -2245,19 +2314,18 @@ Regeln, die über der Arbeitsanweisung stehen:
 - Fehlen die Grundlagen für ein Verfahren (z. B. keine Mieten für den Ertragswert), dann lass es weg und sag das in einem Satz, statt mit erfundenen Werten zu rechnen.
 - Fasse dich knapp: Abschnitte ohne belastbaren Inhalt bekommen einen Satz, keine Wiederholungen.
 - Das ist ein Entwurf für den internen Gebrauch, kein Gutachten — schreibe das einmal an den Anfang.
-- Form: Deutsch, reiner Text ohne Sternchen und ohne Tabellen. Überschriften in GROSSBUCHSTABEN auf eigener Zeile, Aufzählungen mit „- ". Keine Vorrede, kein Schlusswort.${
-          bisher
-            ? `\n\nDu hast bereits den folgenden Teil geschrieben; er brach aus Platzgründen ab. Setze GENAU an der Abbruchstelle fort (beginne mit dem nächsten Wort), wiederhole nichts, und führe die Arbeitsanweisung zu Ende.\n\n=== Bisheriger Text ===\n${bisher}\n=== Ende des bisherigen Textes ===`
-            : ''
-        }`,
-        { model: 'claude-sonnet-5-5', maxSearches: 0, maxTokens: 8192, timeoutMs, ohneNachdenken: true, meldeStopp: (grund) => (stopp = grund) },
-      )
+- Form: Deutsch, reiner Text ohne Sternchen und ohne Tabellen. Überschriften in GROSSBUCHSTABEN auf eigener Zeile, Aufzählungen mit „- ". Keine Vorrede, kein Schlusswort.`
+      const bloecke: ClaudeContentBlock[] = [{ type: 'text', text: anfang, cache_control: { type: 'ephemeral' } }]
+      if (bisher) {
+        bloecke.push({ type: 'text', text: `Du hast bereits den folgenden Teil geschrieben; er brach aus Platzgründen ab. Setze GENAU an der Abbruchstelle fort (beginne mit dem nächsten Wort), wiederhole nichts, und führe die Arbeitsanweisung zu Ende.\n\n=== Bisheriger Text ===\n${bisher}\n=== Ende des bisherigen Textes ===` })
+      }
+      const antwort = await callClaudeResearch(bloecke, { model: 'claude-sonnet-5-5', maxSearches: 0, maxTokens: 8192, timeoutMs, ohneNachdenken: true, meldeStopp: (grund) => (stopp = grund), meldeVerbrauch: zaehle })
       // Die Fortsetzung schließt mitten im Satz an: ohne Leerzeile anfügen, wenn der bisherige Text nicht mit einem Satzende aufhört.
       const naht = bisher && !/[.!?:]\s*$/.test(bisher) ? ' ' : '\n\n'
       const text = bisher ? `${bisher.trimEnd()}${naht}${antwort.trim()}` : antwort.trim()
       const fortsetzungen = (z.zwischen?.fortsetzungen ?? 0) + (schritt.nr === 5 ? 1 : 0)
       const weiter = stopp === 'max_tokens' && fortsetzungen < 2 ? 5 : 6
-      await schreibe({ zwischen: { ...(z.zwischen ?? {}), text, fortsetzungen }, vorlageName: String(v.name ?? ''), schrittNr: weiter, versuch: 0, laeuftSeit: null, schritt: OBJEKT_BEWERTUNG_SCHRITTE[weiter - 1].titel })
+      await schreibe({ ...mitVerbrauch(), zwischen: { ...(z.zwischen ?? {}), text, fortsetzungen }, vorlageName: String(v.name ?? ''), schrittNr: weiter, versuch: 0, laeuftSeit: null, schritt: OBJEKT_BEWERTUNG_SCHRITTE[weiter - 1].titel })
     }
 
     if (schritt.nr === 6) {
@@ -2287,7 +2355,7 @@ Antworte NUR mit einem Block in genau dieser Form, ohne Text davor oder danach:
 {"urteil": "ein bis drei Sätze: Ist der Entwurf in sich stimmig und wie belastbar ist das Ergebnis?", "befunde": ["konkreter Befund: Rechenfehler mit richtiger Rechnung, unbelegte Zahl oder Widerspruch — höchstens acht, leere Liste wenn nichts auffällt"], "marktwertVon": null, "marktwertBis": null, "marktwert": null, "preisProQm": null, "mieteProQm": null, "kaufpreisfaktor": null, "rendite": null}
 \`\`\`
 Die Ergebniswerte übernimmst du als reine Zahlen aus dem Entwurf (bei einem Rechenfehler den richtig gerechneten Wert, und nenne den Fehler in „befunde"): Marktwerte in Euro, preisProQm in Euro je m² Wohn-/Nutzfläche, mieteProQm in Euro je m² und Monat, kaufpreisfaktor als Vielfaches der Jahresnettokaltmiete, rendite in Prozent. Was im Entwurf nicht belastbar ermittelt wurde, bleibt null — nichts schätzen.`,
-        { model: 'claude-sonnet-5-5', maxSearches: 0, maxTokens: 3000, timeoutMs, ohneNachdenken: true },
+        { model: 'claude-sonnet-5-5', maxSearches: 0, maxTokens: 3000, timeoutMs, ohneNachdenken: true, meldeVerbrauch: zaehle },
       )
       const block = antwort.match(/```json\s*([\s\S]*?)```/) ?? antwort.match(/(\{[\s\S]*\})/)
       if (!block) throw new Error('Die Zweitprüfung hat kein auswertbares Ergebnis geliefert.')
@@ -2300,7 +2368,20 @@ Die Ergebniswerte übernimmst du als reine Zahlen aus dem Entwurf (bei einem Rec
       const befunde = (Array.isArray(pruefung.befunde) ? pruefung.befunde : []).map((b) => String(b).trim()).filter(Boolean).slice(0, 8)
       const abgebrochen = (z.zwischen?.fortsetzungen ?? 0) >= 2 && !/[.!?]\s*$/.test(text)
       const bericht = `${text}${abgebrochen ? '\n\n(Der Text wurde an dieser Stelle aus Platzgründen beendet.)' : ''}\n\nUNABHÄNGIGE GEGENPRÜFUNG DER RECHENWEGE UND ZAHLEN\n\n${String(pruefung.urteil ?? '').trim()}${befunde.length > 0 ? `\n\n${befunde.map((b) => `- ${b}`).join('\n')}` : '\n\n- Keine Auffälligkeiten bei Rechenwegen und Zahlenherkunft.'}`
-      await schreibe({ status: 'fertig', schritt: 'Fertig', schrittNr: undefined, laeuftSeit: null, bericht, kennzahlen, zwischen: undefined, protokoll: undefined, abgeschlossenAm: new Date().toISOString() })
+      const jetzt = new Date().toISOString()
+      const grundlage: ObjektBewertungZustand['grundlage'] = {
+        unterlagenKennung: objektUnterlagenKennung(o.dokumente ?? {}),
+        fakten: String(z.zwischen?.unterlagen ?? ''),
+        fakten2: z.zwischen?.unterlagen2 || undefined,
+        gelesen: z.gelesen ?? [],
+        nichtGelesen: z.nichtGelesen ?? [],
+        unterlagenAm: z.wiederverwendet?.unterlagenVom ?? z.gestartetAm,
+        ort,
+        markt: String(z.zwischen?.markt ?? ''),
+        quellen: z.quellen ?? [],
+        marktAm: z.wiederverwendet?.marktVom ?? z.gestartetAm,
+      }
+      await schreibe({ ...mitVerbrauch(), status: 'fertig', schritt: 'Fertig', schrittNr: undefined, laeuftSeit: null, bericht, kennzahlen, grundlage, zwischen: undefined, protokoll: undefined, abgeschlossenAm: jetzt })
       return
     }
     await stosseObjektBewertungAn(objektId, 0)
@@ -2311,7 +2392,7 @@ Die Ergebniswerte übernimmst du als reine Zahlen aus dem Entwurf (bei einem Rec
     // Für die Fehlersuche: was genau schiefging und wie viel Zeit der Aufruf hatte.
     const protokoll = [...(z.protokoll ?? []), `Schritt ${schritt.nr}, Versuch ${versuch}: ${err instanceof Error ? `${err.name}: ${err.message}` : String(err)} (Zeit für den Aufruf ${Math.round(timeoutMs / 1000)} s, Umleitungen ${umleitungen})`.slice(0, 400)].slice(-8)
     if (versuch <= 2) {
-      await schreibe({ versuch, laeuftSeit: null, protokoll }).catch(() => {})
+      await schreibe({ ...mitVerbrauch(), versuch, laeuftSeit: null, protokoll }).catch(() => {})
       await warteBisWorkerAbgeloestWird()
       await stosseObjektBewertungAn(objektId, 0)
     } else {
@@ -2320,6 +2401,7 @@ Die Ergebniswerte übernimmst du als reine Zahlen aus dem Entwurf (bei einem Rec
         status: 'fehler',
         laeuftSeit: null,
         protokoll,
+        ...mitVerbrauch(),
         fehler: `Schritt „${schritt.titel}" ist auch nach drei Versuchen gescheitert: ${zeit ? 'Der KI-Dienst hat nicht rechtzeitig geantwortet.' : err instanceof Error ? err.message : String(err)}`,
         abgeschlossenAm: new Date().toISOString(),
       }).catch(() => {})
@@ -3707,6 +3789,18 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify(ergebnis), { headers })
     }
 
+    // Eine Ablage aus den ungeklärten Eingängen zurücknehmen (Einträge zurück in die Liste) — nur mit eigenem Login.
+    if (body.action === 'eingang_rueckgaengig') {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const aufrufer = await ermittleAufrufer(req, admin, body)
+      if (!aufrufer) {
+        return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
+      }
+      const ergebnis = await macheAblageRueckgaengig(admin, String(body.ablageId ?? ''), { name: aufrufer.name || aufrufer.email })
+      if (!ergebnis.ok) return new Response(JSON.stringify({ error: ergebnis.fehler }), { status: 400, headers })
+      return new Response(JSON.stringify(ergebnis), { headers })
+    }
+
     if (body.action === 'mail_objekt_zuordnen') {
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
       const aufrufer = await ermittleAufrufer(req, admin, body)
@@ -3746,7 +3840,7 @@ Deno.serve(async (req: Request) => {
         return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
       }
       const objektId = typeof body.objektId === 'string' ? body.objektId : ''
-      const { data: objekt } = await admin.from('objekte').select('id, bewertung').eq('id', objektId).maybeSingle()
+      const { data: objekt } = await admin.from('objekte').select('id, bezeichnung, adresse, verkaufsdaten, dokumente, bewertung').eq('id', objektId).maybeSingle()
       if (!objekt) return new Response(JSON.stringify({ error: 'Dieses Objekt gibt es nicht (mehr).' }), { status: 404, headers })
       if (body.action === 'objekt_bewertung_verwerfen') {
         const { error: fehler } = await admin.from('objekte').update({ bewertung: null }).eq('id', objektId)
@@ -3777,6 +3871,29 @@ Deno.serve(async (req: Request) => {
         vorlageName: String(vorlage.name ?? ''),
         zusatz: typeof body.zusatz === 'string' ? body.zusatz.slice(0, 1500) : '',
         zwischen: {},
+      }
+      // Sind die Unterlagen seit dem letzten Lauf unverändert, wird ihr Faktenblatt übernommen statt sie neu
+      // zu lesen; Marktdaten desselben Orts gelten MARKT_GILT_TAGE Tage. Mit „neuEinlesen" wird alles neu gemacht.
+      const vorher = alt?.status === 'fertig' ? alt.grundlage : undefined
+      // deno-lint-ignore no-explicit-any
+      const o = objekt as any
+      if (vorher && body.neuEinlesen !== true) {
+        if (vorher.unterlagenKennung === objektUnterlagenKennung(o.dokumente ?? {}) && vorher.fakten) {
+          zustand.zwischen = { unterlagen: vorher.fakten, unterlagen2: vorher.fakten2 }
+          zustand.gelesen = vorher.gelesen
+          zustand.nichtGelesen = vorher.nichtGelesen
+          zustand.wiederverwendet = { unterlagenVom: vorher.unterlagenAm }
+          zustand.schrittNr = 3
+          zustand.schritt = OBJEKT_BEWERTUNG_SCHRITTE[2].titel
+          const alter = Date.now() - new Date(vorher.marktAm).getTime()
+          if (vorher.markt && vorher.ort === objektOrt(o) && alter < MARKT_GILT_TAGE * 86_400_000) {
+            zustand.zwischen.markt = vorher.markt
+            zustand.quellen = vorher.quellen
+            zustand.wiederverwendet.marktVom = vorher.marktAm
+            zustand.schrittNr = 4
+            zustand.schritt = OBJEKT_BEWERTUNG_SCHRITTE[3].titel
+          }
+        }
       }
       const { error: startFehler } = await admin.from('objekte').update({ bewertung: zustand }).eq('id', objektId)
       if (startFehler) return new Response(JSON.stringify({ error: startFehler.message }), { status: 500, headers })

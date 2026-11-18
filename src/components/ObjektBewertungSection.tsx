@@ -5,6 +5,7 @@ import { useApp } from '../context/AppContext'
 import { Card, Field, inputClass, PrimaryButton, SecondaryButton } from './ui'
 import { CURRENT_USER } from '../data/constants'
 import { druckeBlatt } from '../lib/blattDruck'
+import { fmtDate } from '../lib/dates'
 import { isSupabaseConfigured } from '../lib/supabaseClient'
 import { isEmailGatewayConfigured, ladeObjektBewertung, setzeObjektBewertungFort, starteObjektBewertung, verwerfeObjektBewertung } from '../lib/emailGateway'
 import {
@@ -48,6 +49,7 @@ export function ObjektBewertungSection({ objekt }: { objekt: Objekt }) {
   const [wahl, setWahl] = useState<string | null>(null)
   const vorlageId = wahl ?? schlageAnweisungVor(anweisungen, bewertung?.vorlageId)
   const [zusatz, setZusatz] = useState('')
+  const [neuEinlesen, setNeuEinlesen] = useState(false)
   const [formOffen, setFormOffen] = useState(false)
 
   const [vorgang, setVorgang] = useState<Vorgang>('')
@@ -135,7 +137,7 @@ export function ObjektBewertungSection({ objekt }: { objekt: Objekt }) {
     const vorher = bewertungSignatur(bewertung)
     try {
       const hinweis = zusatz.trim()
-      await starteObjektBewertung(objekt.id, vorlageId, hinweis)
+      await starteObjektBewertung(objekt.id, vorlageId, hinweis, neuEinlesen)
       let frisch: ObjektBewertung | null = null
       try {
         frisch = await ladeObjektBewertung(objekt.id)
@@ -278,6 +280,9 @@ export function ObjektBewertungSection({ objekt }: { objekt: Objekt }) {
       onVorlage={setWahl}
       zusatz={zusatz}
       onZusatz={setZusatz}
+      grundlage={bewertung?.status === 'fertig' ? bewertung.grundlage : undefined}
+      neuEinlesen={neuEinlesen}
+      onNeuEinlesen={setNeuEinlesen}
       onStart={starten}
       startet={vorgang === 'start'}
       gesperrt={beschaeftigt}
@@ -492,6 +497,14 @@ export function ObjektBewertungSection({ objekt }: { objekt: Objekt }) {
               <Angabe label="Fertig" wert={zeitpunkt(bewertung.abgeschlossenAm)} />
               <Angabe label="KI-Anweisung" wert={bewertung.vorlageName ?? ''} />
               <Angabe label="Zusätzlicher Hinweis" wert={bewertung.zusatz ?? ''} />
+              <Angabe
+                label="Übernommen"
+                wert={[
+                  bewertung.wiederverwendet?.unterlagenVom ? `Faktenblatt der Unterlagen vom ${fmtDate(bewertung.wiederverwendet.unterlagenVom.slice(0, 10))}` : '',
+                  bewertung.wiederverwendet?.marktVom ? `Marktrecherche vom ${fmtDate(bewertung.wiederverwendet.marktVom.slice(0, 10))}` : '',
+                ].filter(Boolean).join(' · ')}
+              />
+              <Angabe label="KI-Kosten dieses Laufs" wert={bewertung.kostenUsd != null ? `${bewertung.kostenUsd.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} US-Dollar` : ''} />
             </dl>
           </Card>
         </>
@@ -509,6 +522,9 @@ function StartFormular({
   onVorlage,
   zusatz,
   onZusatz,
+  grundlage,
+  neuEinlesen,
+  onNeuEinlesen,
   onStart,
   startet,
   gesperrt,
@@ -521,6 +537,10 @@ function StartFormular({
   onVorlage: (id: string) => void
   zusatz: string
   onZusatz: (text: string) => void
+  /** Grundlage des letzten fertigen Laufs: Unverändertes wird übernommen statt neu bezahlt. */
+  grundlage?: { unterlagenAm: string; marktAm: string }
+  neuEinlesen: boolean
+  onNeuEinlesen: (wert: boolean) => void
   onStart: () => void
   startet: boolean
   gesperrt: boolean
@@ -595,6 +615,15 @@ function StartFormular({
           {unterlagen.mitDatei > 0 && ohneDatei > 0 ? ` ${ohneDatei === 1 ? 'Ein weiterer Eintrag hat' : `${ohneDatei} weitere Einträge haben`} keine Datei und ${ohneDatei === 1 ? 'wird' : 'werden'} nicht gelesen.` : ''}
         </p>
       </div>
+
+      {grundlage && (
+        <label className="mt-3 flex items-start gap-2 text-sm text-slate-600">
+          <input type="checkbox" className="mt-0.5" checked={neuEinlesen} onChange={(e) => onNeuEinlesen(e.target.checked)} disabled={gesperrt} />
+          <span className="min-w-0">
+            Unterlagen und Markt neu einlesen. Ohne Haken übernimmt die KI das Faktenblatt der letzten Bewertung, solange keine Unterlage dazugekommen oder weggefallen ist, und Marktdaten bis 30 Tage alt (Markt vom {fmtDate(grundlage.marktAm.slice(0, 10))}) — das spart Zeit und Kosten.
+          </span>
+        </label>
+      )}
 
       <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
         {onSchliessen && (

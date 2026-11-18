@@ -13,7 +13,7 @@ import { DOKUMENT_ORDNER } from '../../types'
 import type { DokumentOrdnerName, Prioritaet, FinanzierungStatus, KundeBereich, Dokument } from '../../types'
 import { pruefeUnterlagenVollstaendigkeit } from '../../data/objektUnterlagenPflicht'
 import { ladeObjektDokumentHoch, erzeugeDownloadUrl, leseAlsBase64, loescheObjektDokument } from '../../lib/objektDokumenteStorage'
-import { classifyObjektDokument, generateExpose, isEmailGatewayConfigured, schreibeObjektTextNachAnweisung } from '../../lib/emailGateway'
+import { brauchtDateiLink, classifyObjektDokument, generateExpose, holeAnhangUrl, isEmailGatewayConfigured, schreibeObjektTextNachAnweisung } from '../../lib/emailGateway'
 import type { Objekt } from '../../types'
 import { ObjektVerkaufsdatenblatt } from '../../components/ObjektVerkaufsdatenblatt'
 import { ObjektKurzpruefungBlatt } from '../../components/ObjektKurzpruefungBlatt'
@@ -93,7 +93,8 @@ export function ObjektDetail() {
     // Fenster sofort öffnen (sonst blockt der Browser es nach dem Warten), Adresse danach setzen.
     const fenster = window.open('', '_blank')
     try {
-      const url = await erzeugeDownloadUrl(d.url)
+      // Aus den ungeklärten Eingängen abgelegte Dateien bleiben in der gemeinsamen Ablage (das Objekt verweist nur darauf).
+      const url = brauchtDateiLink(d.url) ? await holeAnhangUrl(d.url) : await erzeugeDownloadUrl(d.url)
       if (fenster) fenster.location.href = url
       else window.location.href = url
     } catch (err) {
@@ -113,8 +114,13 @@ export function ObjektDetail() {
   }
 
   async function dokumentLoeschen(d: Dokument, von: DokumentOrdnerName) {
-    if (!window.confirm(`„${d.name}" endgültig löschen? Die Datei wird auch aus der Ablage entfernt.`)) return
-    if (d.url) await loescheObjektDokument(d.url).catch(() => undefined)
+    // Eine Datei aus der gemeinsamen Ablage gehört nicht allein diesem Objekt: Nur der Eintrag verschwindet hier.
+    const gemeinsam = !!d.url && brauchtDateiLink(d.url)
+    const frage = gemeinsam
+      ? `„${d.name}" aus diesem Objekt entfernen? Die Datei selbst bleibt in der gemeinsamen Ablage erhalten.`
+      : `„${d.name}" endgültig löschen? Die Datei wird auch aus der Ablage entfernt.`
+    if (!window.confirm(frage)) return
+    if (d.url && !gemeinsam) await loescheObjektDokument(d.url).catch(() => undefined)
     dispatch({ type: 'UPDATE_OBJEKT', id: objektId, patch: { dokumente: { ...ablage, [von]: (ablage[von] ?? []).filter((x) => x.id !== d.id) } } })
   }
 

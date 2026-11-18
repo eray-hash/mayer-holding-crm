@@ -592,8 +592,8 @@ export async function loescheTerminRemote(id: string): Promise<'abgesagt' | 'aus
 // ---------- Bewertung eines Objekts per Knopf (läuft auf dem Server in mehreren Schritten) ----------
 
 /** Startet die Bewertung nach einer hinterlegten KI-Anweisung. Antwortet sofort; der Stand steht danach in `objekte.bewertung`. */
-export async function starteObjektBewertung(objektId: string, vorlageId: string, zusatz = ''): Promise<void> {
-  await callAuthenticated({ action: 'objekt_bewertung_start', objektId, vorlageId, zusatz })
+export async function starteObjektBewertung(objektId: string, vorlageId: string, zusatz = '', neuEinlesen = false): Promise<void> {
+  await callAuthenticated({ action: 'objekt_bewertung_start', objektId, vorlageId, zusatz, neuEinlesen })
 }
 
 /** Stößt eine hängen gebliebene Bewertung ab dem letzten fertigen Schritt wieder an. */
