@@ -250,7 +250,7 @@ export function SteuerAnalyseSection({ bereich, kundeId }: { bereich: KundeBerei
       <Modal open={startModal} onClose={() => setStartModal(false)} title="Steuer-Analyse starten">
         <p className="text-sm text-slate-600">
           Die Analyse liest die Finanzunterlagen dieser Akte, sucht öffentlich nach allen Firmen des Kunden und deren veröffentlichten Abschlüssen, prüft die aktuell geltenden
-          Steuerregeln und erarbeitet daraus Vorschläge. Das dauert etwa 4 bis 8 Minuten und verursacht echte KI-Kosten von grob 1 bis 2 € je Durchlauf.
+          Steuerregeln und erarbeitet daraus Vorschläge. Das dauert etwa 4 bis 8 Minuten.
         </p>
         <p className="mt-2 text-sm text-slate-600">Je mehr Zahlen in der Akte liegen (BWA, Jahresabschluss), desto konkreter werden die Vorschläge.</p>
         <div className="mt-4 flex justify-end gap-2">

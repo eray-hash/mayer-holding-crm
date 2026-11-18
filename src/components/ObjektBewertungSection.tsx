@@ -504,7 +504,6 @@ export function ObjektBewertungSection({ objekt }: { objekt: Objekt }) {
                   bewertung.wiederverwendet?.marktVom ? `Marktrecherche vom ${fmtDate(bewertung.wiederverwendet.marktVom.slice(0, 10))}` : '',
                 ].filter(Boolean).join(' · ')}
               />
-              <Angabe label="KI-Kosten dieses Laufs" wert={bewertung.kostenUsd != null ? `${bewertung.kostenUsd.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} US-Dollar` : ''} />
             </dl>
           </Card>
         </>
@@ -620,7 +619,7 @@ function StartFormular({
         <label className="mt-3 flex items-start gap-2 text-sm text-slate-600">
           <input type="checkbox" className="mt-0.5" checked={neuEinlesen} onChange={(e) => onNeuEinlesen(e.target.checked)} disabled={gesperrt} />
           <span className="min-w-0">
-            Unterlagen und Markt neu einlesen. Ohne Haken übernimmt die KI das Faktenblatt der letzten Bewertung, solange keine Unterlage dazugekommen oder weggefallen ist, und Marktdaten bis 30 Tage alt (Markt vom {fmtDate(grundlage.marktAm.slice(0, 10))}) — das spart Zeit und Kosten.
+            Unterlagen und Markt neu einlesen. Ohne Haken übernimmt die KI das Faktenblatt der letzten Bewertung, solange keine Unterlage dazugekommen oder weggefallen ist, und Marktdaten bis 30 Tage alt (Markt vom {fmtDate(grundlage.marktAm.slice(0, 10))}) — das geht schneller.
           </span>
         </label>
       )}
