@@ -12,6 +12,7 @@
 // Secret, das in der URL des Webhook-Ziels (?secret=...) mitgeschickt werden muss.
 
 import { createClient } from 'npm:@supabase/supabase-js@2'
+import { kiAufruf, mitAnlass, setzeAnlass } from '../_shared/kiVerbrauch.ts'
 
 // Message-IDs enthalten u.a. spitze Klammern und @ (z.B. "<123@mail.example.com>"), die im
 // Storage-Pfad nicht erlaubt sind — deshalb wird hier auf ein sicheres Zeichenset reduziert.
@@ -39,7 +40,7 @@ async function klassifiziereRelevanz(vonName: string, von: string, betreff: stri
   const apiKey = Deno.env.get('ANTHROPIC_API_KEY')
   if (!apiKey) return 'kunde'
   try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
+    const res = await kiAufruf('inbound-email', 'https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -88,7 +89,7 @@ async function extrahiereTelefonnummer(text: string): Promise<string | null> {
   const apiKey = Deno.env.get('ANTHROPIC_API_KEY')
   if (!apiKey || !text.trim()) return null
   try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
+    const res = await kiAufruf('inbound-email', 'https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -214,7 +215,7 @@ async function erkenneEingehendeVerbindlichkeit(
   const apiKey = Deno.env.get('ANTHROPIC_API_KEY')
   if (!apiKey) return null
   try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
+    const res = await kiAufruf('inbound-email', 'https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -265,7 +266,8 @@ Text: ${text.slice(0, 1500)}`,
   }
 }
 
-Deno.serve(async (req: Request) => {
+Deno.serve((req: Request) => mitAnlass(async () => {
+  setzeAnlass('mail-eingang')
   if (req.method !== 'POST') {
     return new Response('Method not allowed', { status: 405 })
   }
@@ -416,4 +418,4 @@ Deno.serve(async (req: Request) => {
   }
 
   return new Response(JSON.stringify({ ok: true }), { status: 200 })
-})
+}))

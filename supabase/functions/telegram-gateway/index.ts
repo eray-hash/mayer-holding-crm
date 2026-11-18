@@ -18,6 +18,7 @@
 
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2'
 import { PDFDocument, degrees } from 'npm:pdf-lib@1.17.1'
+import { kiAufruf, mitAnlass, setzeAnlass } from '../_shared/kiVerbrauch.ts'
 
 const BOT_TOKEN = Deno.env.get('TELEGRAM_BOT_TOKEN')
 const WEBHOOK_SECRET = Deno.env.get('TELEGRAM_WEBHOOK_SECRET')
@@ -2246,7 +2247,7 @@ async function claude(system: unknown[], messages: unknown[]): Promise<any> {
   // Mengengrenze (429) oder Überlast (529) des KI-Dienstes: kurz warten und noch einmal versuchen,
   // statt dem Mitarbeiter sofort einen Fehler zu zeigen.
   for (let versuch = 0; ; versuch++) {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
+    const res = await kiAufruf('telegram-gateway', 'https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
       body: JSON.stringify({ model: AGENT_MODEL, max_tokens: 2000, system, tools: TOOLS, messages }),
@@ -2912,11 +2913,12 @@ async function verarbeiteUpdate(update: any): Promise<void> {
   }
 }
 
-Deno.serve(async (req: Request) => {
+Deno.serve((req: Request) => mitAnlass(async () => {
   const origin = req.headers.get('origin')
   if (req.method === 'OPTIONS') return new Response('ok', { headers: webHeaders(origin) })
   if (req.method !== 'POST') return new Response('Method not allowed', { status: 405 })
   const body = await req.json().catch(() => null)
+  setzeAnlass(body?.web ? `web:${body.web}` : body?.intern ? `intern:${body.intern}` : body?.message || body?.edited_message ? 'telegram' : '')
   // deno-lint-ignore no-explicit-any
   const runtime = (globalThis as any).EdgeRuntime
 
@@ -2997,4 +2999,4 @@ Deno.serve(async (req: Request) => {
   if (runtime?.waitUntil) runtime.waitUntil(arbeit)
   else await arbeit
   return new Response('ok')
-})
+}))

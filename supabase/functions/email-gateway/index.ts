@@ -233,6 +233,7 @@ import { loescheTermin, sendeErinnerungen, sendeTelegram, speichereTermin } from
 import { ordneMailObjektZu } from './objektMail.ts'
 import { legeEingaengeAb, macheAblageRueckgaengig, nimmEingaengeHeraus } from './eingang.ts'
 import { pruefeNeueTreffer } from './gesuchTreffer.ts'
+import { kiAufruf, mitAnlass, setzeAnlass } from '../_shared/kiVerbrauch.ts'
 
 const ALLOWED_ORIGINS = [
   'https://eray-hash.github.io',
@@ -451,7 +452,7 @@ type Zusammenfassung = {
 
 async function summarizeTranscript(transcript: string): Promise<Zusammenfassung> {
   const apiKey = env('ANTHROPIC_API_KEY')
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
+  const res = await kiAufruf('email-gateway', 'https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
       'x-api-key': apiKey,
@@ -520,7 +521,7 @@ async function callClaudeTool<T>(
   timeoutMs?: number,
 ): Promise<T> {
   const apiKey = env('ANTHROPIC_API_KEY')
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
+  const res = await kiAufruf('email-gateway', 'https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
       'x-api-key': apiKey,
@@ -578,7 +579,7 @@ async function callClaudeResearch(
   opts: { model: 'claude-haiku-4-5-20251001' | 'claude-haiku-5-5' | 'claude-sonnet-5-5'; maxSearches: number; maxTokens?: number; timeoutMs?: number; ohneNachdenken?: boolean; meldeStopp?: (grund: string) => void; meldeVerbrauch?: (v: KiVerbrauch) => void },
 ): Promise<string> {
   const apiKey = env('ANTHROPIC_API_KEY')
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
+  const res = await kiAufruf('email-gateway', 'https://api.anthropic.com/v1/messages', {
     method: 'POST',
     // Eigenes Zeitlimit, damit ein zu langer Aufruf als Fehler zurückkommt (und wiederholt werden
     // kann), statt dass die Plattform den ganzen Worker kommentarlos beendet.
@@ -2894,7 +2895,7 @@ async function fetchImmoRadarTopListings(): Promise<ImmoRadarTreffer[]> {
     }))
 }
 
-Deno.serve(async (req: Request) => {
+Deno.serve((req: Request) => mitAnlass(async () => {
   const origin = req.headers.get('origin')
   const headers = corsHeaders(origin)
 
@@ -2907,6 +2908,7 @@ Deno.serve(async (req: Request) => {
 
   try {
     const body = await req.json()
+    setzeAnlass(body?.action)
 
     if (body.action === 'sync') {
       const mails = await syncInbox(Math.min(Number(body.limit ?? 20), 50))
@@ -3985,4 +3987,4 @@ Deno.serve(async (req: Request) => {
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }
-})
+}))
