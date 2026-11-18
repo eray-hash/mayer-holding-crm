@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ChevronLeft, ChevronRight, Plus, Lock, Settings, AlertTriangle, Users, MapPin, Trash2, Check } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Plus, Lock, Settings, AlertTriangle, Users, MapPin, Trash2, Check, CalendarPlus, Copy } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { useAuth } from '../../context/AuthContext'
 import {
@@ -16,7 +16,7 @@ import {
   type Kollege,
   type KalenderEinstellungen,
 } from '../../lib/kalenderDb'
-import { speichereTerminRemote, loescheTerminRemote, TerminUeberschneidung } from '../../lib/emailGateway'
+import { speichereTerminRemote, loescheTerminRemote, TerminUeberschneidung, holeKalenderAbo, type KalenderAbo } from '../../lib/emailGateway'
 import { KUNDEN_BEREICHE, kundeDetailPfad, kundeBereichLabel } from '../../data/kundenBereiche'
 import { Modal, Field, inputClass, PrimaryButton, SecondaryButton } from '../../components/ui'
 import type { KundeBereich } from '../../types'
@@ -84,6 +84,7 @@ export function Kalender({ privat = false }: { privat?: boolean }) {
   const [formular, setFormular] = useState<Formular | null>(null)
   const [detail, setDetail] = useState<Termin | null>(null)
   const [einstellungenOffen, setEinstellungenOffen] = useState(false)
+  const [aboOffen, setAboOffen] = useState(false)
   const rasterRef = useRef<HTMLDivElement>(null)
 
   const { von, bis, tage } = useMemo(() => {
@@ -216,6 +217,9 @@ export function Kalender({ privat = false }: { privat?: boolean }) {
           <SecondaryButton onClick={() => setAnker(tagStart(new Date()))} className="text-xs">Heute</SecondaryButton>
           <button onClick={() => blaettern(-1)} className="rounded-lg border border-slate-200 bg-white p-1.5 text-slate-500 hover:bg-slate-50" title="Zurück"><ChevronLeft size={15} /></button>
           <button onClick={() => blaettern(1)} className="rounded-lg border border-slate-200 bg-white p-1.5 text-slate-500 hover:bg-slate-50" title="Weiter"><ChevronRight size={15} /></button>
+          <button onClick={() => setAboOffen(true)} className="flex items-center gap-1 rounded-lg border border-slate-200 bg-white p-1.5 text-xs text-slate-600 hover:bg-slate-50" title="In meinen Kalender übernehmen (Handy, Outlook …)">
+            <CalendarPlus size={15} /> <span className="hidden sm:inline">In meinen Kalender</span>
+          </button>
           <button onClick={() => setEinstellungenOffen(true)} className="rounded-lg border border-slate-200 bg-white p-1.5 text-slate-500 hover:bg-slate-50" title="Erinnerungen und Sichtbarkeit"><Settings size={15} /></button>
           <PrimaryButton onClick={() => { const jetzt = new Date(); setFormular(neuesFormular(new Date(anker.getFullYear(), anker.getMonth(), anker.getDate(), Math.min(21, jetzt.getHours() + 1)))) }} className="text-xs">
             <Plus size={14} /> Termin
@@ -360,7 +364,8 @@ export function Kalender({ privat = false }: { privat?: boolean }) {
         />
       )}
 
-      {einstellungenOffen && <EinstellungenFenster ich={ich} onSchliessen={() => setEinstellungenOffen(false)} />}
+      {einstellungenOffen && <EinstellungenFenster ich={ich} onSchliessen={() => setEinstellungenOffen(false)} onAbo={() => { setEinstellungenOffen(false); setAboOffen(true) }} />}
+      {aboOffen && <KalenderAboFenster onSchliessen={() => setAboOffen(false)} />}
     </div>
   )
 }
@@ -704,7 +709,7 @@ function TerminDetail({
   )
 }
 
-function EinstellungenFenster({ ich, onSchliessen }: { ich: string; onSchliessen: () => void }) {
+function EinstellungenFenster({ ich, onSchliessen, onAbo }: { ich: string; onSchliessen: () => void; onAbo: () => void }) {
   const { session } = useAuth()
   const [e, setE] = useState<KalenderEinstellungen | null>(null)
   const [telegram, setTelegram] = useState<boolean | null>(null)
@@ -761,10 +766,133 @@ function EinstellungenFenster({ ich, onSchliessen }: { ich: string; onSchliessen
               <span className="block text-xs text-slate-500">Sie sehen nur „Privat“ und die Uhrzeit — nie, worum es geht. Gemeinsam gebuchte Termine sehen alle Beteiligten vollständig.</span>
             </span>
           </label>
+          <p className="mb-2 mt-5 text-sm font-medium text-slate-700">Termine auf dem Handy und in Outlook</p>
+          <button onClick={onAbo} className="flex items-center gap-1.5 text-sm font-medium text-accent-600 hover:underline">
+            <CalendarPlus size={14} /> In meinen Kalender übernehmen …
+          </button>
           {gespeichert && <p className="mt-3 text-xs text-emerald-600">Gespeichert.</p>}
           {fehler && <p className="mt-3 text-xs text-rose-600">{fehler}</p>}
         </div>
       )}
+      <div className="mt-5 flex justify-end">
+        <PrimaryButton onClick={onSchliessen}>Fertig</PrimaryButton>
+      </div>
+    </Modal>
+  )
+}
+
+// Persönliches Kalender-Abo: Die Kalender-App (iPhone, Outlook, Mac, Google) holt die eigenen
+// CRM-Termine regelmäßig über eine geheime Adresse ab. Nur eine Richtung: CRM → Kalender-App.
+function KalenderAboFenster({ onSchliessen }: { onSchliessen: () => void }) {
+  const [abo, setAbo] = useState<KalenderAbo | null>(null)
+  const [laeuft, setLaeuft] = useState(true)
+  const [fehler, setFehler] = useState('')
+  const [kopiert, setKopiert] = useState(false)
+  const [erneuert, setErneuert] = useState(false)
+  const feldRef = useRef<HTMLInputElement>(null)
+
+  async function laden(neu: boolean) {
+    setLaeuft(true)
+    setFehler('')
+    setKopiert(false)
+    try {
+      setAbo(await holeKalenderAbo(neu))
+      if (neu) setErneuert(true)
+    } catch (err) {
+      setFehler(err instanceof Error ? err.message : 'Der Link konnte nicht geladen werden.')
+    } finally {
+      setLaeuft(false)
+    }
+  }
+
+  useEffect(() => {
+    laden(false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  async function kopieren() {
+    if (!abo) return
+    try {
+      await navigator.clipboard.writeText(abo.https)
+      setKopiert(true)
+    } catch {
+      // Ohne Zugriff auf die Zwischenablage: Text markieren, damit man ihn selbst kopieren kann.
+      feldRef.current?.select()
+      setFehler('Kopieren ging nicht automatisch — der Link ist markiert, bitte selbst kopieren.')
+    }
+  }
+
+  function erneuern() {
+    if (!window.confirm('Neuen Link erzeugen? Der alte Link funktioniert dann sofort nicht mehr. Wo er schon eingerichtet ist (Handy, Outlook …), musst du den Kalender mit dem neuen Link noch einmal hinzufügen.')) return
+    laden(true)
+  }
+
+  return (
+    <Modal open onClose={onSchliessen} title="In meinen Kalender übernehmen" width="max-w-lg">
+      <p className="text-sm text-slate-600">
+        Deine CRM-Termine (eigene und gemeinsam gebuchte) erscheinen automatisch in dem Kalender, den du sowieso benutzt — auf dem iPhone, in Outlook, am Mac oder bei Google. Einmal einrichten, danach kommt alles von selbst.
+      </p>
+
+      {fehler && (
+        <div className="mt-3 flex items-start gap-2 rounded-lg bg-rose-50 p-3 text-xs text-rose-700">
+          <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" /> {fehler}
+        </div>
+      )}
+
+      {laeuft && !abo && <p className="mt-4 text-sm text-slate-400">Link wird geladen …</p>}
+
+      {abo && (
+        <>
+          <p className="mb-1.5 mt-4 text-sm font-medium text-slate-700">Dein persönlicher Link</p>
+          <input ref={feldRef} readOnly value={abo.https} onFocus={(ev) => ev.target.select()} className={`${inputClass} font-mono text-xs`} aria-label="Dein persönlicher Kalender-Link" />
+          <div className="mt-2 flex flex-wrap gap-2">
+            <a href={abo.webcal} className="inline-flex items-center gap-1.5 rounded-lg bg-accent-600 px-3 py-2 text-sm font-medium text-white hover:bg-accent-700">
+              <CalendarPlus size={14} /> In Kalender-App öffnen
+            </a>
+            <SecondaryButton onClick={kopieren} className="text-sm">
+              <Copy size={14} /> {kopiert ? 'Kopiert' : 'Link kopieren'}
+            </SecondaryButton>
+          </div>
+          {erneuert && <p className="mt-2 text-xs text-emerald-600">Neuer Link erzeugt — der alte funktioniert nicht mehr.</p>}
+          <p className="mt-3 rounded-lg bg-amber-50 p-3 text-xs text-amber-800">
+            Der Link ist geheim: Wer ihn hat, sieht deine Termine. Nicht weitergeben und nicht in Mails an Kunden schreiben.
+          </p>
+
+          <p className="mb-1.5 mt-5 text-sm font-medium text-slate-700">iPhone (Kalender von Apple)</p>
+          <ol className="list-decimal space-y-1 pl-5 text-sm text-slate-600">
+            <li>Das CRM auf dem iPhone öffnen und oben auf „In Kalender-App öffnen“ tippen.</li>
+            <li>Auf „Abonnieren“ tippen, danach oben rechts auf „Hinzufügen“. Falls nach dem Account gefragt wird: „Auf meinem iPhone“ wählen.</li>
+            <li>
+              Damit Änderungen schnell ankommen: Einstellungen → Apps → Kalender → Kalender-Accounts → Datenabgleich → unten bei „Abrufen“ „Alle 15 Minuten“ wählen. (Bei älteren iPhones: Einstellungen → Kalender → Accounts → Datenabgleich.)
+            </li>
+          </ol>
+          <p className="mt-1.5 text-xs text-slate-500">
+            Ohne Antippen geht es auch so: Link kopieren, dann in der Kalender-App unten auf „Kalender“ → „Kalender hinzufügen“ → „Kalenderabonnement hinzufügen“ und den Link einfügen. Auf manchen iPhones heißt der Weg: Einstellungen → Kalender → Accounts → Account hinzufügen → Andere → Kalenderabo hinzufügen.
+          </p>
+
+          <p className="mb-1.5 mt-4 text-sm font-medium text-slate-700">Andere Kalender</p>
+          <ul className="space-y-1.5 text-sm text-slate-600">
+            <li><span className="font-medium text-slate-700">Outlook (Windows und im Browser):</span> Link kopieren → Kalender hinzufügen → Aus dem Internet abonnieren → Link einfügen.</li>
+            <li><span className="font-medium text-slate-700">Mac:</span> Kalender → Ablage → Neues Kalenderabonnement → Link einfügen, bei „Automatisch aktualisieren“ „Alle 15 Minuten“ wählen.</li>
+            <li><span className="font-medium text-slate-700">Google Kalender und Android:</span> am Computer auf calendar.google.com → Weitere Kalender (+) → Per URL → Link einfügen. Danach erscheint er auch auf dem Android-Handy.</li>
+          </ul>
+
+          <p className="mb-1.5 mt-4 text-sm font-medium text-slate-700">Gut zu wissen</p>
+          <ul className="list-disc space-y-1 pl-5 text-xs text-slate-500">
+            <li>Die Kalender-App holt neue Termine nach ihrem eigenen Takt: das iPhone und der Mac auf Wunsch alle 15 Minuten, Outlook und Google teils erst nach mehreren Stunden.</li>
+            <li>Es geht nur in eine Richtung: Termine im CRM anlegen oder ändern. Was du in der Kalender-App änderst, kommt nicht ins CRM zurück.</li>
+            <li>Übertragen werden Termine der letzten 60 Tage und der nächsten 18 Monate.</li>
+          </ul>
+
+          <div className="mt-5 border-t border-slate-100 pt-4">
+            <SecondaryButton onClick={erneuern} disabled={laeuft} className="text-xs">
+              {laeuft ? 'Wird erzeugt …' : 'Neuen Link erzeugen (alter wird ungültig)'}
+            </SecondaryButton>
+            <p className="mt-1.5 text-xs text-slate-500">Zum Beispiel, wenn der Link versehentlich weitergegeben wurde.</p>
+          </div>
+        </>
+      )}
+
       <div className="mt-5 flex justify-end">
         <PrimaryButton onClick={onSchliessen}>Fertig</PrimaryButton>
       </div>

@@ -230,6 +230,7 @@ import {
   zieheBesitzUm,
 } from './postfach.ts'
 import { loescheTermin, sendeErinnerungen, sendeTelegram, speichereTermin } from './kalender.ts'
+import { aboLink, kalenderAboAntwort } from './kalenderAbo.ts'
 import { ordneMailObjektZu } from './objektMail.ts'
 import { legeEingaengeAb, macheAblageRueckgaengig, nimmEingaengeHeraus } from './eingang.ts'
 import { pruefeNeueTreffer } from './gesuchTreffer.ts'
@@ -2939,6 +2940,14 @@ Deno.serve((req: Request) => mitAnlass(async () => {
 
   if (req.method === 'OPTIONS') return new Response(null, { headers })
 
+  // Kalender-Abo (siehe kalenderAbo.ts): Kalender-Apps rufen nur per GET/HEAD eine Adresse ab, ohne
+  // Kopfzeilen und ohne Inhalt — deshalb VOR der Secret-Prüfung. Die geheime Kennung in `?kalender=`
+  // ist der einzige Schutz. Jeder andere GET-Aufruf bekommt ein 404; per GET wird nie etwas anderes ausgeliefert.
+  if (req.method === 'GET' || req.method === 'HEAD') {
+    const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+    return await kalenderAboAntwort(admin, new URL(req.url).searchParams.get('kalender'), req.method)
+  }
+
   const sharedSecret = Deno.env.get('CRM_SHARED_SECRET')
   if (sharedSecret && req.headers.get('x-crm-secret') !== sharedSecret) {
     return new Response(JSON.stringify({ error: 'Nicht autorisiert' }), { status: 401, headers })
@@ -3084,6 +3093,18 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       const ergebnis = await speichereTermin(admin, aufrufer, body.termin ?? {})
       if (!ergebnis.ok) return new Response(JSON.stringify({ error: ergebnis.fehler, belegt: ergebnis.belegt }), { status: ergebnis.status, headers })
       return new Response(JSON.stringify({ ok: true, termin: ergebnis.termin, benachrichtigt: ergebnis.benachrichtigt, ohneTelegram: ergebnis.ohneTelegram }), { headers })
+    }
+
+    if (body.action === 'kalender_abo_link') {
+      // Persönliche Abo-Adresse für die eigene Kalender-App; `neu: true` macht die alte ungültig.
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const aufrufer = await ermittleAufrufer(req, admin, body)
+      if (!aufrufer) {
+        return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
+      }
+      const ergebnis = await aboLink(admin, aufrufer.email, body.neu === true, Deno.env.get('SUPABASE_URL')!)
+      if (!ergebnis.ok) return new Response(JSON.stringify({ error: ergebnis.fehler }), { status: 500, headers })
+      return new Response(JSON.stringify({ https: ergebnis.https, webcal: ergebnis.webcal }), { headers })
     }
 
     // ---------- Postfächer (siehe postfach.ts) ----------

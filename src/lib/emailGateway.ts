@@ -613,3 +613,13 @@ export async function ladeObjektBewertung(objektId: string): Promise<import('../
   if (error) throw new Error(error.message)
   return ((data as { bewertung?: import('../types').ObjektBewertung | null } | null)?.bewertung ?? null) as import('../types').ObjektBewertung | null
 }
+
+// ---------- Kalender-Abo (CRM-Termine in der eigenen Kalender-App) ----------
+
+export type KalenderAbo = { https: string; webcal: string }
+
+/** Persönliche, geheime Abo-Adresse. Legt sie beim ersten Aufruf an; `neu` erzeugt eine frische (die alte wird ungültig). */
+export async function holeKalenderAbo(neu = false): Promise<KalenderAbo> {
+  const data = await callAuthenticated({ action: 'kalender_abo_link', neu })
+  return { https: data.https, webcal: data.webcal }
+}
