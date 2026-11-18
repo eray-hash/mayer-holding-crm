@@ -565,7 +565,11 @@ const KI_PREISE: Record<string, { ein: number; aus: number; cacheSchreiben: numb
 const PREIS_JE_SUCHE = 0.01
 
 function kostenUsd(v: KiVerbrauch): number {
-  const p = KI_PREISE[v.modell] ?? KI_PREISE['claude-sonnet-5-5']
+  // Haiku 5.5 kostet bei Anfragen über 100.000 Token das Fünffache. Eine Recherche mit Websuche besteht aus
+  // mehreren Runden; ob die Grenze je Runde oder für die ganze Anfrage gilt, ist nicht belegt — gerechnet wird
+  // vorsichtig mit dem höheren Satz, sobald die Summe darüber liegt.
+  const gross = v.modell === 'claude-haiku-5-5' && v.ein + v.cacheSchreiben + v.cacheLesen > 100_000
+  const p = gross ? { ein: 0.5, aus: 2.5, cacheSchreiben: 0.625, cacheLesen: 0.05 } : (KI_PREISE[v.modell] ?? KI_PREISE['claude-sonnet-5-5'])
   return (v.ein * p.ein + v.aus * p.aus + v.cacheSchreiben * p.cacheSchreiben + v.cacheLesen * p.cacheLesen) / 1_000_000 + v.suchen * PREIS_JE_SUCHE
 }
 
@@ -2267,7 +2271,8 @@ Regeln: Zu jeder Zahl die Quelle mit Adresse und Stand nennen. Keine Zahl ohne F
 \`\`\`
 der alle verwendeten Fundstellen nennt.`,
         // Haiku 5.5 statt 4.5: neueres Modell zu einem Zehntel des Preises.
-        { model: 'claude-haiku-5-5', maxSearches: 8, maxTokens: 4096, timeoutMs, meldeVerbrauch: zaehle },
+        // Mehr Platz als bei Haiku 4.5: Das neuere Modell schreibt ausführlicher und lief bei 4096 an die Grenze.
+        { model: 'claude-haiku-5-5', maxSearches: 8, maxTokens: 12_000, timeoutMs, ohneNachdenken: true, meldeVerbrauch: zaehle },
       )
       let quellen: { titel: string; url: string }[] = []
       const m = markt.match(/```json\s*([\s\S]*?)```/)
