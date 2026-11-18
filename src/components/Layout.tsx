@@ -23,7 +23,7 @@ import {
   ChevronDown,
   Phone,
   Lock,
-  Search, CalendarDays, BarChart3 } from 'lucide-react'
+  Search, CalendarDays, BarChart3, Lightbulb } from 'lucide-react'
 import type { Bereich } from '../types'
 import { useApp } from '../context/AppContext'
 import { useAuth } from '../context/AuthContext'
@@ -321,6 +321,11 @@ export function Layout({ children }: { children: ReactNode }) {
                     {isSupabaseConfigured && session && (mitarbeiter?.rolle === 'geschaeftsfuehrung' || mitarbeiter?.ist_admin) && (
                       <MenuItem icon={<Users size={15} />} onClick={() => { setProfilMenuOpen(false); navigate('/mitarbeiter') }}>
                         Mitarbeiter verwalten
+                      </MenuItem>
+                    )}
+                    {isSupabaseConfigured && session && (mitarbeiter?.rolle === 'geschaeftsfuehrung' || mitarbeiter?.ist_admin) && (
+                      <MenuItem icon={<Lightbulb size={15} />} onClick={() => { setProfilMenuOpen(false); navigate('/wuensche') }}>
+                        Wünsche
                       </MenuItem>
                     )}
                     {isSupabaseConfigured && session && (

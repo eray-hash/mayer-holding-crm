@@ -68,7 +68,7 @@ import {
   PRIVAT_STATUS,
 } from '../data/statusNetworks'
 import { uid, today, addDays } from '../lib/dates'
-import { CURRENT_USER } from '../data/constants'
+import { CURRENT_USER, DEMO_NUTZER } from '../data/constants'
 import { useAuth } from './AuthContext'
 import { updateMyProfilRemote } from '../lib/profilSync'
 
@@ -1327,13 +1327,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const { mitarbeiter } = useAuth()
   useEffect(() => {
     if (!mitarbeiter) return
+    // Vor dem Login steht im Profil der Platzhalter — sobald der echte Name da ist, ersetzt er ihn
+    // (Name im Profil, Name in der Signatur).
+    const echt = mitarbeiter.name?.trim()
+    if (echt) {
+      const p = stateRef.current.profil
+      const sig = mitarbeiter.signatur_html || p.signaturHtml || ''
+      const patch: Partial<MitarbeiterProfil> = {}
+      if (!p.name?.trim() || p.name === DEMO_NUTZER) patch.name = echt
+      if (sig.includes(DEMO_NUTZER)) patch.signaturHtml = sig.split(DEMO_NUTZER).join(echt)
+      if (Object.keys(patch).length > 0) dispatch({ type: 'UPDATE_PROFIL', patch })
+      if (patch.signaturHtml && mitarbeiter.signatur_html?.includes(DEMO_NUTZER)) {
+        updateMyProfilRemote(mitarbeiter.telefon ?? '', patch.signaturHtml, mitarbeiter.foto_data_url ?? undefined, mitarbeiter.buchungslink ?? undefined).catch((err) =>
+          console.error('Signatur-Korrektur fehlgeschlagen:', err),
+        )
+        return
+      }
+    }
     const serverHatWerte = !!(mitarbeiter.telefon || mitarbeiter.signatur_html || mitarbeiter.foto_data_url || mitarbeiter.buchungslink)
     if (serverHatWerte) {
       dispatch({
         type: 'UPDATE_PROFIL',
         patch: {
           telefon: mitarbeiter.telefon ?? '',
-          signaturHtml: mitarbeiter.signatur_html ?? '',
+          signaturHtml: (mitarbeiter.signatur_html ?? '').split(DEMO_NUTZER).join(echt || DEMO_NUTZER),
           fotoDataUrl: mitarbeiter.foto_data_url ?? undefined,
           buchungslink: mitarbeiter.buchungslink ?? undefined,
         },
@@ -1342,7 +1359,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
     if (localStorage.getItem(PROFIL_MIGRATION_FLAG_KEY) === 'true') return
     const lokalesProfil = stateRef.current.profil
-    updateMyProfilRemote(lokalesProfil.telefon, lokalesProfil.signaturHtml, lokalesProfil.fotoDataUrl, lokalesProfil.buchungslink).catch((err) =>
+    updateMyProfilRemote(lokalesProfil.telefon, (lokalesProfil.signaturHtml ?? '').split(DEMO_NUTZER).join(echt || DEMO_NUTZER), lokalesProfil.fotoDataUrl, lokalesProfil.buchungslink).catch((err) =>
       console.error('Profil-Migration fehlgeschlagen:', err),
     )
     localStorage.setItem(PROFIL_MIGRATION_FLAG_KEY, 'true')

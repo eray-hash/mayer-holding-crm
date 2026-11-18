@@ -19,6 +19,7 @@
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2'
 import { PDFDocument, degrees } from 'npm:pdf-lib@1.17.1'
 import { kiAufruf, mitAnlass, setzeAnlass } from '../_shared/kiVerbrauch.ts'
+import { entschaerfe, kuerze as kuerzeWunsch, merkeWunsch } from '../_shared/wuensche.ts'
 import { bereichName, darfAkte, darfBereich, darfObjekte, freigegebeneBereiche, istEingeschraenkt, nichtFreigegeben, siehtAlleBereiche } from './rechte.ts'
 import { richteFotoAus } from './bildDrehung.ts'
 
@@ -1277,6 +1278,19 @@ export const TOOLS = [
       required: ['frage'],
     },
   },
+  {
+    name: 'wunsch_notieren',
+    description:
+      'Hält einen Wunsch an das CRM für die Geschäftsführung fest. Aufrufen, wenn du etwas, worum der Mitarbeiter bittet, nicht tun kannst, weil dir dafür die Möglichkeit fehlt (nicht, weil ein Kunde oder eine Angabe fehlt oder ein Bereich nicht freigegeben ist), oder wenn er ausdrücklich einen Wunsch äußert ("wäre gut, wenn …", "Wunsch: …", "könnte das CRM …"). Titel und Beschreibung beschreiben die FUNKTION, ohne Namen von Kunden oder Firmen, ohne Beträge, Adressen oder Inhalte aus Unterlagen, z. B. "Exposé direkt per WhatsApp verschicken".',
+    input_schema: {
+      type: 'object',
+      properties: {
+        titel: { type: 'string', description: 'Kurzer Titel der gewünschten Funktion, höchstens 70 Zeichen.' },
+        beschreibung: { type: 'string', description: 'Ein bis zwei Sätze: was gewünscht ist und wofür, ohne Kundendaten.' },
+      },
+      required: ['titel'],
+    },
+  },
 ]
 
 // deno-lint-ignore no-explicit-any
@@ -1284,6 +1298,17 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
   const { supabase, mitarbeiter, state } = ctx
   const heute = heuteBerlin()
   const protokolliere = (text: string) => state.aktionen.push({ z: new Date().toISOString(), text })
+
+  // Wunsch an das CRM für die Geschäftsführung (Tabelle wuensche, siehe _shared/wuensche.ts). Kein
+  // Bereichsbezug; gleiche offene Wünsche werden hochgezählt statt doppelt angelegt.
+  if (name === 'wunsch_notieren') {
+    const titel = kuerzeWunsch(entschaerfe(String(input?.titel ?? '')), 90)
+    if (!titel) return 'Fehler: Bitte einen kurzen Titel für den Wunsch angeben.'
+    const ergebnis = await merkeWunsch(supabase, { quelle: 'assistent', mitarbeiter: mitarbeiter.name, titel, beschreibung: entschaerfe(String(input?.beschreibung ?? '')) })
+    if (!ergebnis) return 'Fehler: Der Wunsch konnte nicht gespeichert werden.'
+    protokolliere(`Wunsch für die Geschäftsführung notiert: ${ergebnis.titel}`)
+    return ergebnis.neu ? `Notiert: „${ergebnis.titel}“.` : `Diesen Wunsch gab es schon („${ergebnis.titel}“); er ist jetzt ${ergebnis.anzahl}× vermerkt.`
+  }
 
   // Kalender: Lesen direkt (an die eigene Adresse gebunden), Schreiben über die Mail-Funktion — dort
   // liegen Überschneidungsprüfung, Telegram-Nachricht an Beteiligte und die Erinnerungen.
@@ -2519,6 +2544,7 @@ So arbeitest du:
 - Kunden löschen: nur auf ausdrücklichen Wunsch und erst nach Bestätigung in einer eigenen Nachricht.
 - E-Mails: Du kannst E-Mails an einen Kunden, an mehrere oder an alle schicken. Nennt der Mitarbeiter nur den Inhalt, schreibst du daraus selbst die fertige Mail: passender Betreff, höflicher Text in der Sie-Form, klar und ohne Floskeln, ohne englische Begriffe, nichts dazuerfinden (keine Termine, Preise oder Zusagen, die er nicht genannt hat). Dann rufst du mail_vorbereiten auf. Ist nicht klar, an wen die Mail gehen soll, frag vorher nach. Zeige ihm danach den Betreff und den vollständigen Text so, wie das Werkzeug ihn liefert, nenne die Zahl der Empfänger und wer ausgelassen wird, und frag, ob du so senden sollst. Erst wenn er in seiner nächsten Nachricht klar zustimmt, rufst du mail_senden auf. Will er etwas ändern, bereitest du neu vor, zeigst die neue Fassung und fragst erneut. Ohne seine Zustimmung wird nie gesendet. Lehnt er ab oder will er doch nicht senden, ist die Fassung damit verworfen; bestätige das in einem Satz. Der Inhalt geht als normaler Mailtext hinaus, ohne Anhang. Briefe für den Postversand kannst du noch nicht erstellen, weil in den Akten keine Anschriften stehen.
 - Für Fragen quer über alle Kunden oder Objekte ("was steht heute an", "wer sucht ...") nutze firmenueberblick.
+- Wünsche an das CRM: Kannst du etwas, worum der Mitarbeiter bittet, nicht tun, weil dir dafür die Möglichkeit fehlt (nicht, weil ein Kunde oder eine Angabe fehlt oder ein Bereich nicht freigegeben ist), oder sagt er "wäre gut, wenn …", "Wunsch: …" oder "könnte das CRM …", hältst du das mit wunsch_notieren fest: Titel und Beschreibung auf Ebene der Funktion, ohne Kundennamen, Beträge oder Inhalte aus Unterlagen. Sag ihm danach offen in einem kurzen Satz, dass du es als Wunsch für die Geschäftsführung notiert hast.
 - Internet: Bittet dich der Mitarbeiter ausdrücklich, etwas im Internet nachzusehen oder zu recherchieren ("recherchier den Laden", "was findest du online über die Firma X"), nutzt du internet_recherche. Gib dabei alle Anhaltspunkte aus dem Gespräch oder der Akte mit (Firmenname, Ort, Webseite), damit keine gleichnamige Firma erwischt wird. Recherchiere nur Geschäftliches und Öffentliches: Firmen, Geschäftsführer und Inhaber in ihrer beruflichen Rolle, Webseite, Handelsregister, Bewertungen, Presse. Zum Privatleben von Personen (Gesundheit, Familie, Beziehungen, Privatanschrift) recherchierst du nie; sag das in einem Satz. Ohne ausdrückliche Bitte recherchierst du nicht, auch nicht beim Ablegen von Dateien. Sag beim Weitergeben, dass es aus dem Internet stammt und veraltet oder falsch sein kann, und nenne die Quellenadressen. Ins CRM übernimmst du davon nur etwas, wenn der Mitarbeiter es ausdrücklich verlangt.
 
 Ton und Form:

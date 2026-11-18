@@ -3,7 +3,7 @@ import { AlertTriangle, ArrowDown, ArrowUp, Check, Download, FileText, FolderInp
 import { useApp } from '../context/AppContext'
 import { useAuth } from '../context/AuthContext'
 import { Field, Modal, PrimaryButton, SecondaryButton, inputClass } from './ui'
-import { CURRENT_USER } from '../data/constants'
+import { CURRENT_USER, DEMO_NUTZER } from '../data/constants'
 import { briefkopfAus } from '../data/briefkopf'
 import { erzeugeExposePdf, type ExposeBild } from '../lib/exposePdf'
 import { adresseVon, exposeFakten, interneAngabenIn, objektartVon, ortVon, preisText, standardTitel } from '../lib/exposeDaten'
@@ -194,7 +194,7 @@ export function useExposeKontext() {
     () => ({
       firma: briefkopfAus(state.vorlagenBeratung).name,
       kontakt: {
-        name: state.profil.name?.trim() || mitarbeiter?.name || CURRENT_USER,
+        name: [state.profil.name?.trim(), mitarbeiter?.name?.trim(), CURRENT_USER].find((n) => n && n !== DEMO_NUTZER) || '',
         telefon: state.profil.telefon?.trim() || mitarbeiter?.telefon || '',
         email: state.profil.email?.trim() || mitarbeiter?.email || '',
       },

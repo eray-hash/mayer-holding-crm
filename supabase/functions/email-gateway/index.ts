@@ -238,6 +238,7 @@ import { istDienstSchluessel, sendeTagesmeldungen, tagesmeldungTest } from './ta
 import { pruefeBonitaet } from './bonitaet.ts'
 import { lieseKontoauszug } from './kontoauszug.ts'
 import { beantworteKundenUnterlagen } from './kundenUnterlagen.ts'
+import { pruefeWunschAnalyse, wunschAnalyseTest } from './wunschAnalyse.ts'
 import { kiAufruf, mitAnlass, setzeAnlass } from '../_shared/kiVerbrauch.ts'
 
 const ALLOWED_ORIGINS = [
@@ -3070,6 +3071,10 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       // Außerhalb der Zeitfenster ohne Datenbankzugriff; höchstens einmal je Person und Tag; wirft nie.
       const tagesmeldung = await sendeTagesmeldungen(admin, sendeTelegram)
       if (tagesmeldung.morgen > 0 || tagesmeldung.woche > 0) console.log(`Tagesmeldung: ${tagesmeldung.morgen} Morgen-Übersicht(en), ${tagesmeldung.woche} Wochenbericht(e).`)
+      // Wünsche und Probleme der Mitarbeiter: Auswertung alle zwei Stunden, Bericht an die Admins ab 18 Uhr —
+      // siehe wunschAnalyse.ts. Im Hintergrund (der KI-Aufruf dauert); außerhalb der Stunden ohne Datenbankzugriff; wirft nie.
+      // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
+      EdgeRuntime.waitUntil(pruefeWunschAnalyse(admin, sendeTelegram))
       // Derselbe Minutentakt hält auch die Warteschlange für Sammelsendungen per Telegram in Gang
       // (falls ein Schritt abgebrochen ist oder an der Mengengrenze des KI-Dienstes warten musste).
       try {
@@ -3085,6 +3090,17 @@ Deno.serve((req: Request) => mitAnlass(async () => {
         console.error('Anstoß der Telegram-Warteschlange fehlgeschlagen:', err)
       }
       return new Response(JSON.stringify({ ok: true, gesendet: ergebnis.gesendet }), { headers })
+    }
+    if (body.action === 'wunsch_analyse_test') {
+      // Sofortige Wunsch-Auswertung (siehe wunschAnalyse.ts) ohne Zeitfenster und Buchhaltungszeile. Nur mit dem
+      // Dienst-Schlüssel. { stunden?: 1–48 (Vorgabe 24), schreiben?: false = Tabelle nicht anfassen, senden?: true = Bericht schicken }
+      const token = (req.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '').trim()
+      if (!istDienstSchluessel(token)) {
+        return new Response(JSON.stringify({ error: 'Nur mit dem Dienst-Schlüssel.' }), { status: 401, headers })
+      }
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const ergebnis = await wunschAnalyseTest(admin, sendeTelegram, { senden: body.senden, stunden: body.stunden, schreiben: body.schreiben, jetzt: body.jetzt })
+      return new Response(JSON.stringify(ergebnis), { headers })
     }
     if (body.action === 'tagesmeldung_test') {
       // Probelauf für EINE Person, sofort (ohne 8-Uhr-Fenster, Wochentag und Einstellungen) und ohne die

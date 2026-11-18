@@ -56,6 +56,7 @@ import { UngeklaerteEingaenge } from './pages/eingang/UngeklaerteEingaenge'
 import { Kampagnen } from './pages/kampagnen/Kampagnen'
 import { MeinProfil } from './pages/profil/MeinProfil'
 import { MitarbeiterVerwalten } from './pages/admin/MitarbeiterVerwalten'
+import { Wuensche } from './pages/admin/Wuensche'
 import { ProjekteListe } from './pages/projekte/ProjekteListe'
 import { PortalLogin } from './pages/portal/PortalLogin'
 import { PortalMagicLink } from './pages/portal/PortalMagicLink'
@@ -92,6 +93,7 @@ function AdminRoutesContent() {
         <Route path="/kampagnen" element={<Kampagnen />} />
         <Route path="/profil" element={<MeinProfil />} />
         <Route path="/mitarbeiter" element={<RequireAdmin><MitarbeiterVerwalten /></RequireAdmin>} />
+        <Route path="/wuensche" element={<RequireAdmin><Wuensche /></RequireAdmin>} />
 
         {/* Privat: bewusst NICHT per RequireBereich beschränkt — jeder Mitarbeiter hat seinen
             eigenen, persönlichen Bereich, das ist keine von der GF zuteilbare Berechtigung.

@@ -81,7 +81,9 @@ export const LUKRATIVITAET_COLOR: Record<string, string> = {
 // eingeloggten Mitarbeiters auf, sobald der verfügbar ist, statt dass hier für immer der
 // ursprüngliche Demo-Platzhalter stehen bleibt (der sonst JEDE Aktivität im echten, geteilten CRM
 // fälschlich "Eray (Demo)" zuschreiben würde, egal wer wirklich eingeloggt ist).
-export let CURRENT_USER = 'Eray (Demo)'
+/** Platzhalter vor dem Login — darf nie in Exposé, Signatur oder Mail landen. */
+export const DEMO_NUTZER = 'Eray (Demo)'
+export let CURRENT_USER = DEMO_NUTZER
 
 export function setCurrentUser(name: string) {
   CURRENT_USER = name
