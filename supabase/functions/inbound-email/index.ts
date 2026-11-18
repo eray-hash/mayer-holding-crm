@@ -36,6 +36,18 @@ function parseFromHeader(raw: string): { email: string; name: string } {
 // verstecken ("nicht_relevant" setzen), nie löschen — bei einer KI-Fehlklassifizierung geht dadurch
 // nichts verloren, siehe Mitarbeiter-Rückfrage vom 30.10.2026. Ein Fehler beim Klassifizieren darf
 // das Einsortieren der Mail selbst nicht verhindern — im Zweifel bleibt sie sichtbar ("kunde").
+function istDienstSchluessel(token: string): boolean {
+  if (token.length < 30) return false
+  if (token === Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')) return true
+  try {
+    const sammle = (wert: unknown): string[] =>
+      typeof wert === 'string' ? [wert] : wert && typeof wert === 'object' ? Object.values(wert as Record<string, unknown>).flatMap(sammle) : []
+    return sammle(JSON.parse(Deno.env.get('SUPABASE_SECRET_KEYS') ?? '{}')).includes(token)
+  } catch {
+    return false
+  }
+}
+
 async function klassifiziereRelevanz(vonName: string, von: string, betreff: string, ausschnitt: string): Promise<'kunde' | 'nicht_relevant'> {
   const apiKey = Deno.env.get('ANTHROPIC_API_KEY')
   if (!apiKey) return 'kunde'
@@ -270,6 +282,28 @@ Deno.serve((req: Request) => mitAnlass(async () => {
   setzeAnlass('mail-eingang')
   if (req.method !== 'POST') {
     return new Response('Method not allowed', { status: 405 })
+  }
+
+  // Interner Aufruf (nur mit Dienstschlüssel): bereits gespeicherte Mails des gemeinsamen Postfachs mit
+  // derselben Einordnung wie beim Eingang neu bewerten — z. B. nach einem Ausfall des KI-Dienstes, in
+  // dem alles als relevant durchgerutscht ist. Setzt nur `relevanz`; gelöscht wird nichts.
+  const dienst = (req.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '').trim()
+  if (istDienstSchluessel(dienst)) {
+    const auftrag = await req.json().catch(() => null)
+    const ids: string[] = Array.isArray(auftrag?.neuEinordnen) ? auftrag.neuEinordnen.map(String).slice(0, 100) : []
+    if (ids.length === 0) return new Response(JSON.stringify({ error: 'neuEinordnen (Liste von Mail-Kennungen) fehlt' }), { status: 400 })
+    const db = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+    const { data: mails, error } = await db.from('eingegangene_emails').select('id, von, von_name, betreff, ausschnitt, relevanz, besitzer_email').in('id', ids)
+    if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500 })
+    const ergebnis: { id: string; vorher: string | null; nachher: string }[] = []
+    // deno-lint-ignore no-explicit-any
+    for (const m of (mails ?? []) as any[]) {
+      if (m.besitzer_email) continue // private Postfächer werden hier nicht angefasst
+      const nachher = await klassifiziereRelevanz(m.von_name ?? '', m.von ?? '', m.betreff ?? '', m.ausschnitt ?? '')
+      if (nachher !== m.relevanz) await db.from('eingegangene_emails').update({ relevanz: nachher }).eq('id', m.id)
+      ergebnis.push({ id: m.id, vorher: m.relevanz, nachher })
+    }
+    return new Response(JSON.stringify({ ok: true, ergebnis }), { headers: { 'content-type': 'application/json' } })
   }
 
   const url = new URL(req.url)
