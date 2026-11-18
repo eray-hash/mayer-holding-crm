@@ -57,6 +57,7 @@ import { Kampagnen } from './pages/kampagnen/Kampagnen'
 import { MeinProfil } from './pages/profil/MeinProfil'
 import { MitarbeiterVerwalten } from './pages/admin/MitarbeiterVerwalten'
 import { Wuensche } from './pages/admin/Wuensche'
+import { AufgabenUebersicht } from './pages/aufgaben/AufgabenUebersicht'
 import { ProjekteListe } from './pages/projekte/ProjekteListe'
 import { PortalLogin } from './pages/portal/PortalLogin'
 import { PortalMagicLink } from './pages/portal/PortalMagicLink'
@@ -88,6 +89,7 @@ function AdminRoutesContent() {
         <Route path="/postfach" element={<Postfach />} />
         <Route path="/eingaenge" element={<UngeklaerteEingaenge />} />
         <Route path="/kalender" element={<Kalender />} />
+        <Route path="/aufgaben" element={<AufgabenUebersicht />} />
         {/* Für alle: Was jemand sieht, begrenzt die Datenbank (Bereichsrechte) schon im App-Zustand. */}
         <Route path="/auswertungen" element={<Auswertungen />} />
         <Route path="/kampagnen" element={<Kampagnen />} />

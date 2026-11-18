@@ -23,7 +23,7 @@ import {
   ChevronDown,
   Phone,
   Lock,
-  Search, CalendarDays, BarChart3, Lightbulb } from 'lucide-react'
+  Search, CalendarDays, BarChart3, Lightbulb, ListChecks } from 'lucide-react'
 import type { Bereich } from '../types'
 import { useApp } from '../context/AppContext'
 import { useAuth } from '../context/AuthContext'
@@ -190,6 +190,14 @@ export function Layout({ children }: { children: ReactNode }) {
             title="Gespräch aufzeichnen (Kunde per Telefonnummer oder Name finden)"
           >
             <Phone size={16} />
+          </button>
+          <button
+            onClick={() => navigate('/aufgaben')}
+            className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
+            title="Aufgaben nach Mitarbeiter: wer muss was bis wann erledigen"
+            aria-label="Aufgaben nach Mitarbeiter"
+          >
+            <ListChecks size={16} />
           </button>
           <button
             onClick={() => navigate('/kalender')}

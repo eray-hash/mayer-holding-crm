@@ -21,6 +21,7 @@ import { PDFDocument, degrees } from 'npm:pdf-lib@1.17.1'
 import { kiAufruf, mitAnlass, setzeAnlass } from '../_shared/kiVerbrauch.ts'
 import { entschaerfe, kuerze as kuerzeWunsch, merkeWunsch } from '../_shared/wuensche.ts'
 import { bereichName, darfAkte, darfBereich, darfObjekte, freigegebeneBereiche, istEingeschraenkt, nichtFreigegeben, siehtAlleBereiche } from './rechte.ts'
+import { aufgabenUebersicht } from './aufgaben.ts'
 import { type AbteilungZeile, alleObjektDokumente, lesenVonSelbst, leseRef, OBJEKT_SPALTEN, objektakteText, objektStatus, type ObjektRow, sucheObjekte } from './objektakte.ts'
 import { richteFotoAus } from './bildDrehung.ts'
 
@@ -962,6 +963,20 @@ export const TOOLS = [
         ab_zeichen: { type: 'integer', description: 'Nur für die Fortsetzung langer Dokumente, wenn ein früherer Aufruf das angeboten hat.' },
       },
       required: ['dokument_id'],
+    },
+  },
+  {
+    name: 'aufgaben_uebersicht',
+    description:
+      'Zeigt, wer welche offenen Aufgaben bis wann erledigen muss: To-dos aus den To-do-Listen, Follow-ups aus Kunden- und Objektakten und Aufgaben aus Projekten, nach Mitarbeiter gruppiert und nach Fälligkeit sortiert (Überfälliges zuerst). Für Fragen wie "was muss Quirin diese Woche machen", "wer hat überfällige Aufgaben", "was steht bei mir an", "welche Aufgaben hat Hasan bis Freitag". Berücksichtigt nur, was der Fragende sehen darf.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        mitarbeiter: { type: 'string', description: 'Name oder Vorname, z. B. "Quirin"; "ich" für den Fragenden selbst. Leer = alle Mitarbeiter.' },
+        bis_datum: { type: 'string', description: 'Nur Aufgaben, die bis zu diesem Tag fällig sind, inklusive überfälliger (yyyy-mm-dd). Für "diese Woche" den kommenden Sonntag, für "heute" das heutige Datum. Leer = alle offenen, auch ohne Datum.' },
+        ohne_datum: { type: 'boolean', description: 'false = Aufgaben ohne Datum weglassen. Nur nötig, wenn kein bis_datum gesetzt ist.' },
+        arten: { type: 'array', items: { type: 'string', enum: ['todo', 'followup', 'projekt'] }, description: 'Nur diese Arten. Leer = alle.' },
+      },
     },
   },
   {
@@ -2130,6 +2145,10 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     return `„${dok.name}" aus der Akte von ${kundeName(k)} genommen.${pfad ? ` Die Datei bleibt gespeichert: pfad=${pfad}` : ' Die Datei stammt nicht aus Telegram und kann hier nicht neu zugeordnet werden.'}`
   }
 
+  if (name === 'aufgaben_uebersicht') {
+    return await aufgabenUebersicht(supabase, mitarbeiter, input, heute)
+  }
+
   if (name === 'objekte_suchen') {
     if (!darfObjekte(mitarbeiter)) return nichtFreigegeben('immobilien', mitarbeiter.name)
     const { data } = await supabase.from('objekte').select('id, bezeichnung, adresse, typ, status, kaufpreis, verantwortlich, eigentuemer, verkaufsdaten')
@@ -2608,6 +2627,7 @@ So arbeitest du:
 - Kunden löschen: nur auf ausdrücklichen Wunsch und erst nach Bestätigung in einer eigenen Nachricht.
 - E-Mails: Du kannst E-Mails an einen Kunden, an mehrere oder an alle schicken. Nennt der Mitarbeiter nur den Inhalt, schreibst du daraus selbst die fertige Mail: passender Betreff, höflicher Text in der Sie-Form, klar und ohne Floskeln, ohne englische Begriffe, nichts dazuerfinden (keine Termine, Preise oder Zusagen, die er nicht genannt hat). Dann rufst du mail_vorbereiten auf. Ist nicht klar, an wen die Mail gehen soll, frag vorher nach. Zeige ihm danach den Betreff und den vollständigen Text so, wie das Werkzeug ihn liefert, nenne die Zahl der Empfänger und wer ausgelassen wird, und frag, ob du so senden sollst. Erst wenn er in seiner nächsten Nachricht klar zustimmt, rufst du mail_senden auf. Will er etwas ändern, bereitest du neu vor, zeigst die neue Fassung und fragst erneut. Ohne seine Zustimmung wird nie gesendet. Lehnt er ab oder will er doch nicht senden, ist die Fassung damit verworfen; bestätige das in einem Satz. Der Inhalt geht als normaler Mailtext hinaus, ohne Anhang. Briefe für den Postversand kannst du noch nicht erstellen, weil in den Akten keine Anschriften stehen.
 - Für Fragen quer über alle Kunden oder Objekte ("was steht heute an", "wer sucht ...") nutze firmenueberblick.
+- Aufgaben und Zuständigkeiten: Fragt jemand, wer was bis wann erledigen muss, was bei ihm oder einem Kollegen ansteht oder was überfällig ist, nutze aufgaben_uebersicht (nicht firmenueberblick). Antworte nach Person gegliedert, Überfälliges zuerst, mit Datum. Ist die Liste lang, nenne zuerst das Fällige und sag, wie viel ohne Datum dazukommt; die vollständige Liste steht im CRM unter „Aufgaben nach Mitarbeiter“ (Symbol mit Häkchenliste oben rechts).
 - Immobilien-Objekte: Fragt jemand nach einem Ort, einer Adresse oder einer Immobilie ("was weißt du über Suppingen"), suchst du mit objekte_suchen und liest dann mit objektakte_lesen die ganze Objektakte. Antworte daraus vollständig, aber übersichtlich: Eckdaten, Preis, Eigentümer, Stand von Verkaufsdatenblatt, Kurzprüfung und Bewertung, welche Unterlagen da sind und was sie enthalten, offene Fragen, nächste Schritte. Ist ein Feld leer, sag kurz, dass es noch nicht eingetragen ist, statt es wegzulassen. Für den Inhalt einzelner Unterlagen nutzt du dokument_inhalt mit objekt_id.
 - Wünsche an das CRM: Kannst du etwas, worum der Mitarbeiter bittet, nicht tun, weil dir dafür die Möglichkeit fehlt (nicht, weil ein Kunde oder eine Angabe fehlt oder ein Bereich nicht freigegeben ist), oder sagt er "wäre gut, wenn …", "Wunsch: …" oder "könnte das CRM …", hältst du das mit wunsch_notieren fest: Titel und Beschreibung auf Ebene der Funktion, ohne Kundennamen, Beträge oder Inhalte aus Unterlagen. Sag ihm danach offen in einem kurzen Satz, dass du es als Wunsch für die Geschäftsführung notiert hast.
 - Internet: Bittet dich der Mitarbeiter ausdrücklich, etwas im Internet nachzusehen oder zu recherchieren ("recherchier den Laden", "was findest du online über die Firma X"), nutzt du internet_recherche. Gib dabei alle Anhaltspunkte aus dem Gespräch oder der Akte mit (Firmenname, Ort, Webseite), damit keine gleichnamige Firma erwischt wird. Recherchiere nur Geschäftliches und Öffentliches: Firmen, Geschäftsführer und Inhaber in ihrer beruflichen Rolle, Webseite, Handelsregister, Bewertungen, Presse. Zum Privatleben von Personen (Gesundheit, Familie, Beziehungen, Privatanschrift) recherchierst du nie; sag das in einem Satz. Ohne ausdrückliche Bitte recherchierst du nicht, auch nicht beim Ablegen von Dateien. Sag beim Weitergeben, dass es aus dem Internet stammt und veraltet oder falsch sein kann, und nenne die Quellenadressen. Ins CRM übernimmst du davon nur etwas, wenn der Mitarbeiter es ausdrücklich verlangt.
