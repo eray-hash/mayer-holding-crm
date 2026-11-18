@@ -23,7 +23,7 @@ import {
   ChevronDown,
   Phone,
   Lock,
-  Search, CalendarDays } from 'lucide-react'
+  Search, CalendarDays, BarChart3 } from 'lucide-react'
 import type { Bereich } from '../types'
 import { useApp } from '../context/AppContext'
 import { useAuth } from '../context/AuthContext'
@@ -199,6 +199,14 @@ export function Layout({ children }: { children: ReactNode }) {
             <CalendarDays size={16} />
           </button>
           <button
+            onClick={() => navigate('/auswertungen')}
+            className="hidden rounded-lg p-2 text-slate-500 hover:bg-slate-100 sm:inline-flex"
+            title="Auswertungen"
+            aria-label="Auswertungen"
+          >
+            <BarChart3 size={16} />
+          </button>
+          <button
             onClick={() => navigate('/postfach')}
             className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
             title="Postfach (info@amayer-holding.com)"
@@ -369,6 +377,15 @@ export function Layout({ children }: { children: ReactNode }) {
               >
                 <aktuellerBereich.Sidebar collapsed={false} onToggle={() => setDrawerOpen(false)} />
               </div>
+
+              {/* Auf dem Handy ist in der Kopfleiste kein Platz für das Auswertungs-Symbol. */}
+              <button
+                onClick={() => { setDrawerOpen(false); navigate('/auswertungen') }}
+                className="mb-6 flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm font-medium text-slate-700 hover:bg-slate-50 sm:hidden"
+              >
+                <BarChart3 size={17} className="text-slate-400" />
+                Auswertungen
+              </button>
 
               <h3 className="mb-2 px-3 text-xs font-semibold uppercase tracking-wide text-slate-400 md:hidden">Bereich wechseln</h3>
               {/* Schlichte Liste statt großer Kacheln (Wunsch vom 13.11.2026): alle Bereiche auf einen

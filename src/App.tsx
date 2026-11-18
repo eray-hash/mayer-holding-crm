@@ -47,6 +47,7 @@ import { PrivatListe } from './pages/privat/PrivatListe'
 import { PrivatDetail } from './pages/privat/PrivatDetail'
 import { PrivatPostfach } from './pages/privat/PrivatPostfach'
 import { Kalender } from './pages/kalender/Kalender'
+import { Auswertungen } from './pages/auswertungen/Auswertungen'
 import { PostfachEinrichtenHinweis } from './components/PostfachEinstellungen'
 import { ToDoListe, BereichToDoListe } from './pages/todo/ToDoListe'
 import { HeuteScreen } from './pages/heute/HeuteScreen'
@@ -85,6 +86,8 @@ function AdminRoutesContent() {
         <Route path="/postfach" element={<Postfach />} />
         <Route path="/eingaenge" element={<UngeklaerteEingaenge />} />
         <Route path="/kalender" element={<Kalender />} />
+        {/* Für alle: Was jemand sieht, begrenzt die Datenbank (Bereichsrechte) schon im App-Zustand. */}
+        <Route path="/auswertungen" element={<Auswertungen />} />
         <Route path="/kampagnen" element={<Kampagnen />} />
         <Route path="/profil" element={<MeinProfil />} />
         <Route path="/mitarbeiter" element={<RequireAdmin><MitarbeiterVerwalten /></RequireAdmin>} />
