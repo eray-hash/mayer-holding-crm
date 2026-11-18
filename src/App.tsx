@@ -50,6 +50,7 @@ import { PostfachEinrichtenHinweis } from './components/PostfachEinstellungen'
 import { ToDoListe, BereichToDoListe } from './pages/todo/ToDoListe'
 import { HeuteScreen } from './pages/heute/HeuteScreen'
 import { Postfach } from './pages/postfach/Postfach'
+import { UngeklaerteEingaenge } from './pages/eingang/UngeklaerteEingaenge'
 import { Kampagnen } from './pages/kampagnen/Kampagnen'
 import { MeinProfil } from './pages/profil/MeinProfil'
 import { MitarbeiterVerwalten } from './pages/admin/MitarbeiterVerwalten'
@@ -81,6 +82,7 @@ function AdminRoutesContent() {
         <Route path="/" element={<RootRedirect />} />
         <Route path="/heute" element={<HeuteScreen />} />
         <Route path="/postfach" element={<Postfach />} />
+        <Route path="/eingaenge" element={<UngeklaerteEingaenge />} />
         <Route path="/kalender" element={<Kalender />} />
         <Route path="/kampagnen" element={<Kampagnen />} />
         <Route path="/profil" element={<MeinProfil />} />

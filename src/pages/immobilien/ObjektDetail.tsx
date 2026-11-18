@@ -20,11 +20,14 @@ import { ObjektKurzpruefungBlatt } from '../../components/ObjektKurzpruefungBlat
 import { ObjektFragenSection } from '../../components/ObjektFragenSection'
 import { ObjektWeitergabenSection } from '../../components/ObjektWeitergabenSection'
 import { ObjektAbrechnungSection } from '../../components/ObjektAbrechnungSection'
+import { ObjektUnterlagenAnfordern } from '../../components/ObjektUnterlagenAnfordern'
+import { ObjektBewertungSection } from '../../components/ObjektBewertungSection'
 
 const TABS = [
   { id: 'uebersicht', label: 'Übersicht' },
   { id: 'verkaufsdaten', label: 'Verkaufsdatenblatt' },
   { id: 'kurzpruefung', label: 'Kurzprüfung' },
+  { id: 'bewertung', label: 'Bewertung' },
   { id: 'fragen', label: 'Fragen' },
   { id: 'weitergaben', label: 'Weitergaben' },
   { id: 'abrechnung', label: 'Abrechnung' },
@@ -287,6 +290,7 @@ export function ObjektDetail() {
 
       {tab === 'dokumente' && !ordner && (
         <div>
+          <ObjektUnterlagenAnfordern objekt={objekt} />
           <div className="mb-3 flex justify-end">
             <PrimaryButton onClick={() => setUploadOpen(true)}>
               <Sparkles size={14} /> Dokument hochladen (KI sortiert automatisch)
@@ -386,6 +390,7 @@ export function ObjektDetail() {
       {tab === 'weitergaben' && <ObjektWeitergabenSection key={objekt.id} objekt={objekt} />}
 
       {tab === 'abrechnung' && <ObjektAbrechnungSection key={objekt.id} objekt={objekt} />}
+      {tab === 'bewertung' && <ObjektBewertungSection key={objekt.id} objekt={objekt} />}
 
       {tab === 'finanzierung' && (
         <div>

@@ -2,11 +2,53 @@ import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { CheckCircle2, Circle, Loader2, Upload, Camera } from 'lucide-react'
 import { Card, Field, inputClass, PrimaryButton } from '../../components/ui'
-import { uid, today } from '../../lib/dates'
+import { uid, today, fmtDate } from '../../lib/dates'
 import { holePublicObjekt, holeObjektUploadUrl, sendePublicObjektFormular, type PublicObjekt } from '../../lib/emailGateway'
 import { ladeAlsEigentuemerHoch } from '../../lib/objektDokumenteStorage'
 import { pruefeUnterlagenVollstaendigkeit } from '../../data/objektUnterlagenPflicht'
+import { DOKUMENT_ORDNER } from '../../types'
 import type { Dokument, DokumentOrdnerName, Objekt } from '../../types'
+
+/** Eine Unterlage mit Haken (schon bei uns?) und Knopf zum Hochladen. Jede weitere Datei kommt dazu,
+ *  nichts wird ersetzt. */
+function UnterlagenZeile({
+  kategorie,
+  vorhanden,
+  laeuft,
+  gesperrt,
+  onDatei,
+}: {
+  kategorie: string
+  vorhanden: boolean
+  laeuft: boolean
+  gesperrt: boolean
+  onDatei: (file: File | undefined) => void
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-lg border border-slate-100 bg-white p-3">
+      <div className="flex min-w-0 items-center gap-2 text-sm">
+        {vorhanden ? <CheckCircle2 size={16} className="flex-shrink-0 text-emerald-500" /> : <Circle size={16} className="flex-shrink-0 text-slate-300" />}
+        <span lang="de" className={`min-w-0 hyphens-auto break-words ${vorhanden ? 'text-slate-600' : 'font-medium text-slate-700'}`}>{kategorie}</span>
+      </div>
+      <label className="flex flex-shrink-0 cursor-pointer items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50">
+        {laeuft ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
+        {vorhanden ? 'Weitere Datei' : 'Hochladen'}
+        <input
+          type="file"
+          accept="image/*,application/pdf"
+          className="hidden"
+          disabled={gesperrt}
+          onChange={(e) => {
+            const datei = e.target.files?.[0]
+            // Feld leeren, damit dieselbe Datei nach einem Fehler noch einmal gewählt werden kann.
+            e.target.value = ''
+            onDatei(datei)
+          }}
+        />
+      </label>
+    </div>
+  )
+}
 
 // Öffentliches, nicht-authentifiziertes Eigentümer-Portal für ein Immobilien-Objekt (Quirin
 // Lutzenberger, Immobilienfachwirt: "Eigentümer bekommt automatisch einen persönlichen Link, dort
@@ -78,6 +120,18 @@ export function PublicEigentuemerPortal() {
     prozent: checkRoh.pflicht.length === 0 ? 100 : Math.round((vorhandenGesamt.size / checkRoh.pflicht.length) * 100),
   }
 
+  // Worum der Mitarbeiter zuletzt ausdrücklich gebeten hat (per E-Mail mit dem Link auf diese Seite). Das
+  // können auch Unterlagen sein, die für die Objektart keine Pflicht sind — sie lassen sich oben genauso
+  // hochladen. Unbekannte Namen (z. B. ein später umbenannter Ordner) werden ausgelassen.
+  const angefordert = objekt.angefordert
+  const angefragteOrdner = (Array.isArray(angefordert?.ordner) ? angefordert.ordner : []).filter(
+    (o, i, alle): o is DokumentOrdnerName => (DOKUMENT_ORDNER as readonly string[]).includes(o) && alle.indexOf(o) === i,
+  )
+  const angefragtWeitere = typeof angefordert?.weitere === 'string' ? angefordert.weitere.trim() : ''
+  const istVorhanden = (ordner: DokumentOrdnerName) => (objekt?.dokumente?.[ordner]?.length ?? 0) > 0 || neuHochgeladen.has(ordner)
+  const angefragtDa = angefragteOrdner.filter(istVorhanden).length
+  const zeigeAnfrage = angefragteOrdner.length > 0 || angefragtWeitere !== ''
+
   async function stammdatenSpeichernKlick() {
     if (!name.trim() || !telefon.trim() || !email.trim()) {
       setStammdatenFehler('Bitte Name, Telefon und E-Mail-Adresse angeben.')
@@ -130,6 +184,63 @@ export function PublicEigentuemerPortal() {
           <p className="mt-1 text-sm text-slate-500">{objekt.bezeichnung} · {objekt.adresse}</p>
         </div>
 
+        {zeigeAnfrage && (
+          <Card className="mb-5 border-accent-200 bg-accent-50/40 p-6">
+            <h2 className="text-base font-semibold text-slate-800">Darum bitten wir Sie aktuell</h2>
+            <p className="mb-4 mt-1 text-xs text-slate-500">
+              {angefordert?.datum ? `Angefragt am ${fmtDate(angefordert.datum)}. ` : ''}
+              Ein Foto mit dem Handy oder eine PDF-Datei genügt.
+              {angefragteOrdner.length > 0 ? ` ${angefragtDa} von ${angefragteOrdner.length} ${angefragteOrdner.length === 1 ? 'Unterlage ist' : 'Unterlagen sind'} schon bei uns.` : ''}
+            </p>
+            {angefragteOrdner.length > 0 && (
+              <div className="space-y-2">
+                {angefragteOrdner.map((kategorie) => (
+                  <UnterlagenZeile
+                    key={kategorie}
+                    kategorie={kategorie}
+                    vorhanden={istVorhanden(kategorie)}
+                    laeuft={hochladenKategorie === kategorie}
+                    gesperrt={hochladenKategorie !== null}
+                    onDatei={(file) => dateiHochladen(kategorie, file)}
+                  />
+                ))}
+              </div>
+            )}
+            {angefragtWeitere && (
+              <div className={`rounded-lg border border-slate-100 bg-white p-3 ${angefragteOrdner.length > 0 ? 'mt-2' : ''}`}>
+                <div className="text-xs font-medium text-slate-500">Außerdem bitten wir um:</div>
+                <p className="mt-1 whitespace-pre-wrap break-words text-sm font-medium text-slate-700">{angefragtWeitere}</p>
+                <label className="mt-3 inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50">
+                  {hochladenKategorie === 'Sonstiges' ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
+                  Dazu eine Datei hochladen
+                  <input
+                    type="file"
+                    accept="image/*,application/pdf"
+                    className="hidden"
+                    disabled={hochladenKategorie !== null}
+                    onChange={(e) => {
+                      const datei = e.target.files?.[0]
+                      e.target.value = ''
+                      dateiHochladen('Sonstiges', datei)
+                    }}
+                  />
+                </label>
+                {neuHochgeladen.has('Sonstiges') && (
+                  <p className="mt-2 flex items-center gap-1.5 text-xs font-medium text-emerald-600">
+                    <CheckCircle2 size={13} className="flex-shrink-0" /> Datei hochgeladen — weitere Dateien einfach erneut hochladen.
+                  </p>
+                )}
+              </div>
+            )}
+            {angefragteOrdner.length > 0 && angefragtDa === angefragteOrdner.length && (
+              <p className="mt-3 flex items-center gap-1.5 text-sm font-medium text-emerald-700">
+                <CheckCircle2 size={15} className="flex-shrink-0" /> Vielen Dank – {angefragtWeitere ? 'die oben genannten Unterlagen sind' : 'alles, worum wir gebeten haben, ist'} bei uns angekommen.
+              </p>
+            )}
+            {uploadFehler && <p className="mt-3 rounded-lg bg-rose-50 p-3 text-sm font-medium text-rose-600">{uploadFehler}</p>}
+          </Card>
+        )}
+
         <Card className="mb-5 p-6">
           <h2 className="mb-1 text-sm font-semibold text-slate-700">Ihre Kontaktdaten</h2>
           <p className="mb-4 text-xs text-slate-500">
@@ -156,9 +267,9 @@ export function PublicEigentuemerPortal() {
         </Card>
 
         <Card className="mb-5 p-6">
-          <div className="mb-1 flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-slate-700">Benötigte Unterlagen</h2>
-            <span className="text-sm font-semibold text-slate-700">{check.prozent} %</span>
+          <div className="mb-1 flex items-center justify-between gap-3">
+            <h2 className="min-w-0 text-sm font-semibold text-slate-700">{zeigeAnfrage ? 'Alle Unterlagen, die wir zu Ihrem Objekt brauchen' : 'Benötigte Unterlagen'}</h2>
+            <span className="flex-shrink-0 whitespace-nowrap text-sm font-semibold text-slate-700">{check.prozent} %</span>
           </div>
           <div className="mb-4 h-2 overflow-hidden rounded-full bg-slate-100">
             <div className={`h-full rounded-full ${check.prozent === 100 ? 'bg-emerald-500' : 'bg-accent-500'}`} style={{ width: `${check.prozent}%` }} />
@@ -167,32 +278,16 @@ export function PublicEigentuemerPortal() {
             <p className="text-sm text-slate-500">Für dieses Objekt sind aktuell keine bestimmten Unterlagen hinterlegt.</p>
           ) : (
             <div className="space-y-2">
-              {check.pflicht.map((kategorie) => {
-                const vorhanden = check.vorhanden.includes(kategorie) || neuHochgeladen.has(kategorie)
-                return (
-                  <div key={kategorie} className="flex items-center justify-between gap-3 rounded-lg border border-slate-100 p-3">
-                    <div className="flex items-center gap-2 text-sm">
-                      {vorhanden ? <CheckCircle2 size={16} className="flex-shrink-0 text-emerald-500" /> : <Circle size={16} className="flex-shrink-0 text-slate-300" />}
-                      <span className={vorhanden ? 'text-slate-600' : 'font-medium text-slate-700'}>{kategorie}</span>
-                    </div>
-                    <label className="flex flex-shrink-0 cursor-pointer items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50">
-                      {hochladenKategorie === kategorie ? (
-                        <Loader2 size={13} className="animate-spin" />
-                      ) : (
-                        <Upload size={13} />
-                      )}
-                      {vorhanden ? 'Ersetzen' : 'Hochladen'}
-                      <input
-                        type="file"
-                        accept="image/*,application/pdf"
-                        className="hidden"
-                        disabled={hochladenKategorie !== null}
-                        onChange={(e) => dateiHochladen(kategorie, e.target.files?.[0])}
-                      />
-                    </label>
-                  </div>
-                )
-              })}
+              {check.pflicht.map((kategorie) => (
+                <UnterlagenZeile
+                  key={kategorie}
+                  kategorie={kategorie}
+                  vorhanden={istVorhanden(kategorie)}
+                  laeuft={hochladenKategorie === kategorie}
+                  gesperrt={hochladenKategorie !== null}
+                  onDatei={(file) => dateiHochladen(kategorie, file)}
+                />
+              ))}
             </div>
           )}
         </Card>

@@ -229,8 +229,10 @@ import {
   verbindePostfach,
   zieheBesitzUm,
 } from './postfach.ts'
-import { loescheTermin, sendeErinnerungen, speichereTermin } from './kalender.ts'
+import { loescheTermin, sendeErinnerungen, sendeTelegram, speichereTermin } from './kalender.ts'
 import { ordneMailObjektZu } from './objektMail.ts'
+import { legeEingaengeAb, nimmEingaengeHeraus } from './eingang.ts'
+import { pruefeNeueTreffer } from './gesuchTreffer.ts'
 
 const ALLOWED_ORIGINS = [
   'https://eray-hash.github.io',
@@ -553,7 +555,7 @@ async function callClaudeTool<T>(
 // des Fließtexts aus (siehe z.B. abschließender ```json-Block der Bewertungssynthese).
 async function callClaudeResearch(
   prompt: string | ClaudeContentBlock[],
-  opts: { model: 'claude-haiku-4-5-20251001' | 'claude-sonnet-5-5'; maxSearches: number; maxTokens?: number; timeoutMs?: number; ohneNachdenken?: boolean },
+  opts: { model: 'claude-haiku-4-5-20251001' | 'claude-sonnet-5-5'; maxSearches: number; maxTokens?: number; timeoutMs?: number; ohneNachdenken?: boolean; meldeStopp?: (grund: string) => void },
 ): Promise<string> {
   const apiKey = env('ANTHROPIC_API_KEY')
   const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -584,6 +586,7 @@ async function callClaudeResearch(
     throw new Error(`Anthropic-API-Fehler (${res.status}): ${detail.slice(0, 300)}`)
   }
   const data = await res.json()
+  opts.meldeStopp?.(String(data.stop_reason ?? ''))
   const text = (data.content ?? [])
     .filter((c: { type: string }) => c.type === 'text')
     .map((c: { text: string }) => c.text)
@@ -926,6 +929,7 @@ Antworte auf Deutsch. Gib GANZ AM ENDE einen einzelnen Codeblock mit reinem JSON
 // Zeitlimit unterhalb der Restlaufzeit, damit ein zu langer Aufruf als Fehler ankommt und der Schritt
 // wiederholt werden kann.
 const WORKER_GEBOOTET = Date.now()
+const WORKER_KENNUNG = crypto.randomUUID().slice(0, 8)
 const WORKER_LEBENSDAUER_MS = Number(Deno.env.get('WORKER_WALL_CLOCK_MS') ?? '150000')
 
 const RECHERCHE_SCHRITTE = [
@@ -1890,7 +1894,7 @@ function groesseInBytes(text: unknown): number {
 /** Lädt die aussagekräftigsten Unterlagen eines Objekts als Inhaltsblöcke für einen KI-Aufruf — begrenzt,
  *  damit der Aufruf sicher innerhalb der Laufzeit der Funktion fertig wird. */
 // deno-lint-ignore no-explicit-any
-async function ladeObjektUnterlagen(admin: any, dokumente: Record<string, any[]>, hoechstens = 4, hoechstensBytes = 12 * 1024 * 1024) {
+async function ladeObjektUnterlagen(admin: any, dokumente: Record<string, any[]>, hoechstens = 4, hoechstensBytes = 12 * 1024 * 1024, ohne: string[] = []) {
   const bloecke: ClaudeContentBlock[] = []
   const gelesen: string[] = []
   const ausgelassen: string[] = []
@@ -1905,6 +1909,7 @@ async function ladeObjektUnterlagen(admin: any, dokumente: Record<string, any[]>
     const name = String(d.name ?? 'Datei')
     const art = lesbareArt(name, d.typ)
     if (!art) continue
+    if (ohne.includes(`${name} (${ordner})`)) continue
     if (gelesen.length >= hoechstens) {
       ausgelassen.push(`${name} (${ordner})`)
       continue
@@ -2047,6 +2052,284 @@ ${gelesen.length > 0 ? 'Es folgen Unterlagen aus der Objektakte.' : 'Unterlagen 
     120_000,
   )
   return { text: String(ergebnis.text ?? ''), fehlendeAngaben: String(ergebnis.fehlende_angaben ?? ''), anweisung: v.name as string, gelesen, ausgelassen }
+}
+
+// ---------- Bewertung eines Objekts per Knopf ----------
+// Läuft wie die Steuer-Analyse als Kette einzelner Aufrufe (ein Worker lebt nur 150 Sekunden): Unterlagen
+// lesen (bis zu zwei Durchgänge), Markt recherchieren, Bewertung nach der hinterlegten KI-Anweisung
+// schreiben. Der Stand steht in objekte.bewertung — diese Spalte schreibt nur der Server.
+type ObjektBewertungZustand = {
+  status: 'laeuft' | 'fertig' | 'fehler'
+  schritt?: string
+  schrittNr?: number
+  schritteGesamt?: number
+  versuch?: number
+  laeuftSeit?: string | null
+  gestartetAm: string
+  gestartetVon?: string
+  aktualisiertAm?: string
+  abgeschlossenAm?: string
+  vorlageId?: string
+  vorlageName?: string
+  zusatz?: string
+  gelesen?: string[]
+  nichtGelesen?: string[]
+  zwischen?: { unterlagen?: string; unterlagen2?: string; markt?: string; text?: string; fortsetzungen?: number }
+  protokoll?: string[]
+  bericht?: string
+  kennzahlen?: Record<string, number>
+  quellen?: { titel: string; url: string }[]
+  fehler?: string
+}
+
+class BewertungVerworfen extends Error {}
+
+const OBJEKT_BEWERTUNG_SCHRITTE = [
+  { nr: 1, titel: 'Unterlagen lesen', bedarfMs: 110_000 },
+  { nr: 2, titel: 'Weitere Unterlagen lesen', bedarfMs: 110_000 },
+  { nr: 3, titel: 'Markt recherchieren', bedarfMs: 105_000 },
+  { nr: 4, titel: 'Bewertung schreiben', bedarfMs: 110_000 },
+  // Lange Anweisungen ergeben mehr Text, als in einen Aufruf passt: dann wird hier fortgesetzt (höchstens zweimal).
+  { nr: 5, titel: 'Bewertung fortsetzen', bedarfMs: 110_000 },
+  { nr: 6, titel: 'Ergebnis gegenprüfen', bedarfMs: 80_000 },
+]
+
+async function stosseObjektBewertungAn(objektId: string, umleitungen = 0): Promise<void> {
+  const secret = Deno.env.get('CRM_SHARED_SECRET')
+  await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/email-gateway`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...(secret ? { 'x-crm-secret': secret } : {}) },
+    body: JSON.stringify({ action: 'objekt_bewertung_schritt', objektId, umleitungen }),
+  }).catch((err) => console.error('Bewertungs-Schritt konnte nicht angestoßen werden:', err))
+}
+
+const FAKTEN_AUFTRAG = `Du bereitest die Bewertung einer Immobilie vor. Lies die folgenden Unterlagen und schreibe ein Faktenblatt: alles, was für den Wert wichtig ist, jeweils mit Fundstelle (Unterlage und möglichst Seite).
+
+Gliederung: Lage und Anschrift · Objektart, Baujahr, Bauweise · Grundstück (Fläche, Flurstück, Erbbaurecht, Lasten und Beschränkungen laut Grundbuch) · Flächen (Wohn-, Nutz-, Gewerbefläche) · Einheiten und Aufteilung · Vermietung (Mieter, Ist-Miete je Einheit und gesamt, Soll-Miete, Leerstand, Laufzeiten, Staffeln) · Bewirtschaftungskosten, Hausgeld, Rücklagen · Zustand, Sanierungen mit Jahr, bekannte Mängel, anstehende Arbeiten · Energie (Ausweis, Kennwert, Heizung) · Preisangaben (Kaufpreisvorstellung, Werte aus Gutachten mit Stichtag und Verfahren) · Besonderheiten und Risiken · Widersprüche zwischen den Unterlagen.
+
+Regeln: Nur was ausdrücklich in den Unterlagen steht. Nichts schätzen, nichts ergänzen. Zahlen genau übernehmen, mit Einheit. Zu einem Punkt ohne Angabe schreibst du „keine Angabe". Betrifft eine Unterlage erkennbar ein anderes Objekt, verwende sie nicht und sag das. Kein Vorwort, kein Schlusswort.`
+
+async function fuehreObjektBewertungAus(objektId: string, umleitungen: number, wiederaufnehmen = false): Promise<void> {
+  const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+  const { data } = await admin.from('objekte').select('id, bezeichnung, adresse, typ, kaufpreis, dokumente, verkaufsdaten, kurzpruefung, bewertung').eq('id', objektId).maybeSingle()
+  // deno-lint-ignore no-explicit-any
+  const o = data as any
+  const z = o?.bewertung as ObjektBewertungZustand | null
+  // Nach einem Fehler oder einem Hänger ab dem offenen Schritt weitermachen, statt die fertigen Schritte zu wiederholen.
+  if (z && wiederaufnehmen && z.schrittNr && (z.status === 'fehler' || z.status === 'laeuft')) {
+    if (z.status === 'laeuft' && z.laeuftSeit && Date.now() - new Date(z.laeuftSeit).getTime() < WORKER_LEBENSDAUER_MS) return
+    z.status = 'laeuft'
+    z.versuch = 0
+    z.fehler = undefined
+    z.abgeschlossenAm = undefined
+    z.laeuftSeit = null
+  }
+  if (!o || !z || z.status !== 'laeuft' || !z.schrittNr) return
+  const schritt = OBJEKT_BEWERTUNG_SCHRITTE.find((x) => x.nr === z.schrittNr)
+  if (!schritt) return
+  // Derselbe Schritt läuft gerade schon woanders (z. B. doppelter Klick auf „Fortsetzen").
+  if (z.laeuftSeit && Date.now() - new Date(z.laeuftSeit).getTime() < WORKER_LEBENSDAUER_MS) return
+
+  async function schreibe(patch: Partial<ObjektBewertungZustand>) {
+    // Wurde die Bewertung inzwischen verworfen oder neu gestartet, schreibt dieser Lauf nichts mehr.
+    const { data: jetzt } = await admin.from('objekte').select('bewertung').eq('id', objektId).maybeSingle()
+    // deno-lint-ignore no-explicit-any
+    if ((jetzt as any)?.bewertung?.gestartetAm !== z!.gestartetAm) throw new BewertungVerworfen()
+    Object.assign(z!, patch, { aktualisiertAm: new Date().toISOString() })
+    await admin.from('objekte').update({ bewertung: z }).eq('id', objektId)
+  }
+
+  const rest = WORKER_LEBENSDAUER_MS - (Date.now() - WORKER_GEBOOTET)
+  if (rest < schritt.bedarfMs + 10_000 && umleitungen < 3) {
+    await schreibe({ schritt: schritt.titel })
+    await warteBisWorkerAbgeloestWird()
+    await stosseObjektBewertungAn(objektId, umleitungen + 1)
+    return
+  }
+  const timeoutMs = Math.max(20_000, rest - 12_000)
+  const ort = [o.verkaufsdaten?.uebersicht?.strasse, o.verkaufsdaten?.uebersicht?.plzOrt].filter(Boolean).join(', ') || o.adresse || o.bezeichnung
+  const crmDaten = JSON.stringify({ bezeichnung: o.bezeichnung, adresse: o.adresse, objektart: o.verkaufsdaten?.uebersicht?.objektart || o.typ, kaufpreisvorstellung: o.kaufpreis || undefined, verkaufsdatenblatt: o.verkaufsdaten ?? undefined, kurzpruefung: o.kurzpruefung ?? undefined }, null, 1)
+
+  try {
+    await schreibe({ schritt: schritt.titel, laeuftSeit: new Date().toISOString() })
+
+    if (schritt.nr === 1 || schritt.nr === 2) {
+      const schon = schritt.nr === 2 ? (z.gelesen ?? []) : []
+      const { bloecke, gelesen, ausgelassen } = await ladeObjektUnterlagen(admin, o.dokumente ?? {}, 5, 14 * 1024 * 1024, schon)
+      let fakten = ''
+      if (gelesen.length > 0) {
+        fakten = await callClaudeResearch(
+          [{ type: 'text', text: `${FAKTEN_AUFTRAG}\n\nObjekt laut CRM: „${o.bezeichnung}"${o.adresse ? `, ${o.adresse}` : ''}.${schritt.nr === 2 && z.zwischen?.unterlagen ? `\n\nAus früheren Unterlagen ist schon bekannt (nicht wiederholen, nur Neues und Abweichendes nennen):\n${z.zwischen.unterlagen.slice(0, 12_000)}` : ''}` }, ...bloecke],
+          { model: 'claude-sonnet-5-5', maxSearches: 0, maxTokens: 5000, timeoutMs, ohneNachdenken: true },
+        )
+      }
+      const zwischen = { ...(z.zwischen ?? {}) }
+      if (schritt.nr === 1) zwischen.unterlagen = fakten
+      else zwischen.unterlagen2 = fakten
+      const alleGelesen = [...schon, ...gelesen]
+      // Ein zweiter Durchgang lohnt nur, wenn noch lesbare Unterlagen übrig sind, die nicht an der Größe scheitern.
+      const nochOffen = ausgelassen.filter((a) => !/zu groß|nicht abrufbar/.test(a))
+      const weiter = schritt.nr === 1 && nochOffen.length > 0 ? 2 : 3
+      await schreibe({ zwischen, gelesen: alleGelesen, nichtGelesen: weiter === 2 ? ausgelassen.filter((a) => /zu groß|nicht abrufbar/.test(a)) : ausgelassen, schrittNr: weiter, versuch: 0, laeuftSeit: null, schritt: OBJEKT_BEWERTUNG_SCHRITTE[weiter - 1].titel })
+    }
+
+    if (schritt.nr === 3) {
+      const fakten = [z.zwischen?.unterlagen, z.zwischen?.unterlagen2].filter(Boolean).join('\n\n').slice(0, 14_000)
+      const markt = await callClaudeResearch(
+        `Du recherchierst für die Bewertung einer Immobilie die Marktlage am Standort. Stichtag heute: ${new Date().toISOString().slice(0, 10)}.
+
+Objekt: „${o.bezeichnung}", Lage: ${ort}, Objektart: ${o.verkaufsdaten?.uebersicht?.objektart || o.typ}.
+${fakten ? `\nWas aus den Unterlagen bekannt ist:\n${fakten}\n` : ''}
+Suche im Netz nach, jeweils für genau diesen Ort (wenn es dort nichts gibt: Nachbarort oder Landkreis, und sag das dazu):
+1. Bodenrichtwert (Euro je m², Stichtag, Zone) — amtliche Quelle bevorzugt.
+2. Kaufpreise je m² für diese Objektart (Bestand), als Spanne und Mittelwert.
+3. Mieten je m² (Mietspiegel, sonst Angebotsmieten) für Wohnen und, falls passend, Gewerbe.
+4. Übliche Kaufpreisfaktoren oder Renditen für diese Objektart in dieser Lage; Liegenschaftszins, falls veröffentlicht.
+5. Entwicklung der letzten ein bis zwei Jahre und Einschätzung der Lage (Nachfrage, Bevölkerung, Verkehrsanbindung).
+
+Regeln: Zu jeder Zahl die Quelle mit Adresse und Stand nennen. Keine Zahl ohne Fundstelle. Was sich nicht finden lässt, ausdrücklich als „nicht gefunden" kennzeichnen — nichts schätzen. Deutsch, knapp, als gegliederter Text ohne Vorrede. Schließe mit einem Block
+\`\`\`json
+{"quellen": [{"titel": "…", "url": "https://…"}]}
+\`\`\`
+der alle verwendeten Fundstellen nennt.`,
+        { model: 'claude-haiku-4-5-20251001', maxSearches: 8, maxTokens: 4096, timeoutMs },
+      )
+      let quellen: { titel: string; url: string }[] = []
+      const m = markt.match(/```json\s*([\s\S]*?)```/)
+      if (m) {
+        try {
+          // deno-lint-ignore no-explicit-any
+          const roh = (JSON.parse(m[1]) as any)?.quellen
+          // deno-lint-ignore no-explicit-any
+          if (Array.isArray(roh)) quellen = roh.filter((q: any) => typeof q?.url === 'string' && /^https?:\/\//.test(q.url)).map((q: any) => ({ titel: String(q.titel ?? q.url).slice(0, 160), url: String(q.url).slice(0, 500) })).slice(0, 25)
+        } catch {
+          // Die Fundstellen stehen dann weiterhin im Text der Recherche.
+        }
+      }
+      await schreibe({ zwischen: { ...(z.zwischen ?? {}), markt: markt.replace(/```json[\s\S]*?```/, '').trim() }, quellen, schrittNr: 4, versuch: 0, laeuftSeit: null, schritt: OBJEKT_BEWERTUNG_SCHRITTE[3].titel })
+    }
+
+    if (schritt.nr === 4 || schritt.nr === 5) {
+      const { data: v } = await admin.from('vorlagen').select('id, name, kategorie, text').eq('id', z.vorlageId ?? '').maybeSingle()
+      if (!v || v.kategorie !== 'ki' || !String(v.text ?? '').trim()) throw new Error('Die gewählte KI-Anweisung gibt es nicht mehr oder sie hat keinen Text.')
+      const fakten = [z.zwischen?.unterlagen, z.zwischen?.unterlagen2].filter(Boolean).join('\n\n')
+      const bisher = schritt.nr === 5 ? String(z.zwischen?.text ?? '') : ''
+      let stopp = ''
+      const antwort = await callClaudeResearch(
+        `Du arbeitest für die Immobilienabteilung der Andreas Mayer Holding. Führe die folgende, von der Abteilung hinterlegte Arbeitsanweisung für das Objekt „${o.bezeichnung}" aus und erstelle daraus eine Bewertung.
+
+=== Arbeitsanweisung „${v.name}" ===
+${String(v.text).slice(0, 45_000)}
+=== Ende der Arbeitsanweisung ===
+
+Daten aus dem CRM:
+${crmDaten}
+${String(z.zusatz ?? '').trim() ? `\nZusätzlicher Hinweis des Mitarbeiters: ${String(z.zusatz).trim().slice(0, 1500)}\n` : ''}
+Faktenblatt aus den Unterlagen der Objektakte (${(z.gelesen ?? []).length} gelesen):
+${fakten.trim() || '(Es lag keine lesbare Unterlage vor.)'}
+
+Marktrecherche zum Standort (mit Fundstellen):
+${String(z.zwischen?.markt ?? '').trim() || '(Die Recherche hat nichts ergeben.)'}
+
+Regeln, die über der Arbeitsanweisung stehen:
+- Arbeite in EINEM Durchgang mit dem, was vorliegt. Stellt die Anweisung Rückfragen oder verlangt sie ein Gespräch in Schritten, dann triff stattdessen ausdrücklich benannte Annahmen und liste am Ende unter „OFFENE PUNKTE", was noch zu klären ist.
+- Erfinde keine Zahlen. Jede Zahl stammt aus dem Faktenblatt, aus der Marktrecherche (mit Fundstelle) oder ist als Annahme gekennzeichnet. Rechne nachvollziehbar und zeige den Rechenweg.
+- Nenne den Wert als Spanne mit Mittelwert und sag, wovon er am stärksten abhängt. Stelle die Kaufpreisvorstellung dem Ergebnis gegenüber, wenn eine vorliegt.
+- Fehlen die Grundlagen für ein Verfahren (z. B. keine Mieten für den Ertragswert), dann lass es weg und sag das in einem Satz, statt mit erfundenen Werten zu rechnen.
+- Fasse dich knapp: Abschnitte ohne belastbaren Inhalt bekommen einen Satz, keine Wiederholungen.
+- Das ist ein Entwurf für den internen Gebrauch, kein Gutachten — schreibe das einmal an den Anfang.
+- Form: Deutsch, reiner Text ohne Sternchen und ohne Tabellen. Überschriften in GROSSBUCHSTABEN auf eigener Zeile, Aufzählungen mit „- ". Keine Vorrede, kein Schlusswort.${
+          bisher
+            ? `\n\nDu hast bereits den folgenden Teil geschrieben; er brach aus Platzgründen ab. Setze GENAU an der Abbruchstelle fort (beginne mit dem nächsten Wort), wiederhole nichts, und führe die Arbeitsanweisung zu Ende.\n\n=== Bisheriger Text ===\n${bisher}\n=== Ende des bisherigen Textes ===`
+            : ''
+        }`,
+        { model: 'claude-sonnet-5-5', maxSearches: 0, maxTokens: 8192, timeoutMs, ohneNachdenken: true, meldeStopp: (grund) => (stopp = grund) },
+      )
+      // Die Fortsetzung schließt mitten im Satz an: ohne Leerzeile anfügen, wenn der bisherige Text nicht mit einem Satzende aufhört.
+      const naht = bisher && !/[.!?:]\s*$/.test(bisher) ? ' ' : '\n\n'
+      const text = bisher ? `${bisher.trimEnd()}${naht}${antwort.trim()}` : antwort.trim()
+      const fortsetzungen = (z.zwischen?.fortsetzungen ?? 0) + (schritt.nr === 5 ? 1 : 0)
+      const weiter = stopp === 'max_tokens' && fortsetzungen < 2 ? 5 : 6
+      await schreibe({ zwischen: { ...(z.zwischen ?? {}), text, fortsetzungen }, vorlageName: String(v.name ?? ''), schrittNr: weiter, versuch: 0, laeuftSeit: null, schritt: OBJEKT_BEWERTUNG_SCHRITTE[weiter - 1].titel })
+    }
+
+    if (schritt.nr === 6) {
+      const text = String(z.zwischen?.text ?? '').trim()
+      if (text.length < 200) throw new Error('Die KI hat keinen verwertbaren Bewertungstext geliefert.')
+      const fakten = [z.zwischen?.unterlagen, z.zwischen?.unterlagen2].filter(Boolean).join('\n\n')
+      const pruefung = await callClaudeTool<Record<string, unknown>>(
+        `Du prüfst als zweite, unabhängige Stelle den Entwurf einer Immobilienbewertung für das Objekt „${o.bezeichnung}". Du schreibst die Bewertung nicht neu.
+
+Prüfe: Stimmen die Rechenwege (rechne nach)? Stammen die verwendeten Zahlen aus dem Faktenblatt oder der Marktrecherche, oder sind sie als Annahme gekennzeichnet? Gibt es Widersprüche im Text oder zu den Grundlagen? Ist die genannte Wertspanne durch die Rechnung gedeckt?
+
+=== Faktenblatt aus den Unterlagen ===
+${fakten.trim().slice(0, 16_000) || '(keine lesbare Unterlage)'}
+
+=== Marktrecherche ===
+${String(z.zwischen?.markt ?? '').trim().slice(0, 8_000) || '(nichts gefunden)'}
+
+=== Entwurf der Bewertung ===
+${text.slice(0, 60_000)}
+=== Ende ===
+
+Rufe das Werkzeug pruefergebnis auf. Die Ergebniswerte übernimmst du aus dem Entwurf (bei einem Rechenfehler den richtig gerechneten Wert, und nenne den Fehler in „befunde"). Was im Entwurf nicht belastbar ermittelt wurde, lässt du weg — nichts schätzen.`,
+        {
+          name: 'pruefergebnis',
+          description: 'Ergebnis der Zweitprüfung und die Ergebniswerte der Bewertung.',
+          input_schema: {
+            type: 'object',
+            properties: {
+              urteil: { type: 'string', description: 'Ein bis drei Sätze: Ist der Entwurf in sich stimmig und wie belastbar ist das Ergebnis?' },
+              befunde: { type: 'array', items: { type: 'string' }, description: 'Konkrete Befunde: Rechenfehler mit richtiger Rechnung, unbelegte Zahlen, Widersprüche. Leer, wenn nichts auffällt. Höchstens acht.' },
+              marktwertVon: { type: 'number', description: 'Untere Grenze des Marktwerts in Euro' },
+              marktwertBis: { type: 'number', description: 'Obere Grenze des Marktwerts in Euro' },
+              marktwert: { type: 'number', description: 'Mittelwert oder wahrscheinlichster Marktwert in Euro' },
+              preisProQm: { type: 'number', description: 'Marktwert je m² Wohn-/Nutzfläche in Euro' },
+              mieteProQm: { type: 'number', description: 'Angesetzte Miete je m² und Monat in Euro' },
+              kaufpreisfaktor: { type: 'number', description: 'Kaufpreisfaktor (Marktwert geteilt durch Jahresnettokaltmiete)' },
+              rendite: { type: 'number', description: 'Rendite in Prozent' },
+            },
+            required: ['urteil', 'befunde'],
+          },
+        },
+        2500,
+        'claude-sonnet-5-5',
+        'auto',
+        timeoutMs,
+      )
+      const kennzahlen: Record<string, number> = {}
+      for (const feld of ['marktwertVon', 'marktwertBis', 'marktwert', 'preisProQm', 'mieteProQm', 'kaufpreisfaktor', 'rendite']) {
+        const wert = Number(pruefung[feld])
+        if (pruefung[feld] != null && Number.isFinite(wert) && wert > 0) kennzahlen[feld] = wert
+      }
+      const befunde = (Array.isArray(pruefung.befunde) ? pruefung.befunde : []).map((b) => String(b).trim()).filter(Boolean).slice(0, 8)
+      const abgebrochen = (z.zwischen?.fortsetzungen ?? 0) >= 2 && !/[.!?]\s*$/.test(text)
+      const bericht = `${text}${abgebrochen ? '\n\n(Der Text wurde an dieser Stelle aus Platzgründen beendet.)' : ''}\n\nZWEITPRÜFUNG\n\n${String(pruefung.urteil ?? '').trim()}${befunde.length > 0 ? `\n\n${befunde.map((b) => `- ${b}`).join('\n')}` : '\n\n- Keine Auffälligkeiten bei Rechenwegen und Zahlenherkunft.'}`
+      await schreibe({ status: 'fertig', schritt: 'Fertig', schrittNr: undefined, laeuftSeit: null, bericht, kennzahlen, zwischen: undefined, protokoll: undefined, abgeschlossenAm: new Date().toISOString() })
+      return
+    }
+    await stosseObjektBewertungAn(objektId, 0)
+  } catch (err) {
+    if (err instanceof BewertungVerworfen) return
+    console.error(`Objekt-Bewertung, Schritt ${schritt.nr} fehlgeschlagen:`, err)
+    const versuch = (z.versuch ?? 0) + 1
+    // Für die Fehlersuche: was genau schiefging und wie viel Zeit der Aufruf hatte.
+    const protokoll = [...(z.protokoll ?? []), `Schritt ${schritt.nr}, Versuch ${versuch}: ${err instanceof Error ? `${err.name}: ${err.message}` : String(err)} (Zeit für den Aufruf ${Math.round(timeoutMs / 1000)} s, Umleitungen ${umleitungen})`.slice(0, 400)].slice(-8)
+    if (versuch <= 2) {
+      await schreibe({ versuch, laeuftSeit: null, protokoll }).catch(() => {})
+      await warteBisWorkerAbgeloestWird()
+      await stosseObjektBewertungAn(objektId, 0)
+    } else {
+      const zeit = err instanceof Error && /abort|timeout|timed out/i.test(`${err.name} ${err.message}`)
+      await schreibe({
+        status: 'fehler',
+        laeuftSeit: null,
+        protokoll,
+        fehler: `Schritt „${schritt.titel}" ist auch nach drei Versuchen gescheitert: ${zeit ? 'Der KI-Dienst hat nicht rechtzeitig geantwortet.' : err instanceof Error ? err.message : String(err)}`,
+        abgeschlossenAm: new Date().toISOString(),
+      }).catch(() => {})
+    }
+  }
 }
 
 // KI-Dokumentenverarbeitung für per Telegram geschickte Kunden-Unterlagen (siehe telegram-gateway):
@@ -2645,6 +2928,10 @@ Deno.serve(async (req: Request) => {
       // Vom Zeitplan jede Minute, ohne Login: verschickt fällige Erinnerungen, gibt nur eine Zahl zurück.
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
       const ergebnis = await sendeErinnerungen(admin)
+      // Im selben Takt (die Funktion bremst sich selbst auf alle fünf Minuten): neue Treffer zwischen
+      // Gesuchen und Objekten erkennen und den Zuständigen per Telegram melden.
+      const treffer = body.ohneTreffer === true ? { gelaufen: false, neu: 0, benachrichtigt: 0 } : await pruefeNeueTreffer(admin, sendeTelegram)
+      if (treffer.gelaufen && treffer.neu > 0) console.log(`Gesuch-Treffer: ${treffer.neu} neu, ${treffer.benachrichtigt} Nachricht(en).`)
       // Derselbe Minutentakt hält auch die Warteschlange für Sammelsendungen per Telegram in Gang
       // (falls ein Schritt abgebrochen ist oder an der Mengengrenze des KI-Dienstes warten musste).
       try {
@@ -3225,11 +3512,17 @@ Deno.serve(async (req: Request) => {
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
       const { data, error: selectError } = await admin
         .from('objekte')
-        .select('bezeichnung, adresse, typ, dokumente, eigentuemer')
+        .select('bezeichnung, adresse, typ, dokumente, eigentuemer, unterlagen_anforderungen')
         .eq('id', objektId)
         .maybeSingle()
       if (selectError) return new Response(JSON.stringify({ error: selectError.message }), { status: 500, headers })
-      return new Response(JSON.stringify({ objekt: data }), { headers })
+      if (!data) return new Response(JSON.stringify({ objekt: null }), { headers })
+      // Von der jüngsten Anforderung sieht der Eigentümer nur, WAS erbeten wurde — nicht, wer sie an wen geschickt hat.
+      // deno-lint-ignore no-explicit-any
+      const { unterlagen_anforderungen: anforderungen, ...oeffentlich } = data as any
+      const juengste = Array.isArray(anforderungen) ? anforderungen[0] : null
+      const angefordert = juengste ? { datum: String(juengste.datum ?? ''), ordner: Array.isArray(juengste.ordner) ? juengste.ordner.map(String) : [], weitere: typeof juengste.weitere === 'string' ? juengste.weitere : undefined } : undefined
+      return new Response(JSON.stringify({ objekt: { ...oeffentlich, angefordert } }), { headers })
     }
 
     // Erzeugt einen Signed-Upload-Token statt den Datei-Inhalt selbst entgegenzunehmen — eine Edge
@@ -3401,6 +3694,39 @@ Deno.serve(async (req: Request) => {
 
     // Immobilien-Objekte: Vorschlag fürs Verkaufsdatenblatt und Text nach hinterlegter KI-Anweisung — nur mit eigenem Login.
     // Mail aus dem gemeinsamen Postfach einem Immobilien-Objekt zuordnen (Anhänge in die Objektakte) — nur mit eigenem Login.
+    // Nur zur Messung: Alter und Kennung des Prozesses, der diese Anfrage beantwortet.
+    if (body.action === 'worker_stand') {
+      return new Response(JSON.stringify({ kennung: WORKER_KENNUNG, alterMs: Date.now() - WORKER_GEBOOTET }), { headers })
+    }
+
+    // Nur zur Messung: schreibt im Hintergrund alle vier Sekunden sein Alter, bis der Prozess beendet wird.
+    if (body.action === 'worker_puls') {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
+      EdgeRuntime.waitUntil(
+        (async () => {
+          for (;;) {
+            await admin.from('abteilung_eintraege').upsert({ id: 'worker_puls', art: 'worker_puls', daten: { kennung: WORKER_KENNUNG, alterMs: Date.now() - WORKER_GEBOOTET }, updated_at: new Date().toISOString() })
+            await new Promise((r) => setTimeout(r, 4000))
+          }
+        })(),
+      )
+      return new Response(JSON.stringify({ kennung: WORKER_KENNUNG, alterMs: Date.now() - WORKER_GEBOOTET }), { headers })
+    }
+
+    if (body.action === 'eingang_ablegen' || body.action === 'eingang_entfernen') {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const aufrufer = await ermittleAufrufer(req, admin, body)
+      if (!aufrufer) {
+        return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
+      }
+      const dokumentIds = Array.isArray(body.dokumentIds) ? body.dokumentIds.map(String) : []
+      const wer = { name: aufrufer.name || aufrufer.email }
+      const ergebnis = body.action === 'eingang_ablegen' ? await legeEingaengeAb(admin, { dokumentIds, ziel: body.ziel }, wer) : await nimmEingaengeHeraus(admin, dokumentIds, wer)
+      if (!ergebnis.ok) return new Response(JSON.stringify({ error: ergebnis.fehler }), { status: 400, headers })
+      return new Response(JSON.stringify(ergebnis), { headers })
+    }
+
     if (body.action === 'mail_objekt_zuordnen') {
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
       const aufrufer = await ermittleAufrufer(req, admin, body)
@@ -3431,6 +3757,61 @@ Deno.serve(async (req: Request) => {
         const zeit = err instanceof Error && /abort|timeout|timed out/i.test(`${err.name} ${err.message}`)
         return new Response(JSON.stringify({ error: zeit ? 'Das Lesen der Unterlagen hat zu lange gedauert. Bitte noch einmal versuchen — beim zweiten Mal geht es oft schneller.' : err instanceof Error ? err.message : String(err) }), { status: zeit ? 504 : 500, headers })
       }
+    }
+
+    if (body.action === 'objekt_bewertung_start' || body.action === 'objekt_bewertung_verwerfen') {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const aufrufer = await ermittleAufrufer(req, admin, body)
+      if (!aufrufer) {
+        return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
+      }
+      const objektId = typeof body.objektId === 'string' ? body.objektId : ''
+      const { data: objekt } = await admin.from('objekte').select('id, bewertung').eq('id', objektId).maybeSingle()
+      if (!objekt) return new Response(JSON.stringify({ error: 'Dieses Objekt gibt es nicht (mehr).' }), { status: 404, headers })
+      if (body.action === 'objekt_bewertung_verwerfen') {
+        const { error: fehler } = await admin.from('objekte').update({ bewertung: null }).eq('id', objektId)
+        if (fehler) return new Response(JSON.stringify({ error: fehler.message }), { status: 500, headers })
+        return new Response(JSON.stringify({ ok: true }), { headers })
+      }
+      // deno-lint-ignore no-explicit-any
+      const alt = (objekt as any).bewertung as ObjektBewertungZustand | null
+      if (alt?.status === 'laeuft' && alt.aktualisiertAm && Date.now() - new Date(alt.aktualisiertAm).getTime() < 4 * 60_000) {
+        return new Response(JSON.stringify({ error: 'Für dieses Objekt läuft gerade schon eine Bewertung.' }), { status: 409, headers })
+      }
+      const { data: vorlage } = await admin.from('vorlagen').select('id, name, kategorie, text').eq('id', String(body.vorlageId ?? '')).maybeSingle()
+      if (!vorlage || vorlage.kategorie !== 'ki' || !String(vorlage.text ?? '').trim()) {
+        return new Response(JSON.stringify({ error: 'Diese KI-Anweisung gibt es nicht oder sie hat keinen Text.' }), { status: 400, headers })
+      }
+      const gestartetAm = new Date().toISOString()
+      const zustand: ObjektBewertungZustand = {
+        status: 'laeuft',
+        schritt: OBJEKT_BEWERTUNG_SCHRITTE[0].titel,
+        schrittNr: 1,
+        schritteGesamt: OBJEKT_BEWERTUNG_SCHRITTE.length,
+        versuch: 0,
+        laeuftSeit: null,
+        gestartetAm,
+        aktualisiertAm: gestartetAm,
+        gestartetVon: aufrufer.name || aufrufer.email,
+        vorlageId: String(vorlage.id),
+        vorlageName: String(vorlage.name ?? ''),
+        zusatz: typeof body.zusatz === 'string' ? body.zusatz.slice(0, 1500) : '',
+        zwischen: {},
+      }
+      const { error: startFehler } = await admin.from('objekte').update({ bewertung: zustand }).eq('id', objektId)
+      if (startFehler) return new Response(JSON.stringify({ error: startFehler.message }), { status: 500, headers })
+      await stosseObjektBewertungAn(objektId, 0)
+      return new Response(JSON.stringify({ ok: true }), { headers })
+    }
+
+    // Führt den nächsten offenen Schritt der Bewertung aus; antwortet sofort und arbeitet im Hintergrund.
+    if (body.action === 'objekt_bewertung_schritt') {
+      if (typeof body.objektId !== 'string' || !body.objektId) {
+        return new Response(JSON.stringify({ error: 'objektId fehlt.' }), { status: 400, headers })
+      }
+      // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
+      EdgeRuntime.waitUntil(fuehreObjektBewertungAus(body.objektId, Number(body.umleitungen) || 0, body.wiederaufnehmen === true))
+      return new Response(JSON.stringify({ ok: true }), { headers })
     }
 
     if (body.action === 'dokument_lesen') {

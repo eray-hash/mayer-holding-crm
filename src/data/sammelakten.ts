@@ -7,4 +7,5 @@ export const AKTE_INTERN = 'k_intern_holding'
 
 export const istSammelakte = (kundeId: string) => kundeId === AKTE_UNGEKLAERT || kundeId === AKTE_INTERN
 
-export const PFAD_UNGEKLAERT = `/beratung/kunden/${AKTE_UNGEKLAERT}`
+// Die Sortier-Ansicht (pages/eingang/UngeklaerteEingaenge.tsx); die Akte selbst liegt weiter unter /beratung/kunden/….
+export const PFAD_UNGEKLAERT = '/eingaenge'

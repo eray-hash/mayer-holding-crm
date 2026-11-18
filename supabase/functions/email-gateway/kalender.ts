@@ -44,7 +44,7 @@ async function ladeTeam(admin: Db): Promise<Map<string, Person>> {
   return team
 }
 
-async function sendeTelegram(chat: number | string | null, text: string): Promise<boolean> {
+export async function sendeTelegram(chat: number | string | null, text: string): Promise<boolean> {
   const token = Deno.env.get('TELEGRAM_BOT_TOKEN')
   if (!token || !chat) return false
   try {

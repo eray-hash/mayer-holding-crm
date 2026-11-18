@@ -5,11 +5,26 @@ import { useApp } from '../../context/AppContext'
 import { useAuth } from '../../context/AuthContext'
 import { Card, EmptyState, Field, inputClass, Modal, PrimaryButton } from '../../components/ui'
 import { GesuchFormular } from '../../components/GesuchFormular'
-import { alleGesuche, budgetText, passendeObjekte } from '../../lib/gesuche'
+import { alleGesuche, budgetText, passendeObjekte, pruefe } from '../../lib/gesuche'
+import { entdecktText, neueTrefferMeldungen, NEU_TAGE, paarSchluessel } from '../../lib/trefferMeldungen'
 import { kundeBereichLabel, kundeDetailPfad } from '../../data/kundenBereiche'
 import { CURRENT_USER } from '../../data/constants'
 import { fmtDate, fmtEUR, today, uid } from '../../lib/dates'
-import type { Gesuch, Kunde } from '../../types'
+import type { Gesuch, Kunde, KundeBereich } from '../../types'
+
+function kontaktPfad(bereich: KundeBereich, kundeId: string): string {
+  return bereich === 'immobilienkunden' ? `/immobilien/kunden/${kundeId}?tab=stammdatenblatt` : kundeDetailPfad(bereich, kundeId)
+}
+
+/** Kleine Marke für Paare, die der Server in den letzten Tagen neu entdeckt hat. */
+function NeuMarke() {
+  return <span className="rounded-full bg-accent-50 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-accent-700">neu</span>
+}
+
+// So viele neue Treffer zeigt die Karte oben, bevor „alle anzeigen" nötig wird — auf dem Handy weniger,
+// weil dort jeder Eintrag mehrere Zeilen braucht und die Karte sonst den ganzen Bildschirm füllt.
+const NEUE_ZUERST = 5
+const NEUE_ZUERST_HANDY = 3
 
 /** Alle Gesuche auf einen Blick — wer sucht was, und welche Objekte aus dem Bestand dazu passen.
  *  Ein neues Gesuch ist in einer Minute erfasst: Kontakt wählen (oder neu anlegen), Wunsch eintragen. */
@@ -20,15 +35,36 @@ export function Gesuche() {
   const [auchErledigte, setAuchErledigte] = useState(false)
   const [offen, setOffen] = useState<string | null>(null)
   const [neu, setNeu] = useState(false)
+  const [alleNeuen, setAlleNeuen] = useState(false)
+
+  const alle = useMemo(() => alleGesuche(state), [state])
+
+  // Vom Server neu entdeckte Treffer (Regel für „neu": siehe src/lib/trefferMeldungen.ts). Gezeigt wird
+  // nur, was nach dem Abgleich dieser Seite auch jetzt noch passt — überholte Meldungen räumt der Server
+  // erst bei seinem nächsten Lauf ab. Auch ob es ein Treffer oder „zu prüfen" ist, kommt aus dem Abgleich
+  // der Seite, damit Karte und Liste nie Verschiedenes sagen.
+  const neueTreffer = useMemo(() => {
+    const liste = []
+    for (const meldung of neueTrefferMeldungen(state.trefferMeldungen ?? [])) {
+      const z = alle.find((x) => x.gesuch.id === meldung.gesuchId && x.kunde.id === meldung.kundeId)
+      const objekt = state.objekte.find((o) => o.id === meldung.objektId)
+      if (!z || !objekt || z.gesuch.erledigt) continue
+      const t = pruefe(z.gesuch, objekt)
+      if (!t) continue
+      liste.push({ meldung, gesuch: z.gesuch, kunde: z.kunde, bereich: z.bereich, objekt, sicher: t.offen.length === 0 })
+    }
+    return liste
+  }, [alle, state.objekte, state.trefferMeldungen])
+  const neuePaare = useMemo(() => new Set(neueTreffer.map((n) => paarSchluessel(n.gesuch.id, n.objekt.id))), [neueTreffer])
 
   const zeilen = useMemo(() => {
     const begriff = suche.trim().toLowerCase()
-    return alleGesuche(state)
+    return alle
       .filter((z) => auchErledigte || !z.gesuch.erledigt)
       .filter((z) => !begriff || `${z.kunde.firma} ${z.kunde.ansprechpartner} ${z.gesuch.titel} ${z.gesuch.lage} ${z.gesuch.objekttypen.join(' ')} ${z.gesuch.notizen}`.toLowerCase().includes(begriff))
       .map((z) => ({ ...z, treffer: passendeObjekte(z.gesuch, state.objekte) }))
       .sort((a, b) => b.gesuch.erstelltAm.localeCompare(a.gesuch.erstelltAm))
-  }, [state, suche, auchErledigte])
+  }, [alle, state.objekte, suche, auchErledigte])
 
   return (
     <div>
@@ -43,6 +79,45 @@ export function Gesuche() {
           <Plus size={15} /> Neues Gesuch
         </PrimaryButton>
       </div>
+
+      {neueTreffer.length > 0 && (
+        <Card className="mb-4 overflow-hidden">
+          <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 border-b border-slate-100 px-4 py-2.5">
+            <h2 className="text-sm font-semibold text-slate-800">Neue Treffer</h2>
+            <span className="text-xs text-slate-400">
+              {neueTreffer.length} in den letzten {NEU_TAGE} Tagen
+            </span>
+          </div>
+          <ul className="divide-y divide-slate-100">
+            {(alleNeuen ? neueTreffer : neueTreffer.slice(0, NEUE_ZUERST)).map((n, i) => (
+              <li key={n.meldung.id} className={`${!alleNeuen && i >= NEUE_ZUERST_HANDY ? 'hidden sm:flex' : 'flex'} flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2 text-sm`}>
+                <div className="min-w-0 flex-1 basis-60 break-words">
+                  <Link to={`/immobilien/objekte/${n.objekt.id}`} className="font-medium text-accent-600 hover:underline">
+                    {n.objekt.bezeichnung}
+                  </Link>
+                  <span className="text-slate-500"> passt zu „{n.gesuch.titel}“ von </span>
+                  <Link to={kontaktPfad(n.bereich, n.kunde.id)} className="font-medium text-accent-600 hover:underline">
+                    {n.kunde.firma || n.kunde.ansprechpartner}
+                  </Link>
+                </div>
+                <div className="flex shrink-0 items-center gap-2 text-xs">
+                  <span className={`rounded-full px-2 py-0.5 font-medium ${n.sicher ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>{n.sicher ? 'Treffer' : 'zu prüfen'}</span>
+                  <span className="text-slate-400">{entdecktText(n.meldung.entdecktAm)}</span>
+                </div>
+              </li>
+            ))}
+          </ul>
+          {neueTreffer.length > NEUE_ZUERST_HANDY && (
+            <button
+              onClick={() => setAlleNeuen(!alleNeuen)}
+              className={`${neueTreffer.length > NEUE_ZUERST ? '' : 'sm:hidden'} w-full border-t border-slate-100 px-4 py-2 text-left text-xs font-medium text-accent-600 hover:bg-slate-50`}
+              aria-expanded={alleNeuen}
+            >
+              {alleNeuen ? 'weniger anzeigen' : `alle ${neueTreffer.length} anzeigen`}
+            </button>
+          )}
+        </Card>
+      )}
 
       <Card className="mb-4 flex flex-wrap items-center gap-3 p-3">
         <div className="relative min-w-52 flex-1">
@@ -62,7 +137,8 @@ export function Gesuche() {
             const schluessel = `${kunde.id}:${g.id}`
             const auf = offen === schluessel
             const sicher = treffer.filter((t) => t.offen.length === 0).length
-            const kontaktLink = bereich === 'immobilienkunden' ? `/immobilien/kunden/${kunde.id}?tab=stammdatenblatt` : kundeDetailPfad(bereich, kunde.id)
+            const kontaktLink = kontaktPfad(bereich, kunde.id)
+            const hatNeue = treffer.some((t) => neuePaare.has(paarSchluessel(g.id, t.objekt.id)))
             return (
               <div key={schluessel} className={g.erledigt ? 'opacity-60' : ''}>
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3">
@@ -80,18 +156,21 @@ export function Gesuche() {
                       {bereich === 'immobilienkunden' ? 'Immobilien-Kontakt' : kundeBereichLabel(bereich)} · {fmtDate(g.erstelltAm)}
                     </div>
                   </div>
-                  <button
-                    onClick={() => setOffen(auf ? null : schluessel)}
-                    disabled={treffer.length === 0}
-                    className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-medium ${
-                      sicher > 0 ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : treffer.length > 0 ? 'bg-amber-50 text-amber-700 hover:bg-amber-100' : 'bg-slate-50 text-slate-400'
-                    }`}
-                    title="Treffer: alle Angaben passen. Zu prüfen: Beim Objekt fehlt eine Angabe (z. B. der Kaufpreis), deshalb ist der Abgleich nicht sicher."
-                    aria-expanded={auf}
-                  >
-                    {treffer.length === 0 ? 'kein Treffer' : [sicher > 0 ? `${sicher} Treffer` : '', treffer.length - sicher > 0 ? `${treffer.length - sicher} zu prüfen` : ''].filter(Boolean).join(' · ')}
-                    {treffer.length > 0 && <ChevronDown size={13} className={auf ? 'rotate-180' : ''} />}
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setOffen(auf ? null : schluessel)}
+                      disabled={treffer.length === 0}
+                      className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-medium ${
+                        sicher > 0 ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : treffer.length > 0 ? 'bg-amber-50 text-amber-700 hover:bg-amber-100' : 'bg-slate-50 text-slate-400'
+                      }`}
+                      title="Treffer: alle Angaben passen. Zu prüfen: Beim Objekt fehlt eine Angabe (z. B. der Kaufpreis), deshalb ist der Abgleich nicht sicher."
+                      aria-expanded={auf}
+                    >
+                      {treffer.length === 0 ? 'kein Treffer' : [sicher > 0 ? `${sicher} Treffer` : '', treffer.length - sicher > 0 ? `${treffer.length - sicher} zu prüfen` : ''].filter(Boolean).join(' · ')}
+                      {treffer.length > 0 && <ChevronDown size={13} className={auf ? 'rotate-180' : ''} />}
+                    </button>
+                    {hatNeue && <NeuMarke />}
+                  </div>
                 </div>
                 {auf && (
                   <ul className="space-y-1 bg-slate-50 px-4 py-3">
@@ -100,6 +179,12 @@ export function Gesuche() {
                         <Link to={`/immobilien/objekte/${t.objekt.id}`} className="font-medium text-accent-600 hover:underline">
                           {t.objekt.bezeichnung}
                         </Link>
+                        {neuePaare.has(paarSchluessel(g.id, t.objekt.id)) && (
+                          <>
+                            {' '}
+                            <NeuMarke />
+                          </>
+                        )}
                         <span className="text-xs text-slate-500">
                           {' '}
                           · {t.objekt.typ}
