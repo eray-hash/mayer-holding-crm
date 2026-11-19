@@ -24,6 +24,7 @@ import { bereichName, darfAkte, darfBereich, darfObjekte, freigegebeneBereiche, 
 import { aufgabenUebersicht } from './aufgaben.ts'
 import { type AbteilungZeile, alleObjektDokumente, lesenVonSelbst, leseRef, OBJEKT_SPALTEN, objektakteText, objektStatus, type ObjektRow, sucheObjekte } from './objektakte.ts'
 import { richteFotoAus } from './bildDrehung.ts'
+import { loescheTelegramNachricht, sensibelHinweis, sensibleArt, sensiblerEingang } from './sensibel.ts'
 import { kollegenBenachrichtigen, type MitteilungsWege, schickeMitteilung, todoAnlegen, todoErledigen } from './teamWerkzeuge.ts'
 import { datumDeutsch, empfaengerVon, findeEmpfaenger, ladeAnhaengeFuerVersand, MAIL_SPALTEN, type MailZeile, volltextVon, VOLLTEXT_HOECHSTENS, type WeiterleitungEntwurf, weiterleitungsBetreff, weiterleitungsText } from './mailWerkzeuge.ts'
 
@@ -3333,7 +3334,13 @@ function sortierBericht(aktionen: string[]): string {
   const jeAkte = new Map<string, number>()
   const neueAkten: string[] = []
   const nichtGespeichert: string[] = []
+  let sensibelGeloescht = 0
   for (const a of aktionen) {
+    const sensibel = /^SENSIBEL (\d+)$/.exec(a)
+    if (sensibel) {
+      sensibelGeloescht += Number(sensibel[1])
+      continue
+    }
     const ablage = /^(\d+) Datei\(en\) (?:bei|unter) (.+?) abgelegt/.exec(a)
     if (ablage) jeAkte.set(ablage[2], (jeAkte.get(ablage[2]) ?? 0) + Number(ablage[1]))
     const neu = /^Kunde (.+?) im Bereich (.+?) (?:automatisch )?angelegt/.exec(a)
@@ -3346,6 +3353,9 @@ function sortierBericht(aktionen: string[]): string {
   if (neueAkten.length > 0) zeilen.push('', `Neu angelegte Akten (bitte kurz prüfen): ${neueAkten.join(', ')}`)
   if (jeAkte.has('Ungeklärte Eingänge')) zeilen.push('', 'Was unter „Ungeklärte Eingänge" liegt, konnte ich keinem Kunden zuordnen. Sag mir einfach, wohin es soll.')
   if (nichtGespeichert.length > 0) zeilen.push('', ...nichtGespeichert.slice(0, 5))
+  if (sensibelGeloescht > 0) {
+    zeilen.push('', `Hinweis: ${sensibelGeloescht === 1 ? 'Ein sensibles Dokument (z. B. Ausweis, Kontoauszug, Vertrag) habe ich' : `${sensibelGeloescht} sensible Dokumente (z. B. Ausweise, Kontoauszüge, Verträge) habe ich`} im CRM abgelegt und aus diesem Chat gelöscht. Solche Unterlagen bitte künftig direkt im CRM hochladen.`)
+  }
   return zeilen.join('\n').slice(0, 3900)
 }
 
@@ -3366,6 +3376,8 @@ export async function fuehreSortierSchrittAus(mitarbeiterId: string, selbstWeite
     const bericht: string[] = Array.isArray(m.datei_bericht) ? [...m.datei_bericht] : []
     const gespeichert = stapel.filter((z) => String(z.zeile).startsWith('pfad='))
     for (const z of stapel) if (!String(z.zeile).startsWith('pfad=')) bericht.push(String(z.zeile))
+    const sensibelGeloescht = gespeichert.filter((z) => /aus dem Telegram-Chat gelöscht/.test(String(z.zeile))).length
+    if (sensibelGeloescht > 0) bericht.push(`SENSIBEL ${sensibelGeloescht}`)
     if (gespeichert.length > 0) {
       const eingang = [
         '[Datei-Eingang per Telegram — Systemmeldung, nicht vom Mitarbeiter getippt]',
@@ -3561,6 +3573,8 @@ async function verarbeiteUpdate(update: any): Promise<void> {
   // wird dafür nicht abgelegt — sonst läge jeder gesprochene Auftrag als Datei in einer Akte.
   let dateiLauf: string | null = null
   let gesprochen = ''
+  // Sensible Unterlage (Ausweis, Kontoauszug …): nach dem Ablegen aus dem Chat löschen (sensibel.ts).
+  let sensibel: string | null = null
   if (message.voice && !weitergeleitet && kannAbhoeren()) {
     try {
       const ton = await telegramDateiHerunterladen(message.voice.file_id)
@@ -3582,8 +3596,15 @@ async function verarbeiteUpdate(update: any): Promise<void> {
     const { count: wartend } = await supabase.from('telegram_warteschlange').select('id', { count: 'exact', head: true }).eq('mitarbeiter_id', String(mitarbeiter.id))
     dateiLauf = (wartend ?? 0) === 0 ? await belegeDateiLauf(supabase, mitarbeiter.id) : null
     if (!dateiLauf) {
-      let zeile = await speichereNurDatei(supabase, await ladeTelegramEingang(message))
+      const datei = await ladeTelegramEingang(message)
+      let zeile = await speichereNurDatei(supabase, datei)
       if (weitergeleitet && vonWem && zeile.startsWith('pfad=')) zeile += ` | weitergeleitet, ursprünglich von ${vonWem}`
+      // Sammelsendung: Die Datei ist gespeichert, aber noch nicht ausgewertet — hier zählen nur
+      // Dateiname und Bildunterschrift. Gelöscht wird erst, wenn die Datei sicher in der Ablage liegt.
+      const artSammel = zeile.startsWith('pfad=') && !/^(audio|video)\//.test(datei.contentType) ? sensibleArt([datei.dateiname, datei.caption]) : null
+      if (artSammel && (await loescheTelegramNachricht(BOT_TOKEN, chatId, message.message_id))) {
+        zeile += ` | sensibel: ${artSammel}, aus dem Telegram-Chat gelöscht`
+      }
       await supabase.from('telegram_warteschlange').insert({ mitarbeiter_id: String(mitarbeiter.id), chat_id: String(chatId), zeile })
       // Genau eine Rückmeldung je Sammelsendung: Nur wer den Bericht als Erster eröffnet, schreibt.
       const { data: erster } = await supabase.from('mitarbeiter').update({ datei_bericht: [] }).eq('id', mitarbeiter.id).is('datei_bericht', null).select('id')
@@ -3595,7 +3616,9 @@ async function verarbeiteUpdate(update: any): Promise<void> {
       return
     }
     try {
-      eingang = await verarbeiteDateiEingang(supabase, await ladeTelegramEingang(message), mitarbeiter)
+      const datei = await ladeTelegramEingang(message)
+      eingang = await verarbeiteDateiEingang(supabase, datei, mitarbeiter)
+      sensibel = sensiblerEingang(eingang, datei)
     } catch (err) {
       await gebeDateiLaufFrei(supabase, mitarbeiter.id, dateiLauf)
       throw err
@@ -3620,7 +3643,9 @@ async function verarbeiteUpdate(update: any): Promise<void> {
     // Auch wenn der Assistent ausfällt, bleibt nichts liegen: Die Datei kommt in die Sammelakte.
     const notAblage = istDatei ? await stelleAblageSicher(supabase, mitarbeiter.name, eingang).catch(() => []) : []
     const dateiHinweis = notAblage.length > 0 ? ` Deine Datei liegt unter „Ungeklärte Eingänge": ${notAblage.join(', ')}.` : istDatei ? ' Deine Datei ist gespeichert.' : ''
-    await sendTelegramMessage(chatId, `Da ist gerade etwas schiefgelaufen (${err instanceof Error ? err.message : 'unbekannter Fehler'}).${dateiHinweis}${istDatei ? '' : ' Versuch es bitte gleich noch einmal.'}`)
+    // Auch hier ist die Datei gespeichert und notfalls in der Sammelakte — eine sensible Unterlage kann raus.
+    const geloescht = sensibel ? await loescheTelegramNachricht(BOT_TOKEN, chatId, message.message_id) : false
+    await sendTelegramMessage(chatId, `Da ist gerade etwas schiefgelaufen (${err instanceof Error ? err.message : 'unbekannter Fehler'}).${dateiHinweis}${istDatei ? '' : ' Versuch es bitte gleich noch einmal.'}${geloescht && sensibel ? `\n\n${sensibelHinweis(sensibel)}` : ''}`)
     return
   }
   if (istDatei) {
@@ -3636,6 +3661,11 @@ async function verarbeiteUpdate(update: any): Promise<void> {
   }
   // Der Versand startet erst, nachdem der Zustand mit dem Auftrag gespeichert ist — der erste
   // Versandschritt liest ihn von dort.
+  // Sensible Unterlage: Sie ist gespeichert und abgelegt (Assistent bzw. Sicherheitsnetz oben) —
+  // jetzt aus dem Telegram-Chat löschen. Klappt das Löschen nicht, bleibt alles wie bisher.
+  if (istDatei && sensibel && (await loescheTelegramNachricht(BOT_TOKEN, chatId, message.message_id))) {
+    antwort = `${antwort}\n\n${sensibelHinweis(sensibel)}`
+  }
   const mailStart = await speichereZustand(supabase, mitarbeiter.id, state)
   await sendTelegramMessage(chatId, antwort)
   if (mailStart) await stosseMailSchrittAn(mitarbeiter.id, mailStart, {}, 0)
