@@ -24,6 +24,8 @@ import { bereichName, darfAkte, darfBereich, darfObjekte, freigegebeneBereiche, 
 import { aufgabenUebersicht } from './aufgaben.ts'
 import { type AbteilungZeile, alleObjektDokumente, lesenVonSelbst, leseRef, OBJEKT_SPALTEN, objektakteText, objektStatus, type ObjektRow, sucheObjekte } from './objektakte.ts'
 import { richteFotoAus } from './bildDrehung.ts'
+import { kollegenBenachrichtigen, type MitteilungsWege, schickeMitteilung, todoAnlegen, todoErledigen } from './teamWerkzeuge.ts'
+import { datumDeutsch, empfaengerVon, findeEmpfaenger, ladeAnhaengeFuerVersand, MAIL_SPALTEN, type MailZeile, volltextVon, VOLLTEXT_HOECHSTENS, type WeiterleitungEntwurf, weiterleitungsBetreff, weiterleitungsText } from './mailWerkzeuge.ts'
 
 const BOT_TOKEN = Deno.env.get('TELEGRAM_BOT_TOKEN')
 const WEBHOOK_SECRET = Deno.env.get('TELEGRAM_WEBHOOK_SECRET')
@@ -34,9 +36,12 @@ const ANTHROPIC_API_KEY = Deno.env.get('ANTHROPIC_API_KEY')
 const AGENT_MODEL = Deno.env.get('TELEGRAM_AGENT_MODEL') ?? 'claude-sonnet-5-5'
 // Abschrift von Sprachnachrichten und Aufnahmen (Whisper). Ohne Schlüssel bleibt alles beim Alten:
 // Tonaufnahmen werden gespeichert, aber nicht verstanden.
-const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY')
-const TRANSKRIPTION_URL = Deno.env.get('TRANSKRIPTION_URL') ?? 'https://api.openai.com/v1/audio/transcriptions'
-const TRANSKRIPTION_MODELL = Deno.env.get('TRANSKRIPTION_MODELL') ?? 'whisper-1'
+// Seit 19.11.2026 genügt ein kostenloser Groq-Schlüssel (GROQ_API_KEY): Groq bietet dieselbe
+// Schnittstelle wie OpenAI, Adresse und Modell werden dann passend gewählt.
+const GROQ_API_KEY = Deno.env.get('GROQ_API_KEY')
+const OPENAI_API_KEY = GROQ_API_KEY ?? Deno.env.get('OPENAI_API_KEY')
+const TRANSKRIPTION_URL = Deno.env.get('TRANSKRIPTION_URL') ?? (GROQ_API_KEY ? 'https://api.groq.com/openai/v1/audio/transcriptions' : 'https://api.openai.com/v1/audio/transcriptions')
+const TRANSKRIPTION_MODELL = Deno.env.get('TRANSKRIPTION_MODELL') ?? (GROQ_API_KEY ? 'whisper-large-v3-turbo' : 'whisper-1')
 // Sprache der Aufnahmen; leer = selbst erkennen lassen. Deutsch als Vorgabe, weil kurze deutsche
 // Sätze sonst gelegentlich als andere Sprache erkannt und "übersetzt" werden.
 const TRANSKRIPTION_SPRACHE = Deno.env.get('TRANSKRIPTION_SPRACHE') ?? 'de'
@@ -856,6 +861,8 @@ type AgentState = {
   mail_start?: string
   // Abschlussmeldung des letzten Versands — das CRM-Fenster fragt sie ab, Telegram bekommt sie zugestellt.
   mail_ergebnis?: { id: string; text: string; z: string }
+  // Vorbereitete, noch nicht bestätigte Weiterleitung einer Mail (mail_weiterleiten): gilt nur für die direkt folgende Nachricht.
+  weiterleitung_anfrage?: WeiterleitungEntwurf
   // Ergebnisse der letzten Datei-Eingänge (Antwort auf eine im CRM-Fenster hochgeladene Datei, Bericht
   // einer Sammelsendung) — das CRM-Fenster fragt sie ab.
   datei_ergebnisse?: { id: string; text: string; z: string }[]
@@ -885,6 +892,7 @@ export function ladeState(raw: unknown): AgentState {
     mail_anfrage: r?.mail_anfrage,
     mail_auftrag: r?.mail_auftrag,
     mail_ergebnis: r?.mail_ergebnis,
+    weiterleitung_anfrage: r?.weiterleitung_anfrage,
     datei_ergebnisse: Array.isArray(r?.datei_ergebnisse) ? r.datei_ergebnisse.slice(-6) : undefined,
   }
 }
@@ -926,6 +934,7 @@ type ToolKontext = {
   state: AgentState
   vorherigeLoeschAnfrage: AgentState['loesch_anfrage']
   vorherigeMailAnfrage: AgentState['mail_anfrage']
+  vorherigeWeiterleitung?: AgentState['weiterleitung_anfrage']
   // Die Nachricht, auf die gerade geantwortet wird (für Werkzeuge, die nur auf ausdrücklichen Wunsch laufen).
   eingang?: string
   // Internetrecherchen in diesem Zug (begrenzt, siehe internet_recherche).
@@ -1239,9 +1248,29 @@ export const TOOLS = [
     input_schema: { type: 'object', properties: { termin_id: { type: 'string' } }, required: ['termin_id'] },
   },
   {
+    name: 'termin_aendern',
+    description:
+      'Ändert einen bestehenden Termin (termin_id aus termine_zeigen) direkt — Titel, Zeit, Ort, Notiz oder Teilnehmer. Immer statt Absagen und neu Anlegen verwenden, sonst bekommen die Teilnehmer doppelte Nachrichten. Nur angeben, was sich ändert. Wird beginn ohne ende verschoben, bleibt die Dauer gleich. Die Beteiligten bekommen genau eine Nachricht „Termin geändert“ (bei reinen Tippfehlern im Titel keine); neu Hinzugefügte eine Einladung, Entfernte eine Absage. Ändern kann nur, wer den Termin angelegt hat. Meldet das Werkzeug eine Überschneidung, frag nach und ruf es mit trotz_ueberschneidung=true erneut auf.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        termin_id: { type: 'string' },
+        titel: { type: 'string' },
+        beginn: { type: 'string', description: 'Neuer Beginn, JJJJ-MM-TTTHH:MM (bei ganztägig JJJJ-MM-TT).' },
+        ende: { type: 'string', description: 'Neues Ende, JJJJ-MM-TTTHH:MM.' },
+        ganztags: { type: 'boolean' },
+        ort: { type: 'string' },
+        notiz: { type: 'string' },
+        teilnehmer: { type: 'array', items: { type: 'string' }, description: 'VOLLSTÄNDIGE neue Liste der Kollegen (ohne den Mitarbeiter selbst). Weglassen, wenn sich an den Teilnehmern nichts ändert.' },
+        trotz_ueberschneidung: { type: 'boolean' },
+      },
+      required: ['termin_id'],
+    },
+  },
+  {
     name: 'privater_bereich',
     description:
-      'Zeigt, was im PRIVATEN Bereich des Mitarbeiters liegt, mit dem du gerade sprichst (nur seine eigenen Sachen, niemand sonst sieht sie): Mails aus seinem privaten Postfach (Eingang und Gesendet) und seine privaten Kontakte. Nur verwenden, wenn er ausdrücklich nach seinem privaten Postfach / seinen privaten Kontakten fragt oder etwas daraus in den öffentlichen Bereich holen will.',
+      'Zeigt, was im PRIVATEN Bereich des Mitarbeiters liegt, mit dem du gerade sprichst (nur seine eigenen Sachen, niemand sonst sieht sie): Mails aus seinem privaten Postfach (Eingang und Gesendet) und seine privaten Kontakte. Nur verwenden, wenn er ausdrücklich nach seinem privaten Postfach / seinen privaten Kontakten fragt oder etwas daraus in den öffentlichen Bereich holen will. Die Liste zeigt von jeder Mail nur den Anfang — den ganzen Text liefert mail_lesen.',
     input_schema: {
       type: 'object',
       properties: {
@@ -1290,6 +1319,27 @@ export const TOOLS = [
     },
   },
   {
+    name: 'mail_lesen',
+    description:
+      'Liest EINE Mail vollständig (ganzer Text samt Verlauf, Absender, Empfänger, Datum, Anhänge) — aus dem gemeinsamen Postfach oder aus dem eigenen privaten Postfach des Mitarbeiters. Die Listen von gemeinsames_postfach und privater_bereich zeigen nur den Anfang; nutze mail_lesen immer, wenn es auf Einzelheiten ankommt (Termin, Uhrzeit, Link, Betrag, Frist) oder der Mitarbeiter etwas aus einer Mail geprüft haben will. mail_id stammt aus einer dieser Listen.',
+    input_schema: { type: 'object', properties: { mail_id: { type: 'string' } }, required: ['mail_id'] },
+  },
+  {
+    name: 'mail_weiterleiten',
+    description:
+      'Leitet eine empfangene Mail (gemeinsames Postfach oder eigenes privates Postfach) samt Anhängen an einen Kollegen (an dessen CRM-Mailadresse) oder an eine genannte E-Mail-Adresse weiter, auf Wunsch mit kurzer Notiz. Zweistufig wie mail_senden: Erst ohne senden aufrufen — das zeigt die Fassung, NICHTS wird verschickt; zeige sie dem Mitarbeiter und frag. Erst wenn er in seiner nächsten Nachricht ausdrücklich zustimmt, mit senden=true und derselben mail_id erneut aufrufen.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        mail_id: { type: 'string', description: 'Kennung aus gemeinsames_postfach, privater_bereich oder mail_lesen.' },
+        an: { type: 'string', description: 'Name eines Kollegen (Vor- oder Nachname genügt, wenn eindeutig) oder eine E-Mail-Adresse.' },
+        notiz: { type: 'string', description: 'Optional: kurze Zeile über der weitergeleiteten Mail, z. B. „Bitte schau dir die Einladung an."' },
+        senden: { type: 'boolean', description: 'Nur true, wenn der Mitarbeiter die gezeigte Fassung in seiner letzten Nachricht freigegeben hat.' },
+      },
+      required: ['mail_id', 'an'],
+    },
+  },
+  {
     name: 'firmenueberblick',
     description: 'Überblick über ALLE Kunden und Immobilien-Objekte der für den Mitarbeiter freigegebenen Bereiche (Status, Zuständigkeit, letzte Aktivität, Suchprofile) samt aller fälligen Follow-ups. Für Fragen, die nicht einen einzelnen Kunden betreffen ("was steht heute an", "welche Käufer suchen …", "wer ist im Status …").',
     input_schema: { type: 'object', properties: {} },
@@ -1322,6 +1372,48 @@ export const TOOLS = [
       required: ['titel'],
     },
   },
+  {
+    name: 'kollegen_benachrichtigen',
+    description:
+      'Schickt einem oder mehreren Kollegen (höchstens 5) eine kurze Nachricht per Telegram, z. B. "ich habe für X eine Akte angelegt, schau mal rein". Kein Termin nötig. Die Nachricht beginnt automatisch mit "Nachricht von <Name>:". Nur auf ausdrücklichen Wunsch des Mitarbeiters ("sag Hasan Bescheid", "gib Andreas kurz Bescheid"). Formuliere den Text knapp und sachlich in seinem Sinn; ist unklar, was drinstehen soll, frag kurz nach.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        mitarbeiter: { type: 'string', description: 'Vorname oder Name des Kollegen, mehrere mit Komma getrennt.' },
+        text: { type: 'string', description: 'Die Nachricht, reiner Text ohne Markdown.' },
+      },
+      required: ['mitarbeiter', 'text'],
+    },
+  },
+  {
+    name: 'todo_anlegen',
+    description:
+      'Legt ein To-do ohne Kundenakte an (für Aufgaben mit Kundenakte nimm aufgabe_setzen). Ohne bereich und fuer landet es in der eigenen To-do-Liste des Mitarbeiters. Es erscheint im CRM in der To-do-Liste und unter "Aufgaben nach Mitarbeiter". Datum als JJJJ-MM-TT oder TT.MM.JJJJ.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        aufgabe: { type: 'string', description: 'Was zu tun ist, ein Satz.' },
+        erledigen_bis: { type: 'string', description: 'Fälligkeit, optional.' },
+        kunde_projekt: { type: 'string', description: 'Optional: Stichwort zu Kunde, Projekt oder Thema (freier Text).' },
+        zustaendig: { type: 'string', description: 'Optional: wer es erledigt, falls nicht der Mitarbeiter selbst.' },
+        prio: { type: 'string', enum: ['A', 'B', 'C'], description: 'Optional: A = dringend, B = normal, C = wenn Zeit ist.' },
+        bereich: { type: 'string', enum: ['beratung', 'immobilien', 'erben', 'betriebsuebergabe', 'betriebsformen', 'akademie', 'finanzierungen'], description: 'Optional: in die gemeinsame To-do-Liste dieses Bereichs statt in die eigene.' },
+        fuer: { type: 'string', description: 'Optional, nur Geschäftsführung: Name eines Kollegen, in dessen eigene Liste es soll.' },
+      },
+      required: ['aufgabe'],
+    },
+  },
+  {
+    name: 'todo_erledigen',
+    description: 'Hakt ein offenes To-do ab (eigene Liste oder freigegebene Bereichsliste). Mit todo_id oder einem Suchbegriff aus dem Aufgabentext; bei mehreren Treffern kommt eine Liste zum Nachfragen.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        todo_id: { type: 'string' },
+        suchbegriff: { type: 'string', description: 'Wort oder Teil aus dem Aufgabentext.' },
+      },
+    },
+  },
 ]
 
 // deno-lint-ignore no-explicit-any
@@ -1341,9 +1433,14 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     return ergebnis.neu ? `Notiert: „${ergebnis.titel}“.` : `Diesen Wunsch gab es schon („${ergebnis.titel}“); er ist jetzt ${ergebnis.anzahl}× vermerkt.`
   }
 
+  // Team-Werkzeuge (teamWerkzeuge.ts): Nachricht an Kollegen, To-dos ohne Kundenakte.
+  if (name === 'kollegen_benachrichtigen') return await kollegenBenachrichtigen(supabase, MITTEILUNGS_WEGE, mitarbeiter, input, protokolliere)
+  if (name === 'todo_anlegen') return await todoAnlegen(supabase, mitarbeiter, input, protokolliere)
+  if (name === 'todo_erledigen') return await todoErledigen(supabase, mitarbeiter, input, protokolliere)
+
   // Kalender: Lesen direkt (an die eigene Adresse gebunden), Schreiben über die Mail-Funktion — dort
   // liegen Überschneidungsprüfung, Telegram-Nachricht an Beteiligte und die Erinnerungen.
-  if (name === 'termine_zeigen' || name === 'termin_anlegen' || name === 'termin_absagen') {
+  if (name === 'termine_zeigen' || name === 'termin_anlegen' || name === 'termin_absagen' || name === 'termin_aendern') {
     const ich = String(mitarbeiter.email ?? '').trim().toLowerCase()
     if (!ich) return 'Fehler: Für diesen Mitarbeiter ist keine E-Mail-Adresse hinterlegt.'
     const { data: teamZeilen } = await supabase.from('mitarbeiter').select('name, email').eq('aktiv', true)
@@ -1407,6 +1504,82 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
       if (!ergebnis.ok) return `Fehler: ${ergebnis.daten?.error ?? `Absagen fehlgeschlagen (${ergebnis.status})`}`
       protokolliere(`Termin ${ergebnis.daten.art === 'abgesagt' ? 'abgesagt' : 'für sich abgesagt'} (termin_id=${input.termin_id})`)
       return ergebnis.daten.art === 'abgesagt' ? 'Der Termin ist abgesagt; die Beteiligten wurden benachrichtigt.' : 'Du bist aus dem Termin ausgetragen; wer ihn angelegt hat, wurde benachrichtigt.'
+    }
+
+    // Termin ändern: bestehende Werte übernehmen, nur Genanntes ersetzen, dann über dieselbe
+    // Speicherfunktion wie das CRM (email-gateway kalender.ts) — dort Rechte, Überschneidung,
+    // Erinnerungen und genau eine Nachricht je Beteiligtem.
+    if (name === 'termin_aendern') {
+      const id = String(input.termin_id ?? '').trim()
+      const { data: vorherZeile } = await supabase.from('termine').select('id, titel, beschreibung, ort, beginn, ende, ganztags, besitzer_email, teilnehmer, kunde_id, kunde_bereich, kunde_name').eq('id', id).maybeSingle()
+      // deno-lint-ignore no-explicit-any
+      const vorher = vorherZeile as any
+      if (!vorher) return 'Fehler: Diesen Termin gibt es nicht (mehr). Ermittle die termin_id mit termine_zeigen.'
+      const besitzer = String(vorher.besitzer_email).toLowerCase()
+      if (besitzer !== ich) {
+        if ((vorher.teilnehmer ?? []).includes(ich)) return `Nicht geändert: Ändern kann den Termin nur, wer ihn angelegt hat (${nameVon(besitzer)}). Du kannst dich mit termin_absagen austragen oder ${nameVon(besitzer)} um die Änderung bitten.`
+        return 'Fehler: Das ist nicht dein Termin.'
+      }
+      const berlinTag = (iso: string) => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Berlin' }).format(new Date(iso))
+      const altBeginn = new Date(vorher.beginn)
+      const altEnde = new Date(vorher.ende)
+      const dauer = altEnde.getTime() - altBeginn.getTime()
+      const ganztags = typeof input.ganztags === 'boolean' ? input.ganztags : vorher.ganztags === true
+      let beginn: Date | null
+      let ende: Date | null
+      if (ganztags) {
+        beginn = input.beginn ? berlinZuZeitpunkt(String(input.beginn).slice(0, 10)) : vorher.ganztags ? altBeginn : berlinZuZeitpunkt(berlinTag(vorher.beginn))
+        if (!beginn) return 'Fehler: beginn muss das Format JJJJ-MM-TT haben.'
+        const endeTag = input.ende ? berlinZuZeitpunkt(String(input.ende).slice(0, 10)) : null
+        ende = endeTag ? new Date(endeTag.getTime() + 86400000) : vorher.ganztags ? new Date(beginn.getTime() + dauer) : new Date(beginn.getTime() + 86400000)
+      } else {
+        if (input.beginn) {
+          beginn = berlinZuZeitpunkt(String(input.beginn))
+          if (!beginn || !/T\d{2}:\d{2}/.test(String(input.beginn))) return 'Fehler: beginn muss das Format JJJJ-MM-TTTHH:MM haben.'
+        } else if (vorher.ganztags) {
+          return 'Fehler: Der Termin ist bisher ganztägig — für einen Termin mit Uhrzeit bitte beginn (JJJJ-MM-TTTHH:MM) angeben.'
+        } else beginn = altBeginn
+        const endeEingabe = input.ende ? berlinZuZeitpunkt(String(input.ende)) : null
+        if (input.ende && !endeEingabe) return 'Fehler: ende muss das Format JJJJ-MM-TTTHH:MM haben.'
+        ende = endeEingabe ?? new Date(beginn.getTime() + (vorher.ganztags ? 3600000 : dauer))
+      }
+      let teilnehmer: string[] = (vorher.teilnehmer ?? []).map((p: string) => String(p).toLowerCase())
+      if (Array.isArray(input.teilnehmer)) {
+        teilnehmer = []
+        for (const angabe of input.teilnehmer) {
+          const person = findePerson(String(angabe))
+          if (!person) return `Fehler: „${angabe}" ist kein eindeutiger Kollege. Aktive Kollegen: ${team.filter((m) => m.email !== ich).map((m) => m.name).join(', ')}.`
+          teilnehmer.push(person.email)
+        }
+      }
+      const ergebnis = await rufeKalender({
+        action: 'termin_speichern',
+        termin: {
+          id,
+          titel: input.titel !== undefined ? String(input.titel).trim() : vorher.titel,
+          beginn: beginn.toISOString(),
+          ende: ende.toISOString(),
+          ganztags,
+          teilnehmer,
+          ort: input.ort !== undefined ? String(input.ort) : vorher.ort ?? '',
+          beschreibung: input.notiz !== undefined ? String(input.notiz) : vorher.beschreibung ?? '',
+          kunde: vorher.kunde_id ? { id: vorher.kunde_id, bereich: vorher.kunde_bereich, name: vorher.kunde_name } : null,
+          trotzUeberschneidung: input.trotz_ueberschneidung === true,
+        },
+      })
+      if (ergebnis.status === 409) return `Überschneidung: ${ergebnis.daten?.error} Nicht geändert. Frag, ob trotzdem geändert werden soll (dann trotz_ueberschneidung=true) oder ein anderer Zeitpunkt.`
+      if (!ergebnis.ok) return `Fehler: ${ergebnis.daten?.error ?? `Termin konnte nicht geändert werden (${ergebnis.status})`}`
+      const t = ergebnis.daten.termin
+      protokolliere(`Termin „${t.titel}" geändert, ${berlinText(t.beginn, t.ende, t.ganztags)} (termin_id=${t.id})`)
+      const weg = (vorher.teilnehmer ?? []).filter((p: string) => !teilnehmer.includes(String(p).toLowerCase())).map((p: string) => nameVon(String(p).toLowerCase()))
+      return [
+        `Geändert: „${t.titel}", ${berlinText(t.beginn, t.ende, t.ganztags)}${t.ort ? `, Ort: ${t.ort}` : ''}. termin_id=${t.id}`,
+        (ergebnis.daten.benachrichtigt ?? []).length > 0 ? `Per Telegram benachrichtigt: ${ergebnis.daten.benachrichtigt.join(', ')}.` : teilnehmer.length > 0 ? 'Keine Nachricht an die Teilnehmer nötig (nichts für sie Wichtiges geändert).' : '',
+        weg.length > 0 ? `Aus dem Termin genommen (mit Nachricht): ${weg.join(', ')}.` : '',
+        (ergebnis.daten.ohneTelegram ?? []).length > 0 ? `Ohne Nachricht (Telegram nicht verbunden): ${ergebnis.daten.ohneTelegram.join(', ')}.` : '',
+      ]
+        .filter(Boolean)
+        .join(' ')
     }
 
     const beginn = berlinZuZeitpunkt(String(input.beginn ?? ''))
@@ -1574,7 +1747,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
         akte: m.zugewiesener_kunde_id ? { kunde_id: m.zugewiesener_kunde_id, name: m.zugewiesener_kunde_name } : 'noch keiner Akte zugeordnet',
         anhaenge,
         hinweis: anhaenge.length === 0 ? undefined : m.zugewiesener_kunde_id ? 'Die Anhänge liegen in den Dokumenten der Akte (kundenakte_lesen, dokument_inhalt).' : 'Den Inhalt der Anhänge kannst du erst lesen, wenn die Mail mit mail_zuordnen einer Akte zugeordnet ist.',
-        text: kuerze(voll.trim(), 6000),
+        text: kuerze(volltextVon({ ...m, ausschnitt: voll } as MailZeile), VOLLTEXT_HOECHSTENS),
       })
     }
     const tage = Math.min(60, Math.max(1, Number(input.tage) || 7))
@@ -1609,6 +1782,122 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
         anfang: String(m.ausschnitt ?? '').replace(/\s+/g, ' ').slice(0, 200),
       })),
     )
+  }
+
+  // Eine Mail ganz lesen bzw. weiterleiten: aus dem eigenen privaten Postfach (nur der Besitzer) oder
+  // aus dem gemeinsamen Postfach (mit denselben Bereichsrechten wie gemeinsames_postfach).
+  if (name === 'mail_lesen' || name === 'mail_weiterleiten') {
+    const ich = String(mitarbeiter.email ?? '').trim().toLowerCase()
+    const kennung = String(input.mail_id ?? '').trim()
+    if (!kennung || kennung.length > 400 || /[\s"]/.test(kennung)) return 'Fehler: mail_id ist ungültig — exakt aus der Liste von gemeinsames_postfach oder privater_bereich übernehmen.'
+    const istUuid = /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(kennung)
+    let mail: MailZeile | null = null
+    if (ich) {
+      const { data } = await supabase.from('eingegangene_emails').select(MAIL_SPALTEN).eq(istUuid ? 'id' : 'message_id', kennung).eq('besitzer_email', ich).limit(1).maybeSingle()
+      mail = (data as MailZeile | null) ?? null
+    }
+    if (!mail) {
+      const { data } = await supabase.from('eingegangene_emails').select(MAIL_SPALTEN).eq(istUuid ? 'id' : 'message_id', kennung).is('besitzer_email', null).limit(1).maybeSingle()
+      mail = (data as MailZeile | null) ?? null
+      if (mail && !siehtAlleBereiche(mitarbeiter) && mail.zugewiesener_kunde_id) {
+        const nachgeschlagen = mail.zugewiesener_bereich ? new Map<string, string>() : await bereicheDerAkten(supabase, [String(mail.zugewiesener_kunde_id)])
+        if (!darfZuordnung(mitarbeiter, mail.zugewiesener_kunde_id, mail.zugewiesener_bereich, nachgeschlagen)) {
+          return nichtFreigegeben(mail.zugewiesener_bereich || nachgeschlagen.get(String(mail.zugewiesener_kunde_id)), mitarbeiter.name)
+        }
+      }
+    }
+    if (!mail) return 'Fehler: Diese Mail gibt es weder im gemeinsamen Postfach noch im eigenen privaten Postfach dieses Mitarbeiters. Private Mails von Kollegen sind nicht lesbar.'
+    const privat = !!mail.besitzer_email
+    const anhaenge = (mail.anhaenge ?? []).map((a) => `${a.filename ?? 'Anhang'} (${formatGroesse(Number(a.size ?? 0))})`)
+
+    if (name === 'mail_lesen') {
+      const voll = volltextVon(mail)
+      const { an, cc } = empfaengerVon(mail)
+      return JSON.stringify({
+        mail_id: privat ? mail.message_id ?? mail.id : mail.id,
+        postfach: privat ? 'privat (nur dieser Mitarbeiter)' : 'gemeinsam',
+        von: `${mail.von_name ?? ''} <${mail.von ?? ''}>`,
+        an,
+        cc,
+        datum: datumDeutsch(mail.mail_datum),
+        betreff: mail.betreff,
+        akte: privat ? undefined : mail.zugewiesener_kunde_id ? { kunde_id: mail.zugewiesener_kunde_id, name: mail.zugewiesener_kunde_name } : 'noch keiner Akte zugeordnet',
+        anhaenge,
+        laenge: voll.length,
+        vollstaendig: voll.length <= VOLLTEXT_HOECHSTENS,
+        text: kuerze(voll, VOLLTEXT_HOECHSTENS),
+      })
+    }
+
+    // mail_weiterleiten
+    const { data: teamDaten } = await supabase.from('mitarbeiter').select('name, email').eq('aktiv', true)
+    const empfaenger = findeEmpfaenger(String(input.an ?? ''), ((teamDaten ?? []) as { name: string; email: string | null }[]).filter((m) => m.name))
+    if (typeof empfaenger === 'string') return empfaenger
+    if (empfaenger.email === ich) return 'Fehler: Das ist die eigene Adresse des Mitarbeiters — eine Weiterleitung an sich selbst ist nicht nötig.'
+    const notiz = String(input.notiz ?? '').trim().slice(0, 2000)
+    const betreff = weiterleitungsBetreff(mail.betreff)
+
+    // Absender: private Mails nur über das eigene Postfach (sonst stünde die private Mail im gemeinsamen
+    // Gesendet-Ordner), Mails aus dem gemeinsamen Postfach über das Hauptpostfach der Firma.
+    let postfachId: string | undefined
+    if (privat) {
+      const { data: faecher } = await supabase.from('postfaecher').select('id, adresse, smtp_host, aktiv').eq('besitzer_email', ich)
+      // deno-lint-ignore no-explicit-any
+      const sendefaehig = ((faecher ?? []) as any[]).filter((p) => p.aktiv !== false && p.smtp_host)
+      const fach = sendefaehig.find((p) => p.id === mail!.postfach_id) ?? sendefaehig[0]
+      if (!fach) return 'Nicht möglich: Diese Mail liegt im privaten Postfach, und von dort kann das CRM nicht senden (kein Postfach mit Versand verbunden). Der Mitarbeiter kann die Mail in seinem Mail-Programm weiterleiten oder sie zuerst mit in_oeffentlich_holen ins gemeinsame Postfach holen.'
+      postfachId = fach.id
+    }
+
+    if (input.senden !== true) {
+      const entwurf: WeiterleitungEntwurf = { id: crypto.randomUUID().slice(0, 8), mail_id: kennung, privat, an: empfaenger.email, an_name: empfaenger.name, notiz, betreff, z: new Date().toISOString() }
+      state.weiterleitung_anfrage = entwurf
+      const text = weiterleitungsText(mail, notiz, mitarbeiter.name)
+      return [
+        'NOCH NICHT GESENDET. Zeige dem Mitarbeiter Empfänger, Betreff, Notiz und Anhänge und frag, ob du so weiterleiten sollst. Leite erst weiter (mail_weiterleiten mit senden=true und derselben mail_id), wenn er in seiner nächsten Nachricht klar zustimmt.',
+        '',
+        `An: ${empfaenger.name} <${empfaenger.email}>`,
+        `Absender: ${privat ? 'das eigene Postfach des Mitarbeiters' : 'das Postfach der Firma'}`,
+        `Betreff: ${betreff}`,
+        `Notiz: ${notiz || '(keine — nur „Weitergeleitet von …")'}`,
+        `Anhänge: ${anhaenge.length > 0 ? anhaenge.join(', ') : 'keine'}`,
+        '',
+        'Anfang der Weiterleitung:',
+        '-----',
+        kuerze(text, 1200),
+        '-----',
+      ].join('\n')
+    }
+
+    const vorher = ctx.vorherigeWeiterleitung
+    if (!vorher || vorher.mail_id !== kennung || vorher.an !== empfaenger.email || Date.now() - new Date(vorher.z).getTime() > 30 * 60 * 1000) {
+      return 'Nichts gesendet: Diese Weiterleitung wurde dem Mitarbeiter noch nicht gezeigt oder er hat sie nicht in seiner letzten Nachricht freigegeben. Erst ohne senden aufrufen, die Fassung zeigen und auf seine Zustimmung warten.'
+    }
+    const { fertig, ausgelassen } = await ladeAnhaengeFuerVersand(supabase, mail.anhaenge, SUPABASE_URL)
+    const antwort = await fetch(`${SUPABASE_URL}/functions/v1/email-gateway`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${SERVICE_ROLE_KEY}`, ...(CRM_SHARED_SECRET ? { 'x-crm-secret': CRM_SHARED_SECRET } : {}) },
+      body: JSON.stringify({
+        action: 'send',
+        to: empfaenger.email,
+        toName: empfaenger.name,
+        subject: betreff,
+        text: weiterleitungsText(mail, vorher.notiz, mitarbeiter.name),
+        attachments: fertig,
+        imAuftragVon: ich,
+        ohneRechnungsErkennung: true,
+        ...(privat ? { privat: true, postfachId } : {}),
+      }),
+    })
+    const daten = await antwort.json().catch(() => ({}))
+    if (!antwort.ok) return `Fehler beim Weiterleiten: ${daten?.error ?? `Versand fehlgeschlagen (${antwort.status})`}`
+    protokolliere(`Mail „${mail.betreff}" an ${empfaenger.name} <${empfaenger.email}> weitergeleitet${fertig.length ? ` (${fertig.length} Anhänge)` : ''}`)
+    const kollege = ((teamDaten ?? []) as { name: string; email: string | null }[]).some((m) => String(m.email ?? '').toLowerCase() === empfaenger.email)
+    return [
+      `Weitergeleitet an ${empfaenger.name} <${empfaenger.email}>: „${betreff}"${fertig.length ? ` mit ${fertig.length} Anhang/Anhängen` : ''}.`,
+      ausgelassen.length ? `Nicht mitgeschickt: ${ausgelassen.join(', ')}.` : '',
+      kollege ? 'Wenn der Mitarbeiter möchte, kannst du dem Kollegen zusätzlich per Telegram Bescheid geben.' : '',
+    ].filter(Boolean).join(' ')
   }
 
   if (name === 'mail_zuordnen') {
@@ -2603,8 +2892,9 @@ So arbeitest du:
 - Behaupte nie, etwas erledigt zu haben, was kein Werkzeug bestätigt hat. Meldet ein Werkzeug einen Fehler oder kannst du etwas nicht, sag das offen und was stattdessen geht.
 - Erfinde nichts. Was nicht in Werkzeug-Ergebnissen oder im Gespräch steht, weißt du nicht. Ob es einen Kunden gibt oder nicht, sagst du erst, nachdem du mit kunden_suchen nachgesehen hast. Ob es ein Objekt gibt oder nicht, sagst du erst nach objekte_suchen.
 - Die Bereiche der Holding heißen: Unternehmensberatung, Immobilien, Erben, Betriebsübergabe, Betriebsformen, Akademie, Finanzierungen. Verwende im Gespräch diese Namen.
-- Kalender: Jeder Mitarbeiter hat seinen eigenen Kalender. Du zeigst und buchst Termine mit termine_zeigen, termin_anlegen und termin_absagen. Uhrzeiten sind immer deutsche Ortszeit. Fehlt für einen neuen Termin der Tag oder die Uhrzeit, frag kurz nach, statt zu raten; ohne genannte Dauer gilt eine Stunde. Soll ein Kollege dabei sein, sieh vorher mit termine_zeigen (person) nach, ob er frei ist, und schlag bei Belegung einen freien Zeitpunkt vor. Von fremden Terminen kennst du nur die Uhrzeit — sag dann „ist belegt“, nie mehr.
+- Kalender: Jeder Mitarbeiter hat seinen eigenen Kalender. Du zeigst und buchst Termine mit termine_zeigen, termin_anlegen und termin_absagen. Uhrzeiten sind immer deutsche Ortszeit. Fehlt für einen neuen Termin der Tag oder die Uhrzeit, frag kurz nach, statt zu raten; ohne genannte Dauer gilt eine Stunde. Soll ein Kollege dabei sein, sieh vorher mit termine_zeigen (person) nach, ob er frei ist, und schlag bei Belegung einen freien Zeitpunkt vor. Von fremden Terminen kennst du nur die Uhrzeit — sag dann „ist belegt“, nie mehr. Soll ein bestehender Termin anders heißen, verschoben werden, einen anderen Ort oder andere Teilnehmer bekommen, nimm termin_aendern — nie absagen und neu anlegen. Ganztägige Einträge (Erinnerungen) blockieren keine Termine mit Uhrzeit.
 - Gemeinsames Postfach: Du kannst das gemeinsame Postfach der Firma lesen (gemeinsames_postfach). Sagt jemand, von einem Kunden sei eine Mail gekommen, oder fragt nach Unterlagen aus einer Mail, sieh dort nach, statt zu sagen, dass dir nichts vorliegt. Mails bekannter Absender werden automatisch ihrer Akte zugeordnet, die Anhänge liegen dann in den Dokumenten der Akte. Ist eine Mail noch keiner Akte zugeordnet und ist klar, zu wem sie gehört, ordne sie mit mail_zuordnen zu; ist es unklar, frag nach. Den Inhalt von Anhängen liest du über die Akte (dokument_inhalt), nicht über das Postfach.
+- Mails ganz lesen und weiterleiten: Die Postfach-Listen zeigen nur den Anfang. Geht es um Einzelheiten (Termin, Uhrzeit, Ort, Link, Betrag, Frist), lies die Mail mit mail_lesen ganz, bevor du antwortest — sag nie, du sähest nur den Anfang. Will jemand eine Mail an einen Kollegen oder eine Adresse weiterleiten, nimm mail_weiterleiten: erst die Fassung zeigen, erst nach seiner Zustimmung in der nächsten Nachricht mit senden=true senden.
 - Privater Bereich: Jeder Mitarbeiter hat einen privaten Bereich (eigenes Postfach, eigene Kontakte), den nur er selbst sieht. Du zeigst daraus nur etwas, wenn er ausdrücklich danach fragt (privater_bereich), und holst nur dann etwas in den öffentlichen Bereich (in_oeffentlich_holen), wenn er es klar verlangt. Passen mehrere Mails oder Kontakte, fragst du nach, welche gemeint ist. Bei einem Kontakt brauchst du den Ziel-Bereich; nennt er keinen, frag danach. Sag nach dem Rüberholen in einem Satz, wo es jetzt liegt.
 - Beziehe "er", "sie", "ihm", "seine Akte" auf den Kunden, um den es im Gespräch zuletzt ging. Ist nicht eindeutig, welcher Kunde gemeint ist (mehrere Treffer, kein Treffer, kein Bezug), frag kurz nach, statt zu raten. Lege niemals etwas bei einem Kunden ab, der nur vielleicht gemeint ist; bei Dateien nimmst du in diesem Fall die Sammelakte ziel=ungeklaert, statt zu fragen.
 - Fragt der Mitarbeiter im Gespräch nach einem Kunden, den es noch nicht gibt, sag das und biete an, ihn anzulegen. Frag nach dem Bereich, wenn er nicht klar ist. Sagt der Mitarbeiter klar, dass und wo er angelegt werden soll, leg ihn an. Für geschickte Dateien und weitergeleitete Nachrichten gilt das nicht: Dort legst du selbst an, ohne zu fragen (siehe unten).
@@ -2629,6 +2919,8 @@ So arbeitest du:
 - Für Fragen quer über alle Kunden oder Objekte ("was steht heute an", "wer sucht ...") nutze firmenueberblick.
 - Aufgaben und Zuständigkeiten: Fragt jemand, wer was bis wann erledigen muss, was bei ihm oder einem Kollegen ansteht oder was überfällig ist, nutze aufgaben_uebersicht (nicht firmenueberblick). Antworte nach Person gegliedert, Überfälliges zuerst, mit Datum. Ist die Liste lang, nenne zuerst das Fällige und sag, wie viel ohne Datum dazukommt; die vollständige Liste steht im CRM unter „Aufgaben nach Mitarbeiter“ (Symbol mit Häkchenliste oben rechts).
 - Immobilien-Objekte: Fragt jemand nach einem Ort, einer Adresse oder einer Immobilie ("was weißt du über Suppingen"), suchst du mit objekte_suchen und liest dann mit objektakte_lesen die ganze Objektakte. Antworte daraus vollständig, aber übersichtlich: Eckdaten, Preis, Eigentümer, Stand von Verkaufsdatenblatt, Kurzprüfung und Bewertung, welche Unterlagen da sind und was sie enthalten, offene Fragen, nächste Schritte. Ist ein Feld leer, sag kurz, dass es noch nicht eingetragen ist, statt es wegzulassen. Für den Inhalt einzelner Unterlagen nutzt du dokument_inhalt mit objekt_id.
+- Kollegen Bescheid geben: Bittet der Mitarbeiter, einem Kollegen etwas auszurichten oder ihm kurz Bescheid zu geben ("sag Hasan, dass die Akte angelegt ist"), schickst du das mit kollegen_benachrichtigen. Dafür ist kein Termin nötig. Sag danach, wem du was geschickt hast und wer nicht mit Telegram verbunden ist.
+- To-dos ohne Kundenakte: Will der Mitarbeiter sich oder einem Bereich eine Aufgabe notieren, die zu keinem Kunden gehört ("schreib mir auf: Steuerunterlagen bis Freitag sortieren"), legst du sie mit todo_anlegen an, standardmäßig in seiner eigenen To-do-Liste. Gehört die Aufgabe zu einer Kundenakte, nimmst du aufgabe_setzen. Erledigtes hakst du mit todo_erledigen ab.
 - Wünsche an das CRM: Kannst du etwas, worum der Mitarbeiter bittet, nicht tun, weil dir dafür die Möglichkeit fehlt (nicht, weil ein Kunde oder eine Angabe fehlt oder ein Bereich nicht freigegeben ist), oder sagt er "wäre gut, wenn …", "Wunsch: …" oder "könnte das CRM …", hältst du das mit wunsch_notieren fest: Titel und Beschreibung auf Ebene der Funktion, ohne Kundennamen, Beträge oder Inhalte aus Unterlagen. Sag ihm danach offen in einem kurzen Satz, dass du es als Wunsch für die Geschäftsführung notiert hast.
 - Internet: Bittet dich der Mitarbeiter ausdrücklich, etwas im Internet nachzusehen oder zu recherchieren ("recherchier den Laden", "was findest du online über die Firma X"), nutzt du internet_recherche. Gib dabei alle Anhaltspunkte aus dem Gespräch oder der Akte mit (Firmenname, Ort, Webseite), damit keine gleichnamige Firma erwischt wird. Recherchiere nur Geschäftliches und Öffentliches: Firmen, Geschäftsführer und Inhaber in ihrer beruflichen Rolle, Webseite, Handelsregister, Bewertungen, Presse. Zum Privatleben von Personen (Gesundheit, Familie, Beziehungen, Privatanschrift) recherchierst du nie; sag das in einem Satz. Ohne ausdrückliche Bitte recherchierst du nicht, auch nicht beim Ablegen von Dateien. Sag beim Weitergeben, dass es aus dem Internet stammt und veraltet oder falsch sein kann, und nenne die Quellenadressen. Ins CRM übernimmst du davon nur etwas, wenn der Mitarbeiter es ausdrücklich verlangt.
 
@@ -2639,8 +2931,16 @@ Ton und Form:
 - Nenne bei jeder Änderung, bei welchem Kunden du was genau getan hast. Nenne keine internen IDs oder Dateipfade, außer der Mitarbeiter fragt danach.
 - Sprich nie über deine Werkzeuge und nenne nie ihre Namen. Sag einfach, was du tust oder nicht tust.`
 
+// Länge einer Modellantwort. 2000 reichte nicht: Am 18.11.2026 wollte der Assistent beim Anlegen einer
+// Akte gleich eine lange Ersteinschätzung als Notiz speichern, die Antwort brach mitten im
+// Werkzeug-Aufruf ab (stop_reason max_tokens), und der Mitarbeiter las „nicht fertig geworden",
+// obwohl die Akte schon angelegt war. Bricht eine Antwort trotzdem ab, wird derselbe Schritt einmal mit
+// ANTWORT_TOKENS_GROSS wiederholt (siehe agentAntwort). Bezahlt wird nur, was tatsächlich erzeugt wird.
+const ANTWORT_TOKENS = 4000
+const ANTWORT_TOKENS_GROSS = 12000
+
 // deno-lint-ignore no-explicit-any
-async function claude(system: unknown[], messages: unknown[]): Promise<any> {
+async function claude(system: unknown[], messages: unknown[], maxTokens = ANTWORT_TOKENS): Promise<any> {
   if (!ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY ist nicht gesetzt.')
   // Mengengrenze (429) oder Überlast (529) des KI-Dienstes: kurz warten und noch einmal versuchen,
   // statt dem Mitarbeiter sofort einen Fehler zu zeigen.
@@ -2648,7 +2948,7 @@ async function claude(system: unknown[], messages: unknown[]): Promise<any> {
     const res = await kiAufruf('telegram-gateway', 'https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({ model: AGENT_MODEL, max_tokens: 2000, system, tools: TOOLS, messages }),
+      body: JSON.stringify({ model: AGENT_MODEL, max_tokens: maxTokens, system, tools: TOOLS, messages }),
     })
     const data = await res.json().catch(() => ({}))
     if (res.ok) return data
@@ -2664,9 +2964,10 @@ async function claude(system: unknown[], messages: unknown[]): Promise<any> {
 // Ein Gesprächszug: bekommt die neue Nachricht (oder einen Datei-Eingang), arbeitet mit Werkzeugen,
 // bis eine Antwort feststeht, und schreibt Verlauf und Aktionsprotokoll in den übergebenen Zustand.
 export async function agentAntwort(supabase: Supa, mitarbeiter: Mitarbeiter, state: AgentState, eingang: string, kanal: 'telegram' | 'web' = 'telegram'): Promise<string> {
-  const ctx: ToolKontext = { supabase, mitarbeiter, state, vorherigeLoeschAnfrage: state.loesch_anfrage, vorherigeMailAnfrage: state.mail_anfrage, eingang, recherchen: 0 }
+  const ctx: ToolKontext = { supabase, mitarbeiter, state, vorherigeLoeschAnfrage: state.loesch_anfrage, vorherigeMailAnfrage: state.mail_anfrage, vorherigeWeiterleitung: state.weiterleitung_anfrage, eingang, recherchen: 0 }
   state.loesch_anfrage = undefined // gilt nur für die direkt folgende Nachricht
   state.mail_anfrage = undefined // ebenso: freigeben kann man nur die gerade gezeigte Fassung
+  state.weiterleitung_anfrage = undefined // ebenso für eine vorbereitete Weiterleitung
   state.mail_start = undefined
 
   const neu: Nachricht[] = [{ role: 'user', content: eingang }]
@@ -2697,8 +2998,17 @@ export async function agentAntwort(supabase: Supa, mitarbeiter: Mitarbeiter, sta
   ]
 
   let antwort = ''
+  const aktionenVorher = state.aktionen.length
+  let gross = false
   for (let schritt = 0; schritt < 12; schritt++) {
-    const data = await claude(system, messages())
+    let data = await claude(system, messages())
+    // Abgeschnittene Antwort (meist ein langer Notiztext im Werkzeug-Aufruf): denselben Schritt einmal
+    // mit mehr Platz wiederholen — aber nur, wenn die Laufzeit des Servers dafür noch reicht.
+    if (data.stop_reason === 'max_tokens' && !gross && restlaufzeitMs() > 150_000) {
+      gross = true
+      console.warn('Antwort abgeschnitten (max_tokens) — Schritt wird mit mehr Platz wiederholt.')
+      data = await claude(system, messages(), ANTWORT_TOKENS_GROSS)
+    }
     // deno-lint-ignore no-explicit-any
     const bloecke: any[] = data.content ?? []
     if (data.stop_reason !== 'tool_use') {
@@ -2719,7 +3029,15 @@ export async function agentAntwort(supabase: Supa, mitarbeiter: Mitarbeiter, sta
     }
     neu.push({ role: 'user', content: ergebnisse })
   }
-  if (!antwort) antwort = 'Ich bin damit nicht fertig geworden. Sag mir bitte noch einmal in einem Satz, was ich tun soll.'
+  if (!antwort) {
+    // Nie „nicht fertig" melden, ohne zu sagen, was schon gespeichert ist — sonst wiederholt der
+    // Mitarbeiter die Bitte und es entsteht Doppeltes (Akte HI Bar, 18.11.2026).
+    const erledigt = state.aktionen.slice(aktionenVorher)
+    antwort =
+      erledigt.length > 0
+        ? `Das habe ich schon erledigt:\n${erledigt.map((a) => `- ${a.text.replace(/\s*\((kunde|termin|todo)_id=[^)]*\)/g, '').replace(/\s+/g, ' ')}`).join('\n')}\n\nDen Rest habe ich nicht mehr geschafft. Sag mir kurz, was noch fehlt, dann mache ich da weiter.`
+        : 'Ich bin damit nicht fertig geworden. Sag mir bitte noch einmal in einem Satz, was ich tun soll.'
+  }
 
   neu.push({ role: 'assistant', content: antwort })
   state.zuege = [...state.zuege, { z: new Date().toISOString(), msgs: fuerVerlauf(neu) }].slice(-10)
@@ -2799,6 +3117,9 @@ async function speichereZustand(supabase: Supa, mitarbeiterId: string, state: Ag
   await supabase.from('mitarbeiter').update({ telegram_pending: state }).eq('id', mitarbeiterId)
   return mailStart
 }
+
+// Für Mitteilungen an Mitarbeiter (Werkzeug kollegen_benachrichtigen und interne Rückfrage von außen).
+const MITTEILUNGS_WEGE: MitteilungsWege = { botToken: BOT_TOKEN, ladeState, speichereZustand }
 
 const WEB_ORIGINS = ['https://eray-hash.github.io', 'http://localhost:5173', 'http://localhost:5174']
 function webHeaders(origin: string | null): Record<string, string> {
@@ -3367,6 +3688,21 @@ Deno.serve((req: Request) => mitAnlass(async () => {
     return new Response('ok')
   }
 
+  // Prüfung der Abschrift (Groq/Whisper) ohne Anmeldung im Browser: nur mit dem Dienst-Schlüssel.
+  // Speichert nichts, gibt nur den erkannten Text zurück.
+  if (body?.intern === 'transkription_test') {
+    const schluessel = (req.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '').trim()
+    if (!istDienstSchluessel(schluessel)) return new Response('Unauthorized', { status: 401 })
+    if (typeof body.audio_base64 !== 'string' || body.audio_base64.length < 100 || body.audio_base64.length > 2_000_000) return new Response('Bad request', { status: 400 })
+    try {
+      const bytes = Uint8Array.from(atob(body.audio_base64), (c) => c.charCodeAt(0))
+      const text = await transkribiere(bytes, 'probe.m4a', 'audio/mp4')
+      return new Response(JSON.stringify({ ok: true, modell: TRANSKRIPTION_MODELL, groq: !!GROQ_API_KEY, text }), { headers: { 'content-type': 'application/json' } })
+    } catch (err) {
+      return new Response(JSON.stringify({ ok: false, groq: !!GROQ_API_KEY, fehler: err instanceof Error ? err.message : String(err) }), { status: 502, headers: { 'content-type': 'application/json' } })
+    }
+  }
+
   // Rückfrage an einen Mitarbeiter über Telegram, gestellt von außen (Einrichtung, Datenübernahme).
   // Nur mit dem Dienst-Schlüssel des Projekts — das gemeinsame Geheimnis steht im ausgelieferten
   // Programm und darf niemandem erlauben, Mitarbeitern im Namen des Assistenten zu schreiben.
@@ -3376,35 +3712,12 @@ Deno.serve((req: Request) => mitAnlass(async () => {
     if (!istDienstSchluessel(schluessel)) return new Response('Unauthorized', { status: 401 })
     const text = typeof body.text === 'string' ? body.text.trim().slice(0, 3800) : ''
     if (!text || typeof body.mitarbeiterId !== 'string') return new Response('Bad request', { status: 400 })
-    const supabase = supa()
-    const { data: m } = await supabase.from('mitarbeiter').select('id, name, aktiv, telegram_chat_id, telegram_pending').eq('id', body.mitarbeiterId).maybeSingle()
-    if (!m?.aktiv) return new Response(JSON.stringify({ ok: false, grund: 'Mitarbeiter nicht gefunden' }), { status: 404 })
-    if (!m.telegram_chat_id || !BOT_TOKEN) return new Response(JSON.stringify({ ok: false, grund: 'nicht mit Telegram verbunden' }), { status: 409 })
-    const antwort = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ chat_id: m.telegram_chat_id, text }),
-    })
-    if (!antwort.ok) return new Response(JSON.stringify({ ok: false, grund: `Telegram lehnt ab (${antwort.status})` }), { status: 502 })
-    const state = ladeState(m.telegram_pending)
     const von = typeof body.von === 'string' && body.von.trim() ? body.von.trim().slice(0, 80) : 'der Einrichtung des CRM'
-    state.zuege.push({
-      z: new Date().toISOString(),
-      msgs: [
-        {
-          role: 'user',
-          // art 'mitteilung': eine Nachricht ohne Frage (z. B. „dein Wunsch ist erfüllt") — Folgefragen
-          // beantwortet der Assistent dann ganz normal, statt sie als Antwort weiterzureichen.
-          content:
-            body.art === 'mitteilung'
-              ? `[Systemmeldung, nicht vom Mitarbeiter getippt] Im Auftrag von ${von} wurde dem Mitarbeiter über dich die folgende Mitteilung geschickt. Fragt er danach weiter, hilf ihm ganz normal mit deinen Werkzeugen.`
-              : `[Systemmeldung, nicht vom Mitarbeiter getippt] Im Auftrag von ${von} wurde dem Mitarbeiter über dich die folgende Rückfrage geschickt. Antwortet er darauf, bedanke dich kurz und sag ihm, dass seine Antwort an ${von} weitergegeben wird. Lege dafür nichts im CRM an und ändere nichts, außer er bittet ausdrücklich darum.`,
-        },
-        { role: 'assistant', content: text },
-      ],
-    })
-    await speichereZustand(supabase, String(m.id), state)
-    return new Response(JSON.stringify({ ok: true, an: m.name }), { headers: { 'content-type': 'application/json' } })
+    // art 'mitteilung': eine Nachricht ohne Frage (z. B. „dein Wunsch ist erfüllt") — Folgefragen
+    // beantwortet der Assistent dann ganz normal, statt sie als Antwort weiterzureichen.
+    const r = await schickeMitteilung(supa(), MITTEILUNGS_WEGE, body.mitarbeiterId, text, von, body.art === 'mitteilung' ? 'mitteilung' : 'rueckfrage')
+    if (!r.ok) return new Response(JSON.stringify({ ok: false, grund: r.grund }), { status: r.status })
+    return new Response(JSON.stringify({ ok: true, an: r.an }), { headers: { 'content-type': 'application/json' } })
   }
 
   // 3) Telegram.

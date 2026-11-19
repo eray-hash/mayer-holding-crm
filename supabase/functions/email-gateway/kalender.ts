@@ -89,8 +89,13 @@ function terminText(t: Termin, team: Map<string, Person>): string {
 }
 
 // Wer von den genannten Personen ist im Zeitraum schon belegt? (ohne den Termin selbst)
+// Nur Termine mit Uhrzeit blockieren einander. Ganztägige Einträge sind meist Erinnerungen
+// („Antwort an … klären“) und dürfen eine Buchung mit Uhrzeit nicht verhindern — so lehnte der
+// Assistent am 18.11.2026 eine Besprechung von Andreas wegen seiner ganztägigen Erinnerung ab.
+// Umgekehrt blockiert ein neuer ganztägiger Eintrag nichts (der Aufrufer prüft dann gar nicht).
 async function findeUeberschneidungen(admin: Db, personen: string[], beginn: string, ende: string, ohneId?: string): Promise<string[]> {
-  const { data } = await admin.from('termine').select('id, besitzer_email, teilnehmer').lt('beginn', ende).gt('ende', beginn)
+  if (personen.length === 0) return []
+  const { data } = await admin.from('termine').select('id, besitzer_email, teilnehmer').eq('ganztags', false).lt('beginn', ende).gt('ende', beginn)
   const belegt = new Set<string>()
   for (const t of (data ?? []) as { id: string; besitzer_email: string; teilnehmer: string[] }[]) {
     if (t.id === ohneId) continue
@@ -139,15 +144,18 @@ export async function speichereTermin(admin: Db, a: Aufrufer, e: TerminEingabe):
     if (vorher.besitzer_email.toLowerCase() !== a.email) return { ok: false, status: 403, fehler: 'Ändern kann einen Termin nur, wer ihn angelegt hat.' }
   }
 
-  if (e.trotzUeberschneidung !== true) {
-    const belegt = await findeUeberschneidungen(admin, [a.email, ...teilnehmer], beginn.toISOString(), ende.toISOString(), vorher?.id)
+  const zeitGeaendert = !vorher || new Date(vorher.beginn).getTime() !== beginn.getTime() || new Date(vorher.ende).getTime() !== ende.getTime() || vorher.ganztags !== (e.ganztags === true)
+  // Geprüft wird nur, was sich für jemanden ändert: neuer oder verschobener Termin → alle Beteiligten;
+  // nur Titel/Ort/Notiz geändert → niemand; neu hinzugekommene Teilnehmer → nur diese.
+  if (e.trotzUeberschneidung !== true && e.ganztags !== true) {
+    const zuPruefen = zeitGeaendert ? [a.email, ...teilnehmer] : teilnehmer.filter((p) => !(vorher?.teilnehmer ?? []).includes(p))
+    const belegt = await findeUeberschneidungen(admin, zuPruefen, beginn.toISOString(), ende.toISOString(), vorher?.id)
     if (belegt.length > 0) {
       const namen = belegt.map((p) => (p === a.email ? 'du selbst' : team.get(p)?.name ?? p))
       return { ok: false, status: 409, fehler: `In dieser Zeit schon belegt: ${namen.join(', ')}.`, belegt }
     }
   }
 
-  const zeitGeaendert = !vorher || new Date(vorher.beginn).getTime() !== beginn.getTime() || new Date(vorher.ende).getTime() !== ende.getTime()
   // Vorläufe, die beim Anlegen schon verstrichen sind, gelten als erledigt — sonst käme direkt nach
   // dem Anlegen eines Termins für heute Nachmittag die "1 Tag vorher"-Erinnerung.
   const bisBeginn = (beginn.getTime() - Date.now()) / 60000
@@ -180,7 +188,9 @@ export async function speichereTermin(admin: Db, a: Aufrufer, e: TerminEingabe):
   // wenn sich für den Empfänger etwas Sichtbares geändert hat (Zeit, Ort, Titel) oder er neu dabei ist.
   const benachrichtigt: string[] = []
   const ohneTelegram: string[] = []
-  const sichtbarGeaendert = !vorher || zeitGeaendert || vorher.ort !== termin.ort || vorher.titel !== termin.titel
+  // Ein reiner Tippfehler im Titel (Groß/Klein, Leerzeichen, Satzzeichen) ist keine Nachricht wert.
+  const titelKern = (s: string) => String(s ?? '').toLowerCase().replace(/[^a-z0-9äöüß]+/g, '')
+  const sichtbarGeaendert = !vorher || zeitGeaendert || String(vorher.ort ?? '').trim() !== String(termin.ort ?? '').trim() || titelKern(vorher.titel) !== titelKern(termin.titel)
   for (const p of termin.teilnehmer) {
     const neuDabei = !vorher || !(vorher.teilnehmer ?? []).includes(p)
     if (!neuDabei && !sichtbarGeaendert) continue

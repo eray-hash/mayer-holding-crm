@@ -11,7 +11,8 @@
 //   Das Modell geht JEDE Bitte durch und beurteilt, ob sie erfüllt wurde. Nicht oder nur teilweise
 //   erfüllte Bitten werden als Eintrag in `wuensche` (quelle „analyse“) festgehalten, auf Ebene der
 //   Funktion umschrieben, mit kurzem Grund.
-// - Bericht: Ab BERICHT_STUNDE einmal am Tag zusätzlich die Probleme auf dem Server (gescheiterte
+// - Bericht (seit 19.11.2026 nach JEDER Auswertung, vorher einmal am Tag ab 18 Uhr): zusätzlich die
+//   Probleme auf dem Server seit der letzten Auswertung (gescheiterte
 //   Bewertungen und Analysen, nicht lesbare Dokumente, hängende Warteschlange, Bonitätseinschätzungen
 //   ohne Ergebnis, Fehler im Browser, auffällige Zahl von KI-Aufrufen) als Einträge mit quelle „fehler“,
 //   dann EINE Telegram-Nachricht an Admins mit Telegram — nur wenn es seit der letzten Meldung etwas
@@ -39,7 +40,6 @@ export type ModellAufruf = (prompt: string) => Promise<string>
 const TABELLE = 'abteilung_eintraege'
 const STAND_ID = 'wunsch_stand'
 export const AUSWERTUNG_STUNDEN = [8, 10, 12, 14, 16, 18, 20, 22]
-export const BERICHT_STUNDE = 18
 const FENSTER_MINUTEN = 30
 const TAG_MS = 24 * 60 * 60 * 1000
 const MODELL = 'claude-haiku-5-5'
@@ -554,12 +554,12 @@ export function berichtText(eintraege: WunschZeile[], heute: Map<string, number>
       return `• ${w.titel}${w.mitarbeiter ? ` – ${w.mitarbeiter}` : ''}${w.anzahl > 1 ? ` (${w.anzahl}×)` : ''}${grund ? ` – ${grund}` : ''}`
     })
     if (wuensche.length > HOECHSTENS_ZEILEN) zeilen.push(`… und ${wuensche.length - HOECHSTENS_ZEILEN} weitere`)
-    teile.push(`Neue Wünsche heute (${wuensche.length}):\n${zeilen.join('\n')}`)
+    teile.push(`Neu seit der letzten Meldung (${wuensche.length}):\n${zeilen.join('\n')}`)
   }
   if (probleme.length > 0) {
     const zeilen = probleme.slice(0, HOECHSTENS_ZEILEN).map((p) => `• ${p.titel} ${heute.get(p.id) ?? p.anzahl}×`)
     if (probleme.length > HOECHSTENS_ZEILEN) zeilen.push(`… und ${probleme.length - HOECHSTENS_ZEILEN} weitere`)
-    teile.push(`Probleme heute:\n${zeilen.join('\n')}`)
+    teile.push(`Probleme seit der letzten Meldung:\n${zeilen.join('\n')}`)
   }
   teile.push('Alle Wünsche im CRM unter Wünsche.')
   return teile.join('\n\n')
@@ -660,8 +660,7 @@ async function lauf(admin: Db, sende: SendeFunktion, optionen: Optionen, ergebni
   if (lesefehler) throw new Error(`Stand nicht lesbar: ${lesefehler.message}`)
   const stand: Stand = (alsObjekt(zeile?.daten) as Stand | null) ?? {}
   if (stand.slot === slot) return
-  const berichtFaellig = b.stunde >= BERICHT_STUNDE && stand.berichtTag !== b.datum
-  const neu: Stand = { ...stand, slot, version: crypto.randomUUID(), ...(berichtFaellig ? { berichtTag: b.datum } : {}) }
+  const neu: Stand = { ...stand, slot, version: crypto.randomUUID(), berichtTag: b.datum }
   const jetztIso = jetzt.toISOString()
   if (!zeile) {
     const { error } = await admin.from(TABELLE).insert({ id: STAND_ID, art: STAND_ID, daten: neu, updated_at: jetztIso })
@@ -692,13 +691,14 @@ async function lauf(admin: Db, sende: SendeFunktion, optionen: Optionen, ergebni
     console.error('Wunsch-Auswertung der Gespräche fehlgeschlagen:', err instanceof Error ? err.message : err)
   }
 
-  // ---- Einmal am Tag: Probleme auf dem Server und der Bericht ----
-  let probleme: Problem[] = []
-  if (berichtFaellig) probleme = await sammleProbleme(admin, new Date(jetzt.getTime() - TAG_MS), jetzt, namen)
+  // ---- Nach JEDER Auswertung: Probleme auf dem Server seit der letzten Auswertung und die Meldung ----
+  // Eray (19.11.2026): Er will nicht bis 18 Uhr warten, sondern gleich erfahren, wenn etwas nicht geht.
+  // `berichte` sendet nur, wenn es seit der letzten Meldung Neues gibt (`gemeldet_am`) — ohne Fund keine Nachricht.
+  const probleme: Problem[] = await sammleProbleme(admin, von, jetzt, namen)
   const heute = await schreibe(admin, punkte, probleme, jetzt, offene)
   ergebnis.punkte = punkte.length
   ergebnis.probleme = probleme.length
-  if (berichtFaellig) ergebnis.gesendet = (await berichte(admin, sende, jetzt, heute, optionen.berichtAn)).gesendet
+  ergebnis.gesendet = (await berichte(admin, sende, jetzt, heute, optionen.berichtAn)).gesendet
 }
 
 // ---------------------------------------------------------------------------------------------
