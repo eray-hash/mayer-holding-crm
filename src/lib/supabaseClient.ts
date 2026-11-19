@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import { installiereFetchSchutz } from './nurLesen'
 
 const url = import.meta.env.VITE_SUPABASE_URL as string | undefined
 const key = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined
@@ -39,4 +40,9 @@ export function setzePasswortFestlegenNoetig(noetig: boolean): void {
 
 // Ohne .env.local läuft die App im Demo-Modus mit den lokalen Mock-Daten (siehe AppContext.tsx) —
 // genau wie im Fundament Command Center.
-export const supabase = isSupabaseConfigured ? createClient(url!, key!) : null
+// Alle Aufrufe laufen über window.fetch, das bei „Ansehen als …“ schreibende Aufrufe abweist (siehe
+// lib/nurLesen.ts) — der Client bekommt es ausdrücklich, damit er keine eigene Kopie von fetch hält.
+installiereFetchSchutz()
+export const supabase = isSupabaseConfigured
+  ? createClient(url!, key!, { global: { fetch: (eingabe: RequestInfo | URL, init?: RequestInit) => window.fetch(eingabe, init) } })
+  : null

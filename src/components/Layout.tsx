@@ -23,10 +23,12 @@ import {
   ChevronDown,
   Phone,
   Lock,
-  Search, CalendarDays, BarChart3, Lightbulb, ListChecks } from 'lucide-react'
+  Search, CalendarDays, BarChart3, Lightbulb, ListChecks, Eye, ShieldCheck } from 'lucide-react'
 import type { Bereich } from '../types'
 import { useApp } from '../context/AppContext'
 import { useAuth } from '../context/AuthContext'
+import { AnsichtAlsAuswahl, AnsichtAlsBanner } from '../context/AnsichtAls'
+import { useNutzungMessen } from '../lib/nutzungMessen'
 import { isSupabaseConfigured } from '../lib/supabaseClient'
 import { darfBereich } from '../lib/bereichsRechte'
 import { collectPriorityEntries } from '../lib/todayPriorities'
@@ -67,7 +69,10 @@ const BEREICHE: {
 
 export function Layout({ children }: { children: ReactNode }) {
   const { state, dispatch } = useApp()
-  const { session, mitarbeiter, signOut } = useAuth()
+  const { session, mitarbeiter, signOut, echterMitarbeiter, istSuperuser, ansichtAls } = useAuth()
+  const [ansichtAuswahlOpen, setAnsichtAuswahlOpen] = useState(false)
+  // Nutzungsdauer (Superuser-Auswertung): immer der echte angemeldete Mensch, nie bei „Ansehen als …“.
+  useNutzungMessen(ansichtAls ? null : echterMitarbeiter?.email)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [dokumentImportOpen, setDokumentImportOpen] = useState(false)
@@ -152,6 +157,8 @@ export function Layout({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex h-screen flex-col bg-slate-50">
+      <AnsichtAlsBanner />
+      {ansichtAuswahlOpen && <AnsichtAlsAuswahl onClose={() => setAnsichtAuswahlOpen(false)} />}
       {/* Topbar */}
       <header className="flex h-14 flex-shrink-0 items-center justify-between border-b border-slate-200 bg-white px-2 sm:px-4">
         <div className="flex min-w-0 items-center gap-2 sm:gap-3">
@@ -334,6 +341,16 @@ export function Layout({ children }: { children: ReactNode }) {
                     {isSupabaseConfigured && session && (mitarbeiter?.rolle === 'geschaeftsfuehrung' || mitarbeiter?.ist_admin) && (
                       <MenuItem icon={<Lightbulb size={15} />} onClick={() => { setProfilMenuOpen(false); navigate('/wuensche') }}>
                         Wünsche
+                      </MenuItem>
+                    )}
+                    {isSupabaseConfigured && session && istSuperuser && (
+                      <MenuItem icon={<ShieldCheck size={15} />} onClick={() => { setProfilMenuOpen(false); navigate('/superuser') }}>
+                        Superuser
+                      </MenuItem>
+                    )}
+                    {isSupabaseConfigured && session && istSuperuser && !ansichtAls && (
+                      <MenuItem icon={<Eye size={15} />} onClick={() => { setProfilMenuOpen(false); setAnsichtAuswahlOpen(true) }}>
+                        Ansehen als …
                       </MenuItem>
                     )}
                     {isSupabaseConfigured && session && (

@@ -70,6 +70,8 @@ import {
 import { uid, today, addDays } from '../lib/dates'
 import { CURRENT_USER, DEMO_NUTZER } from '../data/constants'
 import { useAuth } from './AuthContext'
+import { filtereFuerPerson } from '../lib/ansichtFilter'
+import { istNurLesen, meldeGesperrt } from '../lib/nurLesen'
 import { updateMyProfilRemote } from '../lib/profilSync'
 
 export type Rolle = 'geschaeftsfuehrung' | 'mitarbeiter'
@@ -1324,7 +1326,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // PROFIL_MIGRATION_FLAG_KEY oben). Sobald die eigene mitarbeiter-Zeile lädt: hat sie bereits Werte,
   // gewinnt ab jetzt immer der Server; ist sie noch komplett leer (frisch hinzugefügte Spalten),
   // wird der bisherige lokale Stand genau einmal hochgeschoben.
-  const { mitarbeiter } = useAuth()
+  // Bewusst der ECHTE angemeldete Mitarbeiter: bei „Ansehen als …“ würde sonst das Profil der
+  // angesehenen Person in das eigene geschrieben.
+  const { echterMitarbeiter: mitarbeiter, ansichtAls } = useAuth()
   useEffect(() => {
     if (!mitarbeiter) return
     // Vor dem Login steht im Profil der Platzhalter — sobald der echte Name da ist, ersetzt er ihn
@@ -1401,7 +1405,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [dispatch])
 
-  const value = useMemo(() => ({ state, dispatch, hydrated, hydrateError, neuLaden }), [state, dispatch, hydrated, hydrateError, neuLaden])
+  // „Ansehen als …“ (Superuser): Die Oberfläche bekommt den Stand, den die angesehene Person sähe, und
+  // kann nichts ändern. Die Sperre prüft den Nur-Lesen-Schalter bei JEDEM Aufruf (nicht den Stand beim
+  // letzten Zeichnen) und sitzt vor dem Reducer und vor crmSync — es wird weder lokal noch in der
+  // Datenbank etwas geändert. Nur der Wechsel des angezeigten Bereichs (reine Navigation) bleibt erlaubt.
+  // Die internen Ladevorgänge (Hydrate, Server-Stand) nutzen weiter `dispatch` direkt.
+  const sichtDispatch = useCallback(
+    (action: Action) => {
+      if (istNurLesen() && action.type !== 'SET_BEREICH') {
+        meldeGesperrt()
+        return
+      }
+      dispatch(action)
+    },
+    [dispatch],
+  )
+  const sichtState = useMemo(() => (ansichtAls ? filtereFuerPerson(state, ansichtAls) : state), [state, ansichtAls])
+  const value = useMemo(
+    () => ({ state: sichtState, dispatch: sichtDispatch, hydrated, hydrateError, neuLaden }),
+    [sichtState, sichtDispatch, hydrated, hydrateError, neuLaden],
+  )
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>
 }

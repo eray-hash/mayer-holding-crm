@@ -29,7 +29,21 @@ function ordnerAnzeige(pfad: string): string {
   return pfad.replace(/^INBOX[./]/i, '').replace(/\//g, ' › ')
 }
 
+// „Ansehen als …“: Private Mails gehören dem angemeldeten Menschen; die einer anderen Person lädt die
+// Datenbank dem Superuser nicht (und soll es auch nicht). Statt fremder Leere ein klarer Hinweis.
 export function PrivatPostfach() {
+  const { ansichtAls } = useAuth()
+  if (ansichtAls) {
+    return (
+      <div className="rounded-xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900">
+        Private Mails werden in dieser Ansicht nicht gezeigt. {ansichtAls.name} sieht hier nur das eigene Postfach.
+      </div>
+    )
+  }
+  return <PrivatPostfachInhalt />
+}
+
+function PrivatPostfachInhalt() {
   const { state, dispatch } = useApp()
   const { session, mitarbeiter } = useAuth()
   const ich = (session?.user.email ?? '').toLowerCase()

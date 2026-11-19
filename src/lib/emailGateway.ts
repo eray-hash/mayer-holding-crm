@@ -683,3 +683,10 @@ export async function ladeKundenUnterlageHoch(pfad: string, uploadToken: string,
 export async function meldeKundenUnterlage(token: string, punkt: string, dokument: { pfad: string; name: string }): Promise<void> {
   await call({ action: 'public_unterlagen_eingang', token, punkt, dokument })
 }
+
+/** Superuser-Auswertungen (nur Mitarbeiter mit ist_superuser; der Server prüft das Login). */
+export type SuperuserTeil = 'nutzung' | 'verlauf' | 'zahlen' | 'technik'
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function ladeSuperuserAuswertung(teil: SuperuserTeil, zeitraum: 7 | 30 | 90, filter: { person?: string; bereich?: string } = {}): Promise<any> {
+  return callAuthenticated({ action: 'superuser_auswertung', teil, zeitraum: String(zeitraum), ...filter })
+}
