@@ -57,7 +57,8 @@ function UnterlagenZeile({
 // Konditionen voraussetzen, die der Mitarbeiter vor Linkversand festlegen müsste (siehe
 // Projektnotiz); dieser erste Schritt deckt den unstrittigen Kern ab: Stammdaten + Unterlagen.
 export function PublicEigentuemerPortal() {
-  const { objektId } = useParams()
+  // `token` = geheimes Zeichen des Objekts aus dem Link. Alte Links (vor dem 19.11.2026) haben keins.
+  const { objektId, token: zugang } = useParams()
   const [objekt, setObjekt] = useState<PublicObjekt | null | undefined>(undefined)
 
   const [name, setName] = useState('')
@@ -73,11 +74,14 @@ export function PublicEigentuemerPortal() {
   const [neuHochgeladen, setNeuHochgeladen] = useState<Set<string>>(new Set())
 
   useEffect(() => {
-    if (!objektId) return
-    holePublicObjekt(objektId)
+    if (!objektId || !zugang) {
+      setObjekt(null)
+      return
+    }
+    holePublicObjekt(objektId, zugang)
       .then(setObjekt)
       .catch(() => setObjekt(null))
-  }, [objektId])
+  }, [objektId, zugang])
 
   useEffect(() => {
     if (objekt?.eigentuemer) {
@@ -88,12 +92,12 @@ export function PublicEigentuemerPortal() {
     }
   }, [objekt])
 
-  if (!objektId || objekt === null) {
+  if (!objektId || !zugang || objekt === null) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
         <Card className="max-w-md p-8 text-center">
-          <h1 className="mb-2 text-lg font-semibold text-slate-800">Link ungültig</h1>
-          <p className="text-sm text-slate-500">Dieser Link ist nicht mehr verfügbar. Bitte fordern Sie einen neuen Link an.</p>
+          <h1 className="mb-2 text-lg font-semibold text-slate-800">Link abgelaufen</h1>
+          <p className="text-sm text-slate-500">Dieser Link ist abgelaufen – bitte fordern Sie bei uns einen neuen an.</p>
         </Card>
       </div>
     )
@@ -142,6 +146,7 @@ export function PublicEigentuemerPortal() {
     try {
       await sendePublicObjektFormular({
         objektId: objektId!,
+        zugang: zugang!,
         aktivitaetText: 'Stammdaten vom Eigentümer bestätigt/aktualisiert.',
         eigentuemer: { name: name.trim(), telefon: telefon.trim(), email: email.trim(), ansprechpartner: ansprechpartner.trim() || undefined },
       })
@@ -158,11 +163,12 @@ export function PublicEigentuemerPortal() {
     setHochladenKategorie(kategorie)
     setUploadFehler('')
     try {
-      const { pfad, token } = await holeObjektUploadUrl(objektId!, file.name)
+      const { pfad, token } = await holeObjektUploadUrl(objektId!, zugang!, file.name)
       const { groesse } = await ladeAlsEigentuemerHoch(pfad, token, file)
       const dokument: Dokument = { id: uid('dok'), name: file.name, typ: file.type || 'Datei', datum: today(), groesse, url: pfad }
       await sendePublicObjektFormular({
         objektId: objektId!,
+        zugang: zugang!,
         aktivitaetText: `Dokument vom Eigentümer hochgeladen: „${file.name}" (${kategorie}).`,
         dokument,
         ordner: kategorie,

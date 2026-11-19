@@ -323,9 +323,10 @@ export async function fordrePortalLinkAn(email: string): Promise<void> {
 // aber nur, solange der Zugang noch nie geöffnet wurde. Wurde er schon einmal geöffnet (z. B. über
 // den Einladungs-Link, der anmeldet, ohne ein Passwort zu vergeben), setzt der Server das Passwort
 // NICHT, sondern schickt einen Link an das Postfach; dann kommt linkGeschickt zurück.
-export async function selbstRegistrieren(email: string, passwort: string): Promise<{ linkGeschickt: boolean }> {
-  const data = await call({ action: 'self_register', email, passwort })
-  return { linkGeschickt: data?.linkGeschickt === true }
+// Seit 19.11.2026 schickt der Server nur einen Link zum Festlegen des Passworts (nie ein direkt
+// gesetztes Passwort) und antwortet immer gleich.
+export async function selbstRegistrieren(email: string): Promise<void> {
+  await call({ action: 'self_register', email })
 }
 
 export type LeadKlassifizierungsErgebnis = { geprueft: number; vorgeschlagen: number; uebersprungen: number }
@@ -349,9 +350,17 @@ export type PublicKunde = {
   unterlagenCheckliste?: Record<string, boolean>
 }
 
-export async function holePublicKunde(bereich: string, kundeId: string): Promise<PublicKunde | null> {
-  const data = await call({ action: 'public_get_kunde', bereich, kundeId })
+/** `formular`: Nur das Selbstauskunft-Formular bekommt die gespeicherte Selbstauskunft, nur der
+ *  Mandantenfragebogen die Unterlagen-Liste (seit 19.11.2026). */
+export async function holePublicKunde(bereich: string, kundeId: string, formular?: 'selbstauskunft' | 'mandantenfragebogen'): Promise<PublicKunde | null> {
+  const data = await call({ action: 'public_get_kunde', bereich, kundeId, ...(formular ? { formular } : {}) })
   return data.kunde ?? null
+}
+
+/** Prüfzeichen für den Behörden-Versand im Vollmacht-Link (nur angemeldet). */
+export async function holeBehoerdenPruefzeichen(kundeId: string, email: string): Promise<string> {
+  const data = await call({ action: 'behoerde_link_pruefzeichen', kundeId, email })
+  return String(data.sig ?? '')
 }
 
 export async function sendePublicFormular(params: {
@@ -367,7 +376,8 @@ export async function sendePublicFormular(params: {
   // Query-Parameter des Formular-Links (vom Mitarbeiter beim Versenden festgelegt). pdfBase64 sollte
   // praktisch immer mitgeschickt werden (siehe generateDokumentPdf) — sonst geht nur die isolierte
   // Signatur raus, die für die Behörde allein nicht nachvollziehbar ist.
-  behoerde?: { email: string; name?: string; pdfBase64?: string; pdfFilename?: string }
+  // `sig`: Prüfzeichen aus dem Link (&sig=…), ohne gültiges Zeichen verschickt der Server nichts.
+  behoerde?: { email: string; name?: string; sig?: string; pdfBase64?: string; pdfFilename?: string }
 }): Promise<void> {
   await call({ action: 'public_submit_formular', ...params })
 }
@@ -434,24 +444,29 @@ export async function erstellePublicLead(params: {
   aktivitaetText: string
   aktivitaetUser?: string
   signatur?: { name: string; dataUrl: string; kontext: string }
+  /** Unsichtbares Feld gegen Programme (bleibt bei Menschen leer). */
+  webseite?: string
 }): Promise<void> {
   await call({ action: 'public_create_lead', ...params })
 }
 
 // Öffentliches Eigentümer-Portal (PublicEigentuemerPortal.tsx) — Eigentümer ist beim Ausfüllen
 // nicht als Mitarbeiter eingeloggt, die objekte-RLS-Policy lässt sonst weder Lesen noch Schreiben zu.
+// Seit 19.11.2026 braucht jede dieser Aktionen das geheime Zeichen des Objekts (`zugang`, steht im Link
+// der Eigentümer-Seite). Ohne gültiges Zeichen kommt `{ objekt: null, abgelaufen: true }` zurück.
 export type PublicObjekt = {
   bezeichnung: string
   adresse: string
   typ: import('../types').ObjektTyp
-  dokumente: Partial<Record<import('../types').DokumentOrdnerName, import('../types').Dokument[]>>
+  /** Nur die Namen der vorhandenen Unterlagen je Ordner — keine Ablage-Pfade. */
+  dokumente: Partial<Record<import('../types').DokumentOrdnerName, { name: string }[]>>
   eigentuemer?: import('../types').ObjektEigentuemer
   /** Die jüngste Anforderung von Unterlagen durch den Mitarbeiter (falls es eine gibt). */
   angefordert?: { datum: string; ordner: import('../types').DokumentOrdnerName[]; weitere?: string }
 }
 
-export async function holePublicObjekt(objektId: string): Promise<PublicObjekt | null> {
-  const data = await call({ action: 'public_get_objekt', objektId })
+export async function holePublicObjekt(objektId: string, zugang: string): Promise<PublicObjekt | null> {
+  const data = await call({ action: 'public_get_objekt', objektId, zugang })
   return data.objekt ?? null
 }
 
@@ -490,13 +505,14 @@ export async function entscheidePublicVorschlag(
 // Erzeugt einen Signed-Upload-Token statt den Datei-Inhalt entgegenzunehmen (Edge-Function-
 // Größenlimit) — der eigentliche Upload läuft danach direkt vom Browser zu Supabase Storage, siehe
 // objektDokumenteStorage.ts ladeAlsEigentuemerHoch().
-export async function holeObjektUploadUrl(objektId: string, dateiname: string): Promise<{ pfad: string; token: string }> {
-  const data = await call({ action: 'public_objekt_upload_url', objektId, dateiname })
+export async function holeObjektUploadUrl(objektId: string, zugang: string, dateiname: string): Promise<{ pfad: string; token: string }> {
+  const data = await call({ action: 'public_objekt_upload_url', objektId, zugang, dateiname })
   return { pfad: data.pfad, token: data.token }
 }
 
 export async function sendePublicObjektFormular(params: {
   objektId: string
+  zugang: string
   aktivitaetText: string
   eigentuemer?: import('../types').ObjektEigentuemer
   dokument?: import('../types').Dokument

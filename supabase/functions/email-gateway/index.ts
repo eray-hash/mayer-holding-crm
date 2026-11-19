@@ -2949,6 +2949,58 @@ async function fetchImmoRadarTopListings(): Promise<ImmoRadarTreffer[]> {
     }))
 }
 
+// ---------- Öffentliche Formulare absichern (19.11.2026) ----------
+
+/** Vergleich ohne frühes Abbrechen, damit die Dauer nichts über das Zeichen verrät. */
+function gleichSicher(a: string, b: string): boolean {
+  if (a.length !== b.length) return false
+  let unterschied = 0
+  for (let i = 0; i < a.length; i++) unterschied |= a.charCodeAt(i) ^ b.charCodeAt(i)
+  return unterschied === 0
+}
+
+/** Eigentümer-Seite: Passt das geheime Zeichen aus dem Link zum Objekt? */
+// deno-lint-ignore no-explicit-any
+async function eigentuemerZugangGueltig(admin: any, objektId: unknown, zugang: unknown): Promise<boolean> {
+  const id = String(objektId ?? '')
+  const zeichen = String(zugang ?? '')
+  if (!id || zeichen.length < 32) return false
+  const { data } = await admin.from('objekte').select('eigentuemer_token').eq('id', id).maybeSingle()
+  const richtig = String(data?.eigentuemer_token ?? '')
+  return !!richtig && gleichSicher(richtig, zeichen)
+}
+
+// Behörden-Versand aus der Vollmacht (Finanzamt): Die Adresse steht im Link, den der Mitarbeiter
+// verschickt. Damit niemand eine beliebige Adresse einsetzt (Versand über das Firmenpostfach mit
+// beliebigem PDF), unterschreibt der Server Kunde + Adresse + Name; das Formular schickt das
+// Prüfzeichen mit. Schlüssel: aus dem Dienst-Schlüssel abgeleitet, liegt nirgends sonst.
+async function behoerdenSchluessel(): Promise<CryptoKey> {
+  const roh = new TextEncoder().encode(`behoerden-versand:${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''}`)
+  const basis = await crypto.subtle.digest('SHA-256', roh)
+  return await crypto.subtle.importKey('raw', basis, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
+}
+
+async function behoerdenPruefzeichen(kundeId: string, email: string): Promise<string> {
+  const inhalt = new TextEncoder().encode(`${kundeId}|${email.trim().toLowerCase()}`)
+  const sig = new Uint8Array(await crypto.subtle.sign('HMAC', await behoerdenSchluessel(), inhalt))
+  return Array.from(sig.slice(0, 16), (b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+/** Einfache Mengengrenze für öffentliche Formulare: zählt Aufrufe je Schlüssel in der letzten Stunde
+ *  (Tabelle formular_zaehler, nur für den Server lesbar). true = Grenze erreicht. */
+// deno-lint-ignore no-explicit-any
+async function grenzeErreicht(admin: any, grenzen: { schluessel: string; hoechstens: number }[]): Promise<boolean> {
+  const seit = new Date(Date.now() - 60 * 60_000).toISOString()
+  for (const g of grenzen) {
+    const { count } = await admin.from('formular_zaehler').select('id', { count: 'exact', head: true }).eq('schluessel', g.schluessel).gte('zeit', seit)
+    if ((count ?? 0) >= g.hoechstens) return true
+  }
+  await admin.from('formular_zaehler').insert(grenzen.map((g) => ({ schluessel: g.schluessel })))
+  // Alte Zählerzeilen gelegentlich wegräumen.
+  if (Math.random() < 0.05) await admin.from('formular_zaehler').delete().lt('zeit', new Date(Date.now() - 2 * 86400_000).toISOString())
+  return false
+}
+
 // Aktionen, die ohne Anmeldung gehen müssen (Anmeldeseite). Alle `public_*` (Formulare für Kunden)
 // sind ohnehin ausgenommen.
 const OHNE_LOGIN = new Set(['request_password_reset', 'self_register'])
@@ -3491,67 +3543,39 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       return new Response(JSON.stringify({ ok: true }), { headers })
     }
 
+    // Ersten Zugang einrichten (Anmeldeseite, ohne Login). Seit 19.11.2026 setzt diese Aktion NIE selbst
+    // ein Passwort: Vorher konnte jeder, der die Firmen-Adresse eines eingeladenen, aber noch nie
+    // angemeldeten Kollegen kannte, dessen Zugang übernehmen. Jetzt geht immer nur ein Link an das
+    // Postfach — wer es lesen kann, legt dort sein Passwort fest (Seite „Passwort festlegen“, App.tsx).
+    // Die Antwort ist immer dieselbe, egal ob die Adresse zu einem Mitarbeiter gehört.
     if (body.action === 'self_register') {
-      const { email, passwort } = body
-      if (!email || typeof email !== 'string' || !email.trim() || !passwort || typeof passwort !== 'string' || passwort.length < 8) {
-        return new Response(
-          JSON.stringify({ error: 'E-Mail und ein Passwort mit mindestens 8 Zeichen sind Pflichtfelder' }),
-          { status: 400, headers },
-        )
+      const email = typeof body.email === 'string' ? body.email.trim() : ''
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return new Response(JSON.stringify({ error: 'Bitte eine vollständige E-Mail-Adresse angeben.' }), { status: 400, headers })
       }
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
-      const normalisiert = email.trim().toLowerCase()
-      const { data: mitarbeiterRows } = await admin.from('mitarbeiter').select('email').eq('aktiv', true)
-      const treffer = (mitarbeiterRows ?? []).find((m: { email: string }) => m.email?.trim().toLowerCase() === normalisiert)
-      if (!treffer) {
-        return new Response(
-          JSON.stringify({ error: 'Diese E-Mail-Adresse ist nicht als aktiver Mitarbeiter hinterlegt.' }),
-          { status: 404, headers },
-        )
-      }
-      const { data: userList, error: listError } = await admin.auth.admin.listUsers({ page: 1, perPage: 1000 })
-      if (listError) {
-        return new Response(JSON.stringify({ error: listError.message }), { status: 400, headers })
-      }
-      const bestehenderUser = userList.users.find((u) => u.email?.trim().toLowerCase() === normalisiert)
-      // Sicherheitsgrenze: Registrieren setzt ein Passwort nur für einen Zugang, der noch nie geöffnet
-      // wurde. Sonst könnte jeder, der die (oft erratbare) Firmen-E-Mail eines Kollegen kennt, dessen
-      // Zugang übernehmen, ohne je in dessen Postfach gewesen zu sein.
-      // "Schon geöffnet" heißt aber NICHT "hat ein Passwort": Wer nur den Einladungs-Link angeklickt
-      // hat, gilt als angemeldet und hat trotzdem keins (so bei Andreas Mayer am 12.11.2026 — die alte
-      // Meldung "bereits ein Passwort gesetzt" war falsch und ließ ihn ohne Ausweg stehen). Deshalb
-      // geht in diesem Fall ein Link an das Postfach: Wer es lesen kann, legt dort sein Passwort fest.
-      if (bestehenderUser?.last_sign_in_at) {
-        const geschickt = await schickePasswortLink(admin, treffer.email)
-        if (!geschickt) {
-          return new Response(
-            JSON.stringify({
-              error: 'Dieser Zugang wurde schon einmal geöffnet. Der Link zum Festlegen des Passworts konnte gerade nicht verschickt werden — bitte Eray oder Hasan um einen Login-Link bitten.',
-            }),
-            { status: 502, headers },
-          )
-        }
+      const normalisiert = email.toLowerCase()
+      if (await grenzeErreicht(admin, [{ schluessel: `registrieren:${normalisiert}`, hoechstens: 3 }])) {
         return new Response(JSON.stringify({ ok: true, linkGeschickt: true }), { headers })
       }
-      if (bestehenderUser) {
-        const { error: updateErr } = await admin.auth.admin.updateUserById(bestehenderUser.id, {
-          password: passwort,
-          email_confirm: true,
-        })
-        if (updateErr) {
-          return new Response(JSON.stringify({ error: updateErr.message }), { status: 400, headers })
-        }
-      } else {
-        const { error: createErr } = await admin.auth.admin.createUser({
-          email: treffer.email,
-          password: passwort,
-          email_confirm: true,
-        })
-        if (createErr) {
-          return new Response(JSON.stringify({ error: createErr.message }), { status: 400, headers })
+      const { data: mitarbeiterRows } = await admin.from('mitarbeiter').select('email').eq('aktiv', true)
+      const treffer = (mitarbeiterRows ?? []).find((m: { email: string }) => m.email?.trim().toLowerCase() === normalisiert)
+      if (treffer) {
+        try {
+          const { data: userList } = await admin.auth.admin.listUsers({ page: 1, perPage: 1000 })
+          const bestehenderUser = userList?.users.find((u) => u.email?.trim().toLowerCase() === normalisiert)
+          // Ohne Zugang gibt es keinen Link — dann den Zugang ohne Passwort anlegen (ohne Link kommt niemand hinein).
+          if (!bestehenderUser) {
+            const { error: createErr } = await admin.auth.admin.createUser({ email: treffer.email, email_confirm: true })
+            if (createErr) console.error('Registrieren: Zugang nicht angelegt', createErr.message)
+          }
+          const geschickt = await schickePasswortLink(admin, treffer.email)
+          if (!geschickt) console.error('Registrieren: Link nicht verschickt')
+        } catch (err) {
+          console.error('Registrieren fehlgeschlagen', err instanceof Error ? err.message : err)
         }
       }
-      return new Response(JSON.stringify({ ok: true }), { headers })
+      return new Response(JSON.stringify({ ok: true, linkGeschickt: true }), { headers })
     }
 
     if (body.action === 'classify_new_leads') {
@@ -3624,6 +3648,17 @@ Deno.serve((req: Request) => mitAnlass(async () => {
     // generate_login_link/invite_mitarbeiter oben — die Autorisierung ist das geteilte
     // x-crm-secret (oben bereits geprüft) plus die praktisch unerratbare Kunden-ID in der URL.
 
+    // Prüfzeichen für den Behörden-Versand im Vollmacht-Link (nur für angemeldete Mitarbeiter — die
+    // Anmeldung prüft pruefeZugang oben). Siehe public_submit_formular.
+    if (body.action === 'behoerde_link_pruefzeichen') {
+      const kundeId = String(body.kundeId ?? '')
+      const email = String(body.email ?? '').trim()
+      if (!kundeId || !/^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/.test(email)) {
+        return new Response(JSON.stringify({ error: 'Bitte eine vollständige E-Mail-Adresse angeben.' }), { status: 400, headers })
+      }
+      return new Response(JSON.stringify({ sig: await behoerdenPruefzeichen(kundeId, email) }), { headers })
+    }
+
     if (body.action === 'public_get_kunde') {
       const { bereich, kundeId } = body
       if (!bereich || !kundeId) {
@@ -3642,9 +3677,20 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       // Signatur-Bilddaten aller bisherigen Formulare — die werden für kein öffentliches Formular
       // zur Anzeige gebraucht.
       const ndaUnterschrieben = ((data.signaturen as { kontext: string }[]) ?? []).some((s) => s.kontext === 'NDA – Geheimhaltungsvereinbarung')
-      const { signaturen: _signaturen, unterlagen_checkliste, ...kundeOhneSignaturen } = data
+      // Nur, was das jeweilige Formular braucht (19.11.2026): Die Selbstauskunft (Einkommen, Vermögen …)
+      // nur für das Selbstauskunft-Formular, die Unterlagen-Liste nur für den Mandantenfragebogen.
+      const formular = String(body.formular ?? '')
       return new Response(
-        JSON.stringify({ kunde: { ...kundeOhneSignaturen, ndaUnterschrieben, unterlagenCheckliste: unterlagen_checkliste ?? undefined } }),
+        JSON.stringify({
+          kunde: {
+            firma: data.firma,
+            ansprechpartner: data.ansprechpartner,
+            email: data.email,
+            ndaUnterschrieben,
+            ...(formular === 'selbstauskunft' ? { selbstauskunft: data.selbstauskunft ?? undefined } : {}),
+            ...(formular === 'mandantenfragebogen' ? { unterlagenCheckliste: data.unterlagen_checkliste ?? undefined } : {}),
+          },
+        }),
         { headers },
       )
     }
@@ -3684,7 +3730,26 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       // wird nach erfolgreicher Unterschrift automatisch eine E-Mail mit der Signatur als Anhang an
       // diese Adresse geschickt und eine Wiedervorlage angelegt — kein manueller Schritt mehr nötig.
       // Ein Fehler hier darf das eigentliche Speichern der Formular-Antwort nicht verhindern.
-      if (behoerde?.email && signatur) {
+      // Seit 19.11.2026 nur mit gültigem Prüfzeichen aus dem Link (siehe behoerde_link_pruefzeichen) —
+      // sonst könnte jeder mit einem Formular-Link Mails mit beliebigem Anhang an beliebige Adressen
+      // über das Firmenpostfach schicken. Ohne gültiges Zeichen: speichern ja, Versand nein, Wiedervorlage.
+      const behoerdeErlaubt =
+        !!behoerde?.email &&
+        typeof behoerde?.sig === 'string' &&
+        /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/.test(String(behoerde.email).trim()) &&
+        gleichSicher(String(behoerde.sig), await behoerdenPruefzeichen(String(kundeId), String(behoerde.email)))
+      if (behoerde?.email && signatur && !behoerdeErlaubt) {
+        console.warn('Behörden-Versand ohne gültiges Prüfzeichen übersprungen', kundeId)
+        activities.unshift({
+          id: crypto.randomUUID(),
+          date: heute,
+          text: `Automatischer Versand an die Behörde nicht ausgeführt (Link ohne gültiges Prüfzeichen). Bitte die unterschriebene ${String(signatur.kontext ?? 'Vollmacht')} von Hand senden.`,
+          user: 'System (automatisiert)',
+        })
+        patch.activities = activities
+        patch.follow_up = { date: heute, note: 'Unterschriebene Vollmacht von Hand an die Behörde senden', done: false }
+      }
+      if (behoerdeErlaubt && signatur) {
         try {
           const betreff = `${signatur.kontext} — ${bestehend.firma}`
           const text = `Sehr geehrte Damen und Herren,\n\nim Anhang erhalten Sie die digital unterschriebene "${signatur.kontext}" für ${bestehend.ansprechpartner} (${bestehend.firma}).\n\nMit freundlichen Grüßen\nAndreas Mayer Holding`
@@ -3695,7 +3760,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
           const anhang = behoerde.pdfBase64
             ? { filename: behoerde.pdfFilename || 'dokument.pdf', contentBase64: behoerde.pdfBase64, contentType: 'application/pdf' }
             : { filename: 'unterschrift.png', contentBase64: signatur.dataUrl.split(',')[1] ?? signatur.dataUrl, contentType: 'image/png' }
-          await sendMail(behoerde.email, betreff, text, undefined, [anhang])
+          await sendMail(String(behoerde.email).trim(), betreff, text, undefined, [anhang])
           try {
             await admin.from('gesendete_emails').insert({
               an: behoerde.email,
@@ -3761,7 +3826,21 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       if (!firma || !email || !aktivitaetText) {
         return new Response(JSON.stringify({ error: 'firma, email und aktivitaetText sind Pflichtfelder' }), { status: 400, headers })
       }
+      // Schutz vor Massen-Einträgen (19.11.2026): Ein für Menschen unsichtbares Feld („webseite“) füllen nur
+      // Programme aus — dann still „ok“ ohne Anlegen. Dazu Mengengrenzen je Stunde: je E-Mail 3, je
+      // Netzadresse 20 (bei Veranstaltungen füllen mehrere Gäste am selben Gerät/WLAN aus), insgesamt 60.
+      if (typeof body.webseite === 'string' && body.webseite.trim()) return new Response(JSON.stringify({ ok: true }), { headers })
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const netzadresse = (req.headers.get('x-forwarded-for') ?? '').split(',')[0].trim() || 'unbekannt'
+      if (
+        await grenzeErreicht(admin, [
+          { schluessel: `lead:mail:${String(email).trim().toLowerCase()}`, hoechstens: 3 },
+          { schluessel: `lead:ip:${netzadresse}`, hoechstens: 20 },
+          { schluessel: 'lead:alle', hoechstens: 60 },
+        ])
+      ) {
+        return new Response(JSON.stringify({ error: 'Gerade sind zu viele Anmeldungen eingegangen. Bitte versuchen Sie es in einer Stunde erneut.' }), { status: 429, headers })
+      }
       const heute = new Date().toISOString().slice(0, 10)
       const id = `k_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`
       const { error: insertError } = await admin.from('kunden').insert({
@@ -3791,25 +3870,35 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       return new Response(JSON.stringify(antwort.body), { status: antwort.status, headers })
     }
 
+    // Eigentümer-Seite (/formular/eigentuemer/:objektId/:token): Seit 19.11.2026 braucht jede der drei
+    // Aktionen das geheime Zeichen des Objekts (objekte.eigentuemer_token). Vorher reichte die Objekt-
+    // Kennung, die sich erraten lässt (o_ql_…) — damit ließen sich Eigentümerdaten lesen und überschreiben,
+    // Dateien hochladen und über die Ablage-Pfade Unterlagen finden.
     if (body.action === 'public_get_objekt') {
-      const { objektId } = body
-      if (!objektId) {
-        return new Response(JSON.stringify({ error: 'objektId ist ein Pflichtfeld' }), { status: 400, headers })
-      }
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      if (!(await eigentuemerZugangGueltig(admin, body.objektId, body.zugang))) {
+        return new Response(JSON.stringify({ objekt: null, abgelaufen: true }), { headers })
+      }
       const { data, error: selectError } = await admin
         .from('objekte')
         .select('bezeichnung, adresse, typ, dokumente, eigentuemer, unterlagen_anforderungen')
-        .eq('id', objektId)
+        .eq('id', String(body.objektId))
         .maybeSingle()
-      if (selectError) return new Response(JSON.stringify({ error: selectError.message }), { status: 500, headers })
-      if (!data) return new Response(JSON.stringify({ objekt: null }), { headers })
+      if (selectError) return new Response(JSON.stringify({ error: 'Das Objekt konnte gerade nicht geladen werden.' }), { status: 500, headers })
+      if (!data) return new Response(JSON.stringify({ objekt: null, abgelaufen: true }), { headers })
       // Von der jüngsten Anforderung sieht der Eigentümer nur, WAS erbeten wurde — nicht, wer sie an wen geschickt hat.
       // deno-lint-ignore no-explicit-any
-      const { unterlagen_anforderungen: anforderungen, ...oeffentlich } = data as any
+      const { unterlagen_anforderungen: anforderungen, dokumente, ...oeffentlich } = data as any
       const juengste = Array.isArray(anforderungen) ? anforderungen[0] : null
       const angefordert = juengste ? { datum: String(juengste.datum ?? ''), ordner: Array.isArray(juengste.ordner) ? juengste.ordner.map(String) : [], weitere: typeof juengste.weitere === 'string' ? juengste.weitere : undefined } : undefined
-      return new Response(JSON.stringify({ objekt: { ...oeffentlich, angefordert } }), { headers })
+      // Von den Unterlagen nur die Namen je Ordner (für „schon bei uns“) — keine Ablage-Pfade.
+      const nurNamen: Record<string, { name: string }[]> = {}
+      if (dokumente && typeof dokumente === 'object') {
+        for (const [ordner, liste] of Object.entries(dokumente as Record<string, unknown>)) {
+          if (Array.isArray(liste)) nurNamen[ordner] = liste.map((d) => ({ name: String((d as { name?: unknown })?.name ?? '') }))
+        }
+      }
+      return new Response(JSON.stringify({ objekt: { ...oeffentlich, dokumente: nurNamen, angefordert } }), { headers })
     }
 
     // Erzeugt einen Signed-Upload-Token statt den Datei-Inhalt selbst entgegenzunehmen — eine Edge
@@ -3822,7 +3911,10 @@ Deno.serve((req: Request) => mitAnlass(async () => {
         return new Response(JSON.stringify({ error: 'objektId und dateiname sind Pflichtfelder' }), { status: 400, headers })
       }
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
-      const pfad = `${objektId}/eigentuemer_${crypto.randomUUID()}_${String(dateiname).replace(/[^a-zA-Z0-9._-]/g, '_')}`
+      if (!(await eigentuemerZugangGueltig(admin, objektId, body.zugang))) {
+        return new Response(JSON.stringify({ error: 'Dieser Link ist abgelaufen – bitte fordern Sie bei uns einen neuen an.' }), { status: 403, headers })
+      }
+      const pfad = `${objektId}/eigentuemer_${crypto.randomUUID()}_${String(dateiname).replace(/[^a-zA-Z0-9._-]/g, '_').slice(-120)}`
       const { data, error: uploadUrlError } = await admin.storage.from('objekt-dokumente').createSignedUploadUrl(pfad)
       if (uploadUrlError) return new Response(JSON.stringify({ error: uploadUrlError.message }), { status: 500, headers })
       return new Response(JSON.stringify({ pfad: data.path, token: data.token }), { headers })
@@ -3834,24 +3926,41 @@ Deno.serve((req: Request) => mitAnlass(async () => {
         return new Response(JSON.stringify({ error: 'objektId und aktivitaetText sind Pflichtfelder' }), { status: 400, headers })
       }
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      if (!(await eigentuemerZugangGueltig(admin, objektId, body.zugang))) {
+        return new Response(JSON.stringify({ error: 'Dieser Link ist abgelaufen – bitte fordern Sie bei uns einen neuen an.' }), { status: 403, headers })
+      }
       const { data: bestehend, error: selectError } = await admin
         .from('objekte')
         .select('activities, dokumente')
         .eq('id', objektId)
         .maybeSingle()
-      if (selectError) return new Response(JSON.stringify({ error: selectError.message }), { status: 500, headers })
-      if (!bestehend) return new Response(JSON.stringify({ error: 'Objekt nicht gefunden' }), { status: 404, headers })
+      if (selectError) return new Response(JSON.stringify({ error: 'Speichern fehlgeschlagen. Bitte erneut versuchen.' }), { status: 500, headers })
+      if (!bestehend) return new Response(JSON.stringify({ error: 'Dieser Link ist abgelaufen – bitte fordern Sie bei uns einen neuen an.' }), { status: 404, headers })
 
+      // Nur, was die Eigentümer-Seite wirklich schickt — keine beliebigen Felder, keine fremden Ablage-Pfade.
+      const kurz = (wert: unknown, max: number) => String(wert ?? '').trim().slice(0, max)
       const heute = new Date().toISOString().slice(0, 10)
       const activities: unknown[] = [
-        { id: crypto.randomUUID(), date: heute, text: aktivitaetText, user: 'Eigentümer (Formular)' },
+        { id: crypto.randomUUID(), date: heute, text: kurz(aktivitaetText, 500), user: 'Eigentümer (Formular)' },
         ...((bestehend.activities as unknown[]) ?? []),
       ]
       const patch: Record<string, unknown> = { activities }
-      if (eigentuemer) patch.eigentuemer = eigentuemer
+      if (eigentuemer && typeof eigentuemer === 'object') {
+        const e = eigentuemer as Record<string, unknown>
+        const ansprechpartner = kurz(e.ansprechpartner, 200)
+        patch.eigentuemer = { name: kurz(e.name, 200), telefon: kurz(e.telefon, 100), email: kurz(e.email, 200), ...(ansprechpartner ? { ansprechpartner } : {}) }
+      }
       if (dokument && ordner) {
+        const d = dokument as Record<string, unknown>
+        const url = String(d.url ?? '')
+        // Hochgeladen wird nur über public_objekt_upload_url — der Pfad muss genau daher stammen.
+        if (!url.startsWith(`${objektId}/eigentuemer_`) || url.includes('..')) {
+          return new Response(JSON.stringify({ error: 'Die Datei konnte nicht zugeordnet werden. Bitte erneut hochladen.' }), { status: 400, headers })
+        }
+        const ordnerName = kurz(ordner, 80)
+        const sauber = { id: kurz(d.id, 60) || `dok_${crypto.randomUUID().slice(0, 11)}`, name: kurz(d.name, 200), typ: kurz(d.typ, 100), datum: heute, groesse: kurz(d.groesse, 30), url }
         const dokumenteBisher = (bestehend.dokumente as Record<string, unknown[]>) ?? {}
-        patch.dokumente = { ...dokumenteBisher, [ordner]: [dokument, ...((dokumenteBisher[ordner] as unknown[]) ?? [])] }
+        patch.dokumente = { ...dokumenteBisher, [ordnerName]: [sauber, ...((dokumenteBisher[ordnerName] as unknown[]) ?? [])] }
       }
 
       const { error: updateError } = await admin.from('objekte').update(patch).eq('id', objektId)

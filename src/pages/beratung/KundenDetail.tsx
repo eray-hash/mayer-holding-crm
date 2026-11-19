@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, Mail } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
@@ -26,6 +26,60 @@ import { FollowUpForm } from '../../components/FollowUpEditor'
 import { AktenReiter } from '../../components/AktenReiter'
 import type { Prioritaet } from '../../types'
 import { angezeigterStatus } from '../../lib/rechnungen'
+import { holeBehoerdenPruefzeichen } from '../../lib/emailGateway'
+
+/** Link zur Finanzamt-Vollmacht. Mit eingetragener Behörden-Adresse holt das Fenster beim Server ein
+ *  Prüfzeichen (seit 19.11.2026) — nur damit verschickt der Server die unterschriebene Vollmacht an
+ *  genau diese Adresse. */
+function VollmachtFinanzamtLink({ kundeId }: { kundeId: string }) {
+  const [finanzamtEmail, setFinanzamtEmail] = useState('')
+  const [pruef, setPruef] = useState<{ email: string; sig: string } | null>(null)
+  const [fehler, setFehler] = useState('')
+  const adresse = finanzamtEmail.trim()
+  const gueltig = /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/.test(adresse)
+
+  useEffect(() => {
+    setFehler('')
+    if (!gueltig) return
+    let aktiv = true
+    const uhr = window.setTimeout(() => {
+      holeBehoerdenPruefzeichen(kundeId, adresse)
+        .then((sig) => aktiv && setPruef({ email: adresse, sig }))
+        .catch((err) => aktiv && setFehler(err instanceof Error ? err.message : 'Der Link konnte nicht vorbereitet werden.'))
+    }, 500)
+    return () => {
+      aktiv = false
+      window.clearTimeout(uhr)
+    }
+  }, [kundeId, adresse, gueltig])
+
+  const basis = `/formular/vollmacht/beratung/finanzamt/${kundeId}`
+  const fertig = gueltig && pruef?.email === adresse && !!pruef.sig
+  return (
+    <div className="mt-4 border-t border-slate-100 pt-4">
+      <div className="mb-1.5 text-xs font-medium text-slate-400">Vollmacht Finanzamt digital versenden</div>
+      <input
+        className={`${inputClass} mb-1.5 text-xs`}
+        placeholder="E-Mail Finanzamt (für automatischen Versand nach Unterschrift, optional)"
+        value={finanzamtEmail}
+        onChange={(e) => setFinanzamtEmail(e.target.value)}
+      />
+      {!adresse ? (
+        <FormularLinkButtons pfad={basis} />
+      ) : fertig ? (
+        <FormularLinkButtons pfad={`${basis}?behoerde=${encodeURIComponent(adresse)}&sig=${encodeURIComponent(pruef!.sig)}`} />
+      ) : (
+        <p className="text-xs text-slate-400">{gueltig ? 'Link wird vorbereitet …' : 'Bitte eine vollständige E-Mail-Adresse eintragen.'}</p>
+      )}
+      {fehler && <p className="mt-1 text-xs text-rose-600">{fehler}</p>}
+      {fertig && (
+        <p className="mt-1 text-xs text-slate-400">
+          Sobald unterschrieben, wird die Vollmacht automatisch an {adresse} geschickt und eine Wiedervorlage angelegt.
+        </p>
+      )}
+    </div>
+  )
+}
 
 const TABS = [
   { id: 'uebersicht', label: 'Übersicht' },
@@ -49,7 +103,6 @@ export function KundenDetail() {
   const { state, dispatch } = useApp()
   const [sendEmailOpen, setSendEmailOpen] = useState(false)
   const [editFollowUp, setEditFollowUp] = useState(false)
-  const [finanzamtEmail, setFinanzamtEmail] = useState('')
 
   const kunde = state.kunden.find((k) => k.id === id)
   const tab = params.get('tab') ?? 'uebersicht'
@@ -131,23 +184,7 @@ export function KundenDetail() {
               <div className="text-xs font-medium text-slate-400">Nächste Follow-up-Aufgabe</div>
               <div className={`text-sm ${overdue ? 'font-medium text-rose-600' : 'text-slate-700'}`}>{fmtDate(kunde.followUp.date)} — {kunde.followUp.note}</div>
             </div>
-            <div className="mt-4 border-t border-slate-100 pt-4">
-              <div className="mb-1.5 text-xs font-medium text-slate-400">Vollmacht Finanzamt digital versenden</div>
-              <input
-                className={`${inputClass} mb-1.5 text-xs`}
-                placeholder="E-Mail Finanzamt (für automatischen Versand nach Unterschrift, optional)"
-                value={finanzamtEmail}
-                onChange={(e) => setFinanzamtEmail(e.target.value)}
-              />
-              <FormularLinkButtons
-                pfad={`/formular/vollmacht/beratung/finanzamt/${kunde.id}${finanzamtEmail.trim() ? `?behoerde=${encodeURIComponent(finanzamtEmail.trim())}` : ''}`}
-              />
-              {finanzamtEmail.trim() && (
-                <p className="mt-1 text-xs text-slate-400">
-                  Sobald unterschrieben, wird die Vollmacht automatisch an {finanzamtEmail.trim()} geschickt und eine Wiedervorlage angelegt.
-                </p>
-              )}
-            </div>
+            <VollmachtFinanzamtLink kundeId={kunde.id} />
             <div className="mt-3">
               <div className="mb-1.5 text-xs font-medium text-slate-400">Vollmacht Bank digital versenden</div>
               <FormularLinkButtons pfad={`/formular/vollmacht/beratung/bank/${kunde.id}`} />

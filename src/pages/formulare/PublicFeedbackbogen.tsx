@@ -20,6 +20,8 @@ export function PublicFeedbackbogen() {
   const [name, setName] = useState('')
   const [telefon, setTelefon] = useState('')
   const [email, setEmail] = useState('')
+  // Unsichtbares Feld gegen Programme, die Formulare automatisch ausfüllen (bleibt bei Menschen leer).
+  const [webseite, setWebseite] = useState('')
   const [feedback, setFeedback] = useState<Record<string, JaNein>>({})
   // Tabelle "Kriterien (unternehmerisch)": je Zeile Anzahl und ungefährer Wert.
   const [unternehmerisch, setUnternehmerisch] = useState<Record<string, { anzahl: string; wert: string }>>({})
@@ -86,6 +88,7 @@ export function PublicFeedbackbogen() {
         aktivitaetText: activityLines.join(' '),
         aktivitaetUser: 'Kunde (Formular)',
         signatur: { name, dataUrl: signatur, kontext: `Feedbackbogen – ${veranstaltung}` },
+        webseite,
       })
       setSubmitted(true)
     } catch (err) {
@@ -157,6 +160,12 @@ export function PublicFeedbackbogen() {
             <Field label="E-Mail*">
               <input type="email" className={inputClass} value={email} onChange={(e) => setEmail(e.target.value)} />
             </Field>
+          </div>
+          <div aria-hidden="true" style={{ position: 'absolute', left: '-10000px', width: 1, height: 1, overflow: 'hidden' }}>
+            <label>
+              Webseite
+              <input tabIndex={-1} autoComplete="off" value={webseite} onChange={(e) => setWebseite(e.target.value)} />
+            </label>
           </div>
           <p className="mb-4 text-xs text-slate-400">{F.pflichtHinweis}</p>
 

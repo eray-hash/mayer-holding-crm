@@ -57,6 +57,8 @@ export function PublicVollmachtBeratung() {
   const [searchParams] = useSearchParams()
   const behoerdeEmail = searchParams.get('behoerde')
   const behoerdeName = searchParams.get('behoerdeName')
+  // Prüfzeichen des Servers für die Behörden-Adresse (seit 19.11.2026) — ohne verschickt der Server nichts.
+  const behoerdeSig = searchParams.get('sig') ?? undefined
   const [kunde, setKunde] = useState<PublicKunde | null | undefined>(undefined)
   const [submitted, setSubmitted] = useState(false)
   const [senden, setSenden] = useState(false)
@@ -114,7 +116,7 @@ export function PublicVollmachtBeratung() {
         : `Wohnhaft: ${adresse}, Bank: ${bank}.`
 
     try {
-      let behoerde: { email: string; name?: string; pdfBase64?: string; pdfFilename?: string } | undefined
+      let behoerde: { email: string; name?: string; sig?: string; pdfBase64?: string; pdfFilename?: string } | undefined
       if (behoerdeEmail) {
         const felder: { label: string; value: string }[] = [
           { label: 'Vollmachtgeber', value: `${kunde!.ansprechpartner} (${kunde!.firma})` },
@@ -134,7 +136,7 @@ export function PublicVollmachtBeratung() {
           ort: 'Ulm',
           datum: today(),
         })
-        behoerde = { email: behoerdeEmail, name: behoerdeName || 'Finanzamt', pdfBase64: pdf.base64, pdfFilename: `${TITEL[gueltigerTyp]}.pdf` }
+        behoerde = { email: behoerdeEmail, name: behoerdeName || 'Finanzamt', sig: behoerdeSig, pdfBase64: pdf.base64, pdfFilename: `${TITEL[gueltigerTyp]}.pdf` }
       }
 
       await sendePublicFormular({

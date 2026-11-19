@@ -550,6 +550,9 @@ export type Objekt = {
   bewertung?: ObjektBewertung
   // Wann welche Unterlagen beim Eigentümer angefordert wurden (neueste zuerst).
   unterlagenAnforderungen?: UnterlagenAnforderung[]
+  // Geheimes Zeichen für den Link zur Eigentümer-Seite (/formular/eigentuemer/:objektId/:token). Erzeugt
+  // die Datenbank beim Anlegen; das Fenster liest es nur und schreibt es nie zurück (siehe objektToRow).
+  eigentuemerToken?: string
 }
 
 /** Stand und Ergebnis der Bewertung eines Objekts nach einer hinterlegten KI-Anweisung. */

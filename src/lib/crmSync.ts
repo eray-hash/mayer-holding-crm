@@ -206,6 +206,8 @@ function rowToObjekt(row: any): Objekt {
     exposeText: row.expose_text ?? undefined,
     bewertung: row.bewertung ?? undefined,
     unterlagenAnforderungen: row.unterlagen_anforderungen ?? undefined,
+    // Nur lesen: `eigentuemer_token` fehlt in objektToRow mit Absicht (die Datenbank vergibt es).
+    eigentuemerToken: row.eigentuemer_token ?? undefined,
   }
 }
 

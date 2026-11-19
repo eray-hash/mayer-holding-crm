@@ -29,7 +29,7 @@ export function PublicSelbstauskunft() {
 
   useEffect(() => {
     if (!bereichRoh || !kundeId) return
-    holePublicKunde(bereichRoh, kundeId)
+    holePublicKunde(bereichRoh, kundeId, 'selbstauskunft')
       .then(setKunde)
       .catch(() => setKunde(null))
   }, [bereichRoh, kundeId])

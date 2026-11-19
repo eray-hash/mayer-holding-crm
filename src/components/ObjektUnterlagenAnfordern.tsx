@@ -9,6 +9,7 @@ import { pruefeUnterlagenVollstaendigkeit } from '../data/objektUnterlagenPflich
 import { isEmailGatewayConfigured, sendEmail } from '../lib/emailGateway'
 import { gemerkterAbsender, merkeAbsender, postfachBezeichnung, usePostfaecher } from '../lib/postfaecher'
 import { addDays, fmtDate, today, uid } from '../lib/dates'
+import { useEigentuemerPfad } from '../lib/eigentuemerLink'
 import { DOKUMENT_ORDNER } from '../types'
 import type { ActivityEntry, DokumentOrdnerName, FollowUp, Objekt, UnterlagenAnforderung } from '../types'
 
@@ -46,8 +47,10 @@ function ordnerReihenfolge(pflicht: DokumentOrdnerName[]): DokumentOrdnerName[] 
   return [...pflicht, ...DOKUMENT_ORDNER.filter((o) => !pflicht.includes(o))]
 }
 
-function eigentuemerSeite(objekt: Objekt): string {
-  return shareableUrl(`/formular/eigentuemer/${objekt.id}`)
+/** Volle Adresse der Eigentümer-Seite (mit geheimem Zeichen) oder '' solange es noch nicht bekannt ist. */
+function useEigentuemerSeite(objekt: Objekt): string {
+  const pfad = useEigentuemerPfad(objekt)
+  return pfad ? shareableUrl(pfad) : ''
 }
 
 function weitereZeilen(weitere: string): string[] {
@@ -173,7 +176,7 @@ function AnforderungFenster({ objekt, vorgabe, onClose }: { objekt: Objekt; vorg
 
   const check = pruefeUnterlagenVollstaendigkeit(objekt)
   const alleOrdner = ordnerReihenfolge(check.pflicht)
-  const link = eigentuemerSeite(objekt)
+  const link = useEigentuemerSeite(objekt)
   const signaturHtml = state.profil.signaturHtml?.trim() ?? ''
 
   const [gewaehlt, setGewaehlt] = useState<Set<DokumentOrdnerName>>(() => new Set(vorgabe.ordner))
@@ -223,7 +226,7 @@ function AnforderungFenster({ objekt, vorgabe, onClose }: { objekt: Objekt; vorg
   const nichtsGewaehlt = ordnerGewaehlt.length === 0 && !weitere.trim()
   const adresseFehlt = !an.trim()
   const adresseUngueltig = !adresseFehlt && !istMailAdresse(an)
-  const kannSenden = isEmailGatewayConfigured && !sendet && !nichtsGewaehlt && istMailAdresse(an) && !!betreff.trim() && !!text.trim()
+  const kannSenden = isEmailGatewayConfigured && !sendet && !nichtsGewaehlt && istMailAdresse(an) && !!betreff.trim() && !!text.trim() && !!link
   const aufTestrechner = ['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname)
 
   function schalte(ordner: DokumentOrdnerName) {
@@ -429,7 +432,10 @@ function AnforderungFenster({ objekt, vorgabe, onClose }: { objekt: Objekt; vorg
               </button>
             </p>
           )}
-          {eigenerText !== null && !text.includes(link) && (
+          {!link && (
+            <p className="-mt-1 mb-3 text-xs font-medium text-amber-700">Der Link zur Eigentümer-Seite wird noch vorbereitet – bitte einen Moment warten oder die Seite neu laden.</p>
+          )}
+          {link && eigenerText !== null && !text.includes(link) && (
             <p className="-mt-1 mb-3 text-xs font-medium text-amber-700">Im Text steht der Link zur Eigentümer-Seite nicht mehr – ohne ihn kann der Eigentümer nichts hochladen.</p>
           )}
           {signaturHtml && <p className="-mt-1 mb-3 text-xs text-slate-400">Deine Signatur aus „Mein Profil“ wird beim Senden angehängt.</p>}
@@ -474,7 +480,7 @@ function AnforderungFenster({ objekt, vorgabe, onClose }: { objekt: Objekt; vorg
           {linkKopie.fehler && <p className="mb-3 select-all break-all rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">{link}</p>}
 
           <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-            <SecondaryButton onClick={() => linkKopie.kopiere(link)}>
+            <SecondaryButton onClick={() => link && linkKopie.kopiere(link)} disabled={!link}>
               {linkKopie.kopiert ? <Check size={14} className="text-emerald-600" /> : <Link2 size={14} />}
               {linkKopie.kopiert ? 'Link kopiert' : 'Nur Link kopieren'}
             </SecondaryButton>
@@ -516,7 +522,7 @@ export function ObjektUnterlagenAnfordern({ objekt }: { objekt: Objekt }) {
   const anforderungen = objekt.unterlagenAnforderungen ?? []
   const letzte = anforderungen[0]
   const letzteOffen = letzte ? letzte.ordner.filter((o) => !istDa(objekt, o)) : []
-  const link = eigentuemerSeite(objekt)
+  const link = useEigentuemerSeite(objekt)
 
   const eigentuemerMail = objekt.eigentuemer?.email?.trim() || objekt.verkaufsdaten?.auftraggeber?.email?.trim() || ''
   const eigentuemerName = objekt.eigentuemer?.name?.trim() || objekt.verkaufsdaten?.auftraggeber?.name?.trim() || ''
@@ -552,7 +558,7 @@ export function ObjektUnterlagenAnfordern({ objekt }: { objekt: Objekt }) {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <SecondaryButton onClick={() => linkKopie.kopiere(link)}>
+          <SecondaryButton onClick={() => link && linkKopie.kopiere(link)} disabled={!link}>
             {linkKopie.kopiert ? <Check size={14} className="text-emerald-600" /> : <Link2 size={14} />}
             {linkKopie.kopiert ? 'Link kopiert' : 'Link zur Eigentümer-Seite kopieren'}
           </SecondaryButton>

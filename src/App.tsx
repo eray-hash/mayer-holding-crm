@@ -318,6 +318,9 @@ function AppRoutes() {
         <Route path="/formular/mandantenfragebogen/erben/:mandantId" element={<PublicMandantenfragebogenErben />} />
         <Route path="/formular/vollmacht/beratung/:typ/:kundeId" element={<PublicVollmachtBeratung />} />
         <Route path="/formular/selbstauskunft/:bereich/:kundeId" element={<PublicSelbstauskunft />} />
+        {/* Mit geheimem Zeichen (seit 19.11.2026). Alte Links ohne Zeichen landen auf derselben Seite und
+            bekommen dort den Hinweis, dass der Link abgelaufen ist. */}
+        <Route path="/formular/eigentuemer/:objektId/:token" element={<PublicEigentuemerPortal />} />
         <Route path="/formular/eigentuemer/:objektId" element={<PublicEigentuemerPortal />} />
         <Route path="/formular/nda/:bereich/:kundeId" element={<PublicNda />} />
         <Route path="/formular/unterlagen/:token" element={<PublicKundenUnterlagen />} />

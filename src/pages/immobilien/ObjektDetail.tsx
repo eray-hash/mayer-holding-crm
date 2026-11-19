@@ -5,6 +5,7 @@ import { useApp, type AppData } from '../../context/AppContext'
 import { StatusWidget } from '../../components/StatusWidget'
 import { Card, Modal, Field, inputClass, PrimaryButton, SecondaryButton, EmptyState, StatusBadge } from '../../components/ui'
 import { FormularLinkButtons } from '../../components/FormularLink'
+import { useEigentuemerPfad } from '../../lib/eigentuemerLink'
 import { KUNDEN_BEREICHE, kundeBereichLabel, kundeDetailPfad } from '../../data/kundenBereiche'
 import { useBereichsRechte } from '../../lib/bereichsRechte'
 import { alleGesuche, budgetText, eckdatenTexte, passendeGesuche } from '../../lib/gesuche'
@@ -236,7 +237,7 @@ export function ObjektDetail() {
                 <p className="mb-2 text-xs text-slate-400">Noch nicht vom Eigentümer bestätigt.</p>
               )}
               <div className="mt-2">
-                <FormularLinkButtons pfad={`/formular/eigentuemer/${objekt.id}`} />
+                <EigentuemerLinkKnoepfe objekt={objekt} />
               </div>
             </div>
           </Card>
@@ -842,6 +843,13 @@ function ExposeSection({ objekt }: { objekt: Objekt }) {
       )}
     </Card>
   )
+}
+
+/** Öffnen/Kopieren der Eigentümer-Seite — der Link enthält das geheime Zeichen des Objekts. */
+function EigentuemerLinkKnoepfe({ objekt }: { objekt: Objekt }) {
+  const pfad = useEigentuemerPfad(objekt)
+  if (!pfad) return <p className="text-xs text-slate-400">Link zur Eigentümer-Seite wird vorbereitet …</p>
+  return <FormularLinkButtons pfad={pfad} />
 }
 
 function Row({ label, value }: { label: string; value: string }) {

@@ -18,7 +18,7 @@ export function PublicMandantenfragebogenErben() {
 
   useEffect(() => {
     if (!mandantId) return
-    holePublicKunde('erben', mandantId)
+    holePublicKunde('erben', mandantId, 'mandantenfragebogen')
       .then((k) => {
         setMandant(k)
         if (k?.unterlagenCheckliste) setCheckliste(k.unterlagenCheckliste)
