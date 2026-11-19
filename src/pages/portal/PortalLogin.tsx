@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { ShieldCheck, Mail, CheckCircle2, AlertTriangle } from 'lucide-react'
-import { requestMagicLink } from '../../lib/portalAuthDb'
-import { sendEmail, isEmailGatewayConfigured } from '../../lib/emailGateway'
+import { fordrePortalLinkAn, isEmailGatewayConfigured } from '../../lib/emailGateway'
 import { inputClass } from '../../components/ui'
 
 // Magic-Link-Login: kein Passwort, kein Demo-Zugänge-Dropdown mehr (das hätte mit echten
@@ -21,17 +20,9 @@ export function PortalLogin() {
     setSenden(true)
     setError(null)
     try {
-      const antwort = await requestMagicLink(adresse)
-      if (antwort.gefunden && antwort.token) {
-        const link = `${window.location.origin}${window.location.pathname}#/portal/magic/${antwort.token}`
-        await sendEmail(
-          antwort.email ?? adresse,
-          'Ihr Zugang zum Investoren-Portal',
-          `Guten Tag ${antwort.name ?? ''},\n\nmit folgendem Link gelangen Sie zu Ihrem Investoren-Portal (15 Minuten gültig):\n${link}\n\nFalls Sie diese Anfrage nicht gestellt haben, ignorieren Sie diese E-Mail einfach.`,
-          `<p>Guten Tag ${antwort.name ?? ''},</p><p>mit folgendem Link gelangen Sie zu Ihrem Investoren-Portal (15 Minuten gültig):</p><p><a href="${link}">${link}</a></p><p>Falls Sie diese Anfrage nicht gestellt haben, ignorieren Sie diese E-Mail einfach.</p>`,
-        )
-      }
-      // Bewusst immer dieselbe Bestätigung, unabhängig von antwort.gefunden.
+      // Der Server erzeugt den Link und verschickt ihn (19.11.2026) — der Browser bekommt das Zeichen nie zu sehen.
+      await fordrePortalLinkAn(adresse)
+      // Bewusst immer dieselbe Bestätigung, unabhängig davon, ob die Adresse zu einem Investor gehört.
       setAbgeschickt(true)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Link konnte nicht verschickt werden.')

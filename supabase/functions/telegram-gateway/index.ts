@@ -151,6 +151,7 @@ async function callEmailGateway(action: string, body: Record<string, unknown>): 
     method: 'POST',
     headers: {
       'content-type': 'application/json',
+      authorization: `Bearer ${SERVICE_ROLE_KEY}`,
       ...(CRM_SHARED_SECRET ? { 'x-crm-secret': CRM_SHARED_SECRET } : {}),
     },
     body: JSON.stringify({ action, ...body }),
@@ -2810,7 +2811,7 @@ function mailText(entwurf: { text: string }, e: MailEmpfaenger, absender: string
 async function stosseMailSchrittAn(mitarbeiterId: string, auftragId: string, fehlversuche: Record<string, number>, runde: number): Promise<void> {
   await fetch(`${SUPABASE_URL}/functions/v1/telegram-gateway`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', ...(CRM_SHARED_SECRET ? { 'x-crm-secret': CRM_SHARED_SECRET } : {}) },
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${SERVICE_ROLE_KEY}`, ...(CRM_SHARED_SECRET ? { 'x-crm-secret': CRM_SHARED_SECRET } : {}) },
     body: JSON.stringify({ intern: 'mail_schritt', mitarbeiterId, auftragId, fehlversuche, runde }),
   }).catch((err) => console.error('Mail-Schritt konnte nicht angestoßen werden:', err))
 }
@@ -3322,7 +3323,7 @@ async function speichereNurDatei(supabase: Supa, eingangsDatei: DateiEingang): P
 async function stosseSortierSchrittAn(mitarbeiterId: string): Promise<void> {
   await fetch(`${SUPABASE_URL}/functions/v1/telegram-gateway`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', ...(CRM_SHARED_SECRET ? { 'x-crm-secret': CRM_SHARED_SECRET } : {}) },
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${SERVICE_ROLE_KEY}`, ...(CRM_SHARED_SECRET ? { 'x-crm-secret': CRM_SHARED_SECRET } : {}) },
     body: JSON.stringify({ intern: 'sortier_schritt', mitarbeiterId }),
   }).catch((err) => console.error('Sortier-Schritt konnte nicht angestoßen werden:', err))
 }
@@ -3661,8 +3662,10 @@ Deno.serve((req: Request) => mitAnlass(async () => {
 
   // 2) Interner Aufruf (Versandschritt einer E-Mail an viele Empfänger): nur mit dem gemeinsamen
   //    Geheimnis. Er kann nichts Neues auslösen, nur einen schon freigegebenen Versand fortsetzen.
+  // Seit 19.11.2026 nur noch mit dem Dienst-Schlüssel — das gemeinsame Geheimnis steht im Seiten-Code.
+  const internDienst = istDienstSchluessel((req.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '').trim())
   if (body?.intern === 'mail_schritt') {
-    if (!CRM_SHARED_SECRET || req.headers.get('x-crm-secret') !== CRM_SHARED_SECRET) return new Response('Unauthorized', { status: 401 })
+    if (!internDienst) return new Response('Unauthorized', { status: 401 })
     if (typeof body.mitarbeiterId !== 'string' || typeof body.auftragId !== 'string') return new Response('Bad request', { status: 400 })
     const schritt = fuehreMailSchrittAus(body.mitarbeiterId, body.auftragId, body.fehlversuche && typeof body.fehlversuche === 'object' ? body.fehlversuche : {}, Number(body.runde) || 0).catch((err) =>
       console.error('Mail-Schritt fehlgeschlagen:', err),
@@ -3675,7 +3678,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
   // Warteschlange für Sammelsendungen: ein Schritt je Aufruf bzw. Anstoß durch den Zeitplan. Beides
   // kann nichts Neues auslösen, nur bereits gespeicherte Dateien einsortieren.
   if (body?.intern === 'sortier_schritt' || body?.intern === 'sortier_anstoss') {
-    if (!CRM_SHARED_SECRET || req.headers.get('x-crm-secret') !== CRM_SHARED_SECRET) return new Response('Unauthorized', { status: 401 })
+    if (!internDienst) return new Response('Unauthorized', { status: 401 })
     const schritt = (
       body.intern === 'sortier_anstoss'
         ? stosseWartendeAn()

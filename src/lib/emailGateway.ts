@@ -313,6 +313,12 @@ export async function requestPasswordReset(email: string): Promise<void> {
   await call({ action: 'request_password_reset', email })
 }
 
+// Investoren-Portal: Der Server erzeugt den Anmelde-Link und verschickt ihn selbst. Antwortet immer
+// gleich, egal ob die Adresse zu einem Investor gehört.
+export async function fordrePortalLinkAn(email: string): Promise<void> {
+  await call({ action: 'public_portal_link', email, basis: `${window.location.origin}${window.location.pathname}` })
+}
+
 // Setzt das allererste Passwort für eine hinterlegte Mitarbeiter-E-Mail, ganz ohne Mailversand —
 // aber nur, solange der Zugang noch nie geöffnet wurde. Wurde er schon einmal geöffnet (z. B. über
 // den Einladungs-Link, der anmeldet, ohne ein Passwort zu vergeben), setzt der Server das Passwort

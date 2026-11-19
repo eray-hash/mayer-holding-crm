@@ -239,6 +239,7 @@ import { pruefeBonitaet } from './bonitaet.ts'
 import { lieseKontoauszug } from './kontoauszug.ts'
 import { beantworteKundenUnterlagen } from './kundenUnterlagen.ts'
 import { pruefeWunschAnalyse, wunschAnalyseTest } from './wunschAnalyse.ts'
+import { pruefeSuperuserWochenbericht, superuserAuswertung, superuserWochenberichtTest } from './superuser.ts'
 import { kiAufruf, mitAnlass, setzeAnlass } from '../_shared/kiVerbrauch.ts'
 
 const ALLOWED_ORIGINS = [
@@ -1041,7 +1042,7 @@ async function stosseRechercheSchrittAn(bereich: string, kundeId: string, umleit
   const secret = Deno.env.get('CRM_SHARED_SECRET')
   await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/email-gateway`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', ...(secret ? { 'x-crm-secret': secret } : {}) },
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`, ...(secret ? { 'x-crm-secret': secret } : {}) },
     body: JSON.stringify({ action, bereich, kundeId, umleitungen }),
   }).catch((err) => console.error('Recherche-Schritt konnte nicht angestoßen werden:', err))
 }
@@ -1300,7 +1301,7 @@ async function stosseDokumentLesenAn(ref: DokumentRef, extra: Record<string, unk
   const secret = Deno.env.get('CRM_SHARED_SECRET')
   await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/email-gateway`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', ...(secret ? { 'x-crm-secret': secret } : {}) },
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`, ...(secret ? { 'x-crm-secret': secret } : {}) },
     body: JSON.stringify({ action: 'dokument_lesen', ...ref, ...extra }),
   }).catch((err) => console.error('Dokument-Lesen konnte nicht angestoßen werden:', err))
 }
@@ -2203,7 +2204,7 @@ async function stosseObjektBewertungAn(objektId: string, umleitungen = 0): Promi
   const secret = Deno.env.get('CRM_SHARED_SECRET')
   await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/email-gateway`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', ...(secret ? { 'x-crm-secret': secret } : {}) },
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`, ...(secret ? { 'x-crm-secret': secret } : {}) },
     body: JSON.stringify({ action: 'objekt_bewertung_schritt', objektId, umleitungen }),
   }).catch((err) => console.error('Bewertungs-Schritt konnte nicht angestoßen werden:', err))
 }
@@ -2948,6 +2949,41 @@ async function fetchImmoRadarTopListings(): Promise<ImmoRadarTreffer[]> {
     }))
 }
 
+// Aktionen, die ohne Anmeldung gehen müssen (Anmeldeseite). Alle `public_*` (Formulare für Kunden)
+// sind ohnehin ausgenommen.
+const OHNE_LOGIN = new Set(['request_password_reset', 'self_register'])
+// Zeitplan-Aufträge (pg_cron) weisen sich mit dem Zeitplan-Zeichen aus dem Vault aus.
+const ZEITPLAN_AKTIONEN = new Set(['termin_erinnerungen', 'postfach_abruf', 'classify_new_leads'])
+const ZUGANG_MERKER = new Map<string, number>()
+
+async function pruefeZugang(req: Request, aktion: string): Promise<boolean> {
+  const token = (req.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '').trim()
+  if (token && istDienstSchluessel(token)) return true
+  const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+  const cron = (req.headers.get('x-cron-token') ?? '').trim()
+  if (cron && ZEITPLAN_AKTIONEN.has(aktion)) {
+    const schluessel = `cron:${cron}`
+    if ((ZUGANG_MERKER.get(schluessel) ?? 0) > Date.now()) return true
+    const { data } = await admin.rpc('pruefe_cron_token', { t: cron })
+    if (data === true) {
+      ZUGANG_MERKER.set(schluessel, Date.now() + 10 * 60_000)
+      return true
+    }
+  }
+  if (!token || token.length < 30) return false
+  // Ein bestätigtes Login-Zeichen eine Minute lang merken, damit nicht jeder Aufruf nachfragen muss.
+  if ((ZUGANG_MERKER.get(token) ?? 0) > Date.now()) return true
+  const { data, error } = await admin.auth.getUser(token)
+  const email = data?.user?.email
+  if (error || !email) return false
+  const muster = email.toLowerCase().replace(/[\\%_]/g, (z: string) => `\\${z}`)
+  const { data: zeile } = await admin.from('mitarbeiter').select('aktiv').ilike('email', muster).maybeSingle()
+  if (!zeile?.aktiv) return false
+  if (ZUGANG_MERKER.size > 500) ZUGANG_MERKER.clear()
+  ZUGANG_MERKER.set(token, Date.now() + 60_000)
+  return true
+}
+
 Deno.serve((req: Request) => mitAnlass(async () => {
   const origin = req.headers.get('origin')
   const headers = corsHeaders(origin)
@@ -2970,6 +3006,21 @@ Deno.serve((req: Request) => mitAnlass(async () => {
   try {
     const body = await req.json()
     setzeAnlass(body?.action)
+
+    // Anmeldung erzwingen (19.11.2026): Das x-crm-secret oben steckt im öffentlichen Seiten-Code und
+    // beweist nichts. Jede Aktion außer den öffentlichen Formularen braucht deshalb einen angemeldeten,
+    // aktiven Mitarbeiter, den Dienst-Schlüssel (Aufrufe der eigenen Funktionen) oder — nur für die
+    // Zeitplan-Aufträge — das Zeitplan-Zeichen aus dem Vault (x-cron-token, siehe pruefe_cron_token).
+    {
+      const aktion = String(body?.action ?? '')
+      if (!aktion.startsWith('public_') && !OHNE_LOGIN.has(aktion)) {
+        const zugang = await pruefeZugang(req, aktion)
+        if (!zugang) {
+          console.warn('Aufruf ohne Anmeldung abgewiesen:', aktion)
+          return new Response(JSON.stringify({ error: 'Bitte neu anmelden — die Anmeldung fehlt oder ist abgelaufen.' }), { status: 401, headers })
+        }
+      }
+    }
 
     if (body.action === 'sync') {
       const mails = await syncInbox(Math.min(Number(body.limit ?? 20), 50))
@@ -3081,6 +3132,9 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       // Außerhalb der Zeitfenster ohne Datenbankzugriff; höchstens einmal je Person und Tag; wirft nie.
       const tagesmeldung = await sendeTagesmeldungen(admin, sendeTelegram)
       if (tagesmeldung.morgen > 0 || tagesmeldung.woche > 0) console.log(`Tagesmeldung: ${tagesmeldung.morgen} Morgen-Übersicht(en), ${tagesmeldung.woche} Wochenbericht(e).`)
+      // Superuser-Wochenbericht (freitags ab 16 Uhr, einmal) — siehe superuser.ts; sonst ohne Datenbankzugriff.
+      // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
+      EdgeRuntime.waitUntil(pruefeSuperuserWochenbericht(admin, sendeTelegram))
       // Wünsche und Probleme der Mitarbeiter: Auswertung alle zwei Stunden, Bericht an die Admins ab 18 Uhr —
       // siehe wunschAnalyse.ts. Im Hintergrund (der KI-Aufruf dauert); außerhalb der Stunden ohne Datenbankzugriff; wirft nie.
       // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
@@ -3092,7 +3146,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
         if ((count ?? 0) > 0) {
           await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/telegram-gateway`, {
             method: 'POST',
-            headers: { 'content-type': 'application/json', ...(sharedSecret ? { 'x-crm-secret': sharedSecret } : {}) },
+            headers: { 'content-type': 'application/json', authorization: `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`, ...(sharedSecret ? { 'x-crm-secret': sharedSecret } : {}) },
             body: JSON.stringify({ intern: 'sortier_anstoss' }),
           })
         }
@@ -3100,6 +3154,12 @@ Deno.serve((req: Request) => mitAnlass(async () => {
         console.error('Anstoß der Telegram-Warteschlange fehlgeschlagen:', err)
       }
       return new Response(JSON.stringify({ ok: true, gesendet: ergebnis.gesendet }), { headers })
+    }
+    // ---------- Superuser (siehe superuser.ts): nur Mitarbeiter mit ist_superuser ----------
+    if (body.action === 'superuser_auswertung' || body.action === 'superuser_wochenbericht_test') {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const ergebnis = body.action === 'superuser_auswertung' ? await superuserAuswertung(req, admin, body) : await superuserWochenberichtTest(req, admin, body, sendeTelegram)
+      return new Response(JSON.stringify(ergebnis.daten), { status: ergebnis.status, headers })
     }
     if (body.action === 'wunsch_analyse_test') {
       // Sofortige Wunsch-Auswertung (siehe wunschAnalyse.ts) ohne Zeitfenster und Buchhaltungszeile. Nur mit dem
@@ -3176,7 +3236,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
         const rufeSelbst = (inhalt: Record<string, unknown>) =>
           fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/email-gateway`, {
             method: 'POST',
-            headers: { 'content-type': 'application/json', ...(geheim ? { 'x-crm-secret': geheim } : {}) },
+            headers: { 'content-type': 'application/json', authorization: `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`, ...(geheim ? { 'x-crm-secret': geheim } : {}) },
             body: JSON.stringify({ action: 'postfach_abruf', ...inhalt }),
           }).catch((err) => console.error('Postfach-Abruf: Folgeaufruf fehlgeschlagen:', err))
         // Der Zeitplan selbst holt nichts ab, er stößt je Postfach einen eigenen Aufruf an.
@@ -3664,6 +3724,35 @@ Deno.serve((req: Request) => mitAnlass(async () => {
 
       const { error: updateError } = await admin.from('kunden').update(patch).eq('id', kundeId).eq('bereich', bereich)
       if (updateError) return new Response(JSON.stringify({ error: updateError.message }), { status: 500, headers })
+      return new Response(JSON.stringify({ ok: true }), { headers })
+    }
+
+    // Investoren-Portal: Anmelde-Link anfordern (19.11.2026). Vorher holte der Browser das Zeichen selbst
+    // ab und verschickte die Mail über die offene Aktion `send` — damit konnte jeder, der die Adresse
+    // eines Investors kannte, sich ohne Mail einloggen. Jetzt erzeugt nur der Server das Zeichen und
+    // schickt es per Mail; der Browser bekommt immer dieselbe Antwort (keine Auskunft, wer Investor ist).
+    if (body.action === 'public_portal_link') {
+      const adresse = String(body.email ?? '').trim().toLowerCase()
+      const basis = String(body.basis ?? '')
+      const erlaubteBasis = /^https:\/\/eray-hash\.github\.io\/mayer-holding-crm\/?$|^http:\/\/localhost:\d+\/?$/.test(basis)
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(adresse) || !erlaubteBasis) return new Response(JSON.stringify({ ok: true }), { headers })
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const { data: antwort, error: rpcFehler } = await admin.rpc('portal_request_magic_link', { p_email: adresse })
+      if (rpcFehler) console.error('Portal-Link: Anfrage fehlgeschlagen', rpcFehler.message)
+      if (antwort?.gefunden && antwort?.token) {
+        const link = `${basis.replace(/\/?$/, '/')}#/portal/magic/${antwort.token}`
+        const name = String(antwort.name ?? '')
+        try {
+          await sendMail(
+            String(antwort.email ?? adresse),
+            'Ihr Zugang zum Investoren-Portal',
+            `Guten Tag ${name},\n\nmit folgendem Link gelangen Sie zu Ihrem Investoren-Portal (15 Minuten gültig):\n${link}\n\nFalls Sie diese Anfrage nicht gestellt haben, ignorieren Sie diese E-Mail einfach.`,
+            `<p>Guten Tag ${name.replace(/[<>&"]/g, '')},</p><p>mit folgendem Link gelangen Sie zu Ihrem Investoren-Portal (15 Minuten gültig):</p><p><a href="${link}">${link}</a></p><p>Falls Sie diese Anfrage nicht gestellt haben, ignorieren Sie diese E-Mail einfach.</p>`,
+          )
+        } catch (err) {
+          console.error('Portal-Link: Mail nicht versendet', err instanceof Error ? err.message : err)
+        }
+      }
       return new Response(JSON.stringify({ ok: true }), { headers })
     }
 
