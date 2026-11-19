@@ -16,7 +16,7 @@
 //   2. Nach dem Deploy: setWebhook bei Telegram mit secret_token = TELEGRAM_WEBHOOK_SECRET.
 //   3. Mitarbeiter verknüpfen sich über "Mein Profil" (Code per /start <code> an den Bot).
 
-import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2'
+import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2.119.1'
 import { PDFDocument, degrees } from 'npm:pdf-lib@1.17.1'
 import { kiAufruf, mitAnlass, setzeAnlass } from '../_shared/kiVerbrauch.ts'
 import { entschaerfe, kuerze as kuerzeWunsch, merkeWunsch } from '../_shared/wuensche.ts'

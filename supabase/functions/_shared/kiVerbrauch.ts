@@ -3,7 +3,7 @@
 // Zweck: sehen, welche Funktion des CRM wie viel kostet, bevor an Modellen oder Abläufen gespart wird.
 // Die Tabelle hat keine Lese- oder Schreibregel für angemeldete Nutzer; nur der Server schreibt sie.
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { createClient } from 'npm:@supabase/supabase-js@2'
+import { createClient } from 'npm:@supabase/supabase-js@2.119.1'
 
 const ANLASS = new AsyncLocalStorage<{ anlass: string }>()
 

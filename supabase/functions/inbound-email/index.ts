@@ -11,7 +11,7 @@
 // vorhanden, müssen nicht manuell gesetzt werden. Nur INBOUND_SECRET ist ein frei gewähltes
 // Secret, das in der URL des Webhook-Ziels (?secret=...) mitgeschickt werden muss.
 
-import { createClient } from 'npm:@supabase/supabase-js@2'
+import { createClient } from 'npm:@supabase/supabase-js@2.119.1'
 import { mitAnlass, setzeAnlass } from '../_shared/kiVerbrauch.ts'
 import { erkenneEingehendeVerbindlichkeit, klassifiziereRelevanz, versucheAutomatischeZuordnung } from '../_shared/mailEingang.ts'
 

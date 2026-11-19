@@ -203,7 +203,7 @@
 import { ImapFlow } from 'npm:imapflow@1'
 import { simpleParser } from 'npm:mailparser@3'
 import nodemailer from 'npm:nodemailer@6'
-import { createClient } from 'npm:@supabase/supabase-js@2'
+import { createClient } from 'npm:@supabase/supabase-js@2.119.1'
 import { unzipSync, strFromU8 } from 'npm:fflate@0.8.2'
 import { PDFDocument } from 'npm:pdf-lib@1.17.1'
 import {
