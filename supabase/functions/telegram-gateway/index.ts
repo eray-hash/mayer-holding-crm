@@ -25,8 +25,10 @@ import { aufgabenUebersicht } from './aufgaben.ts'
 import { type AbteilungZeile, alleObjektDokumente, lesenVonSelbst, leseRef, OBJEKT_SPALTEN, objektakteText, objektStatus, type ObjektRow, sucheObjekte } from './objektakte.ts'
 import { richteFotoAus } from './bildDrehung.ts'
 import { loescheTelegramNachricht, sensibelHinweis, sensibleArt, sensiblerEingang } from './sensibel.ts'
-import { kollegenBenachrichtigen, type MitteilungsWege, schickeMitteilung, todoAnlegen, todoErledigen } from './teamWerkzeuge.ts'
+import { kollegenBenachrichtigen, type MitteilungsWege, schickeMitteilung, todoAendern, todoAnlegen, todoErledigen } from './teamWerkzeuge.ts'
 import { fuehrePflegeWerkzeugAus, istPflegeWerkzeug, type PflegeAnfrage, PFLEGE_WERKZEUGE } from './pflegeWerkzeuge.ts'
+import { DOKUMENT_WERKZEUGE, fuehreDokumentWerkzeugAus, istDokumentWerkzeug } from './dokumentErstellen.ts'
+import { fuehreGesendetWerkzeugAus, GESENDET_WERKZEUGE, istGesendetWerkzeug } from './gesendetWerkzeug.ts'
 import { datumDeutsch, empfaengerVon, findeEmpfaenger, ladeAnhaengeFuerVersand, MAIL_SPALTEN, type MailZeile, volltextVon, VOLLTEXT_HOECHSTENS, type WeiterleitungEntwurf, weiterleitungsBetreff, weiterleitungsText } from './mailWerkzeuge.ts'
 
 const BOT_TOKEN = Deno.env.get('TELEGRAM_BOT_TOKEN')
@@ -1402,13 +1404,17 @@ export const TOOLS = [
   {
     name: 'todo_anlegen',
     description:
-      'Legt ein To-do ohne Kundenakte an (für Aufgaben mit Kundenakte nimm aufgabe_setzen). Ohne bereich und fuer landet es in der eigenen To-do-Liste des Mitarbeiters. Es erscheint im CRM in der To-do-Liste und unter "Aufgaben nach Mitarbeiter". Datum als JJJJ-MM-TT oder TT.MM.JJJJ.',
+      'Legt ein NEUES To-do ohne Kundenakte an (für Aufgaben mit Kundenakte nimm aufgabe_setzen). Ohne bereich und fuer landet es in der eigenen To-do-Liste des Mitarbeiters. Es erscheint im CRM in der To-do-Liste und unter "Aufgaben nach Mitarbeiter". Datum als JJJJ-MM-TT oder TT.MM.JJJJ. ' +
+      'Soll ein bestehendes To-do nur anders heißen, eine Frist oder eine Erinnerung bekommen, nimm todo_aendern statt ein neues anzulegen und das alte abzuhaken. ' +
+      'Persönliche Erinnerung ohne Kunden ("erinnere mich morgen an X", "erinnere mich um 15 Uhr an Y"): leg sofort ein To-do mit erinnern_um an, ohne zurückzufragen; ohne Uhrzeit nimm 09:00 Uhr an diesem Tag. Die Erinnerung kommt per Telegram. ' +
+      'Ist ein Personen- oder Kundenname unklar oder mehrdeutig, leg das To-do trotzdem an, schreib den Namen so wie gesagt in kunde_projekt und nenne den Zweifel in deiner Antwort, statt vorher nachzufragen.',
     input_schema: {
       type: 'object',
       properties: {
         aufgabe: { type: 'string', description: 'Was zu tun ist, ein Satz.' },
-        erledigen_bis: { type: 'string', description: 'Fälligkeit, optional.' },
-        kunde_projekt: { type: 'string', description: 'Optional: Stichwort zu Kunde, Projekt oder Thema (freier Text).' },
+        erledigen_bis: { type: 'string', description: 'Fälligkeit, optional. Fehlt sie und ist erinnern_um gesetzt, wird der Tag der Erinnerung die Fälligkeit.' },
+        erinnern_um: { type: 'string', description: 'Optional: Zeitpunkt der Erinnerung per Telegram in deutscher Ortszeit, Form JJJJ-MM-TTTHH:MM, z. B. 2026-11-20T09:00. Ohne Uhrzeit vom Mitarbeiter: 09:00. Erinnert wird bei der eigenen Liste ihr Besitzer, bei einer Bereichsliste der Zuständige.' },
+        kunde_projekt: { type: 'string', description: 'Optional: Stichwort zu Kunde, Projekt, Person oder Thema (freier Text, Namen so wie gesagt).' },
         zustaendig: { type: 'string', description: 'Optional: wer es erledigt, falls nicht der Mitarbeiter selbst.' },
         prio: { type: 'string', enum: ['A', 'B', 'C'], description: 'Optional: A = dringend, B = normal, C = wenn Zeit ist.' },
         bereich: { type: 'string', enum: ['beratung', 'immobilien', 'erben', 'betriebsuebergabe', 'betriebsformen', 'akademie', 'finanzierungen'], description: 'Optional: in die gemeinsame To-do-Liste dieses Bereichs statt in die eigene.' },
@@ -1418,14 +1424,37 @@ export const TOOLS = [
     },
   },
   ...PFLEGE_WERKZEUGE,
+  ...DOKUMENT_WERKZEUGE,
+  ...GESENDET_WERKZEUGE,
   {
     name: 'todo_erledigen',
-    description: 'Hakt ein offenes To-do ab (eigene Liste oder freigegebene Bereichsliste). Mit todo_id oder einem Suchbegriff aus dem Aufgabentext; bei mehreren Treffern kommt eine Liste zum Nachfragen.',
+    description: 'Hakt ein offenes To-do ab (eigene Liste oder freigegebene Bereichsliste), nur wenn es wirklich erledigt ist — nicht, um es zu korrigieren (dafür todo_aendern). Mit todo_id oder einem Suchbegriff aus dem Aufgabentext; bei mehreren Treffern kommt eine Liste zum Nachfragen.',
     input_schema: {
       type: 'object',
       properties: {
         todo_id: { type: 'string' },
         suchbegriff: { type: 'string', description: 'Wort oder Teil aus dem Aufgabentext.' },
+      },
+    },
+  },
+  {
+    name: 'todo_aendern',
+    description:
+      'Ändert ein bestehendes To-do (eigene Liste oder freigegebene Bereichsliste): Text korrigieren, Fälligkeit setzen oder entfernen, Erinnerung per Telegram setzen oder entfernen, Zuständig, Kunde/Projekt, aktueller Stand, Prio. Legt nie ein neues To-do an. ' +
+      'Nimm es immer, wenn der Mitarbeiter ein vorhandenes To-do umbenennen, ergänzen oder terminieren will — nicht neu anlegen und das alte abhaken. Mit todo_id (aus einer früheren Antwort) oder einem Suchbegriff aus dem Aufgabentext; bei mehreren Treffern kommt eine Liste zum Nachfragen. ' +
+      'Gib nur die Felder an, die sich ändern; ein leerer Text löscht das Feld. Ist ein Name unklar, trag ihn so wie gesagt ein und nenne den Zweifel in der Antwort.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        todo_id: { type: 'string' },
+        suchbegriff: { type: 'string', description: 'Wort oder Teil aus dem bisherigen Aufgabentext.' },
+        aufgabe: { type: 'string', description: 'Neuer Aufgabentext (ersetzt den alten).' },
+        erledigen_bis: { type: 'string', description: 'Neue Fälligkeit JJJJ-MM-TT oder TT.MM.JJJJ; leer = Fälligkeit entfernen.' },
+        erinnern_um: { type: 'string', description: 'Erinnerung per Telegram in deutscher Ortszeit, Form JJJJ-MM-TTTHH:MM, z. B. 2026-11-20T09:00 (ohne Uhrzeit vom Mitarbeiter: 09:00); leer = Erinnerung entfernen. Hat das To-do keine Fälligkeit, wird der Tag der Erinnerung die Fälligkeit.' },
+        zustaendig: { type: 'string', description: 'Wer es erledigt; leer = entfernen.' },
+        kunde_projekt: { type: 'string', description: 'Stichwort zu Kunde, Projekt, Person oder Thema; leer = entfernen.' },
+        aktueller_stand: { type: 'string', description: 'Notiz zum aktuellen Stand (ersetzt die bisherige); leer = entfernen.' },
+        prio: { type: 'string', enum: ['A', 'B', 'C', ''], description: 'A = dringend, B = normal, C = wenn Zeit ist; leer = entfernen.' },
       },
     },
   },
@@ -1436,6 +1465,11 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
   const { supabase, mitarbeiter, state } = ctx
   const heute = heuteBerlin()
   const protokolliere = (text: string) => state.aktionen.push({ z: new Date().toISOString(), text })
+
+  // PDF (Merkblatt, Schreiben, Zusammenfassung) erstellen und in der Akte ablegen — dokumentErstellen.ts.
+  if (istDokumentWerkzeug(name)) return await fuehreDokumentWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
+  // Gesendete Mails (auch aus Outlook über info@ verschickt) — gesendetWerkzeug.ts.
+  if (istGesendetWerkzeug(name)) return await fuehreGesendetWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter })
 
   // Wunsch an das CRM für die Geschäftsführung (Tabelle wuensche, siehe _shared/wuensche.ts). Kein
   // Bereichsbezug; gleiche offene Wünsche werden hochgezählt statt doppelt angelegt.
@@ -1452,6 +1486,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
   if (name === 'kollegen_benachrichtigen') return await kollegenBenachrichtigen(supabase, MITTEILUNGS_WEGE, mitarbeiter, input, protokolliere)
   if (name === 'todo_anlegen') return await todoAnlegen(supabase, mitarbeiter, input, protokolliere)
   if (name === 'todo_erledigen') return await todoErledigen(supabase, mitarbeiter, input, protokolliere)
+  if (name === 'todo_aendern') return await todoAendern(supabase, mitarbeiter, input, protokolliere)
 
   // Aktenpflege nur für Geschäftsführung/Admin, mit Bestätigung in der nächsten Nachricht (pflegeWerkzeuge.ts).
   if (istPflegeWerkzeug(name)) {
@@ -2952,6 +2987,8 @@ So arbeitest du:
 - Immobilien-Objekte: Fragt jemand nach einem Ort, einer Adresse oder einer Immobilie ("was weißt du über Suppingen"), suchst du mit objekte_suchen und liest dann mit objektakte_lesen die ganze Objektakte. Antworte daraus vollständig, aber übersichtlich: Eckdaten, Preis, Eigentümer, Stand von Verkaufsdatenblatt, Kurzprüfung und Bewertung, welche Unterlagen da sind und was sie enthalten, offene Fragen, nächste Schritte. Ist ein Feld leer, sag kurz, dass es noch nicht eingetragen ist, statt es wegzulassen. Für den Inhalt einzelner Unterlagen nutzt du dokument_inhalt mit objekt_id.
 - Kollegen Bescheid geben: Bittet der Mitarbeiter, einem Kollegen etwas auszurichten oder ihm kurz Bescheid zu geben ("sag Hasan, dass die Akte angelegt ist"), schickst du das mit kollegen_benachrichtigen. Dafür ist kein Termin nötig. Sag danach, wem du was geschickt hast und wer nicht mit Telegram verbunden ist.
 - To-dos ohne Kundenakte: Will der Mitarbeiter sich oder einem Bereich eine Aufgabe notieren, die zu keinem Kunden gehört ("schreib mir auf: Steuerunterlagen bis Freitag sortieren"), legst du sie mit todo_anlegen an, standardmäßig in seiner eigenen To-do-Liste. Gehört die Aufgabe zu einer Kundenakte, nimmst du aufgabe_setzen. Erledigtes hakst du mit todo_erledigen ab.
+- Gesendete Mails: Was einem Kunden geschrieben oder geschickt wurde (auch Briefe und Mails, die aus Outlook oder Webmail über info@ oder das eigene Postfach rausgingen), findest du mit gesendete_mails (nach kunde_id, Suchbegriff, Zeitraum; mit mail_id ganz lesen). Sie werden alle paar Minuten automatisch aus dem Gesendet-Ordner ins CRM übernommen und der Akte des Empfängers zugeordnet.
+- Dokumente als Datei: Bittet jemand um ein Merkblatt, ein Schreiben, eine Zusammenfassung oder eine Übersicht „als Datei“, „als PDF“, „zum Ausdrucken“ oder „zum Mitgeben“, schreib den Text vollständig selbst (Inhalte vorher mit kundenakte_lesen, dokument_inhalt oder den Gesprächsprotokollen holen) und erstelle daraus mit dokument_erstellen eine PDF in der Akte des Kunden, statt nur Text zum Kopieren zu liefern. Titel und Text nur auf Deutsch (z. B. „Merkblatt“ statt „Handout“); bestätige danach in einer Zeile, wie die Datei heißt und in welcher Akte sie liegt.
 - Wünsche an das CRM: Kannst du etwas, worum der Mitarbeiter bittet, nicht tun, weil dir dafür die Möglichkeit fehlt (nicht, weil ein Kunde oder eine Angabe fehlt oder ein Bereich nicht freigegeben ist), oder sagt er "wäre gut, wenn …", "Wunsch: …" oder "könnte das CRM …", hältst du das mit wunsch_notieren fest: Titel und Beschreibung auf Ebene der Funktion, ohne Kundennamen, Beträge oder Inhalte aus Unterlagen. Sag ihm danach offen in einem kurzen Satz, dass du es als Wunsch für die Geschäftsführung notiert hast.
 - Internet: Bittet dich der Mitarbeiter ausdrücklich, etwas im Internet nachzusehen oder zu recherchieren ("recherchier den Laden", "was findest du online über die Firma X"), nutzt du internet_recherche. Gib dabei alle Anhaltspunkte aus dem Gespräch oder der Akte mit (Firmenname, Ort, Webseite), damit keine gleichnamige Firma erwischt wird. Recherchiere nur Geschäftliches und Öffentliches: Firmen, Geschäftsführer und Inhaber in ihrer beruflichen Rolle, Webseite, Handelsregister, Bewertungen, Presse. Zum Privatleben von Personen (Gesundheit, Familie, Beziehungen, Privatanschrift) recherchierst du nie; sag das in einem Satz. Ohne ausdrückliche Bitte recherchierst du nicht, auch nicht beim Ablegen von Dateien. Sag beim Weitergeben, dass es aus dem Internet stammt und veraltet oder falsch sein kann, und nenne die Quellenadressen. Ins CRM übernimmst du davon nur etwas, wenn der Mitarbeiter es ausdrücklich verlangt.
 

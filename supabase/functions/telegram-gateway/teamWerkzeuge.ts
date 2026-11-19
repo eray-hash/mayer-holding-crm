@@ -3,6 +3,9 @@
 //   ohne dafür einen Termin anzulegen (Wunsch von Andreas).
 // - todo_anlegen / todo_erledigen: To-dos ohne Kundenbezug in der eigenen Liste oder einer Bereichsliste,
 //   damit sie auf der Seite „Aufgaben nach Mitarbeiter" und in aufgaben_uebersicht erscheinen (Wunsch von Eray).
+// - todo_aendern + Erinnerung (erinnern_um): Andreas wollte am 19.11. ein To-do umbenennen und eine Frist
+//   setzen (der Assistent legte stattdessen neue an) und zu einer festen Uhrzeit erinnert werden. Versand
+//   der Erinnerung: email-gateway/todoErinnerung.ts (Zeitplan jede Minute).
 //
 // Die Datei kennt index.ts nicht (kein Kreis-Import): Telegram-Versand und Gesprächszustand reicht der
 // Aufrufer als Funktionen herein.
@@ -126,6 +129,59 @@ function deDatum(iso?: string | null): string {
   return m ? `${m[3]}.${m[2]}.${m[1]}` : ''
 }
 
+/** Abstand Berlin zu UTC in Minuten zu einem Zeitpunkt (60 im Winter, 120 im Sommer). */
+function berlinVersatzMinuten(ms: number): number {
+  const teile = Object.fromEntries(
+    new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Berlin', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+      .formatToParts(new Date(ms))
+      .map((p) => [p.type, p.value]),
+  )
+  const alsUtc = Date.UTC(Number(teile.year), Number(teile.month) - 1, Number(teile.day), Number(teile.hour), Number(teile.minute))
+  return Math.round((alsUtc - Math.floor(ms / 60000) * 60000) / 60000)
+}
+
+/**
+ * Deutsche Ortszeit („2026-11-20T09:00“, „2026-11-20 9:00“, „20.11.2026 09:00“; nur Datum = 09:00 Uhr)
+ * als UTC-Zeitpunkt (ISO), Sommer-/Winterzeit eingerechnet. Ungültig → undefined.
+ */
+export function berlinZeitZuUtc(wert: string): string | undefined {
+  const s = String(wert ?? '').trim()
+  let j: number, mo: number, t: number, h = 9, mi = 0
+  const iso = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T ,]+(\d{1,2}):(\d{2})(?::\d{2}(?:\.\d+)?)?)?$/)
+  const de = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})(?:[T ,]+(\d{1,2})[:.](\d{2})(?:\s*Uhr)?)?$/i)
+  if (iso) [j, mo, t] = [Number(iso[1]), Number(iso[2]), Number(iso[3])]
+  else if (de) [j, mo, t] = [Number(de[3]), Number(de[2]), Number(de[1])]
+  else return undefined
+  const zeit = iso ?? de!
+  if (zeit[4] !== undefined) [h, mi] = [Number(zeit[4]), Number(zeit[5])]
+  if (mo < 1 || mo > 12 || t < 1 || t > 31 || h > 23 || mi > 59) return undefined
+  const wand = Date.UTC(j, mo - 1, t, h, mi)
+  if (new Date(wand).getUTCDate() !== t) return undefined // z. B. 31.02.
+  // Zweimal rechnen: Der Versatz am geschätzten Zeitpunkt kann um die Umstellung herum noch der alte sein.
+  let utc = wand - berlinVersatzMinuten(wand) * 60000
+  utc = wand - berlinVersatzMinuten(utc) * 60000
+  return new Date(utc).toISOString()
+}
+
+const BERLIN_DATUM = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Berlin' })
+const BERLIN_ZEIT = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+
+/** UTC-Zeitpunkt als „20.11.2026, 09:00 Uhr“ (deutsche Ortszeit). */
+export function deZeitpunkt(iso: string): string {
+  return `${BERLIN_ZEIT.format(new Date(iso))} Uhr`
+}
+
+/** Liest erinnern_um aus der Werkzeug-Eingabe: undefined = nicht angegeben, '' = löschen, sonst UTC-ISO; Fehlertext bei Unsinn. */
+function leseErinnerung(roh: unknown): { wert?: string; fehler?: string } {
+  if (roh === undefined || roh === null) return {}
+  const s = String(roh).trim()
+  if (!s) return { wert: '' }
+  const utc = berlinZeitZuUtc(s)
+  if (!utc) return { fehler: `Fehler: Erinnerungszeit „${s}" nicht erkannt. Nutze JJJJ-MM-TTTHH:MM in deutscher Ortszeit, z. B. 2026-11-20T09:00.` }
+  if (Date.parse(utc) < Date.now() - 5 * 60000) return { fehler: `Fehler: Die Erinnerungszeit ${deZeitpunkt(utc)} liegt in der Vergangenheit. Nimm eine Zeit in der Zukunft.` }
+  return { wert: utc }
+}
+
 /** Gleiche Form wie uid('todo') im CRM (src/lib/dates.ts). */
 function todoId(): string {
   return `todo_${Math.random().toString(36).slice(2, 9)}${Date.now().toString(36).slice(-4)}`
@@ -146,6 +202,11 @@ export async function todoAnlegen(
   const rohDatum = String(input?.erledigen_bis ?? '').trim()
   const bis = rohDatum ? alsIso(rohDatum) : undefined
   if (rohDatum && !bis) return `Fehler: Datum „${rohDatum}" nicht erkannt. Nutze JJJJ-MM-TT oder TT.MM.JJJJ.`
+  const erinnerung = leseErinnerung(input?.erinnern_um)
+  if (erinnerung.fehler) return erinnerung.fehler
+  const erinnernUm = erinnerung.wert || null
+  // Erinnerung ohne Fälligkeit: fällig am Tag der Erinnerung, damit die Aufgabe nicht „ohne Datum“ untergeht.
+  const faellig = bis ?? (erinnernUm ? BERLIN_DATUM.format(new Date(erinnernUm)) : undefined)
   const prio = String(input?.prio ?? '').trim().toUpperCase().slice(0, 1)
 
   let besitzer = eigeneEmail
@@ -191,16 +252,59 @@ export async function todoAnlegen(
     kunde_projekt: String(input?.kunde_projekt ?? '').trim() || null,
     zustaendig,
     prio: prio || null,
-    erledigen_bis: bis ?? null,
+    erledigen_bis: faellig ?? null,
+    erinnern_um: erinnernUm,
     erhalten_am: heute,
     erstellt_am: heute,
   })
   if (error) return `Fehler beim Anlegen: ${error.message}`
-  protokolliere(`To-do „${aufgabe.slice(0, 120)}" in ${liste} angelegt${bis ? `, erledigen bis ${deDatum(bis)}` : ''} (todo_id=${id})`)
-  return `Angelegt in ${liste}: „${aufgabe}"${bis ? `, erledigen bis ${deDatum(bis)}` : ', ohne Fälligkeit'}${zustaendig ? `, zuständig ${zustaendig}` : ''}. Sie steht jetzt auch im CRM unter „Aufgaben nach Mitarbeiter". todo_id=${id}`
+  // Wer erinnert wird: bei der eigenen Liste ihr Besitzer, bei einer Bereichsliste der Zuständige (todoErinnerung.ts im email-gateway).
+  const erinnerungText = erinnernUm ? `, Erinnerung per Telegram am ${deZeitpunkt(erinnernUm)}${bereich ? ` an ${zustaendig ?? 'den Zuständigen'}` : ''}` : ''
+  protokolliere(`To-do „${aufgabe.slice(0, 120)}" in ${liste} angelegt${faellig ? `, erledigen bis ${deDatum(faellig)}` : ''}${erinnernUm ? `, Erinnerung ${deZeitpunkt(erinnernUm)}` : ''} (todo_id=${id})`)
+  return `Angelegt in ${liste}: „${aufgabe}"${faellig ? `, erledigen bis ${deDatum(faellig)}` : ', ohne Fälligkeit'}${zustaendig ? `, zuständig ${zustaendig}` : ''}${erinnerungText}. Sie steht jetzt auch im CRM unter „Aufgaben nach Mitarbeiter". todo_id=${id}`
 }
 
-type TodoZeile = { id: string; aufgabe: string; bereich: string | null; besitzer_email: string | null; erledigen_bis: string | null; erledigt_am: string | null }
+type TodoZeile = {
+  id: string
+  aufgabe: string
+  bereich: string | null
+  besitzer_email: string | null
+  erledigen_bis: string | null
+  erledigt_am: string | null
+  zustaendig: string | null
+  kunde_projekt: string | null
+  aktueller_stand: string | null
+  prio: string | null
+  erinnern_um: string | null
+}
+const TODO_SPALTEN = 'id, aufgabe, bereich, besitzer_email, erledigen_bis, erledigt_am, zustaendig, kunde_projekt, aktueller_stand, prio, erinnern_um'
+
+/**
+ * Sucht genau ein To-do für todo_erledigen / todo_aendern: per todo_id oder Suchbegriff im Aufgabentext
+ * (nur offene), nur in Listen, die der Mitarbeiter ändern darf (eigene Liste, freigegebene Bereichsliste).
+ * Kein oder mehrere Treffer → Text für den Assistenten statt eines To-dos.
+ */
+async function findeTodo(supabase: Supa, fragender: Fragender, input: { todo_id?: unknown; suchbegriff?: unknown } | undefined): Promise<TodoZeile | string> {
+  const eigeneEmail = String(fragender.email ?? '').toLowerCase()
+  const darf = (t: TodoZeile) => (t.bereich ? darfBereich(fragender, t.bereich) : String(t.besitzer_email ?? '').toLowerCase() === eigeneEmail)
+  const id = String(input?.todo_id ?? '').trim()
+  let treffer: TodoZeile[]
+  if (id) {
+    const { data } = await supabase.from('todos').select(TODO_SPALTEN).eq('id', id).maybeSingle()
+    treffer = data ? [data as TodoZeile] : []
+  } else {
+    const such = String(input?.suchbegriff ?? '').trim().toLowerCase()
+    if (!such) return 'Fehler: todo_id oder suchbegriff angeben.'
+    const { data } = await supabase.from('todos').select(TODO_SPALTEN).is('erledigt_am', null).ilike('aufgabe', `%${such.replace(/[%_]/g, ' ')}%`).limit(20)
+    treffer = (data ?? []) as TodoZeile[]
+  }
+  treffer = treffer.filter(darf)
+  if (treffer.length === 0) return 'Kein passendes offenes To-do in Listen gefunden, die dieser Mitarbeiter ändern darf.'
+  if (treffer.length > 1) {
+    return `Mehrere passende To-dos, frag nach, welches gemeint ist:\n${treffer.map((t) => `- ${t.aufgabe}${t.erledigen_bis ? ` (bis ${deDatum(t.erledigen_bis)})` : ''} · ${t.bereich ? bereichName(t.bereich) : 'eigene Liste'} · todo_id=${t.id}`).join('\n')}`
+  }
+  return treffer[0]
+}
 
 /** Werkzeug todo_erledigen: hakt ein To-do ab (eigene Liste oder freigegebene Bereichsliste). */
 export async function todoErledigen(
@@ -210,28 +314,80 @@ export async function todoErledigen(
   input: any,
   protokolliere: (text: string) => void,
 ): Promise<string> {
-  const eigeneEmail = String(fragender.email ?? '').toLowerCase()
-  const darf = (t: TodoZeile) => (t.bereich ? darfBereich(fragender, t.bereich) : String(t.besitzer_email ?? '').toLowerCase() === eigeneEmail)
-  const id = String(input?.todo_id ?? '').trim()
-  let treffer: TodoZeile[]
-  if (id) {
-    const { data } = await supabase.from('todos').select('id, aufgabe, bereich, besitzer_email, erledigen_bis, erledigt_am').eq('id', id).maybeSingle()
-    treffer = data ? [data as TodoZeile] : []
-  } else {
-    const such = String(input?.suchbegriff ?? '').trim().toLowerCase()
-    if (!such) return 'Fehler: todo_id oder suchbegriff angeben.'
-    const { data } = await supabase.from('todos').select('id, aufgabe, bereich, besitzer_email, erledigen_bis, erledigt_am').is('erledigt_am', null).ilike('aufgabe', `%${such.replace(/[%_]/g, ' ')}%`).limit(20)
-    treffer = (data ?? []) as TodoZeile[]
-  }
-  treffer = treffer.filter(darf)
-  if (treffer.length === 0) return 'Kein passendes offenes To-do in Listen gefunden, die dieser Mitarbeiter ändern darf.'
-  if (treffer.length > 1) {
-    return `Mehrere passende To-dos, frag nach, welches gemeint ist:\n${treffer.map((t) => `- ${t.aufgabe}${t.erledigen_bis ? ` (bis ${deDatum(t.erledigen_bis)})` : ''} · ${t.bereich ? bereichName(t.bereich) : 'eigene Liste'} · todo_id=${t.id}`).join('\n')}`
-  }
-  const t = treffer[0]
+  const t = await findeTodo(supabase, fragender, input)
+  if (typeof t === 'string') return t
   if (t.erledigt_am) return `Schon erledigt am ${deDatum(t.erledigt_am)}: „${t.aufgabe}".`
   const { error } = await supabase.from('todos').update({ erledigt_am: heuteIso() }).eq('id', t.id)
   if (error) return `Fehler: ${error.message}`
   protokolliere(`To-do „${t.aufgabe.slice(0, 120)}" als erledigt markiert (todo_id=${t.id})`)
   return `Erledigt: „${t.aufgabe}" (${t.bereich ? `Liste ${bereichName(t.bereich)}` : 'eigene Liste'}).`
+}
+
+/**
+ * Werkzeug todo_aendern: ändert ein bestehendes To-do (Text, Fälligkeit, Erinnerung, Zuständig, Kunde/Projekt,
+ * aktueller Stand, Prio) — legt nie ein neues an. Gleiche Suche und gleiche Rechte wie todo_erledigen.
+ * Nicht angegebene Felder bleiben, leerer Text löscht (außer beim Aufgabentext).
+ */
+export async function todoAendern(
+  supabase: Supa,
+  fragender: Fragender,
+  // deno-lint-ignore no-explicit-any
+  input: any,
+  protokolliere: (text: string) => void,
+): Promise<string> {
+  const t = await findeTodo(supabase, fragender, input)
+  if (typeof t === 'string') return t
+  const angegeben = (feld: string) => input?.[feld] !== undefined && input?.[feld] !== null
+  const patch: Record<string, string | null> = {}
+  const was: string[] = []
+
+  if (angegeben('aufgabe')) {
+    const neu = String(input.aufgabe).trim().slice(0, 500)
+    if (!neu) return 'Fehler: Der Aufgabentext darf nicht leer sein. Zum Abhaken nimm todo_erledigen.'
+    if (neu !== t.aufgabe) {
+      patch.aufgabe = neu
+      was.push(`Text jetzt „${neu}"`)
+    }
+  }
+  if (angegeben('erledigen_bis')) {
+    const roh = String(input.erledigen_bis).trim()
+    const bis = roh ? alsIso(roh) : null
+    if (roh && !bis) return `Fehler: Datum „${roh}" nicht erkannt. Nutze JJJJ-MM-TT oder TT.MM.JJJJ.`
+    patch.erledigen_bis = bis ?? null
+    was.push(bis ? `erledigen bis ${deDatum(bis)}` : 'Fälligkeit entfernt')
+  }
+  const erinnerung = leseErinnerung(input?.erinnern_um)
+  if (erinnerung.fehler) return erinnerung.fehler
+  if (erinnerung.wert !== undefined) {
+    patch.erinnern_um = erinnerung.wert || null
+    if (erinnerung.wert) {
+      const empfaenger = t.bereich ? ` an ${String(input?.zustaendig ?? '').trim() || t.zustaendig || 'den Zuständigen'}` : ''
+      was.push(`Erinnerung per Telegram am ${deZeitpunkt(erinnerung.wert)}${empfaenger}`)
+      // Wie bei todo_anlegen: Ohne Fälligkeit wird der Tag der Erinnerung die Fälligkeit.
+      if (!('erledigen_bis' in patch) && !t.erledigen_bis) {
+        patch.erledigen_bis = BERLIN_DATUM.format(new Date(erinnerung.wert))
+        was.push(`erledigen bis ${deDatum(patch.erledigen_bis)}`)
+      }
+    } else was.push('Erinnerung entfernt')
+  }
+  const textFelder: [string, string][] = [['zustaendig', 'zuständig'], ['kunde_projekt', 'Kunde/Projekt'], ['aktueller_stand', 'aktueller Stand']]
+  for (const [feld, name] of textFelder) {
+    if (!angegeben(feld)) continue
+    const neu = String(input[feld]).trim().slice(0, 1000) || null
+    patch[feld] = neu
+    was.push(neu ? `${name}: ${neu}` : `${name} entfernt`)
+  }
+  if (angegeben('prio')) {
+    const p = String(input.prio).trim().toUpperCase().slice(0, 1) || null
+    patch.prio = p
+    was.push(p ? `Prio ${p}` : 'Prio entfernt')
+  }
+
+  if (Object.keys(patch).length === 0) return `Nichts geändert: Es wurde keine neue Angabe gemacht (todo_id=${t.id}, „${t.aufgabe}").`
+  const { error } = await supabase.from('todos').update(patch).eq('id', t.id)
+  if (error) return `Fehler beim Ändern: ${error.message}`
+  const liste = t.bereich ? `Liste ${bereichName(t.bereich)}` : 'eigene Liste'
+  protokolliere(`To-do „${t.aufgabe.slice(0, 120)}" geändert: ${was.join('; ').slice(0, 300)} (todo_id=${t.id})`)
+  const erledigtHinweis = t.erledigt_am ? ` Hinweis: Das To-do ist seit ${deDatum(t.erledigt_am)} erledigt${patch.erinnern_um ? ', eine Erinnerung kommt dafür nicht' : ''}.` : ''
+  return `Geändert (${liste}, kein neues To-do angelegt): „${patch.aufgabe ?? t.aufgabe}" — ${was.join('; ')}.${erledigtHinweis} todo_id=${t.id}`
 }

@@ -232,6 +232,8 @@ import {
 import { loescheTermin, sendeErinnerungen, sendeTelegram, speichereTermin } from './kalender.ts'
 import { aboLink, kalenderAboAntwort } from './kalenderAbo.ts'
 import { BUCHUNGS_AKTIONEN, buchungAktion } from './buchung.ts'
+import { sendeTodoErinnerungen } from './todoErinnerung.ts'
+import { holeGesendeteMails } from './gesendetAbruf.ts'
 import { ordneMailObjektZu } from './objektMail.ts'
 import { legeEingaengeAb, macheAblageRueckgaengig, nimmEingaengeHeraus } from './eingang.ts'
 import { pruefeNeueTreffer } from './gesuchTreffer.ts'
@@ -3190,6 +3192,12 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       // Vom Zeitplan jede Minute, ohne Login: verschickt fällige Erinnerungen, gibt nur eine Zahl zurück.
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
       const ergebnis = await sendeErinnerungen(admin)
+      // To-dos mit Erinnerungszeit (todoErinnerung.ts): Telegram an Besitzer bzw. Zuständigen; wirft nie.
+      const todoErinnerung = await sendeTodoErinnerungen(admin).catch((err) => {
+        console.error('To-do-Erinnerungen fehlgeschlagen:', err)
+        return { gesendet: 0 }
+      })
+      if (todoErinnerung.gesendet > 0) console.log(`To-do-Erinnerungen: ${todoErinnerung.gesendet} gesendet.`)
       // Im selben Takt (die Funktion bremst sich selbst auf alle fünf Minuten): neue Treffer zwischen
       // Gesuchen und Objekten erkennen und den Zuständigen per Telegram melden.
       const treffer = body.ohneTreffer === true ? { gelaufen: false, neu: 0, benachrichtigt: 0 } : await pruefeNeueTreffer(admin, sendeTelegram)
@@ -3286,6 +3294,23 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       return new Response(JSON.stringify(r.inhalt), { status: r.status, headers })
     }
 
+    // Gesendet-Ordner von Hand abrufen (Geschäftsführung, Dienst-Schlüssel oder Besitzer des privaten Postfachs).
+    if (body.action === 'gesendet_abruf') {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const aufrufer = await ermittleAufrufer(req, admin, body)
+      const postfachId = typeof body.postfachId === 'string' && body.postfachId ? body.postfachId : undefined
+      const token = (req.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '').trim()
+      let erlaubt = istDienstSchluessel(token) || !!aufrufer?.istGf
+      if (!erlaubt && aufrufer && postfachId) {
+        const { data: fach } = await admin.from('postfaecher').select('besitzer_email').eq('id', postfachId).maybeSingle()
+        erlaubt = !!fach?.besitzer_email && String(fach.besitzer_email).toLowerCase() === aufrufer.email.toLowerCase()
+      }
+      if (!erlaubt) return new Response(JSON.stringify({ error: 'Nur für die Geschäftsführung oder den Besitzer des Postfachs.' }), { status: 403, headers })
+      const tage = Number(body.tage) > 0 ? Math.min(365, Number(body.tage)) : undefined
+      const g = await holeGesendeteMails(admin, { postfachId, tage, budgetMs: 100000 })
+      return new Response(JSON.stringify({ ok: true, ...g }), { headers })
+    }
+
     if (body.action === 'kalender_abo_link') {
       // Persönliche Abo-Adresse für die eigene Kalender-App; `neu: true` macht die alte ungültig.
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
@@ -3337,6 +3362,13 @@ Deno.serve((req: Request) => mitAnlass(async () => {
           // Liegt noch mehr auf dem Server (erstes Abholen eines Postfachs mit vielen Mails), gleich
           // weitermachen statt drei Minuten zu warten — jeder Aufruf holt nur eine kleine Portion.
           if (ergebnis.offen && einzeln && kette < 15) await rufeSelbst({ einzeln, kette: kette + 1 })
+          // Gesendet-Ordner desselben Postfachs (gesendetAbruf.ts): auch aus Outlook/Webmail verschickte
+          // Mails landen in gesendete_emails und bei der Akte des Empfängers. Nur im ersten Glied der Kette.
+          if (einzeln && kette === 0) {
+            const g = await holeGesendeteMails(admin, { postfachId: einzeln, budgetMs: 70000 })
+            if (g.fehler.length > 0) console.error('Gesendet-Abruf mit Fehlern:', g.fehler.join(' | '))
+            if (g.neu + g.abgeglichen > 0) console.log(`Gesendet-Abruf ${einzeln}: ${g.neu} neu, ${g.zugeordnet} zugeordnet, ${g.abgeglichen} abgeglichen`)
+          }
           return ergebnis
         })
         if (body.warten === true) {
@@ -4385,7 +4417,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       return new Response(JSON.stringify({ ok: true }), { headers })
     }
 
-    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "bewertung_recherche_start", "bewertung_recherche_schritt", "kunden_umfeld_recherche", "steuer_analyse_start", "steuer_analyse_schritt", "dokument_lesen", "dokument_inhalte", "postfaecher_liste", "postfach_verbinden", "postfach_trennen", "postfach_abruf", "postfach_ordner", "mail_zuordnen", "mail_freigeben", "mail_anhang_url", "termin_speichern", "termin_loeschen", "termin_erinnerungen", "tagesmeldung_test", "kontoauszug_auslesen" oder "firmenwissen_answer"' }), { status: 400, headers })
+    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "bewertung_recherche_start", "bewertung_recherche_schritt", "kunden_umfeld_recherche", "steuer_analyse_start", "steuer_analyse_schritt", "dokument_lesen", "dokument_inhalte", "postfaecher_liste", "postfach_verbinden", "postfach_trennen", "postfach_abruf", "postfach_ordner", "mail_zuordnen", "mail_freigeben", "mail_anhang_url", "termin_speichern", "termin_loeschen", "termin_erinnerungen", "tagesmeldung_test", "kontoauszug_auslesen", "gesendet_abruf" oder "firmenwissen_answer"' }), { status: 400, headers })
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }

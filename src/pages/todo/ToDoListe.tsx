@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Plus, Check, RotateCcw, Trash2, Share2, Upload, Download, ChevronDown, ArrowRightLeft } from 'lucide-react'
+import { Plus, Check, RotateCcw, Trash2, Share2, Upload, Download, ChevronDown, ArrowRightLeft, Bell, X } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { useAuth } from '../../context/AuthContext'
 import { supabase, isSupabaseConfigured } from '../../lib/supabaseClient'
@@ -22,6 +22,35 @@ import type { ToDoImportVorschau, ToDoImportWert } from '../../lib/todoExcelImpo
 // Spalte), nicht automatisch nach Prio — genau wie in der Excel-Vorlage.
 function fmtStunden(minuten: number): string {
   return `${(minuten / 60).toLocaleString('de-DE', { maximumFractionDigits: 2 })} Std.`
+}
+
+// Erinnerung per Telegram (todos.erinnern_um, verschickt vom Zeitplan im email-gateway, todoErinnerung.ts).
+// Im Formular als Ortszeit des Browsers (Datum + Uhrzeit), gespeichert als ISO-Zeitpunkt.
+function isoZuEingabe(iso?: string): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const zwei = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${zwei(d.getMonth() + 1)}-${zwei(d.getDate())}T${zwei(d.getHours())}:${zwei(d.getMinutes())}`
+}
+
+function erinnerungKurz(iso: string): string {
+  return new Date(iso).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
+/** Kleine Glocke mit Uhrzeit; ausgegraut, sobald die Erinnerung verschickt wurde. */
+function ErinnerungsHinweis({ t }: { t: ToDoEintrag }) {
+  if (!t.erinnernUm) return null
+  const gesendet = !!t.erinnertAm
+  return (
+    <span
+      title={gesendet ? `Erinnerung per Telegram gesendet am ${new Date(t.erinnertAm!).toLocaleString('de-DE')}` : 'Erinnerung per Telegram'}
+      className={`inline-flex items-center gap-0.5 whitespace-nowrap ${gesendet ? 'text-slate-300 line-through' : 'text-accent-700'}`}
+    >
+      <Bell size={11} />
+      {erinnerungKurz(t.erinnernUm)}
+    </span>
+  )
 }
 
 function exportiereCsv(liste: ToDoEintrag[], dateiname: string) {
@@ -284,7 +313,7 @@ function ToDoListeKern({ scope }: { scope: Scope }) {
                 <p className="mt-0.5 text-xs text-slate-500">{[t.kundeProjekt, t.zustaendig].filter(Boolean).join(' · ')}</p>
               )}
               {t.wartenAuf && <p className="mt-0.5 text-xs text-amber-700">Warten auf: {t.wartenAuf}</p>}
-              {(t.startDatum || t.geplanteWiedervorlage || t.erledigenBis || zeitaufwandskosten(t) !== undefined || (ansicht === 'erledigt' && t.erledigtAm)) && (
+              {(t.startDatum || t.geplanteWiedervorlage || t.erledigenBis || t.erinnernUm || zeitaufwandskosten(t) !== undefined || (ansicht === 'erledigt' && t.erledigtAm)) && (
                 <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-400">
                   {t.startDatum && <span>Start: {t.startDatum}</span>}
                   {t.erledigenBis && (
@@ -293,6 +322,7 @@ function ToDoListeKern({ scope }: { scope: Scope }) {
                       {isOverdue(t.erledigenBis, !!t.erledigtAm) && ' · überfällig'}
                     </span>
                   )}
+                  <ErinnerungsHinweis t={t} />
                   {t.geplanteWiedervorlage && <span>Wiedervorlage: {t.geplanteWiedervorlage}</span>}
                   {zeitaufwandskosten(t) !== undefined && <span>Zeitkosten: {fmtEURCent(zeitaufwandskosten(t)!)}</span>}
                   {ansicht === 'erledigt' && t.erledigtAm && <span>Erledigt: {t.erledigtAm}</span>}
@@ -379,6 +409,11 @@ function ToDoListeKern({ scope }: { scope: Scope }) {
                 <td onClick={() => setEditEintrag(t)} className={`cursor-pointer px-3 py-3 whitespace-nowrap ${ueberfaellig ? 'font-medium text-rose-600' : 'text-slate-500'}`}>
                   {t.erledigenBis ? fmtDate(t.erledigenBis) : ''}
                   {ueberfaellig && ' · überfällig'}
+                  {t.erinnernUm && (
+                    <span className="block text-xs font-normal">
+                      <ErinnerungsHinweis t={t} />
+                    </span>
+                  )}
                 </td>
                 <td onClick={() => setEditEintrag(t)} className="cursor-pointer px-3 py-3 max-w-[12rem] text-slate-500">{t.wartenAuf ?? ''}</td>
                 <td onClick={() => setEditEintrag(t)} className="cursor-pointer px-3 py-3 text-slate-500">{t.abteilung ?? ''}</td>
@@ -722,6 +757,10 @@ function ToDoModal({
   // Neue Aufgabe: "Erhalten am" ist heute vorbelegt. Beim Bearbeiten bleibt ein leeres Feld leer.
   const [erhaltenAm, setErhaltenAm] = useState(initial ? initial.erhaltenAm ?? '' : today())
   const [erledigenBis, setErledigenBis] = useState(initial?.erledigenBis ?? '')
+  const erinnerungAnfang = isoZuEingabe(initial?.erinnernUm)
+  const [erinnerung, setErinnerung] = useState(erinnerungAnfang)
+  const erinnerungGeaendert = erinnerung !== erinnerungAnfang
+  const erinnerungVorbei = !!erinnerung && erinnerungGeaendert && new Date(erinnerung).getTime() < Date.now()
   const [stundensatz, setStundensatz] = useState(initial?.stundensatz?.toString() ?? '')
 
   const kostenVorschau = zeitaufwandskosten({
@@ -731,7 +770,13 @@ function ToDoModal({
 
   function submit() {
     if (!aufgabe.trim()) return
+    // Nur bei Änderung mitschicken: Sonst bliebe eine vom Assistenten gesetzte Erinnerung unangetastet
+    // (crmSync schickt erinnern_um nur, wenn das Feld bekannt ist). Neue Zeit = noch nicht gesendet.
+    const erinnerungFelder: Partial<ToDoFormWert> = erinnerungGeaendert
+      ? { erinnernUm: erinnerung ? new Date(erinnerung).toISOString() : '', erinnertAm: undefined }
+      : {}
     onSubmit({
+      ...erinnerungFelder,
       startDatum: startDatum || undefined,
       prio: prio || undefined,
       unterPrio: unterPrio ? Number(unterPrio) : undefined,
@@ -749,7 +794,8 @@ function ToDoModal({
       erledigtAm: initial?.erledigtAm,
       wartenAuf: wartenAuf.trim() || undefined,
       erhaltenAm: erhaltenAm || undefined,
-      erledigenBis: erledigenBis || undefined,
+      // Erinnerung ohne Frist: Tag der Erinnerung wird die Frist (wie beim Assistenten).
+      erledigenBis: erledigenBis || (erinnerung && erinnerungGeaendert ? erinnerung.slice(0, 10) : '') || undefined,
       stundensatz: stundensatz ? Number(stundensatz) : undefined,
     })
   }
@@ -784,6 +830,32 @@ function ToDoModal({
           <Field label="Erhalten am"><input type="date" className={inputClass} value={erhaltenAm} onChange={(e) => setErhaltenAm(e.target.value)} /></Field>
           <Field label="Erledigen bis"><input type="date" className={inputClass} value={erledigenBis} onChange={(e) => setErledigenBis(e.target.value)} /></Field>
           <Field label="Warten auf"><input className={inputClass} value={wartenAuf} onChange={(e) => setWartenAuf(e.target.value)} /></Field>
+        </div>
+        <div className="mb-3">
+          <span className="mb-1 flex items-center gap-1 text-xs font-medium text-slate-500">
+            <Bell size={12} /> Erinnerung per Telegram (Datum und Uhrzeit)
+          </span>
+          <div className="flex items-center gap-2">
+            <input
+              type="datetime-local"
+              aria-label="Erinnerung per Telegram"
+              className={`${inputClass} sm:max-w-xs`}
+              value={erinnerung}
+              onChange={(e) => setErinnerung(e.target.value)}
+            />
+            {erinnerung && !readOnly && (
+              <button type="button" onClick={() => setErinnerung('')} title="Erinnerung entfernen" className="rounded-md bg-slate-100 p-2 text-slate-500 hover:bg-slate-200">
+                <X size={14} />
+              </button>
+            )}
+          </div>
+          {erinnerungVorbei && <p className="mt-1 text-xs text-amber-700">Der Zeitpunkt liegt in der Vergangenheit: Bis zwei Tage zurück geht die Erinnerung sofort raus, sonst gar nicht.</p>}
+          {!erinnerungGeaendert && initial?.erinnernUm && initial.erinnertAm && (
+            <p className="mt-1 text-xs text-slate-400">Gesendet am {new Date(initial.erinnertAm).toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' })}. Eine neue Zeit verschickt sie noch einmal.</p>
+          )}
+          {erinnerung && !erinnerungVorbei && !(initial?.erinnertAm && !erinnerungGeaendert) && (
+            <p className="mt-1 text-xs text-slate-400">Kommt bei der eigenen Liste an deren Besitzer, bei einer Bereichsliste an den Zuständigen — wenn er mit Telegram verbunden ist.</p>
+          )}
         </div>
         <Field label="Aktueller Stand"><textarea className={inputClass} rows={2} value={aktuellerStand} onChange={(e) => setAktuellerStand(e.target.value)} /></Field>
         <Field label="Welche Fragen gibt es / welche Infos werden benötigt"><textarea className={inputClass} rows={2} value={welcheFragen} onChange={(e) => setWelcheFragen(e.target.value)} /></Field>
