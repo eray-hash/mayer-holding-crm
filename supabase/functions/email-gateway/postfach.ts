@@ -12,6 +12,7 @@
 //   über `anhangUrl`, das vorher prüft, ob der Fragende die Mail sehen darf.
 import { ImapFlow } from 'npm:imapflow@1'
 import nodemailer from 'npm:nodemailer@6'
+import { pruefeNeueMail } from '../_shared/mailEingang.ts'
 
 // deno-lint-ignore no-explicit-any
 type Db = any
@@ -49,8 +50,9 @@ const ANHANG_VORSATZ = 'privat:'
 const OEFFENTLICHE_ABLAGE = 'email-anhaenge'
 // Der Weiterleitungsdienst des gemeinsamen Postfachs lehnt Mails über 512 KB ab ("552 Message size
 // exceeds the allowed size", gesehen am 11. und 13.11.2026) — sie kamen bisher nie im CRM an. Aus
-// gemeinsamen Postfächern holt der Abruf deshalb genau diese großen Mails; die kleinen kommen
-// weiterhin über die Weiterleitung (mit Einordnung und Zuordnung).
+// dem Hauptpostfach holt der Abruf deshalb genau diese großen Mails; die kleinen kommen weiterhin über
+// die Weiterleitung (mit Einordnung und Zuordnung). Weitere gemeinsame Postfächer werden ganz
+// abgeholt und hier genauso geprüft (pruefeNeueMail).
 const WEITERLEITUNGS_GRENZE = 450 * 1024
 
 function zeitlimit<T>(versprechen: Promise<T>, ms: number, meldung: string): Promise<T> {
@@ -226,7 +228,7 @@ export async function listePostfaecher(admin: Db, a: Aufrufer, alle: boolean): P
       besitzer: p.besitzer_email,
       bereit: p.geheimnis_name ? !!Deno.env.get(p.geheimnis_name) : mitPasswort.has(p.id),
       kannSenden: !!p.smtp_host,
-      holtAb: !!p.besitzer_email,
+      holtAb: !!p.besitzer_email || p.id !== STANDARD_ID,
       letzterAbruf: p.letzter_abruf,
       letzterFehler: p.letzter_fehler,
       ordner: !!p.besitzer_email && p.besitzer_email.toLowerCase() === a.email ? Object.keys(p.ordner_stand ?? {}).sort((x, y) => x.localeCompare(y, 'de')) : [],
@@ -705,8 +707,10 @@ export async function rufePostfachAb(
           break
         }
         const umschlag = n.envelope ?? {}
-        // Kleine Mails gemeinsamer Postfächer kommen über die Weiterleitung — nur weiterzählen.
-        if (gemeinsam && n.size <= WEITERLEITUNGS_GRENZE) {
+        // Kleine Mails des Hauptpostfachs kommen über die Weiterleitung — nur weiterzählen. Weitere
+        // gemeinsame Postfächer (z. B. info@coach-es.de, seit 19.11.2026) haben keine Weiterleitung:
+        // Bei ihnen wird jede Mail hier abgeholt und unten genauso geprüft wie eine weitergeleitete.
+        if (gemeinsam && p.id === STANDARD_ID && n.size <= WEITERLEITUNGS_GRENZE) {
           hoechste = n.uid
           merke(hoechste, gueltig)
           erledigt++
@@ -800,6 +804,25 @@ export async function rufePostfachAb(
             console.error('Mail-Inhalt nicht übernehmbar', p.id, pfad, n.uid, m?.message)
             zeile.ausschnitt = '(Der Inhalt dieser Mail ließ sich nicht ins CRM übernehmen. Bitte im Mail-Programm öffnen.)'
             zeile.anhaenge = null
+          }
+          // Gemeinsame Postfächer: dieselbe Prüfung wie beim Eingang über die Weiterleitung (inbound-email) —
+          // Newsletter/Werbung ausblenden, eindeutige Absender der Akte zuordnen, Lieferantenrechnungen
+          // als Verbindlichkeit. Ein Fehler dort verhindert das Speichern der Mail nicht.
+          if (gemeinsam) {
+            const pruefung = await pruefeNeueMail(admin, {
+              messageId: kennung,
+              von: String(zeile.von),
+              vonName: String(zeile.von_name),
+              betreff: String(zeile.betreff),
+              text: String(zeile.ausschnitt ?? ''),
+              anhaenge: (zeile.anhaenge as { filename: string; size: number; contentType: string; url: string }[] | null) ?? [],
+            })
+            zeile.relevanz = pruefung.relevanz
+            if (pruefung.zuordnung) {
+              zeile.zugewiesener_kunde_id = pruefung.zuordnung.kundeId
+              zeile.zugewiesener_bereich = pruefung.zuordnung.bereich
+              zeile.zugewiesener_kunde_name = pruefung.zuordnung.kundeName
+            }
           }
           const { error } = await admin.from('eingegangene_emails').insert(zeile)
           // 23505 = dieselbe Mail wurde gerade von einem gleichzeitigen Lauf gespeichert — kein Fehler.
@@ -976,7 +999,7 @@ export async function abzuholendePostfaecher(admin: Db): Promise<Postfach[]> {
   return ((data ?? []) as Postfach[]).filter((p) => !p.besitzer_email || aktive.has(p.besitzer_email.toLowerCase()))
 }
 
-// Holt die Postfächer der Reihe nach ab (gemeinsame: nur große Mails) — alle oder nur das genannte.
+// Holt die Postfächer der Reihe nach ab (Hauptpostfach: nur große Mails) — alle oder nur das genannte.
 // Der Zeitplan ruft je Postfach einzeln auf: Jeder Aufruf hat nur begrenzte Rechenzeit, und ein
 // Postfach mit großen Anhängen soll sie nicht mit den anderen teilen müssen.
 export async function rufeAlleAb(admin: Db, budgetMs = 110000, nurId?: string): Promise<{ postfaecher: number; neu: number; offen: boolean; fehler: string[] }> {
