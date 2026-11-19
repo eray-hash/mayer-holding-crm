@@ -99,7 +99,7 @@ function AdminRoutesContent() {
         <Route path="/kampagnen" element={<Kampagnen />} />
         <Route path="/profil" element={<MeinProfil />} />
         <Route path="/mitarbeiter" element={<RequireAdmin><MitarbeiterVerwalten /></RequireAdmin>} />
-        <Route path="/wuensche" element={<RequireAdmin><Wuensche /></RequireAdmin>} />
+        <Route path="/wuensche" element={<Wuensche />} />
 
         {/* Privat: bewusst NICHT per RequireBereich beschränkt — jeder Mitarbeiter hat seinen
             eigenen, persönlichen Bereich, das ist keine von der GF zuteilbare Berechtigung.

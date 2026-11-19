@@ -4,8 +4,9 @@ import { supabase, isSupabaseConfigured } from '../../lib/supabaseClient'
 import { useAuth } from '../../context/AuthContext'
 import { Card, EmptyState, Field, inputClass, PrimaryButton, SecondaryButton } from '../../components/ui'
 
-// Wünsche und Probleme der Mitarbeiter mit dem CRM (Tabelle `wuensche`). Nur Geschäftsführung und
-// Admins sehen und ändern sie (Zeilenschutz in der Datenbank, hier zusätzlich RequireAdmin in App.tsx).
+// Wünsche und Probleme der Mitarbeiter mit dem CRM (Tabelle `wuensche`). Seit 19.11.2026 sehen alle
+// aktiven Mitarbeiter die Liste und können eigene Wünsche eintragen; Status und Notiz ändern nur
+// Geschäftsführung und Admins (Zeilenschutz in der Datenbank: wuensche_lesen_alle / wuensche_eintragen_alle / wuensche_gf).
 // Gefüllt vom Assistenten (Werkzeug wunsch_notieren), von der täglichen Auswertung der Gespräche und
 // der Server-Fehler (supabase/functions/email-gateway/wunschAnalyse.ts) und von Hand auf dieser Seite.
 
@@ -59,6 +60,7 @@ function quelleLabel(q: Quelle): string {
 
 export function Wuensche() {
   const { mitarbeiter } = useAuth()
+  const darfPflegen = !mitarbeiter || mitarbeiter.rolle === 'geschaeftsfuehrung' || !!mitarbeiter.ist_admin
   const [zeilen, setZeilen] = useState<WunschZeile[]>([])
   const [laedt, setLaedt] = useState(true)
   const [fehler, setFehler] = useState<string | null>(null)
@@ -156,8 +158,8 @@ export function Wuensche() {
             <Lightbulb size={20} className="text-amber-500" /> Wünsche
           </h1>
           <p className="text-sm text-slate-500">
-            Was Mitarbeiter im CRM oder beim Assistenten wollten und nicht ging, und Fehler, die das System bemerkt hat. Ohne Kundendaten. Ein Bericht
-            geht täglich um 18 Uhr per Telegram an die Geschäftsführung.
+            Was Mitarbeiter im CRM oder beim Assistenten wollten und nicht ging, und Fehler, die das System bemerkt hat. Ohne Kundendaten. Alle
+            Mitarbeiter sehen die Liste und können Wünsche eintragen{darfPflegen ? '' : '; den Stand pflegt die Geschäftsführung'}.
           </p>
         </div>
         <div className="flex gap-2">
@@ -232,7 +234,7 @@ export function Wuensche() {
           </div>
           <ul className="divide-y divide-slate-100">
             {sichtbar.map((z) => (
-              <WunschEintrag key={z.id} zeile={z} onAendere={(a) => void aendere(z.id, a)} />
+              <WunschEintrag key={z.id} zeile={z} darfPflegen={darfPflegen} onAendere={(a) => void aendere(z.id, a)} />
             ))}
           </ul>
         </Card>
@@ -242,7 +244,7 @@ export function Wuensche() {
   )
 }
 
-function WunschEintrag({ zeile, onAendere }: { zeile: WunschZeile; onAendere: (a: Partial<Pick<WunschZeile, 'status' | 'notiz'>>) => void }) {
+function WunschEintrag({ zeile, darfPflegen, onAendere }: { zeile: WunschZeile; darfPflegen: boolean; onAendere: (a: Partial<Pick<WunschZeile, 'status' | 'notiz'>>) => void }) {
   const [notiz, setNotiz] = useState(zeile.notiz ?? '')
   useEffect(() => setNotiz(zeile.notiz ?? ''), [zeile.notiz])
 
@@ -266,33 +268,46 @@ function WunschEintrag({ zeile, onAendere }: { zeile: WunschZeile; onAendere: (a
         <span className="text-xs text-slate-400 lg:hidden">Zuletzt: </span>
         {datum(zeile.zuletzt_am)}
       </div>
+      {darfPflegen ? (
+        <>
       <div>
-        <select
-          aria-label="Status"
-          className={`w-full rounded-lg border px-2 py-1.5 text-sm font-medium outline-none ${STATUS_FARBE[zeile.status] ?? STATUS_FARBE.neu}`}
-          value={zeile.status}
-          onChange={(e) => onAendere({ status: e.target.value as Status })}
-        >
-          {STATUS.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.label}
-            </option>
-          ))}
-        </select>
-      </div>
-      <div>
-        <textarea
-          aria-label="Notiz"
-          className={`${inputClass} min-h-[2.25rem] py-1.5`}
-          rows={1}
-          placeholder="Notiz"
-          value={notiz}
-          onChange={(e) => setNotiz(e.target.value)}
-          onBlur={() => {
-            if (notiz !== (zeile.notiz ?? '')) onAendere({ notiz: notiz.trim() || null })
-          }}
-        />
-      </div>
+          <select
+            aria-label="Status"
+            className={`w-full rounded-lg border px-2 py-1.5 text-sm font-medium outline-none ${STATUS_FARBE[zeile.status] ?? STATUS_FARBE.neu}`}
+            value={zeile.status}
+            onChange={(e) => onAendere({ status: e.target.value as Status })}
+          >
+            {STATUS.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <textarea
+            aria-label="Notiz"
+            className={`${inputClass} min-h-[2.25rem] py-1.5`}
+            rows={1}
+            placeholder="Notiz"
+            value={notiz}
+            onChange={(e) => setNotiz(e.target.value)}
+            onBlur={() => {
+              if (notiz !== (zeile.notiz ?? '')) onAendere({ notiz: notiz.trim() || null })
+            }}
+          />
+        </div>
+        </>
+      ) : (
+        <>
+          <div>
+            <span className={`inline-block rounded-lg border px-2 py-1 text-sm font-medium ${STATUS_FARBE[zeile.status] ?? STATUS_FARBE.neu}`}>
+              {STATUS.find((s) => s.id === zeile.status)?.label ?? zeile.status}
+            </span>
+          </div>
+          <div className="break-words text-sm text-slate-600">{zeile.notiz || ''}</div>
+        </>
+      )}
     </li>
   )
 }

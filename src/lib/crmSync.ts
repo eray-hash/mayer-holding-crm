@@ -538,6 +538,9 @@ function todoToRow(t: ToDoEintrag) {
     erhalten_am: t.erhaltenAm ?? null,
     erledigen_bis: t.erledigenBis ?? null,
     stundensatz: t.stundensatz ?? null,
+    // Erinnerungszeit nur mitschicken, wenn das Fenster sie kennt — sonst könnte ein älterer Stand im
+    // Browser eine vom Assistenten gesetzte Erinnerung überschreiben. '' = bewusst gelöscht.
+    ...(t.erinnernUm !== undefined ? { erinnern_um: t.erinnernUm || null } : {}),
   }
 }
 
@@ -573,6 +576,8 @@ function rowToTodo(row: any): ToDoEintrag {
     erhaltenAm: row.erhalten_am ?? undefined,
     erledigenBis: row.erledigen_bis ?? undefined,
     stundensatz: row.stundensatz ?? undefined,
+    erinnernUm: row.erinnern_um ?? undefined,
+    erinnertAm: row.erinnert_am ?? undefined,
   }
 }
 

@@ -797,6 +797,9 @@ export type ToDoEintrag = {
   wartenAuf?: string
   erhaltenAm?: string
   erledigenBis?: string
+  /** Erinnerung per Telegram zu diesem Zeitpunkt (ISO); '' = gelöscht. Server setzt erinnertAm nach dem Versand. */
+  erinnernUm?: string
+  erinnertAm?: string
   stundensatz?: number
 }
 

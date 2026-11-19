@@ -338,7 +338,7 @@ export function Layout({ children }: { children: ReactNode }) {
                         Mitarbeiter verwalten
                       </MenuItem>
                     )}
-                    {isSupabaseConfigured && session && (mitarbeiter?.rolle === 'geschaeftsfuehrung' || mitarbeiter?.ist_admin) && (
+                    {isSupabaseConfigured && session && (
                       <MenuItem icon={<Lightbulb size={15} />} onClick={() => { setProfilMenuOpen(false); navigate('/wuensche') }}>
                         Wünsche
                       </MenuItem>
