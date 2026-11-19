@@ -382,7 +382,7 @@ function ZahlenAnsicht({ daten }: { daten: ZahlenDaten }) {
 // ---------------------------------------------------------------------------------------------
 
 type TechnikDaten = {
-  kosten: { summeEuro: number; aufrufe: number; jeTag: Record<string, number>; jeAnlass: Record<string, number>; jeModell: Record<string, number>; umrechnung: string }
+  kosten: { summeEuro: number; aufrufe: number; jeTag: Record<string, number>; jeAnlass: Record<string, number>; jeModell: Record<string, number>; jePerson?: Record<string, number>; umrechnung: string }
   fehler: { browser: number; browserBeispiele: string[]; server: { titel: string; anzahl: number; status: string; zuletzt: string }[]; offeneWuensche: number }
   postfaecher: { adresse: string; art: string; aktiv: boolean; letzterAbruf: string | null; letzterFehler: string | null }[]
   sprachnachrichten: { heute: number; tagesgrenze: number }
@@ -407,6 +407,8 @@ function TechnikAnsicht({ daten }: { daten: TechnikDaten }) {
   const maxTag = Math.max(0.01, ...tage.map(([, n]) => n))
   const anlaesse = Object.entries(daten.kosten.jeAnlass).sort(([a], [b]) => (ANLASS_TEXT[a] ?? a).localeCompare(ANLASS_TEXT[b] ?? b, 'de'))
   const maxAnlass = Math.max(0.01, ...anlaesse.map(([, n]) => n))
+  const personen = Object.entries(daten.kosten.jePerson ?? {}).sort(([, a], [, b]) => b - a)
+  const maxPerson = Math.max(0.01, ...personen.map(([, n]) => n))
   return (
     <div className="space-y-4">
       <div className="grid gap-4 md:grid-cols-3">
@@ -461,6 +463,25 @@ function TechnikAnsicht({ daten }: { daten: TechnikDaten }) {
           </div>
         </Abschnitt>
       </div>
+
+      <Abschnitt titel="KI-Kosten je Person">
+        {personen.length === 0 ? (
+          <EmptyState text="Keine KI-Aufrufe im Zeitraum." />
+        ) : (
+          <div className="space-y-1">
+            {personen.map(([p, n]) => (
+              <div key={p} className="flex items-center gap-2 text-xs">
+                <span className="w-48 shrink-0 truncate text-slate-600" title={p}>
+                  {p}
+                </span>
+                <Balken wert={n} max={maxPerson} farbe="bg-slate-400" />
+                <span className="w-16 shrink-0 text-right text-slate-600">{euro(n)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        <p className="mt-2 text-xs text-slate-500">Je Person gemessen seit 19.11.2026. Zeitplan-Aufträge und der Mail-Eingang laufen ohne Person und stehen unter „Automatisch“.</p>
+      </Abschnitt>
 
       <Abschnitt titel="Postfächer">
         <table className="w-full text-sm">

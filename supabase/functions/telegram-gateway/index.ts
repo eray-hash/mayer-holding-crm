@@ -18,7 +18,7 @@
 
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2.119.1'
 import { PDFDocument, degrees } from 'npm:pdf-lib@1.17.1'
-import { kiAufruf, mitAnlass, setzeAnlass } from '../_shared/kiVerbrauch.ts'
+import { aktuellePerson, kiAufruf, mitAnlass, setzeAnlass, setzePerson } from '../_shared/kiVerbrauch.ts'
 import { entschaerfe, kuerze as kuerzeWunsch, merkeWunsch } from '../_shared/wuensche.ts'
 import { bereichName, darfAkte, darfBereich, darfObjekte, freigegebeneBereiche, istEingeschraenkt, nichtFreigegeben, siehtAlleBereiche } from './rechte.ts'
 import { aufgabenUebersicht } from './aufgaben.ts'
@@ -26,6 +26,7 @@ import { type AbteilungZeile, alleObjektDokumente, lesenVonSelbst, leseRef, OBJE
 import { richteFotoAus } from './bildDrehung.ts'
 import { loescheTelegramNachricht, sensibelHinweis, sensibleArt, sensiblerEingang } from './sensibel.ts'
 import { kollegenBenachrichtigen, type MitteilungsWege, schickeMitteilung, todoAnlegen, todoErledigen } from './teamWerkzeuge.ts'
+import { fuehrePflegeWerkzeugAus, istPflegeWerkzeug, type PflegeAnfrage, PFLEGE_WERKZEUGE } from './pflegeWerkzeuge.ts'
 import { datumDeutsch, empfaengerVon, findeEmpfaenger, ladeAnhaengeFuerVersand, MAIL_SPALTEN, type MailZeile, volltextVon, VOLLTEXT_HOECHSTENS, type WeiterleitungEntwurf, weiterleitungsBetreff, weiterleitungsText } from './mailWerkzeuge.ts'
 
 const BOT_TOKEN = Deno.env.get('TELEGRAM_BOT_TOKEN')
@@ -153,6 +154,7 @@ async function callEmailGateway(action: string, body: Record<string, unknown>): 
     headers: {
       'content-type': 'application/json',
       authorization: `Bearer ${SERVICE_ROLE_KEY}`,
+      'x-ki-person': aktuellePerson(),
       ...(CRM_SHARED_SECRET ? { 'x-crm-secret': CRM_SHARED_SECRET } : {}),
     },
     body: JSON.stringify({ action, ...body }),
@@ -855,6 +857,8 @@ type AgentState = {
   zuege: { z: string; msgs: Nachricht[] }[]
   aktionen: { z: string; text: string }[]
   loesch_anfrage?: { kunde_id: string; name: string; z: string }
+  // Aktenpflege (Bereich wechseln, zusammenführen, siehe pflegeWerkzeuge.ts): gilt nur für die direkt folgende Nachricht.
+  pflege_anfrage?: PflegeAnfrage
   // Vorbereitete, noch nicht bestätigte E-Mail: gilt nur für die direkt folgende Nachricht.
   mail_anfrage?: MailEntwurf
   // Bestätigte E-Mail, die gerade verschickt wird (siehe fuehreMailSchrittAus).
@@ -891,6 +895,7 @@ export function ladeState(raw: unknown): AgentState {
     zuege,
     aktionen: Array.isArray(r?.aktionen) ? r.aktionen.slice(-12) : [],
     loesch_anfrage: r?.loesch_anfrage,
+    pflege_anfrage: r?.pflege_anfrage,
     mail_anfrage: r?.mail_anfrage,
     mail_auftrag: r?.mail_auftrag,
     mail_ergebnis: r?.mail_ergebnis,
@@ -906,6 +911,8 @@ export function ladeState(raw: unknown): AgentState {
 //   "Invalid signature in thinking block" ab — echter Fehler beim zweiten Scan in Folge.
 // - Große Werkzeug-Ergebnisse (ganze Akte, Firmenüberblick) werden gekürzt; braucht der Assistent
 //   sie später wieder, ruft er das Werkzeug neu auf.
+const BILD_VERMERK = '[Bild im CRM-Fenster eingefügt]'
+
 function fuerVerlauf(msgs: Nachricht[]): Nachricht[] {
   return msgs
     .map((m) =>
@@ -917,9 +924,13 @@ function fuerVerlauf(msgs: Nachricht[]): Nachricht[] {
               .filter((b: any) => b?.type !== 'thinking' && b?.type !== 'redacted_thinking')
               // deno-lint-ignore no-explicit-any
               .map((b: any) =>
-                b?.type === 'tool_result' && typeof b.content === 'string' && b.content.length > 2500
-                  ? { ...b, content: `${b.content.slice(0, 2500)} … (für den Verlauf gekürzt — bei Bedarf Werkzeug erneut aufrufen)` }
-                  : b,
+                // Ein im CRM-Fenster eingefügtes Bild gilt nur für seinen Zug und wird nie gespeichert
+                // (Größe des Zustands, Datenschutz) — im Verlauf bleibt nur ein Vermerk.
+                b?.type === 'image'
+                  ? { type: 'text', text: BILD_VERMERK }
+                  : b?.type === 'tool_result' && typeof b.content === 'string' && b.content.length > 2500
+                    ? { ...b, content: `${b.content.slice(0, 2500)} … (für den Verlauf gekürzt — bei Bedarf Werkzeug erneut aufrufen)` }
+                    : b,
               ),
           }
         : m,
@@ -935,6 +946,7 @@ type ToolKontext = {
   mitarbeiter: Mitarbeiter
   state: AgentState
   vorherigeLoeschAnfrage: AgentState['loesch_anfrage']
+  vorherigePflegeAnfrage?: AgentState['pflege_anfrage']
   vorherigeMailAnfrage: AgentState['mail_anfrage']
   vorherigeWeiterleitung?: AgentState['weiterleitung_anfrage']
   // Die Nachricht, auf die gerade geantwortet wird (für Werkzeuge, die nur auf ausdrücklichen Wunsch laufen).
@@ -1405,6 +1417,7 @@ export const TOOLS = [
       required: ['aufgabe'],
     },
   },
+  ...PFLEGE_WERKZEUGE,
   {
     name: 'todo_erledigen',
     description: 'Hakt ein offenes To-do ab (eigene Liste oder freigegebene Bereichsliste). Mit todo_id oder einem Suchbegriff aus dem Aufgabentext; bei mehreren Treffern kommt eine Liste zum Nachfragen.',
@@ -1440,6 +1453,22 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
   if (name === 'todo_anlegen') return await todoAnlegen(supabase, mitarbeiter, input, protokolliere)
   if (name === 'todo_erledigen') return await todoErledigen(supabase, mitarbeiter, input, protokolliere)
 
+  // Aktenpflege nur für Geschäftsführung/Admin, mit Bestätigung in der nächsten Nachricht (pflegeWerkzeuge.ts).
+  if (istPflegeWerkzeug(name)) {
+    return await fuehrePflegeWerkzeugAus(name, input ?? {}, {
+      supabase,
+      mitarbeiter,
+      vorherige: ctx.vorherigePflegeAnfrage,
+      merkeAnfrage: (a) => {
+        state.pflege_anfrage = a
+      },
+      protokolliere,
+      heute,
+      statusJeBereich: STATUS_JE_BEREICH,
+      startStatus: START_STATUS,
+    })
+  }
+
   // Kalender: Lesen direkt (an die eigene Adresse gebunden), Schreiben über die Mail-Funktion — dort
   // liegen Überschneidungsprüfung, Telegram-Nachricht an Beteiligte und die Erinnerungen.
   if (name === 'termine_zeigen' || name === 'termin_anlegen' || name === 'termin_absagen' || name === 'termin_aendern') {
@@ -1456,7 +1485,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     const rufeKalender = async (body: Record<string, unknown>) => {
       const antwort = await fetch(`${SUPABASE_URL}/functions/v1/email-gateway`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`, ...(CRM_SHARED_SECRET ? { 'x-crm-secret': CRM_SHARED_SECRET } : {}) },
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`, 'x-ki-person': aktuellePerson(), ...(CRM_SHARED_SECRET ? { 'x-crm-secret': CRM_SHARED_SECRET } : {}) },
         body: JSON.stringify({ ...body, imAuftragVon: ich }),
       })
       return { ok: antwort.ok, status: antwort.status, daten: await antwort.json().catch(() => ({})) }
@@ -1701,7 +1730,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     // Über die Mail-Funktion, damit auch die Anhänge in die öffentliche Ablage umziehen.
     const antwort = await fetch(`${SUPABASE_URL}/functions/v1/email-gateway`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`, ...(CRM_SHARED_SECRET ? { 'x-crm-secret': CRM_SHARED_SECRET } : {}) },
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`, 'x-ki-person': aktuellePerson(), ...(CRM_SHARED_SECRET ? { 'x-crm-secret': CRM_SHARED_SECRET } : {}) },
       body: JSON.stringify({ action: 'mail_freigeben', art: 'eingang', id: kennung, imAuftragVon: ich, kunde: ziel ? { bereich: ziel.bereich, id: ziel.id, name: kundeName(ziel) } : undefined }),
     })
     if (!antwort.ok) {
@@ -1924,7 +1953,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     // Über die Mail-Funktion: dort werden die Anhänge in die Akte gelegt und der Verlauf ergänzt.
     const antwort = await fetch(`${SUPABASE_URL}/functions/v1/email-gateway`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`, ...(CRM_SHARED_SECRET ? { 'x-crm-secret': CRM_SHARED_SECRET } : {}) },
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`, 'x-ki-person': aktuellePerson(), ...(CRM_SHARED_SECRET ? { 'x-crm-secret': CRM_SHARED_SECRET } : {}) },
       body: JSON.stringify({ action: 'mail_zuordnen', mailId: String(input.mail_id ?? ''), kundeId: ziel.id, imAuftragVon: ich }),
     })
     const daten = await antwort.json().catch(() => ({}))
@@ -2963,16 +2992,31 @@ async function claude(system: unknown[], messages: unknown[], maxTokens = ANTWOR
   }
 }
 
+export type WebBild = { base64: string; mediaType: 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif' }
+
 // Ein Gesprächszug: bekommt die neue Nachricht (oder einen Datei-Eingang), arbeitet mit Werkzeugen,
 // bis eine Antwort feststeht, und schreibt Verlauf und Aktionsprotokoll in den übergebenen Zustand.
-export async function agentAntwort(supabase: Supa, mitarbeiter: Mitarbeiter, state: AgentState, eingang: string, kanal: 'telegram' | 'web' = 'telegram'): Promise<string> {
-  const ctx: ToolKontext = { supabase, mitarbeiter, state, vorherigeLoeschAnfrage: state.loesch_anfrage, vorherigeMailAnfrage: state.mail_anfrage, vorherigeWeiterleitung: state.weiterleitung_anfrage, eingang, recherchen: 0 }
+// `bild`: ein im CRM-Fenster eingefügtes Bild. Das Modell sieht es nur in diesem Zug; gespeichert
+// wird es nirgends (fuerVerlauf ersetzt es im Verlauf durch einen Vermerk).
+export async function agentAntwort(supabase: Supa, mitarbeiter: Mitarbeiter, state: AgentState, eingang: string, kanal: 'telegram' | 'web' = 'telegram', bild?: WebBild): Promise<string> {
+  const ctx: ToolKontext = { supabase, mitarbeiter, state, vorherigeLoeschAnfrage: state.loesch_anfrage, vorherigePflegeAnfrage: state.pflege_anfrage, vorherigeMailAnfrage: state.mail_anfrage, vorherigeWeiterleitung: state.weiterleitung_anfrage, eingang, recherchen: 0 }
   state.loesch_anfrage = undefined // gilt nur für die direkt folgende Nachricht
+  state.pflege_anfrage = undefined // ebenso für Bereich wechseln und Zusammenführen
   state.mail_anfrage = undefined // ebenso: freigeben kann man nur die gerade gezeigte Fassung
   state.weiterleitung_anfrage = undefined // ebenso für eine vorbereitete Weiterleitung
   state.mail_start = undefined
 
-  const neu: Nachricht[] = [{ role: 'user', content: eingang }]
+  const neu: Nachricht[] = [
+    {
+      role: 'user',
+      content: bild
+        ? [
+            { type: 'image', source: { type: 'base64', media_type: bild.mediaType, data: bild.base64 } },
+            { type: 'text', text: eingang },
+          ]
+        : eingang,
+    },
+  ]
   const messages = (): Nachricht[] => [...state.zuege.flatMap((zug) => zug.msgs), ...neu]
 
   const wochentag = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', weekday: 'long' }).format(new Date())
@@ -2988,7 +3032,10 @@ export async function agentAntwort(supabase: Supa, mitarbeiter: Mitarbeiter, sta
           ? `Für ${mitarbeiter.name} sind nur diese Bereiche freigegeben: ${freigegebeneBereiche(mitarbeiter).map(bereichName).join(', ') || 'keiner'}. Kunden, Objekte, Unterlagen und Mails anderer Bereiche kannst du für ihn weder sehen noch ändern, und du sprichst nicht darüber. Meldet ein Werkzeug „Nicht freigegeben", sag ihm das so. Gehört eine geschickte Datei in einen anderen Bereich, legst du sie unter ziel=ungeklaert ab.`
           : '',
         kanal === 'web'
-          ? 'Dieses Gespräch läuft im Assistenten-Fenster des CRM, nicht in Telegram. Dateien kann der Mitarbeiter dir hier nicht schicken; dafür nutzt er Telegram oder lädt sie in der Akte hoch. Die Abschlussmeldung eines E-Mail-Versands erscheint hier im Fenster.'
+          ? `Dieses Gespräch läuft im Assistenten-Fenster des CRM, nicht in Telegram. Dateien und Fotos schickt der Mitarbeiter dir hier über die Büroklammer; sie kommen als Datei-Eingang wie aus Telegram, und du legst sie nach denselben Regeln ab. Ein Bild, das er direkt ins Eingabefeld einfügt (Bildschirmfoto, kopiertes Bild), siehst du nur in der Nachricht, zu der es gehört: Es wird nirgends gespeichert und liegt in keiner Akte; in späteren Nachrichten steht an seiner Stelle nur „${BILD_VERMERK}". Beantworte dazu, was er wissen will. Soll das Bild abgelegt werden, bitte ihn, es über die Büroklammer zu schicken. Die Abschlussmeldung eines E-Mail-Versands erscheint hier im Fenster.`
+          : '',
+        siehtAlleBereiche(mitarbeiter)
+          ? 'Aktenpflege (nur Geschäftsführung und Admins, also auch für diesen Mitarbeiter): Sagt er z. B. „verschiebe X nach Erben", verschiebst du die Akte mit kunde_bereich_wechseln. Sagt er „X und Y sind dieselbe Firma" oder „führe X und Y zusammen", nimmst du kunden_zusammenfuehren; welche Akte bleibt, entscheidet er; sagt er nichts dazu, schlägst du die vollständigere vor. Beides wie beim Löschen: erst beschreiben und fragen, ausführen erst nach seiner klaren Bestätigung in der nächsten Nachricht.'
           : '',
         state.aktionen.length > 0
           ? `Was du in diesem Chat zuletzt im CRM getan hast (älteste zuerst):\n${state.aktionen.slice(-10).map((a) => `- ${a.text}`).join('\n')}`
@@ -3136,6 +3183,9 @@ function webHeaders(origin: string | null): Record<string, string> {
 // Derselbe Assistent für das Assistenten-Fenster im CRM. Zugang nur mit dem eigenen Login des
 // Mitarbeiters (kein gemeinsames Geheimnis — das stünde im öffentlich ausgelieferten Programm).
 // Gesprächsverlauf und Aktionsprotokoll teilt er sich mit dem Telegram-Chat desselben Mitarbeiters.
+// Obergrenze für ein eingefügtes Bild (Base64-Länge): die Grenze des KI-Dienstes für ein Bild (5 MB).
+const BILD_HOECHSTENS_BASE64 = 5 * 1024 * 1024
+
 // deno-lint-ignore no-explicit-any
 async function webAnfrage(req: Request, body: any, headers: Record<string, string>): Promise<Response> {
   const json = (inhalt: unknown, status = 200) => new Response(JSON.stringify(inhalt), { status, headers })
@@ -3150,6 +3200,7 @@ async function webAnfrage(req: Request, body: any, headers: Record<string, strin
     .eq('email', nutzer.user.email)
     .maybeSingle()
   if (!mitarbeiter || !mitarbeiter.aktiv) return json({ error: 'Kein aktiver Mitarbeiter-Zugang.' }, 403)
+  setzePerson(mitarbeiter.email)
 
   if (body.web === 'mail_status') {
     // deno-lint-ignore no-explicit-any
@@ -3249,7 +3300,24 @@ async function webAnfrage(req: Request, body: any, headers: Record<string, strin
       return json({ error: err instanceof Error ? err.message : 'Abschrift fehlgeschlagen.' }, 502)
     }
   }
-  if (body.web !== 'chat' || typeof body.text !== 'string' || !body.text.trim()) return json({ error: 'Unbekannte Anfrage.' }, 400)
+  if (body.web !== 'chat') return json({ error: 'Unbekannte Anfrage.' }, 400)
+  // Optional ein ins Eingabefeld eingefügtes Bild. Es geht nur in diesen einen Zug und wird nicht abgelegt.
+  let bild: WebBild | undefined
+  if (body.bild !== undefined && body.bild !== null) {
+    const b = body.bild
+    const arten = ['image/jpeg', 'image/png', 'image/webp', 'image/gif']
+    if (typeof b !== 'object' || typeof b.base64 !== 'string' || !arten.includes(b.mediaType)) {
+      return json({ error: 'Dieses Bild kann ich nicht lesen. Möglich sind JPEG, PNG, WebP und GIF.' }, 400)
+    }
+    const daten = b.base64.replace(/\s+/g, '')
+    if (daten.length > BILD_HOECHSTENS_BASE64) {
+      return json({ error: 'Das Bild ist zu groß (höchstens etwa 3,5 MB). Bitte verkleinern oder über die Büroklammer als Datei schicken.' }, 413)
+    }
+    if (daten.length < 100 || !/^[A-Za-z0-9+/]+={0,2}$/.test(daten)) return json({ error: 'Das Bild ist leer oder beschädigt. Bitte noch einmal einfügen.' }, 400)
+    bild = { base64: daten, mediaType: b.mediaType }
+  }
+  const getippt = typeof body.text === 'string' ? body.text.trim() : ''
+  if (!getippt && !bild) return json({ error: 'Unbekannte Anfrage.' }, 400)
 
   const state = ladeState(mitarbeiter.telegram_pending)
   const letzteAktion = state.aktionen.length > 0 ? state.aktionen[state.aktionen.length - 1].z : ''
@@ -3261,10 +3329,10 @@ async function webAnfrage(req: Request, body: any, headers: Record<string, strin
     if (o.art === 'mail') offen = `eine E-Mail im gemeinsamen Postfach (mail_id ${o.kennung} — mit gemeinsames_postfach und dieser mail_id lesen)`
     else if (o.art === 'akte') offen = `die Akte mit kunde_id ${o.kennung} (mit kundenakte_lesen lesen)`
   }
-  const eingabe = body.text.trim().slice(0, 4000) + (offen ? `\n\n[Vom CRM ergänzt, nicht vom Mitarbeiter getippt: Er hat im CRM gerade ${offen} geöffnet. „Diese Mail", „dieser Kunde", „hier" meinen das, wenn nichts anderes genannt ist. Nenne die Kennung nicht.]` : '')
+  const eingabe = (getippt || 'Was siehst du auf diesem Bild?').slice(0, 4000) + (offen ? `\n\n[Vom CRM ergänzt, nicht vom Mitarbeiter getippt: Er hat im CRM gerade ${offen} geöffnet. „Diese Mail", „dieser Kunde", „hier" meinen das, wenn nichts anderes genannt ist. Nenne die Kennung nicht.]` : '')
   let antwort: string
   try {
-    antwort = await agentAntwort(supabase, mitarbeiter, state, eingabe, 'web')
+    antwort = await agentAntwort(supabase, mitarbeiter, state, eingabe, 'web', bild)
   } catch (err) {
     console.error('Assistent (CRM-Fenster) fehlgeschlagen:', err)
     return json({ error: `Da ist gerade etwas schiefgelaufen (${err instanceof Error ? err.message : 'unbekannter Fehler'}). Versuch es bitte gleich noch einmal.` }, 502)
@@ -3560,6 +3628,7 @@ async function verarbeiteUpdate(update: any): Promise<void> {
     await sendTelegramMessage(chatId, `Dieser Chat ist noch nicht mit einem CRM-Zugang verbunden. ${SO_GEHTS}`)
     return
   }
+  setzePerson(mitarbeiter.email)
 
   await sendeTippen(chatId)
   let istDatei = !!(message.photo || message.document || message.audio || message.voice || message.video || message.video_note || message.animation)
@@ -3694,6 +3763,8 @@ Deno.serve((req: Request) => mitAnlass(async () => {
   //    Geheimnis. Er kann nichts Neues auslösen, nur einen schon freigegebenen Versand fortsetzen.
   // Seit 19.11.2026 nur noch mit dem Dienst-Schlüssel — das gemeinsame Geheimnis steht im Seiten-Code.
   const internDienst = istDienstSchluessel((req.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '').trim())
+  // Folgeschritte (Mailversand, Einsortieren) laufen für den Mitarbeiter, der sie angestoßen hat — für die Kosten-Zuordnung.
+  if (internDienst) setzePerson(req.headers.get('x-ki-person'))
   if (body?.intern === 'mail_schritt') {
     if (!internDienst) return new Response('Unauthorized', { status: 401 })
     if (typeof body.mitarbeiterId !== 'string' || typeof body.auftragId !== 'string') return new Response('Bad request', { status: 400 })

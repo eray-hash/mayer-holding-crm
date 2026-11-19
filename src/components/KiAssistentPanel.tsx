@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { Mic, Square, Sparkles, AlertTriangle, Send, X, Volume2, VolumeX, Bot, ImagePlus, Phone, Wrench, Check, BookOpen, Paperclip, Maximize2, Minimize2 } from 'lucide-react'
+import { Mic, Square, Sparkles, AlertTriangle, Send, X, Volume2, VolumeX, Bot, ImagePlus, Phone, Paperclip, Maximize2, Minimize2 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
-import { DATEI_ARTEN, dateiStatus, frageAssistent, istServerAssistentVerfuegbar, mailStatus, schickeDatei, verkleinereBild } from '../lib/assistentServer'
+import { BILD_ARTEN, DATEI_ARTEN, dateiStatus, frageAssistent, istServerAssistentVerfuegbar, mailStatus, schickeDatei, verkleinereBild, type AssistentBild } from '../lib/assistentServer'
 import { useAuth } from '../context/AuthContext'
 import { isSupabaseConfigured } from '../lib/supabaseClient'
 import { useSpeechRecognition } from '../lib/useSpeechRecognition'
@@ -12,14 +12,13 @@ import {
   classifyAssistantInput,
   answerAssistantQuestion,
   answerWithImage,
-  classifyPflegeInput,
   answerFirmenwissen,
   type AssistentKlassifikation,
 } from '../lib/emailGateway'
 import { buildFirmenwissenKontext } from '../lib/firmenwissenKontext'
 import { collectFollowUpPriorities } from '../lib/followUpPriorities'
 import { suggestKundeKandidaten, type KundeMatch } from '../lib/matchKunde'
-import { KUNDEN_BEREICHE, kundeBereichLabel } from '../data/kundenBereiche'
+import { KUNDEN_BEREICHE } from '../data/kundenBereiche'
 import { getStatusMap } from '../data/statusNetworks'
 import { CallRecorder } from './CallRecorder'
 import { Modal, inputClass } from './ui'
@@ -51,16 +50,6 @@ function ladeKiChatNachrichten(mitarbeiterId: string | undefined): ChatMessage[]
 type PastedImage = { dataUrl: string; base64: string; mediaType: string }
 type AufnahmeKunde = { bereich: KundeBereich; kundeId: string; kundeName: string }
 
-// Pflege-Modus (nur Geschäftsführung/Admin): Massenkorrekturen an bestehenden Kunden-Datensätzen
-// per Sprache/Text ("X ist kein Kunde", "verschiebe X zu Erben", "X und Y sind dieselbe Firma") —
-// bewusst als eigener Vorschlags-Typ mit Pflicht-Bestätigung VOR jeder Schreiboperation, anders als
-// die übrigen Assistent-Aktionen, die sofort ausgeführt werden (siehe Plan-Beschluss 2026-11-02).
-type PflegeVorschlag = { beschreibung: string } & (
-  | { aktion: 'verschieben'; kundeId: string; vonBereich: KundeBereich; nachBereich: KundeBereich }
-  | { aktion: 'loeschen'; kundeId: string; bereich: KundeBereich }
-  | { aktion: 'merge'; bereich: KundeBereich; behalteId: string; loescheId: string }
-)
-
 // Persistentes Chat-Panel (statt Modal) für den KI-Assistenten — bleibt über die ganze Session
 // gemountet (siehe Layout.tsx), damit der Gesprächsverlauf beim Auf-/Zuklappen erhalten bleibt, UND
 // zusätzlich in localStorage gespiegelt (siehe ladeKiChatNachrichten oben), damit er auch ein
@@ -70,9 +59,10 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
   const { state, dispatch, neuLaden } = useApp()
   const { session, mitarbeiter } = useAuth()
   const { supported, recording, transcript, interim, error: recError, start, stop, setTranscript, setInterim, beschaeftigt: schreibtAb } = useSpeechRecognition()
-  // Im Demo-Modus (ohne Supabase) gibt es keine echten Mitarbeiter-Rollen — dort greift wie überall
-  // sonst in der App state.rolle als Ersatz (siehe Layout.tsx resetData-Gate).
-  const pflegeErlaubt = isSupabaseConfigured
+  // Löschen über den Ersatzweg ohne Server (unten, fuehreAktionLeadLoeschenAus) nur für GF/Admin. Im
+  // Demo-Modus (ohne Supabase) gibt es keine echten Mitarbeiter-Rollen — dort greift wie überall sonst
+  // in der App state.rolle als Ersatz (siehe Layout.tsx resetData-Gate). Mit Server prüft das der Server.
+  const loeschenErlaubt = isSupabaseConfigured
     ? !!session && (mitarbeiter?.rolle === 'geschaeftsfuehrung' || !!mitarbeiter?.ist_admin)
     : state.rolle === 'geschaeftsfuehrung'
   const followUps = collectFollowUpPriorities(state)
@@ -159,12 +149,6 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
   // Löschen ist nicht ohne Weiteres rückgängig zu machen — deshalb immer erst mit "ja" bestätigen
   // lassen, statt sofort zu löschen (gleiches Muster wie bei der Telegram-Variante).
   const [ausstehendeLoeschung, setAusstehendeLoeschung] = useState<KundeMatch | null>(null)
-  const [pflegeModus, setPflegeModus] = useState(false)
-  const [pflegeVorschlag, setPflegeVorschlag] = useState<PflegeVorschlag | null>(null)
-  // Firmen-Wissens-KI (Quirin Lutzenberger: "Eigene Firmen-KI") — bewusst für ALLE aktiven
-  // Mitarbeiter verfügbar, nicht nur GF/Admin wie der Pflege-Modus: rein lesend, keine
-  // Schreiboperation, daher kein erhöhtes Risiko.
-  const [firmenwissenModus, setFirmenwissenModus] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
   const dateiWahl = useRef<HTMLInputElement>(null)
   // Zeile über dem Eingabefeld, solange Dateien hochgeladen oder einsortiert werden.
@@ -172,7 +156,7 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' })
-  }, [messages, aufnahmeKunde, pflegeVorschlag])
+  }, [messages, aufnahmeKunde])
 
   useEffect(() => {
     try {
@@ -181,15 +165,6 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
       // z.B. Safari-Privatmodus oder Speicher voll — Chat bleibt dann nur für diese Sitzung erhalten.
     }
   }, [messages, mitarbeiter?.id])
-
-  // Schaltet den Pflege-Modus hart ab, falls die Berechtigung währenddessen wegfällt (z.B. Admin-
-  // Recht entzogen) — ein offener, unbestätigter Vorschlag wird dabei verworfen statt ausgeführt.
-  useEffect(() => {
-    if (!pflegeErlaubt && (pflegeModus || pflegeVorschlag)) {
-      setPflegeModus(false)
-      setPflegeVorschlag(null)
-    }
-  }, [pflegeErlaubt, pflegeModus, pflegeVorschlag])
 
   function addMessage(role: ChatMessage['role'], text: string, sprechen = false, imageDataUrl?: string) {
     setMessages((m) => [...m, { id: uid('msg'), role, text, imageDataUrl }])
@@ -241,10 +216,28 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
     }
   }
 
+  // Fragt den Assistenten auf dem Server (derselbe wie in Telegram) und zeigt seine Antwort. Er schlägt
+  // nach, ändert Akten und bereitet E-Mails vor; gesendet wird erst nach ausdrücklicher Freigabe im Gespräch.
+  async function frageServer(text: string, sprechen: boolean, bild?: AssistentBild) {
+    try {
+      const r = await frageAssistent(text, offenerKontext(), bild)
+      addMessage('assistant', r.antwort, sprechen)
+      if (r.geaendert) await neuLaden().catch(() => undefined)
+      if (r.mailStart) warteAufVersand(r.mailStart)
+    } catch (err) {
+      addMessage('assistant', err instanceof Error ? err.message : 'Der Assistent ist gerade nicht erreichbar.', sprechen)
+    }
+  }
+
   // Allgemeine Frage ohne konkret erkannten Kunden (z.B. "was muss ich heute machen", "wie ist mein
-  // Stand") — beantwortet über denselben Firmenwissen-Kontext wie der explizite Firmenwissen-Modus,
-  // ergänzt um die eigenen fälligen Follow-ups, damit die Antwort sich wirklich auf "heute" bezieht.
+  // Stand"). Mit Server beantwortet sie der Assistent dort (er sieht Fälligkeiten und Aufgaben aller
+  // Bereiche, die der Mitarbeiter sehen darf). Ohne Server (Demo) wie bisher hier im Browser über den
+  // Firmen-Überblick, ergänzt um die eigenen fälligen Follow-ups.
   async function beantworteUebersicht(text: string, sprechen: boolean) {
+    if (istServerAssistentVerfuegbar && session) {
+      await frageServer(text, sprechen)
+      return
+    }
     const heute = today()
     const eigeneFaellige = followUps.filter((f) => f.verantwortlich === CURRENT_USER)
     const faelligkeitenAbschnitt = [
@@ -306,10 +299,11 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
     addMessage('assistant', `Erledigt — "${firma}" als neuer Lead bei ${bereich} angelegt, dir zugeordnet.`, sprechen)
   }
 
-  // Löschen ist nicht ohne Weiteres rückgängig zu machen — deshalb nur für GF/Admin (dieselbe
-  // Berechtigung wie der bestehende Pflege-Modus) und immer erst mit Rückfrage.
+  // Löschen ist nicht ohne Weiteres rückgängig zu machen — deshalb nur für GF/Admin und immer erst
+  // mit Rückfrage. (Mit Server läuft das Löschen, Verschieben und Zusammenführen von Akten über den
+  // Assistenten auf dem Server, ebenfalls nur für GF/Admin und mit Bestätigung.)
   function fuehreAktionLeadLoeschenAus(match: KundeMatch | null, sprechen: boolean) {
-    if (!pflegeErlaubt) {
+    if (!loeschenErlaubt) {
       addMessage('assistant', 'Kunden/Leads löschen darf nur Geschäftsführung/Admin.', sprechen)
       return
     }
@@ -321,151 +315,27 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
     addMessage('assistant', `Soll ich "${match.kundeName}" bei ${match.bereich} wirklich unwiderruflich löschen? Antworte mit "ja" zum Bestätigen, sonst passiert nichts.`, sprechen)
   }
 
-  function pflegeBestaetigen() {
-    if (!pflegeVorschlag) return
-    const sprechen = inputModus === 'sprache' && ttsEnabled
-    if (pflegeVorschlag.aktion === 'verschieben') {
-      dispatch({ type: 'PFLEGE_VERSCHIEBE_KUNDE', id: pflegeVorschlag.kundeId, vonBereich: pflegeVorschlag.vonBereich, nachBereich: pflegeVorschlag.nachBereich })
-      addMessage('assistant', `Erledigt — nach „${kundeBereichLabel(pflegeVorschlag.nachBereich)}" verschoben.`, sprechen)
-    } else if (pflegeVorschlag.aktion === 'loeschen') {
-      dispatch({ type: 'PFLEGE_LOESCHE_KUNDE', id: pflegeVorschlag.kundeId, bereich: pflegeVorschlag.bereich })
-      addMessage('assistant', 'Erledigt — Datensatz entfernt.', sprechen)
-    } else {
-      dispatch({ type: 'PFLEGE_MERGE_KUNDEN', bereich: pflegeVorschlag.bereich, behalteId: pflegeVorschlag.behalteId, loescheId: pflegeVorschlag.loescheId })
-      addMessage('assistant', 'Erledigt — zusammengeführt.', sprechen)
-    }
-    setPflegeVorschlag(null)
-  }
-
-  function pflegeVerwerfen() {
-    setPflegeVorschlag(null)
-    addMessage('assistant', 'Verworfen — es wurde nichts geändert.')
-  }
-
-  // Pflege-Modus-Zweig von senden(): klassifiziert die Anweisung, löst genannte Namen gegen die
-  // echten Kundendaten auf (bereichsübergreifend, siehe matchKunde.ts) und erzeugt bei Erfolg einen
-  // PflegeVorschlag — dispatcht aber NIE direkt, das passiert ausschließlich in pflegeBestaetigen().
-  async function pflegeSenden(text: string, sprechen: boolean) {
-    const normalisiert = text.trim().toLowerCase()
-    if (pflegeVorschlag && /^(ja|jep|jap|jo|bestätige|bestätigen|ok|okay|passt|mach das)\b/.test(normalisiert)) {
-      addMessage('user', text)
-      pflegeBestaetigen()
-      return
-    }
-    if (pflegeVorschlag && /^(nein|abbrechen|verwerfen|stopp?|nicht)\b/.test(normalisiert)) {
-      addMessage('user', text)
-      pflegeVerwerfen()
-      return
-    }
-
-    addMessage('user', text)
-    setVerarbeiten(true)
-    try {
-      const klass = await classifyPflegeInput(text)
-      if (klass.aktion === 'unklar' || !klass.kunde_name) {
-        addMessage(
-          'assistant',
-          'Das konnte ich nicht eindeutig als Verschieben/Löschen/Zusammenführen einordnen. Nenn mir bitte den Namen und was genau passieren soll.',
-          sprechen,
-        )
-        return
-      }
-      const kandidaten1 = suggestKundeKandidaten(state, klass.kunde_name)
-      if (kandidaten1.length === 0) {
-        addMessage('assistant', `Ich habe niemanden gefunden, der zu „${klass.kunde_name}" passt.`, sprechen)
-        return
-      }
-      if (kandidaten1.length > 1) {
-        addMessage(
-          'assistant',
-          `Mehrere passende Einträge zu „${klass.kunde_name}" gefunden: ${kandidaten1.map((k) => k.kundeName).join(', ')}. Bitte genauer benennen.`,
-          sprechen,
-        )
-        return
-      }
-      const ziel1 = kandidaten1[0]
-
-      if (klass.aktion === 'merge') {
-        if (!klass.kunde_name_2) {
-          addMessage('assistant', 'Für eine Zusammenführung brauche ich beide Namen.', sprechen)
-          return
-        }
-        const kandidaten2 = suggestKundeKandidaten(state, klass.kunde_name_2)
-        if (kandidaten2.length !== 1) {
-          addMessage('assistant', `„${klass.kunde_name_2}" konnte ich nicht eindeutig finden.`, sprechen)
-          return
-        }
-        const ziel2 = kandidaten2[0]
-        if (ziel1.bereich !== ziel2.bereich) {
-          addMessage('assistant', 'Beide Einträge müssen im selben Bereich sein, um sie zusammenzuführen.', sprechen)
-          return
-        }
-        if (ziel1.kundeId === ziel2.kundeId) {
-          addMessage('assistant', 'Das ist derselbe Datensatz — da gibt es nichts zusammenzuführen.', sprechen)
-          return
-        }
-        const beschreibung = `„${ziel2.kundeName}" wird mit „${ziel1.kundeName}" zusammengeführt (Aktivitäten werden übernommen, „${ziel2.kundeName}" wird danach entfernt).`
-        setPflegeVorschlag({ aktion: 'merge', beschreibung, bereich: ziel1.bereich, behalteId: ziel1.kundeId, loescheId: ziel2.kundeId })
-        addMessage('assistant', `Vorschlag: ${beschreibung} Bestätigen?`, sprechen)
-        return
-      }
-
-      if (klass.aktion === 'loeschen') {
-        const beschreibung = `„${ziel1.kundeName}" wird aus „${kundeBereichLabel(ziel1.bereich)}" entfernt.`
-        setPflegeVorschlag({ aktion: 'loeschen', beschreibung, kundeId: ziel1.kundeId, bereich: ziel1.bereich })
-        addMessage('assistant', `Vorschlag: ${beschreibung} Bestätigen?`, sprechen)
-        return
-      }
-
-      // verschieben
-      if (!klass.ziel_bereich) {
-        addMessage('assistant', 'In welchen Bereich soll ich verschieben?', sprechen)
-        return
-      }
-      if (klass.ziel_bereich === ziel1.bereich) {
-        addMessage('assistant', `„${ziel1.kundeName}" ist bereits in „${kundeBereichLabel(ziel1.bereich)}".`, sprechen)
-        return
-      }
-      const beschreibung = `„${ziel1.kundeName}" wird von „${kundeBereichLabel(ziel1.bereich)}" nach „${kundeBereichLabel(klass.ziel_bereich)}" verschoben.`
-      setPflegeVorschlag({ aktion: 'verschieben', beschreibung, kundeId: ziel1.kundeId, vonBereich: ziel1.bereich, nachBereich: klass.ziel_bereich })
-      addMessage('assistant', `Vorschlag: ${beschreibung} Bestätigen?`, sprechen)
-    } catch (err) {
-      addMessage('assistant', `Pflege-Anweisung konnte nicht verarbeitet werden: ${err instanceof Error ? err.message : 'Fehler'}`, sprechen)
-    } finally {
-      setVerarbeiten(false)
-    }
-  }
-
-  // Firmen-Wissens-KI: anders als die normale "frage"-Klassifizierung (ein erkannter Kunde) wird
-  // hier immer eine Zusammenfassung ALLER Kunden/Objekte/Prozesse mitgeschickt — rein lesend, daher
-  // ohne Bestätigungsschritt wie beim Pflege-Modus.
-  async function firmenwissenSenden(text: string, sprechen: boolean) {
-    addMessage('user', text)
-    setVerarbeiten(true)
-    try {
-      const kontext = buildFirmenwissenKontext(state)
-      const antwort = await answerFirmenwissen(text, kontext)
-      addMessage('assistant', antwort, sprechen)
-    } catch (err) {
-      addMessage('assistant', `Frage konnte nicht beantwortet werden: ${err instanceof Error ? err.message : 'Fehler'}`, sprechen)
-    } finally {
-      setVerarbeiten(false)
-    }
-  }
-
   function onPasteInput(e: React.ClipboardEvent<HTMLTextAreaElement>) {
     const item = Array.from(e.clipboardData.items).find((i) => i.type.startsWith('image/'))
     if (!item) return
     const file = item.getAsFile()
     if (!file) return
     e.preventDefault()
-    const reader = new FileReader()
-    reader.onload = () => {
-      const dataUrl = reader.result as string
-      const base64 = dataUrl.split(',')[1] ?? ''
-      setPastedImage({ dataUrl, base64, mediaType: file.type })
-    }
-    reader.readAsDataURL(file)
+    // Große Bildschirmfotos vorher verkleinern (wie bei der Büroklammer) — der Assistent liest bis
+    // etwa 3,5 MB je Bild; ungewöhnliche Formate werden dabei, wenn möglich, zu JPEG.
+    void verkleinereBild(file).then((bild) => {
+      if (!(BILD_ARTEN as readonly string[]).includes(bild.type)) {
+        addMessage('assistant', 'Dieses Bildformat kann ich nicht lesen. Möglich sind JPEG, PNG, WebP und GIF.')
+        return
+      }
+      const reader = new FileReader()
+      reader.onload = () => {
+        const dataUrl = reader.result as string
+        const base64 = dataUrl.split(',')[1] ?? ''
+        setPastedImage({ dataUrl, base64, mediaType: bild.type })
+      }
+      reader.readAsDataURL(bild)
+    })
   }
 
   // Ein freigegebener E-Mail-Versand läuft auf dem Server im Hintergrund. Hier wird alle paar
@@ -581,6 +451,16 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
       addMessage('user', text || '(Bild ohne Text gesendet)', false, bild.dataUrl)
       setPastedImage(null)
       setVerarbeiten(true)
+      // Mit Server: an den Assistenten dort (er sieht das Bild nur für diese Nachricht, abgelegt wird es nicht).
+      if (istServerAssistentVerfuegbar && session) {
+        try {
+          await frageServer(text, sprechen, { base64: bild.base64, mediaType: bild.mediaType as AssistentBild['mediaType'] })
+        } finally {
+          setVerarbeiten(false)
+        }
+        return
+      }
+      // Ohne Server (Demo): wie bisher direkt aus dem Browser.
       try {
         const antwort = await answerWithImage(text, bild.base64, bild.mediaType)
         addMessage('assistant', antwort, sprechen)
@@ -592,16 +472,6 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
       return
     }
     if (!text) return
-
-    if (pflegeModus) {
-      await pflegeSenden(text, sprechen)
-      return
-    }
-
-    if (firmenwissenModus) {
-      await firmenwissenSenden(text, sprechen)
-      return
-    }
 
     // Bestätigung für eine ausstehende Löschung ("ja" = löschen, alles andere = abbrechen) — immer
     // zuerst prüfen, sonst würde die Antwort wie eine neue, kontextlose Nachricht behandelt.
@@ -655,20 +525,15 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
       // ganz normal weiterverarbeiten, nicht in der Rückfrage hängen bleiben.
     }
 
-    // Regelfall: der Assistent auf dem Server (derselbe wie in Telegram). Er schlägt nach, ändert
-    // Akten und bereitet E-Mails vor; gesendet wird erst nach ausdrücklicher Freigabe im Gespräch.
+    // Regelfall: der Assistent auf dem Server (derselbe wie in Telegram), auch für Fragen quer über die
+    // ganze Firma und — nur Geschäftsführung/Admin — für Akten verschieben, zusammenführen und löschen.
     // Nur der Wunsch, ein Gespräch aufzunehmen, bleibt hier im Fenster, weil das Mikrofon hier sitzt.
     const willAufnehmen = /\baufnahme\b|\baufzeichn|\bmitschneid|\b(nimm|nehm|zeichne)\b.*\bauf\b/i.test(text)
     if (istServerAssistentVerfuegbar && session && !willAufnehmen) {
       addMessage('user', text)
       setVerarbeiten(true)
       try {
-        const r = await frageAssistent(text, offenerKontext())
-        addMessage('assistant', r.antwort, sprechen)
-        if (r.geaendert) await neuLaden().catch(() => undefined)
-        if (r.mailStart) warteAufVersand(r.mailStart)
-      } catch (err) {
-        addMessage('assistant', err instanceof Error ? err.message : 'Der Assistent ist gerade nicht erreichbar.', sprechen)
+        await frageServer(text, sprechen)
       } finally {
         setVerarbeiten(false)
       }
@@ -790,32 +655,6 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
             <span className="text-sm font-semibold text-slate-800">KI-Assistent</span>
           </div>
           <div className="flex items-center gap-1">
-            <button
-              onClick={() => {
-                setFirmenwissenModus((v) => !v)
-                setPflegeModus(false)
-              }}
-              className={`rounded-md p-1.5 ${
-                firmenwissenModus ? 'bg-sky-100 text-sky-700' : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600'
-              }`}
-              title={firmenwissenModus ? 'Firmen-Wissen ausschalten' : 'Firmen-Wissen einschalten (bereichsübergreifende Fragen)'}
-            >
-              <BookOpen size={15} />
-            </button>
-            {pflegeErlaubt && (
-              <button
-                onClick={() => {
-                  setPflegeModus((v) => !v)
-                  setFirmenwissenModus(false)
-                }}
-                className={`rounded-md p-1.5 ${
-                  pflegeModus ? 'bg-amber-100 text-amber-700' : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600'
-                }`}
-                title={pflegeModus ? 'Pflege-Modus ausschalten' : 'Pflege-Modus einschalten (Kunden verschieben/löschen/zusammenführen)'}
-              >
-                <Wrench size={15} />
-              </button>
-            )}
             {isSpeechSynthesisSupported && (
               <button
                 onClick={schalteVorlesen}
@@ -845,18 +684,6 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
             </button>
           </div>
         </div>
-
-        {firmenwissenModus && (
-          <div className="flex flex-shrink-0 items-center gap-1.5 bg-sky-50 px-4 py-1.5 text-xs font-medium text-sky-700">
-            <BookOpen size={12} /> Firmen-Wissen aktiv — Fragen über alle Kunden/Objekte/Prozesse hinweg.
-          </div>
-        )}
-
-        {pflegeModus && (
-          <div className="flex flex-shrink-0 items-center gap-1.5 bg-amber-50 px-4 py-1.5 text-xs font-medium text-amber-700">
-            <Wrench size={12} /> Pflege-Modus aktiv — Änderungen werden erst nach Bestätigung gespeichert.
-          </div>
-        )}
 
         {/* Verlauf */}
         <div ref={listRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3">
@@ -907,22 +734,6 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
             </div>
           )}
 
-          {pflegeVorschlag && (
-            <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
-              <p className="mb-2 text-sm text-slate-700">{pflegeVorschlag.beschreibung}</p>
-              <div className="flex justify-end gap-2">
-                <button onClick={pflegeVerwerfen} className="rounded-lg px-3 py-1.5 text-xs font-medium text-slate-500 hover:bg-white">
-                  Verwerfen
-                </button>
-                <button
-                  onClick={pflegeBestaetigen}
-                  className="flex items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700"
-                >
-                  <Check size={13} /> Bestätigen
-                </button>
-              </div>
-            </div>
-          )}
         </div>
 
         {recError && (
@@ -1009,11 +820,7 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
                   : recording
                     ? 'Ich höre zu … zum Beenden auf das Quadrat klicken'
                     : pastedImage
-                  ? 'Frage zum Bild (optional) …'
-                  : pflegeModus
-                    ? 'z.B. „X ist kein Kunde" oder „verschiebe X zu Erben" …'
-                    : firmenwissenModus
-                      ? 'z.B. „Wo liegt das Exposé Musterstraße 17?" …'
+                      ? 'Frage zum Bild (optional) …'
                       : 'Nachricht oder Datei …'
               }
               title="Bilder per Strg/Cmd+V aus der Zwischenablage einfügen"

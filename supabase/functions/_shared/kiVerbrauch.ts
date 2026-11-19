@@ -5,17 +5,29 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { createClient } from 'npm:@supabase/supabase-js@2.119.1'
 
-const ANLASS = new AsyncLocalStorage<{ anlass: string }>()
+const ANLASS = new AsyncLocalStorage<{ anlass: string; person: string }>()
 
 /** Führt eine Anfrage in einem eigenen Rahmen aus; jeder KI-Aufruf darin (auch im Hintergrund) wird ihrem Anlass zugerechnet. */
 export function mitAnlass<T>(arbeit: () => T): T {
-  return ANLASS.run({ anlass: '' }, arbeit)
+  return ANLASS.run({ anlass: '', person: '' }, arbeit)
 }
 
 /** Setzt den Anlass der laufenden Anfrage, z. B. ihre Aktion — erst bekannt, wenn der Inhalt gelesen ist. */
 export function setzeAnlass(anlass: unknown): void {
   const rahmen = ANLASS.getStore()
   if (rahmen && typeof anlass === 'string' && anlass) rahmen.anlass = anlass.slice(0, 80)
+}
+
+/** Setzt, für wen die laufende Anfrage arbeitet (Login-Adresse des Mitarbeiters). Ohne Person gilt der
+ *  Aufruf als automatisch (Zeitplan, Mail-Eingang). Gespeichert wird nur die Adresse, nie Inhalte. */
+export function setzePerson(email: unknown): void {
+  const rahmen = ANLASS.getStore()
+  if (rahmen && typeof email === 'string' && email.includes('@')) rahmen.person = email.trim().toLowerCase().slice(0, 200)
+}
+
+/** Die Person der laufenden Anfrage, z. B. um sie bei einem Aufruf der eigenen Server-Funktionen weiterzugeben. */
+export function aktuellePerson(): string {
+  return ANLASS.getStore()?.person ?? ''
 }
 
 // US-Dollar je Million Token (Preisliste, abgerufen am 18.11.2026); unbekannte Modelle wie Sonnet 5.5.
@@ -41,6 +53,7 @@ export async function kiAufruf(funktion: string, url: string, init: RequestInit)
     const kopie = antwort.clone()
     // Im Hintergrund auswerten, damit der eigentliche Ablauf nicht wartet.
     const anlass = ANLASS.getStore()?.anlass ?? ''
+    const person = ANLASS.getStore()?.person || null
     const modell = (() => {
       try {
         return String(JSON.parse(String(init.body ?? '{}')).model ?? '')
@@ -61,7 +74,7 @@ export async function kiAufruf(funktion: string, url: string, init: RequestInit)
         // Haiku 5.5 kostet bei Anfragen über 100.000 Token das Fünffache — vorsichtig mit dem höheren Satz rechnen.
         const p = modell === 'claude-haiku-5-5' && ein + cacheSchreiben + cacheLesen > 100_000 ? { ein: 0.5, aus: 2.5, cacheSchreiben: 0.625, cacheLesen: 0.05 } : (PREISE[modell] ?? PREISE['claude-sonnet-5-5'])
         const kosten = (ein * p.ein + aus * p.aus + cacheSchreiben * p.cacheSchreiben + cacheLesen * p.cacheLesen) / 1_000_000 + suchen * 0.01
-        const { error } = await db().from('ki_verbrauch').insert({ funktion, anlass, modell, ein, aus, cache_schreiben: cacheSchreiben, cache_lesen: cacheLesen, suchen, kosten_usd: Math.round(kosten * 1_000_000) / 1_000_000 })
+        const { error } = await db().from('ki_verbrauch').insert({ funktion, anlass, person, modell, ein, aus, cache_schreiben: cacheSchreiben, cache_lesen: cacheLesen, suchen, kosten_usd: Math.round(kosten * 1_000_000) / 1_000_000 })
         if (error) console.error('KI-Verbrauch nicht gespeichert:', error.message)
       })
       .catch(() => undefined)

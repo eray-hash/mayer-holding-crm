@@ -31,7 +31,7 @@ export type EingegangeneMail = {
 
 // Schickt den eigenen Login mit, sobald es einen gibt (öffentliche Formulare haben keinen): Der Server
 // kann damit prüfen, wer fragt — das geteilte Secret steht im ausgelieferten Programm und beweist nichts.
-async function call(body: Record<string, unknown>): Promise<any> {
+export async function call(body: Record<string, unknown>): Promise<any> {
   if (!FUNCTION_URL) throw new Error('E-Mail-Postfach ist noch nicht konfiguriert (VITE_EMAIL_GATEWAY_URL fehlt).')
   const { data: sessionData } = (await supabase?.auth.getSession()) ?? { data: { session: null } }
   const token = sessionData.session?.access_token

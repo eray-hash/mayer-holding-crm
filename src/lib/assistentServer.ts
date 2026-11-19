@@ -32,9 +32,15 @@ export type AssistentAntwort = {
   mailStart: string | null
 }
 
-/** `offen`: was im CRM gerade geöffnet ist (Mail im gemeinsamen Postfach oder eine Akte), siehe assistentKontext.ts. */
-export function frageAssistent(text: string, offen?: { art: 'mail' | 'akte'; kennung: string } | null): Promise<AssistentAntwort> {
-  return anfrage<AssistentAntwort>({ web: 'chat', text, ...(offen ? { offen } : {}) })
+/** Bildarten, die der Assistent lesen kann (Grenze des KI-Dienstes). */
+export const BILD_ARTEN = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'] as const
+export type AssistentBild = { base64: string; mediaType: (typeof BILD_ARTEN)[number] }
+
+/** `offen`: was im CRM gerade geöffnet ist (Mail im gemeinsamen Postfach oder eine Akte), siehe assistentKontext.ts.
+ *  `bild`: ein ins Eingabefeld eingefügtes Bild. Der Assistent sieht es nur für diese eine Nachricht;
+ *  es wird nirgends gespeichert (zum Ablegen dient die Büroklammer). `text` darf dann leer sein. */
+export function frageAssistent(text: string, offen?: { art: 'mail' | 'akte'; kennung: string } | null, bild?: AssistentBild | null): Promise<AssistentAntwort> {
+  return anfrage<AssistentAntwort>({ web: 'chat', text, ...(offen ? { offen } : {}), ...(bild ? { bild } : {}) })
 }
 
 /** Benachrichtigt über Telegram: bei einer neuen Frage die Geschäftsführung, bei einer Antwort den Fragesteller.
