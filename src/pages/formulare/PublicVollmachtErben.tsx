@@ -5,6 +5,7 @@ import { Card, Field, inputClass, PrimaryButton, SecondaryButton } from '../../c
 import { SignaturePad } from '../../components/SignaturePad'
 import { holePublicKunde, sendePublicFormular, type PublicKunde } from '../../lib/emailGateway'
 import { ALLGEMEINE_VOLLMACHT, KANZLEI_ANSCHRIFT } from '../../data/originalTexte'
+import { DatenschutzHinweis } from '../../components/DatenschutzHinweis'
 
 export function PublicVollmachtErben() {
   const { mandantId } = useParams()
@@ -149,6 +150,7 @@ export function PublicVollmachtErben() {
           </p>
         </Card>
       </div>
+      <DatenschutzHinweis />
     </div>
   )
 }

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { ShieldCheck, Mail, CheckCircle2, AlertTriangle } from 'lucide-react'
 import { fordrePortalLinkAn, isEmailGatewayConfigured } from '../../lib/emailGateway'
 import { inputClass } from '../../components/ui'
+import { DatenschutzHinweis } from '../../components/DatenschutzHinweis'
 
 // Magic-Link-Login: kein Passwort, kein Demo-Zugänge-Dropdown mehr (das hätte mit echten
 // Investoren-Daten jedem Website-Besucher Namen+E-Mail aller Investoren offengelegt — siehe
@@ -86,6 +87,7 @@ export function PortalLogin() {
           Zielrendite, keine Garantie. Keine Anlageberatung. Investitionen sind mit Risiken bis zum vollständigen
           Kapitalverlust verbunden.
         </p>
+        <DatenschutzHinweis dunkel />
       </div>
     </div>
   )

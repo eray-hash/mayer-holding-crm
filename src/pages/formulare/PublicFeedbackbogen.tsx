@@ -6,6 +6,7 @@ import { addDays, fmtDate, today } from '../../lib/dates'
 import { erstellePublicLead } from '../../lib/emailGateway'
 import type { Prioritaet } from '../../types'
 import { FEEDBACKBOGEN as F } from '../../data/originalTexte'
+import { DatenschutzHinweis } from '../../components/DatenschutzHinweis'
 
 // Wortlaut und Aufbau wie im Original-Feedbackbogen der Kanzlei (data/originalTexte.ts).
 type JaNein = 'ja' | 'nein' | ''
@@ -304,6 +305,7 @@ export function PublicFeedbackbogen() {
           </p>
         </Card>
       </div>
+      <DatenschutzHinweis />
     </div>
   )
 }

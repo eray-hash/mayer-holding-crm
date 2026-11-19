@@ -75,6 +75,7 @@ import { PublicSelbstauskunft } from './pages/formulare/PublicSelbstauskunft'
 import { PublicEigentuemerPortal } from './pages/formulare/PublicEigentuemerPortal'
 import { PublicNda } from './pages/formulare/PublicNda'
 import { PublicKundenUnterlagen } from './pages/formulare/PublicKundenUnterlagen'
+import { PublicDatenschutz } from './pages/formulare/PublicDatenschutz'
 import type { Bereich } from './types'
 
 function RootRedirect() {
@@ -307,6 +308,14 @@ function PortalRoutes() {
 
 function AppRoutes() {
   const location = useLocation()
+  // Datenschutzhinweise (seit 19.11.2026): öffentlich, ohne Anmeldung, verlinkt aus allen Formularen.
+  if (location.pathname === '/datenschutz') {
+    return (
+      <Routes>
+        <Route path="/datenschutz" element={<PublicDatenschutz />} />
+      </Routes>
+    )
+  }
   // Öffentliche, ausfüllbare Formulare: brauchen weder Rollenwahl noch Portal-Login — genau
   // der Link, den man z.B. nach einem Vortrag an Interessenten verschickt.
   if (location.pathname.startsWith('/formular/')) {

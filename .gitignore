@@ -28,3 +28,4 @@ scripts/cleanup-inbox-report.json
 *.njsproj
 *.sln
 *.sw?
+Datenschutz/

@@ -7,6 +7,7 @@ import { holePublicKunde, sendePublicFormular, type PublicKunde } from '../../li
 import { generateDokumentPdf } from '../../lib/generateDokumentPdf'
 import { today } from '../../lib/dates'
 import { KANZLEI_ANSCHRIFT, VOLLMACHT_BANK, VOLLMACHT_FINANZAMT } from '../../data/originalTexte'
+import { DatenschutzHinweis } from '../../components/DatenschutzHinweis'
 
 type VollmachtTyp = 'finanzamt' | 'bank'
 
@@ -260,6 +261,7 @@ export function PublicVollmachtBeratung() {
           </p>
         </Card>
       </div>
+      <DatenschutzHinweis />
     </div>
   )
 }

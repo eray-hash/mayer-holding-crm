@@ -8,6 +8,7 @@ import { ladeAlsEigentuemerHoch } from '../../lib/objektDokumenteStorage'
 import { pruefeUnterlagenVollstaendigkeit } from '../../data/objektUnterlagenPflicht'
 import { DOKUMENT_ORDNER } from '../../types'
 import type { Dokument, DokumentOrdnerName, Objekt } from '../../types'
+import { DatenschutzHinweis } from '../../components/DatenschutzHinweis'
 
 /** Eine Unterlage mit Haken (schon bei uns?) und Knopf zum Hochladen. Jede weitere Datei kommt dazu,
  *  nichts wird ersetzt. */
@@ -323,6 +324,7 @@ export function PublicEigentuemerPortal() {
           Bei Fragen erreichen Sie uns jederzeit unter den Ihnen bekannten Kontaktdaten der Andreas Mayer Holding.
         </p>
       </div>
+      <DatenschutzHinweis />
     </div>
   )
 }

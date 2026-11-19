@@ -5,6 +5,7 @@ import { Card, PrimaryButton, SecondaryButton } from '../../components/ui'
 import { fmtEUR } from '../../lib/dates'
 import { gruppeLabel } from '../../data/constants'
 import { holePublicVorschlag, entscheidePublicVorschlag, type PublicVorschlag, type PublicExposeObjekt } from '../../lib/emailGateway'
+import { DatenschutzHinweis } from '../../components/DatenschutzHinweis'
 
 export function PublicExpose() {
   const { vorschlagId } = useParams()
@@ -128,6 +129,7 @@ export function PublicExpose() {
           </div>
         </Card>
       </div>
+      <DatenschutzHinweis />
     </div>
   )
 }

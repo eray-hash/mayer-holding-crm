@@ -7,6 +7,7 @@ import { SignaturePad } from '../../components/SignaturePad'
 import { holePublicKunde, sendePublicFormular, type PublicKunde } from '../../lib/emailGateway'
 import type { KundeBereich } from '../../types'
 import { GEHEIMHALTUNG, KANZLEI_ANSCHRIFT } from '../../data/originalTexte'
+import { DatenschutzHinweis } from '../../components/DatenschutzHinweis'
 
 // Wortlaut exakt wie im Original der Kanzlei (data/originalTexte.ts), als öffentliches, signierbares Formular.
 export function PublicNda() {
@@ -148,6 +149,7 @@ export function PublicNda() {
           </p>
         </Card>
       </div>
+      <DatenschutzHinweis />
     </div>
   )
 }

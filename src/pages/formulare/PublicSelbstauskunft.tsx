@@ -8,6 +8,7 @@ import { SignaturePad } from '../../components/SignaturePad'
 import { today } from '../../lib/dates'
 import { holePublicKunde, sendePublicFormular, type PublicKunde } from '../../lib/emailGateway'
 import type { KundeBereich } from '../../types'
+import { DatenschutzHinweis } from '../../components/DatenschutzHinweis'
 
 // Öffentliches, nicht-authentifiziertes Selbstauskunft-Formular für einen bereits angelegten
 // Kunden/Mandanten. Der Fragenkatalog kommt bewusst aus dem festen DEFAULT_FRAGENKATALOG statt aus
@@ -189,6 +190,7 @@ export function PublicSelbstauskunft() {
           </p>
         </Card>
       </div>
+      <DatenschutzHinweis />
     </div>
   )
 }

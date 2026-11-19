@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom'
 import { Camera, CheckCircle2, Circle, FileUp, Loader2, Lock } from 'lucide-react'
 import { holePublicUnterlagen, holeUnterlagenUploadUrl, ladeKundenUnterlageHoch, meldeKundenUnterlage, type PublicUnterlagen } from '../../lib/emailGateway'
 import { SONSTIGE_UNTERLAGE } from '../../data/kundenUnterlagen'
+import { DatenschutzHinweis } from '../../components/DatenschutzHinweis'
 
 // Öffentliche Hochlade-Seite für Unterlagen, die ein Mitarbeiter beim Kunden angefordert hat
 // (KundeUnterlagenAnfordern.tsx). Ohne Login; der Schlüssel ist allein die geheime Kennung im Link.
@@ -211,6 +212,7 @@ function Rahmen({ children }: { children: React.ReactNode }) {
         <p className="mb-5 text-center text-xs font-medium uppercase tracking-wide text-accent-600">Andreas Mayer Holding · Schwabstrasse 3, 89075 Ulm</p>
         {children}
       </div>
+      <DatenschutzHinweis />
     </div>
   )
 }

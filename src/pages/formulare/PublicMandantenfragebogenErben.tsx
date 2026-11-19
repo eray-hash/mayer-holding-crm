@@ -4,6 +4,7 @@ import { CheckCircle2, Loader2 } from 'lucide-react'
 import { Card, Field, inputClass, PrimaryButton } from '../../components/ui'
 import { ERBEN_CHECKLISTE, KANZLEI_ANSCHRIFT, MANDANTENFRAGEBOGEN_ERBEN as F } from '../../data/originalTexte'
 import { holePublicKunde, sendePublicFormular, type PublicKunde } from '../../lib/emailGateway'
+import { DatenschutzHinweis } from '../../components/DatenschutzHinweis'
 
 export function PublicMandantenfragebogenErben() {
   const { mandantId } = useParams()
@@ -181,6 +182,7 @@ export function PublicMandantenfragebogenErben() {
           </PrimaryButton>
         </Card>
       </div>
+      <DatenschutzHinweis />
     </div>
   )
 }
