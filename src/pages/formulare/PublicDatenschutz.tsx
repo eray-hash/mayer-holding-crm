@@ -28,7 +28,9 @@ export function PublicDatenschutz() {
         <Card className="p-6">
           <Abschnitt titel="1. Verantwortlicher">
             <p>
-              Andreas Mayer Holding, Schwabstraße 3, 89075 Ulm
+              Andreas Mayer Holding UG (haftungsbeschränkt), Schwabstraße 3, 89075 Ulm
+              <br />
+              vertreten durch den Geschäftsführer Andreas Mayer
               <br />
               E-Mail: <a className="underline" href="mailto:info@amayer-holding.com">info@amayer-holding.com</a>
             </p>
@@ -66,6 +68,7 @@ export function PublicDatenschutz() {
 
           <Abschnitt titel="5. Weitere Dienstleister">
             <ul className="list-disc space-y-1 pl-5">
+              <li>Fundament IT UG (haftungsbeschränkt), Ulm: Entwicklung und Betrieb unseres Kundenverwaltungssystems; setzt die hier genannten technischen Dienste in unserem Auftrag ein</li>
               <li>Supabase: Betrieb der Datenbank und Dateiablage, Server in der EU (Irland)</li>
               <li>IONOS: E-Mail-Postfächer, Deutschland</li>
               <li>CloudMailin: Weiterleitung eingehender E-Mails, Vereinigtes Königreich (von der EU als gleichwertig sicher anerkannt)</li>
