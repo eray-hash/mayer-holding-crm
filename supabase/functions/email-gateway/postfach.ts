@@ -13,6 +13,7 @@
 import { ImapFlow } from 'npm:imapflow@1'
 import nodemailer from 'npm:nodemailer@6'
 import { pruefeNeueMail } from '../_shared/mailEingang.ts'
+import { uebernehmeEinladung } from '../_shared/einladung.ts'
 
 // deno-lint-ignore no-explicit-any
 type Db = any
@@ -533,9 +534,11 @@ const BYTES_JE_LAUF = 10 * 1024 * 1024
 // deno-lint-ignore no-explicit-any
 type Teil = any
 
-// Läuft die Gliederung der Mail ab und sammelt Textteil(e) und Anhänge ein.
-function gliedere(wurzel: Teil): { text?: Teil; html?: Teil; anhaenge: Teil[] } {
-  const ergebnis: { text?: Teil; html?: Teil; anhaenge: Teil[] } = { anhaenge: [] }
+// Läuft die Gliederung der Mail ab und sammelt Textteil(e) und Anhänge ein — und Kalender-Einladungen
+// (`kalender`): der text/calendar-Teil, den Outlook/Google/Apple neben den Mailtext legen, oder eine
+// angehängte .ics-Datei. Ein Teil kann zugleich Anhang und Einladung sein.
+function gliedere(wurzel: Teil): { text?: Teil; html?: Teil; anhaenge: Teil[]; kalender: Teil[] } {
+  const ergebnis: { text?: Teil; html?: Teil; anhaenge: Teil[]; kalender: Teil[] } = { anhaenge: [], kalender: [] }
   const gehe = (knoten: Teil) => {
     if (!knoten) return
     if (Array.isArray(knoten.childNodes) && knoten.childNodes.length > 0) {
@@ -544,6 +547,7 @@ function gliedere(wurzel: Teil): { text?: Teil; html?: Teil; anhaenge: Teil[] } 
     }
     const art = String(knoten.type ?? '').toLowerCase()
     const name = knoten.dispositionParameters?.filename ?? knoten.parameters?.name
+    if (art === 'text/calendar' || art === 'application/ics' || /\.ics$/i.test(String(name ?? ''))) ergebnis.kalender.push(knoten)
     const alsAnhang = String(knoten.disposition ?? '').toLowerCase() === 'attachment' || (!!name && !art.startsWith('text/'))
     if (alsAnhang) ergebnis.anhaenge.push(knoten)
     else if (art === 'text/plain' && !ergebnis.text) ergebnis.text = knoten
@@ -608,6 +612,37 @@ function alsText(bytes: Uint8Array, zeichensatz?: string): string {
     } catch {
       return new TextDecoder('windows-1252').decode(bytes)
     }
+  }
+}
+
+// Kalender-Einladungen einer Mail (persönliches Postfach) in den CRM-Kalender des Besitzers übernehmen.
+// Wirft nie: Jeder Fehler wird nur protokolliert, der Abruf der Mail läuft weiter. Was übernommen wurde,
+// steht zur Nachverfolgung in `rohdaten.einladung` der Mail.
+const KALENDER_HOECHSTENS = 512 * 1024
+async function uebernimmKalenderTeile(admin: Db, client: unknown, uid: number, teile: Teil[], besitzer: string, zeile: Record<string, unknown>): Promise<void> {
+  const summe = { angelegt: 0, geaendert: 0, abgesagt: 0, uebersprungen: 0 }
+  const schonGelesen = new Set<string>()
+  for (const teil of teile.slice(0, 4)) {
+    try {
+      // Größe in Übertragungsform; eine echte Einladung hat wenige KB.
+      if (Number(teil.size ?? 0) > KALENDER_HOECHSTENS * 1.4) continue
+      const geladen = await zeitlimit(ladeTeil(client, uid, teil, KALENDER_HOECHSTENS), 20000, 'Der Mail-Server hat die Kalender-Einladung nicht rechtzeitig geliefert.')
+      if (!geladen || geladen.bytes.length === 0) continue
+      const ics = alsText(geladen.bytes, geladen.meta?.charset ?? teil.parameters?.charset)
+      // Outlook legt dieselbe Einladung als Mailteil UND als Anhang bei.
+      if (schonGelesen.has(ics)) continue
+      schonGelesen.add(ics)
+      const z = await uebernehmeEinladung(admin, besitzer, ics)
+      summe.angelegt += z.angelegt
+      summe.geaendert += z.geaendert
+      summe.abgesagt += z.abgesagt
+      summe.uebersprungen += z.uebersprungen
+    } catch (err) {
+      console.error('Kalender-Einladung nicht übernommen', besitzer, uid, (err as Error)?.message ?? err)
+    }
+  }
+  if (summe.angelegt + summe.geaendert + summe.abgesagt > 0) {
+    zeile.rohdaten = { ...((zeile.rohdaten as Record<string, unknown> | undefined) ?? {}), einladung: summe }
   }
 }
 
@@ -753,7 +788,7 @@ export async function rufePostfachAb(
               : `(Diese Mail ist mit ${(n.size / 1024 / 1024).toFixed(0)} MB zu groß für das CRM. Inhalt und Anhänge bitte im Mail-Programm öffnen.)`
           } else try {
             await admin.from('postfaecher').update({ in_arbeit_uid: n.uid, in_arbeit_ordner: pfad, ...standSpalten() }).eq('id', p.id)
-            const { text: textTeil, html: htmlTeil, anhaenge: anhangTeile } = gliedere(n.bodyStructure)
+            const { text: textTeil, html: htmlTeil, anhaenge: anhangTeile, kalender: kalenderTeile } = gliedere(n.bodyStructure)
             let text = ''
             const quelle = textTeil ?? htmlTeil
             if (quelle) {
@@ -791,6 +826,11 @@ export async function rufePostfachAb(
               }
               const url = gemeinsam ? admin.storage.from(ablage).getPublicUrl(ablagePfad).data.publicUrl : `${ANHANG_VORSATZ}${ablagePfadPrivat}`
               anhaenge.push({ filename: anzeige, size: geladen.bytes.length, contentType: inhaltsart, url })
+            }
+            // Persönliches Postfach: Kalender-Einladungen in den CRM-Kalender des Besitzers übernehmen.
+            // Gemeinsame Postfächer nicht (kein Besitzer). Ein Fehler hier darf den Abruf nie aufhalten.
+            if (!gemeinsam && p.besitzer_email && kalenderTeile.length > 0) {
+              await uebernimmKalenderTeile(admin, client, n.uid, kalenderTeile, p.besitzer_email, zeile)
             }
             const vermerk = ausgelassen.length > 0 ? `\n\n[Nicht ins CRM übernommen, weil zu groß: ${ausgelassen.join(', ')}. Bitte im Mail-Programm öffnen.]` : ''
             zeile.ausschnitt = text.slice(0, 20000 - vermerk.length) + vermerk

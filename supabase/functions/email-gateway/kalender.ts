@@ -9,10 +9,25 @@
 //   einer Stelle — egal, ob der Termin aus der Oberfläche, per Telegram oder per Sprache kommt.
 // - Erinnerungen: Der Zeitplan ruft jede Minute `sendeErinnerungen`. Jeder stellt für sich ein, wie
 //   lange vorher er erinnert werden will (`kalender_einstellungen.erinnerungen`, Minuten, mehrere möglich).
+// - Einladung an den Kunden (`gast_einladen`): Ist der Termin mit einer Kundenakte verknüpft, die eine
+//   E-Mail-Adresse hat, bekommt der Kunde eine Mail mit Kalenderdatei (.ics, UID `<termin-id>@mayer-holding-crm`).
+//   Spätere Änderungen an Zeit/Ort/Titel gehen als Aktualisierung hinterher, Löschen als Absage.
+//   Der eingeladene Gast steht in `termine.gast` ({ email, name, eingeladen, sequenz }); `sequenz` zählt bei
+//   jeder verschickten Fassung hoch und bleibt auch nach einer Absage stehen, damit eine spätere neue
+//   Einladung derselben UID von den Kalendern wieder angenommen wird. Die interne Notiz (`beschreibung`)
+//   geht bewusst NICHT an den Kunden.
 import type { Aufrufer } from './postfach.ts'
+import { icsAnhang } from '../_shared/ics.ts'
 
 // deno-lint-ignore no-explicit-any
 type Db = any
+
+/** Versand einer Mail — wird vom Aufrufer (index.ts) mit dem passenden Absender-Postfach übergeben. */
+export type SendeMail = (to: string, subject: string, text: string, anhaenge?: { filename: string; contentBase64: string; contentType: string }[]) => Promise<void>
+
+/** Eingeladener Kunde. Bei aus Einladungen übernommenen Terminen liegt hier außerdem deren Stand
+ *  (`extern_sequenz`, `extern_stempel`, siehe _shared/einladung.ts). */
+export type TerminGast = { email?: string; name?: string; eingeladen?: boolean; sequenz?: number; extern_sequenz?: number; extern_stempel?: string }
 
 export type Termin = {
   id: string
@@ -29,6 +44,8 @@ export type Termin = {
   kunde_name: string | null
   quelle: string
   erinnert: Record<string, number[]>
+  gast?: TerminGast | null
+  extern_uid?: string | null
 }
 
 type Person = { email: string; name: string; chat: number | string | null }
@@ -116,13 +133,87 @@ export type TerminEingabe = {
   kunde?: { id?: string; bereich?: string; name?: string } | null
   trotzUeberschneidung?: boolean
   quelle?: string
+  /** true: den verknüpften Kunden per Mail mit Kalenderdatei einladen. false: eine bestehende Einladung
+   *  zurückziehen (Absage an den Kunden). Weggelassen: bisherigen Stand beibehalten. */
+  gast_einladen?: boolean
 }
 
 export type SpeicherErgebnis =
-  | { ok: true; termin: Termin; benachrichtigt: string[]; ohneTelegram: string[] }
+  | {
+      ok: true
+      termin: Termin
+      benachrichtigt: string[]
+      ohneTelegram: string[]
+      /** true, wenn bei diesem Speichern eine Einladung (oder Aktualisierung) an den Kunden verschickt wurde. */
+      gastEingeladen: boolean
+      /** Erklärung, falls eine gewünschte Einladung nicht ging, oder Hinweis auf eine verschickte Absage. */
+      gastHinweis?: string
+    }
   | { ok: false; status: number; fehler: string; belegt?: string[] }
 
-export async function speichereTermin(admin: Db, a: Aufrufer, e: TerminEingabe): Promise<SpeicherErgebnis> {
+const MAIL_MUSTER = /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/
+
+/** E-Mail-Adresse und Name des Kunden aus der Akte — null, wenn keine Adresse hinterlegt ist. */
+async function kundenAdresse(admin: Db, a: Aufrufer, kundeId: string, bereich: string | null): Promise<{ email: string; name: string } | null> {
+  let abfrage = admin.from('kunden').select('id, bereich, firma, ansprechpartner, email, verantwortlich_email').eq('id', kundeId)
+  if (bereich) abfrage = abfrage.eq('bereich', bereich)
+  const { data } = await abfrage.limit(1).maybeSingle()
+  if (!data) return null
+  // Private Kontakte nur für den, dem sie gehören.
+  if (data.bereich === 'privat' && String(data.verantwortlich_email ?? '').toLowerCase() !== a.email) return null
+  // Manchmal stehen mehrere Adressen im Feld — die erste gültige.
+  const email = String(data.email ?? '')
+    .split(/[,;\s]+/)
+    .map((x: string) => x.trim().replace(/^<|>$/g, '').toLowerCase())
+    .find((x: string) => MAIL_MUSTER.test(x))
+  if (!email) return null
+  return { email, name: String(data.ansprechpartner || data.firma || '').trim() }
+}
+
+function icsFuerGast(t: Termin, organisator: { name: string; email: string }, gast: { email: string; name?: string }, methode: 'REQUEST' | 'CANCEL', sequenz: number) {
+  return icsAnhang(
+    {
+      uid: `${t.id}@mayer-holding-crm`,
+      titel: t.titel,
+      beginn: t.beginn,
+      // Ganztägig: `ende` ist im CRM der Folgetag 0 Uhr; ics.ts erwartet den letzten Tag selbst.
+      ende: t.ganztags ? new Date(new Date(t.ende).getTime() - 60000).toISOString() : t.ende,
+      ganztags: t.ganztags,
+      ort: t.ort || undefined,
+      beschreibung: `Termin mit ${organisator.name}`,
+      organisator,
+      teilnehmer: [{ email: gast.email, name: gast.name || undefined }],
+      methode,
+      sequenz,
+    },
+    methode === 'CANCEL' ? 'absage.ics' : 'einladung.ics',
+  )
+}
+
+function gastMailText(art: 'neu' | 'geaendert' | 'abgesagt', t: Termin, gastName: string | undefined, absenderName: string): { betreff: string; text: string } {
+  const zeit = zeitraumText(t)
+  const anrede = gastName ? `Guten Tag ${gastName},` : 'Guten Tag,'
+  const eckdaten = [t.titel, zeit, t.ort ? `Ort: ${t.ort}` : ''].filter(Boolean).join('\n')
+  const gruss = `Mit freundlichen Grüßen\n${absenderName}\nAndreas Mayer Holding`
+  if (art === 'abgesagt') {
+    return {
+      betreff: `Abgesagt: ${t.titel} – ${zeit}`,
+      text: `${anrede}\n\nleider müssen wir den folgenden Termin absagen:\n\n${eckdaten}\n\nMit der angehängten Kalenderdatei können Sie den Termin aus Ihrem Kalender entfernen. Für einen neuen Termin melden wir uns gern bei Ihnen.\n\n${gruss}`,
+    }
+  }
+  if (art === 'geaendert') {
+    return {
+      betreff: `Geänderter Termin: ${t.titel} – ${zeit}`,
+      text: `${anrede}\n\nunser gemeinsamer Termin hat sich geändert. Hier die aktuellen Angaben:\n\n${eckdaten}\n\nMit der angehängten Kalenderdatei können Sie Ihren Kalender aktualisieren.\n\n${gruss}`,
+    }
+  }
+  return {
+    betreff: `Einladung: ${t.titel} – ${zeit}`,
+    text: `${anrede}\n\nhiermit laden wir Sie zu folgendem Termin ein:\n\n${eckdaten}\n\nMit der angehängten Kalenderdatei können Sie den Termin in Ihren Kalender übernehmen. Sollte der Termin für Sie nicht passen, antworten Sie gern einfach auf diese Mail.\n\n${gruss}`,
+  }
+}
+
+export async function speichereTermin(admin: Db, a: Aufrufer, e: TerminEingabe, sendeMail?: SendeMail): Promise<SpeicherErgebnis> {
   const titel = String(e.titel ?? '').trim()
   if (!titel) return { ok: false, status: 400, fehler: 'Bitte einen Titel für den Termin angeben.' }
   const beginn = new Date(String(e.beginn ?? ''))
@@ -204,11 +295,105 @@ export async function speichereTermin(admin: Db, a: Aufrufer, e: TerminEingabe):
       await sendeTelegram(team.get(p)?.chat ?? null, `📅 ${a.name} hat dich aus einem Termin genommen\n\n${vorher.titel}\n${zeitraumText(vorher)}`)
     }
   }
-  return { ok: true, termin, benachrichtigt, ohneTelegram }
+
+  const gast = await gastAbgleichen(admin, a, team, e, vorher, termin, sichtbarGeaendert, sendeMail)
+  return { ok: true, termin: gast.termin, benachrichtigt, ohneTelegram, gastEingeladen: gast.eingeladen, ...(gast.hinweis ? { gastHinweis: gast.hinweis } : {}) }
+}
+
+// Einladung des Kunden nach dem Speichern abgleichen: neu einladen, Änderung nachschicken, oder (Kunde
+// entfernt/gewechselt, Einladung abgewählt) dem bisherigen Gast absagen. Fehler beim Versand machen das
+// Speichern nicht rückgängig, sie landen im Hinweis.
+async function gastAbgleichen(
+  admin: Db,
+  a: Aufrufer,
+  team: Map<string, Person>,
+  e: TerminEingabe,
+  vorher: Termin | null,
+  termin: Termin,
+  sichtbarGeaendert: boolean,
+  sendeMail?: SendeMail,
+): Promise<{ termin: Termin; eingeladen: boolean; hinweis?: string }> {
+  const bisher: TerminGast = (vorher?.gast ?? {}) as TerminGast
+  const alterGast = bisher.eingeladen && bisher.email ? { email: bisher.email, name: bisher.name } : null
+  const soll = e.gast_einladen === true || (e.gast_einladen === undefined && !!alterGast)
+  if (!soll && !alterGast) return { termin, eingeladen: false }
+
+  const organisator = { name: team.get(a.email)?.name || a.name || a.email, email: termin.besitzer_email.toLowerCase() }
+  let sequenz = typeof bisher.sequenz === 'number' ? bisher.sequenz : -1
+  let neuerGast: { email: string; name: string } | null = null
+  const hinweise: string[] = []
+  if (soll) {
+    if (!termin.kunde_id) hinweise.push('Keine Einladung verschickt: Der Termin ist mit keiner Kundenakte verknüpft.')
+    else {
+      neuerGast = await kundenAdresse(admin, a, termin.kunde_id, termin.kunde_bereich)
+      if (!neuerGast) hinweise.push('Keine Einladung verschickt: In der Kundenakte ist keine E-Mail-Adresse hinterlegt.')
+    }
+  }
+  if (soll && neuerGast && !sendeMail) {
+    hinweise.push('Keine Einladung verschickt: Der Mailversand steht an dieser Stelle nicht zur Verfügung.')
+    neuerGast = null
+  }
+
+  let gastNeu: TerminGast = { ...bisher }
+  let eingeladen = false
+
+  // Bisheriger Gast fällt weg (Kunde gewechselt oder entfernt, Einladung abgewählt): absagen. Nicht aber,
+  // wenn derselbe Kunde bleibt und nur gerade keine Einladung möglich ist (Adresse fehlt, kein Versand) —
+  // dann bleibt die bestehende Einladung stehen.
+  const behalten = soll && !neuerGast && termin.kunde_id === vorher?.kunde_id
+  if (alterGast && !behalten && (!neuerGast || neuerGast.email !== alterGast.email)) {
+    if (sendeMail) {
+      sequenz++
+      try {
+        const vorlage = vorher ?? termin
+        const { betreff, text } = gastMailText('abgesagt', vorlage, alterGast.name, organisator.name)
+        await sendeMail(alterGast.email, betreff, text, [icsFuerGast(vorlage, organisator, alterGast, 'CANCEL', sequenz)])
+        hinweise.push(`Absage an ${alterGast.email} verschickt.`)
+        gastNeu = { ...gastNeu, eingeladen: false, sequenz }
+      } catch (err) {
+        console.error('Absage an den Kunden fehlgeschlagen', termin.id, (err as Error)?.message ?? err)
+        hinweise.push(`Die Absage an ${alterGast.email} konnte nicht verschickt werden: ${(err as Error)?.message ?? 'unbekannter Fehler'}`)
+        gastNeu = { ...gastNeu, eingeladen: false, sequenz }
+      }
+    } else {
+      gastNeu = { ...gastNeu, eingeladen: false }
+    }
+  }
+
+  if (neuerGast && sendeMail) {
+    const neuDabei = !alterGast || alterGast.email !== neuerGast.email
+    if (neuDabei || sichtbarGeaendert) {
+      sequenz++
+      try {
+        const { betreff, text } = gastMailText(neuDabei ? 'neu' : 'geaendert', termin, neuerGast.name, organisator.name)
+        await sendeMail(neuerGast.email, betreff, text, [icsFuerGast(termin, organisator, neuerGast, 'REQUEST', sequenz)])
+        eingeladen = true
+        gastNeu = { ...gastNeu, email: neuerGast.email, name: neuerGast.name, eingeladen: true, sequenz }
+      } catch (err) {
+        console.error('Einladung an den Kunden fehlgeschlagen', termin.id, (err as Error)?.message ?? err)
+        hinweise.push(`Die Einladung an ${neuerGast.email} konnte nicht verschickt werden: ${(err as Error)?.message ?? 'unbekannter Fehler'}`)
+        // Nummer trotzdem merken: ging die Mail doch raus, muss die nächste Fassung höher liegen.
+        gastNeu = { ...gastNeu, sequenz }
+      }
+    }
+  }
+
+  if (JSON.stringify(gastNeu) !== JSON.stringify(bisher)) {
+    const { data, error } = await admin.from('termine').update({ gast: gastNeu }).eq('id', termin.id).select('*').single()
+    if (error) console.error('Gast am Termin nicht gespeichert', termin.id, error.message)
+    else if (data) termin = data as Termin
+  }
+  return { termin, eingeladen, ...(hinweise.length > 0 ? { hinweis: hinweise.join(' ') } : {}) }
 }
 
 // Besitzer: Termin absagen (für alle). Teilnehmer: nur sich selbst austragen.
-export async function loescheTermin(admin: Db, a: Aufrufer, id: string): Promise<{ ok: true; art: 'abgesagt' | 'ausgetragen' } | { ok: false; status: number; fehler: string }> {
+// War ein Kunde eingeladen und ist `sendeMail` übergeben, bekommt er eine Absage mit Kalenderdatei.
+export async function loescheTermin(
+  admin: Db,
+  a: Aufrufer,
+  id: string,
+  sendeMail?: SendeMail,
+): Promise<{ ok: true; art: 'abgesagt' | 'ausgetragen'; gastAbgesagt?: boolean } | { ok: false; status: number; fehler: string }> {
   const { data } = await admin.from('termine').select('*').eq('id', id).maybeSingle()
   const t = data as Termin | null
   if (!t) return { ok: false, status: 404, fehler: 'Diesen Termin gibt es nicht mehr.' }
@@ -217,7 +402,19 @@ export async function loescheTermin(admin: Db, a: Aufrufer, id: string): Promise
     const { error } = await admin.from('termine').delete().eq('id', id)
     if (error) return { ok: false, status: 500, fehler: error.message }
     for (const p of t.teilnehmer ?? []) await sendeTelegram(team.get(p)?.chat ?? null, `📅 Termin abgesagt von ${a.name}\n\n${t.titel}\n${zeitraumText(t)}`)
-    return { ok: true, art: 'abgesagt' }
+    let gastAbgesagt = false
+    const gast = (t.gast ?? {}) as TerminGast
+    if (gast.eingeladen && gast.email && sendeMail) {
+      try {
+        const organisator = { name: team.get(a.email)?.name || a.name || a.email, email: t.besitzer_email.toLowerCase() }
+        const { betreff, text } = gastMailText('abgesagt', t, gast.name, organisator.name)
+        await sendeMail(gast.email, betreff, text, [icsFuerGast(t, organisator, { email: gast.email, name: gast.name }, 'CANCEL', (typeof gast.sequenz === 'number' ? gast.sequenz : 0) + 1)])
+        gastAbgesagt = true
+      } catch (err) {
+        console.error('Absage an den Kunden fehlgeschlagen', id, (err as Error)?.message ?? err)
+      }
+    }
+    return { ok: true, art: 'abgesagt', gastAbgesagt }
   }
   if (!(t.teilnehmer ?? []).includes(a.email)) return { ok: false, status: 403, fehler: 'Das ist nicht dein Termin.' }
   const { error } = await admin.from('termine').update({ teilnehmer: t.teilnehmer.filter((p) => p !== a.email), geaendert_am: new Date().toISOString() }).eq('id', id)

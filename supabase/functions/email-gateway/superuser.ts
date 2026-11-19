@@ -12,7 +12,8 @@
 //                              Sprachnachrichten von heute gegen die Groq-Tagesgrenze.
 // F Wochenbericht             — freitags ab 16 Uhr einmal per Telegram an alle Superuser.
 //
-// Grenzen der Daten: `ki_verbrauch` kennt keine Person (Kosten nur je Anlass und Tag); der
+// Grenzen der Daten: `ki_verbrauch` kennt die Person erst seit 19.11.2026 (ältere Aufrufe und Zeitplan-
+// Aufträge zählen als "automatisch"); der
 // Assistent-Verlauf (`telegram_pending.zuege`) hält je Mitarbeiter nur die letzten Gesprächszüge;
 // Verlaufseinträge tragen nur einen Tag, keine Uhrzeit; Akten haben kein Anlegedatum (erster
 // Verlaufseintrag gilt als Anlage).
@@ -449,7 +450,7 @@ async function zahlen(admin: Db, g: Grunddaten, jetzt: Date) {
 async function technik(admin: Db, g: Grunddaten, jetzt: Date) {
   const vonIso = new Date(Date.parse(`${g.von}T00:00:00Z`) - 2 * 3600000).toISOString()
   const [ki, wuensche, postfaecher] = await Promise.all([
-    ladeAlle(admin, 'ki_verbrauch', 'am, anlass, funktion, modell, kosten_usd', (q) => q.gte('am', vonIso)),
+    ladeAlle(admin, 'ki_verbrauch', 'am, anlass, person, funktion, modell, kosten_usd', (q) => q.gte('am', vonIso)),
     ladeAlle(admin, 'wuensche', 'titel, quelle, status, anzahl, zuletzt_am', (q) => q.gte('zuletzt_am', vonIso)),
     ladeAlle(admin, 'postfaecher', 'id, adresse, besitzer_email, aktiv, letzter_abruf, letzter_fehler'),
   ])
@@ -468,6 +469,8 @@ async function technik(admin: Db, g: Grunddaten, jetzt: Date) {
   const jeTag: Record<string, number> = {}
   const jeAnlass: Record<string, number> = {}
   const jeModell: Record<string, number> = {}
+  const jePerson: Record<string, number> = {}
+  const emailZuName = new Map(g.team.map((m) => [m.email.toLowerCase(), m.name]))
   let summe = 0
   for (const k of ki) {
     const usd = Number(k.kosten_usd ?? 0)
@@ -478,6 +481,8 @@ async function technik(admin: Db, g: Grunddaten, jetzt: Date) {
     const anlass = k.anlass || `${k.funktion} (ohne Anlass)`
     jeAnlass[anlass] = (jeAnlass[anlass] ?? 0) + usd
     jeModell[k.modell || 'unbekannt'] = (jeModell[k.modell || 'unbekannt'] ?? 0) + usd
+    const person = k.person ? (emailZuName.get(String(k.person).toLowerCase()) ?? String(k.person)) : 'Automatisch (ohne Person)'
+    jePerson[person] = (jePerson[person] ?? 0) + usd
   }
   const runde = (o: Record<string, number>) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, euro(v)]))
 
@@ -493,6 +498,7 @@ async function technik(admin: Db, g: Grunddaten, jetzt: Date) {
       jeTag: runde(jeTag),
       jeAnlass: runde(jeAnlass),
       jeModell: runde(jeModell),
+      jePerson: runde(jePerson),
       umrechnung: `1 $ ≈ ${String(USD_ZU_EUR).replace('.', ',')} €`,
     },
     fehler: {
@@ -571,6 +577,8 @@ export async function wochenberichtText(admin: Db, jetzt: Date): Promise<string>
   if (z.antwortzeit.medianStunden != null) zeilen.push(`Antwortzeit auf erste Mails (Mitte): ${z.antwortzeit.medianStunden < 24 ? `${Math.round(z.antwortzeit.medianStunden)} Std.` : `${(z.antwortzeit.medianStunden / 24).toFixed(1).replace('.', ',')} Tage`}`)
   zeilen.push(`Offene Wünsche: ${t.fehler.offeneWuensche}`)
   zeilen.push(`KI-Kosten der Woche: ${t.kosten.summeEuro.toFixed(2).replace('.', ',')} € (${t.kosten.aufrufe} Aufrufe)`)
+  const personen = Object.entries(t.kosten.jePerson).sort(([, a], [, b]) => b - a).slice(0, 5)
+  for (const [name, betrag] of personen) zeilen.push(`  ${name}: ${betrag.toFixed(2).replace('.', ',')} €`)
   zeilen.push('', 'Alles im CRM unter Superuser.')
   return zeilen.join('\n')
 }

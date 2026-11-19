@@ -73,6 +73,7 @@ import { PublicMandantenfragebogenErben } from './pages/formulare/PublicMandante
 import { PublicVollmachtBeratung } from './pages/formulare/PublicVollmachtBeratung'
 import { PublicSelbstauskunft } from './pages/formulare/PublicSelbstauskunft'
 import { PublicEigentuemerPortal } from './pages/formulare/PublicEigentuemerPortal'
+import { PublicTerminBuchen } from './pages/formulare/PublicTerminBuchen'
 import { PublicNda } from './pages/formulare/PublicNda'
 import { PublicKundenUnterlagen } from './pages/formulare/PublicKundenUnterlagen'
 import { PublicDatenschutz } from './pages/formulare/PublicDatenschutz'
@@ -331,6 +332,7 @@ function AppRoutes() {
             bekommen dort den Hinweis, dass der Link abgelaufen ist. */}
         <Route path="/formular/eigentuemer/:objektId/:token" element={<PublicEigentuemerPortal />} />
         <Route path="/formular/eigentuemer/:objektId" element={<PublicEigentuemerPortal />} />
+        <Route path="/formular/termin/:kennung" element={<PublicTerminBuchen />} />
         <Route path="/formular/nda/:bereich/:kundeId" element={<PublicNda />} />
         <Route path="/formular/unterlagen/:token" element={<PublicKundenUnterlagen />} />
       </Routes>

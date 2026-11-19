@@ -222,8 +222,9 @@ export async function kalenderAboAntwort(admin: Db, token: string | null, method
     const spalten = 'id, titel, beschreibung, ort, beginn, ende, ganztags, besitzer_email, teilnehmer, kunde_name, geaendert_am'
     const muster = ich.replace(/[\\%_]/g, (z) => `\\${z}`)
     const [eigene, dabei] = await Promise.all([
-      admin.from('termine').select(spalten).ilike('besitzer_email', muster).lt('beginn', bis).gt('ende', von).order('beginn').limit(MAX_TERMINE),
-      admin.from('termine').select(spalten).contains('teilnehmer', [ich]).lt('beginn', bis).gt('ende', von).order('beginn').limit(MAX_TERMINE),
+      // Per Mail-Einladung übernommene Termine stehen schon im Kalender des Postfachs — nicht doppelt liefern.
+      admin.from('termine').select(spalten).ilike('besitzer_email', muster).or('quelle.is.null,quelle.neq.einladung').lt('beginn', bis).gt('ende', von).order('beginn').limit(MAX_TERMINE),
+      admin.from('termine').select(spalten).contains('teilnehmer', [ich]).or('quelle.is.null,quelle.neq.einladung').lt('beginn', bis).gt('ende', von).order('beginn').limit(MAX_TERMINE),
     ])
     if (eigene.error) throw new Error(eigene.error.message)
     if (dabei.error) throw new Error(dabei.error.message)

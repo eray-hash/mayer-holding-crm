@@ -231,6 +231,7 @@ import {
 } from './postfach.ts'
 import { loescheTermin, sendeErinnerungen, sendeTelegram, speichereTermin } from './kalender.ts'
 import { aboLink, kalenderAboAntwort } from './kalenderAbo.ts'
+import { BUCHUNGS_AKTIONEN, buchungAktion } from './buchung.ts'
 import { ordneMailObjektZu } from './objektMail.ts'
 import { legeEingaengeAb, macheAblageRueckgaengig, nimmEingaengeHeraus } from './eingang.ts'
 import { pruefeNeueTreffer } from './gesuchTreffer.ts'
@@ -240,7 +241,7 @@ import { lieseKontoauszug } from './kontoauszug.ts'
 import { beantworteKundenUnterlagen } from './kundenUnterlagen.ts'
 import { pruefeWunschAnalyse, wunschAnalyseTest } from './wunschAnalyse.ts'
 import { pruefeSuperuserWochenbericht, superuserAuswertung, superuserWochenberichtTest } from './superuser.ts'
-import { kiAufruf, mitAnlass, setzeAnlass } from '../_shared/kiVerbrauch.ts'
+import { aktuellePerson, kiAufruf, mitAnlass, setzeAnlass, setzePerson } from '../_shared/kiVerbrauch.ts'
 
 const ALLOWED_ORIGINS = [
   'https://eray-hash.github.io',
@@ -1042,7 +1043,7 @@ async function stosseRechercheSchrittAn(bereich: string, kundeId: string, umleit
   const secret = Deno.env.get('CRM_SHARED_SECRET')
   await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/email-gateway`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`, ...(secret ? { 'x-crm-secret': secret } : {}) },
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`, 'x-ki-person': aktuellePerson(), ...(secret ? { 'x-crm-secret': secret } : {}) },
     body: JSON.stringify({ action, bereich, kundeId, umleitungen }),
   }).catch((err) => console.error('Recherche-Schritt konnte nicht angestoßen werden:', err))
 }
@@ -1301,7 +1302,7 @@ async function stosseDokumentLesenAn(ref: DokumentRef, extra: Record<string, unk
   const secret = Deno.env.get('CRM_SHARED_SECRET')
   await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/email-gateway`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`, ...(secret ? { 'x-crm-secret': secret } : {}) },
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`, 'x-ki-person': aktuellePerson(), ...(secret ? { 'x-crm-secret': secret } : {}) },
     body: JSON.stringify({ action: 'dokument_lesen', ...ref, ...extra }),
   }).catch((err) => console.error('Dokument-Lesen konnte nicht angestoßen werden:', err))
 }
@@ -2204,7 +2205,7 @@ async function stosseObjektBewertungAn(objektId: string, umleitungen = 0): Promi
   const secret = Deno.env.get('CRM_SHARED_SECRET')
   await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/email-gateway`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`, ...(secret ? { 'x-crm-secret': secret } : {}) },
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`, 'x-ki-person': aktuellePerson(), ...(secret ? { 'x-crm-secret': secret } : {}) },
     body: JSON.stringify({ action: 'objekt_bewertung_schritt', objektId, umleitungen }),
   }).catch((err) => console.error('Bewertungs-Schritt konnte nicht angestoßen werden:', err))
 }
@@ -3007,10 +3008,15 @@ const OHNE_LOGIN = new Set(['request_password_reset', 'self_register'])
 // Zeitplan-Aufträge (pg_cron) weisen sich mit dem Zeitplan-Zeichen aus dem Vault aus.
 const ZEITPLAN_AKTIONEN = new Set(['termin_erinnerungen', 'postfach_abruf', 'classify_new_leads'])
 const ZUGANG_MERKER = new Map<string, number>()
+const TOKEN_PERSON = new Map<string, string>()
 
 async function pruefeZugang(req: Request, aktion: string): Promise<boolean> {
   const token = (req.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '').trim()
-  if (token && istDienstSchluessel(token)) return true
+  if (token && istDienstSchluessel(token)) {
+    // Aufrufe der eigenen Server-Funktionen dürfen sagen, für wen sie arbeiten (nur für die Kosten-Zuordnung).
+    setzePerson(req.headers.get('x-ki-person'))
+    return true
+  }
   const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
   const cron = (req.headers.get('x-cron-token') ?? '').trim()
   if (cron && ZEITPLAN_AKTIONEN.has(aktion)) {
@@ -3024,15 +3030,23 @@ async function pruefeZugang(req: Request, aktion: string): Promise<boolean> {
   }
   if (!token || token.length < 30) return false
   // Ein bestätigtes Login-Zeichen eine Minute lang merken, damit nicht jeder Aufruf nachfragen muss.
-  if ((ZUGANG_MERKER.get(token) ?? 0) > Date.now()) return true
+  if ((ZUGANG_MERKER.get(token) ?? 0) > Date.now()) {
+    setzePerson(TOKEN_PERSON.get(token))
+    return true
+  }
   const { data, error } = await admin.auth.getUser(token)
   const email = data?.user?.email
   if (error || !email) return false
   const muster = email.toLowerCase().replace(/[\\%_]/g, (z: string) => `\\${z}`)
   const { data: zeile } = await admin.from('mitarbeiter').select('aktiv').ilike('email', muster).maybeSingle()
   if (!zeile?.aktiv) return false
-  if (ZUGANG_MERKER.size > 500) ZUGANG_MERKER.clear()
+  if (ZUGANG_MERKER.size > 500) {
+    ZUGANG_MERKER.clear()
+    TOKEN_PERSON.clear()
+  }
   ZUGANG_MERKER.set(token, Date.now() + 60_000)
+  TOKEN_PERSON.set(token, email)
+  setzePerson(email)
   return true
 }
 
@@ -3198,7 +3212,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
         if ((count ?? 0) > 0) {
           await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/telegram-gateway`, {
             method: 'POST',
-            headers: { 'content-type': 'application/json', authorization: `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`, ...(sharedSecret ? { 'x-crm-secret': sharedSecret } : {}) },
+            headers: { 'content-type': 'application/json', authorization: `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`, 'x-ki-person': aktuellePerson(), ...(sharedSecret ? { 'x-crm-secret': sharedSecret } : {}) },
             body: JSON.stringify({ intern: 'sortier_anstoss' }),
           })
         }
@@ -3243,14 +3257,33 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       if (!aufrufer) {
         return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
       }
+      // Einladungen an Kunden (.ics) gehen über das gemeinsame Postfach hinaus.
+      const sendeKalenderMail = (to: string, subject: string, text: string, anhaenge?: { filename: string; contentBase64: string; contentType: string }[]) => sendMail(to, subject, text, undefined, anhaenge)
       if (body.action === 'termin_loeschen') {
-        const ergebnis = await loescheTermin(admin, aufrufer, String(body.id ?? ''))
+        const ergebnis = await loescheTermin(admin, aufrufer, String(body.id ?? ''), sendeKalenderMail)
         if (!ergebnis.ok) return new Response(JSON.stringify({ error: ergebnis.fehler }), { status: ergebnis.status, headers })
-        return new Response(JSON.stringify({ ok: true, art: ergebnis.art }), { headers })
+        return new Response(JSON.stringify({ ok: true, art: ergebnis.art, gastAbgesagt: ergebnis.gastAbgesagt ?? false }), { headers })
       }
-      const ergebnis = await speichereTermin(admin, aufrufer, body.termin ?? {})
+      const ergebnis = await speichereTermin(admin, aufrufer, body.termin ?? {}, sendeKalenderMail)
       if (!ergebnis.ok) return new Response(JSON.stringify({ error: ergebnis.fehler, belegt: ergebnis.belegt }), { status: ergebnis.status, headers })
-      return new Response(JSON.stringify({ ok: true, termin: ergebnis.termin, benachrichtigt: ergebnis.benachrichtigt, ohneTelegram: ergebnis.ohneTelegram }), { headers })
+      return new Response(JSON.stringify({ ok: true, termin: ergebnis.termin, benachrichtigt: ergebnis.benachrichtigt, ohneTelegram: ergebnis.ohneTelegram, gastEingeladen: ergebnis.gastEingeladen, gastHinweis: ergebnis.gastHinweis }), { headers })
+    }
+
+    // Online-Terminbuchung (buchung.ts): Kunden buchen über einen öffentlichen Link freie Zeiten.
+    if (BUCHUNGS_AKTIONEN.has(String(body.action))) {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      let aufruferEmail: string | undefined
+      if (!String(body.action).startsWith('public_')) {
+        const aufrufer = await ermittleAufrufer(req, admin, body)
+        if (!aufrufer) return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
+        aufruferEmail = aufrufer.email
+      }
+      const r = await buchungAktion(admin, body, {
+        aufruferEmail,
+        sendeMail: (to, subject, text, anhaenge) => sendMail(to, subject, text, undefined, anhaenge),
+        grenzeErreicht: (grenzen) => grenzeErreicht(admin, grenzen),
+      })
+      return new Response(JSON.stringify(r.inhalt), { status: r.status, headers })
     }
 
     if (body.action === 'kalender_abo_link') {
@@ -3288,7 +3321,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
         const rufeSelbst = (inhalt: Record<string, unknown>) =>
           fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/email-gateway`, {
             method: 'POST',
-            headers: { 'content-type': 'application/json', authorization: `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`, ...(geheim ? { 'x-crm-secret': geheim } : {}) },
+            headers: { 'content-type': 'application/json', authorization: `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`, 'x-ki-person': aktuellePerson(), ...(geheim ? { 'x-crm-secret': geheim } : {}) },
             body: JSON.stringify({ action: 'postfach_abruf', ...inhalt }),
           }).catch((err) => console.error('Postfach-Abruf: Folgeaufruf fehlgeschlagen:', err))
         // Der Zeitplan selbst holt nichts ab, er stößt je Postfach einen eigenen Aufruf an.

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ChevronLeft, ChevronRight, Plus, Lock, Settings, AlertTriangle, Users, MapPin, Trash2, Check, CalendarPlus, Copy } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Plus, Lock, Settings, AlertTriangle, Users, MapPin, Trash2, Check, CalendarPlus, Copy, Globe, Mail, Phone } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { useAuth } from '../../context/AuthContext'
 import {
@@ -17,6 +17,18 @@ import {
   type KalenderEinstellungen,
 } from '../../lib/kalenderDb'
 import { speichereTerminRemote, loescheTerminRemote, TerminUeberschneidung, holeKalenderAbo, type KalenderAbo } from '../../lib/emailGateway'
+import {
+  ladeBuchungsZusatz,
+  ladeBuchungsEinstellungen,
+  speichereBuchungsEinstellungen,
+  buchungsLink,
+  DAUER_WAHL,
+  PUFFER_WAHL,
+  WOCHENTAG_NAMEN,
+  type BuchungsEinstellungen,
+  type BuchungsZusatz,
+  type Zeitraum,
+} from '../../lib/terminBuchung'
 import { KUNDEN_BEREICHE, kundeDetailPfad, kundeBereichLabel } from '../../data/kundenBereiche'
 import { Modal, Field, inputClass, PrimaryButton, SecondaryButton } from '../../components/ui'
 import type { KundeBereich } from '../../types'
@@ -60,6 +72,10 @@ type Formular = {
   beschreibung: string
   teilnehmer: string[]
   kunde: { id: string; bereich: string; name: string } | null
+  // Kunde bekommt beim Speichern eine Einladung per E-Mail (Server: kalender.ts, Feld gast_einladen).
+  gastEinladen?: boolean
+  /** Beim Öffnen schon eingeladen — Abhaken zieht die Einladung dann zurück (Absage an den Kunden). */
+  warEingeladen?: boolean
 }
 
 /**
@@ -85,6 +101,9 @@ export function Kalender({ privat = false }: { privat?: boolean }) {
   const [detail, setDetail] = useState<Termin | null>(null)
   const [einstellungenOffen, setEinstellungenOffen] = useState(false)
   const [aboOffen, setAboOffen] = useState(false)
+  const [buchungOffen, setBuchungOffen] = useState(false)
+  // quelle/gast je Termin (Online-Buchung), getrennt nachgeladen — siehe lib/terminBuchung.ts.
+  const [zusatz, setZusatz] = useState<Map<string, BuchungsZusatz>>(new Map())
   const rasterRef = useRef<HTMLDivElement>(null)
 
   const { von, bis, tage } = useMemo(() => {
@@ -102,9 +121,14 @@ export function Kalender({ privat = false }: { privat?: boolean }) {
     setLaedt(true)
     setFehler('')
     try {
-      const [t, b] = await Promise.all([ladeTermine(von, bis), privat ? Promise.resolve([] as Belegt[]) : ladeBelegt(von, bis)])
+      const [t, b, z] = await Promise.all([
+        ladeTermine(von, bis),
+        privat ? Promise.resolve([] as Belegt[]) : ladeBelegt(von, bis),
+        ladeBuchungsZusatz(von, bis).catch(() => new Map<string, BuchungsZusatz>()),
+      ])
       setTermine(t)
       setBelegt(b)
+      setZusatz(z)
     } catch (err) {
       setFehler(err instanceof Error ? err.message : 'Kalender konnte nicht geladen werden.')
     } finally {
@@ -130,6 +154,7 @@ export function Kalender({ privat = false }: { privat?: boolean }) {
 
   const namen = useMemo(() => new Map(kollegen.map((k) => [k.email, k.name])), [kollegen])
   const farbe = (email: string) => FARBEN[Math.max(0, kollegen.findIndex((k) => k.email === email)) % FARBEN.length]
+  const onlineGebucht = (id?: string) => !!id && zusatz.get(id)?.quelle === 'buchung'
   const personen = privat ? [ich] : (gezeigt ?? kollegen.map((k) => k.email))
 
   // Alles, was im Raster erscheint: die voll sichtbaren Termine (einmal, auch wenn mehrere der
@@ -181,7 +206,7 @@ export function Kalender({ privat = false }: { privat?: boolean }) {
     const v = new Date(t.beginn)
     const b = new Date(t.ende)
     setDetail(null)
-    setFormular({ id: t.id, titel: t.titel, datum: tagKey(v), von: uhr(v), bis: uhr(b), ganztags: t.ganztags, ort: t.ort, beschreibung: t.beschreibung, teilnehmer: t.teilnehmer, kunde: t.kundeId ? { id: t.kundeId, bereich: t.kundeBereich ?? '', name: t.kundeName ?? '' } : null })
+    setFormular({ id: t.id, titel: t.titel, datum: tagKey(v), von: uhr(v), bis: uhr(b), ganztags: t.ganztags, ort: t.ort, beschreibung: t.beschreibung, teilnehmer: t.teilnehmer, kunde: t.kundeId ? { id: t.kundeId, bereich: t.kundeBereich ?? '', name: t.kundeName ?? '' } : null, gastEinladen: zusatz.get(t.id)?.gast?.eingeladen === true, warEingeladen: zusatz.get(t.id)?.gast?.eingeladen === true })
   }
 
   function blaettern(richtung: number) {
@@ -274,6 +299,7 @@ export function Kalender({ privat = false }: { privat?: boolean }) {
                 <div className={`mb-0.5 inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[11px] font-semibold ${key === heuteKey ? 'bg-accent-600 text-white' : 'text-slate-600'}`}>{tag.getDate()}</div>
                 {amTag.slice(0, 3).map((e) => (
                   <div key={e.key} className="truncate rounded px-1 py-px text-[11px] text-white" style={{ background: e.privat ? '#94a3b8' : farbe(e.person) }}>
+                    {!e.privat && onlineGebucht(e.termin?.id) && <Globe size={10} className="mr-0.5 inline-block align-[-1px]" aria-label="Online gebucht" />}
                     {e.privat ? `Privat · ${namen.get(e.person) ?? ''}` : `${e.ganztags ? '' : uhr(e.von) + ' '}${e.termin?.titel}`}
                   </div>
                 ))}
@@ -332,6 +358,7 @@ export function Kalender({ privat = false }: { privat?: boolean }) {
                   farbe={farbe}
                   namen={namen}
                   ich={ich}
+                  onlineGebucht={onlineGebucht}
                   onNeu={(start) => setFormular(neuesFormular(start))}
                   onOeffnen={(t) => setDetail(t)}
                 />
@@ -356,6 +383,7 @@ export function Kalender({ privat = false }: { privat?: boolean }) {
       {detail && (
         <TerminDetail
           termin={detail}
+          zusatz={zusatz.get(detail.id)}
           ich={ich}
           namen={namen}
           onSchliessen={() => setDetail(null)}
@@ -364,8 +392,16 @@ export function Kalender({ privat = false }: { privat?: boolean }) {
         />
       )}
 
-      {einstellungenOffen && <EinstellungenFenster ich={ich} onSchliessen={() => setEinstellungenOffen(false)} onAbo={() => { setEinstellungenOffen(false); setAboOffen(true) }} />}
+      {einstellungenOffen && (
+        <EinstellungenFenster
+          ich={ich}
+          onSchliessen={() => setEinstellungenOffen(false)}
+          onAbo={() => { setEinstellungenOffen(false); setAboOffen(true) }}
+          onBuchung={() => { setEinstellungenOffen(false); setBuchungOffen(true) }}
+        />
+      )}
       {aboOffen && <KalenderAboFenster onSchliessen={() => setAboOffen(false)} />}
+      {buchungOffen && <BuchungsFenster onSchliessen={() => setBuchungOffen(false)} />}
     </div>
   )
 }
@@ -376,6 +412,7 @@ function TagesSpalte({
   farbe,
   namen,
   ich,
+  onlineGebucht,
   onNeu,
   onOeffnen,
 }: {
@@ -384,6 +421,7 @@ function TagesSpalte({
   farbe: (email: string) => string
   namen: Map<string, string>
   ich: string
+  onlineGebucht: (id?: string) => boolean
   onNeu: (start: Date) => void
   onOeffnen: (t: Termin) => void
 }) {
@@ -429,6 +467,7 @@ function TagesSpalte({
           }
           const t = e.termin
           const gemeinsam = t.teilnehmer.length > 0
+          const online = onlineGebucht(t.id)
           return (
             <button key={e.key} onClick={() => onOeffnen(t)} className="absolute overflow-hidden rounded-md px-1 py-0.5 text-left text-[11px] leading-tight text-white shadow-sm" style={{ ...stil, background: farbe(t.besitzerEmail) }}>
               <div className="truncate font-semibold">{t.titel}</div>
@@ -436,6 +475,11 @@ function TagesSpalte({
                 {uhr(e.von)}–{uhr(e.bis)}
                 {gemeinsam && ` · ${[t.besitzerEmail, ...t.teilnehmer].map((p) => (p === ich ? 'ich' : (namen.get(p) ?? p).split(' ')[0])).join(', ')}`}
               </div>
+              {online && (
+                <div className="mt-0.5 inline-flex items-center gap-0.5 rounded bg-white/25 px-1 text-[10px] font-medium">
+                  <Globe size={9} /> Online gebucht
+                </div>
+              )}
             </button>
           )
         })}
@@ -494,12 +538,20 @@ function TerminFormular({
     return treffer
   }, [kundenSuche, state])
 
+  // E-Mail-Adresse aus der Akte des verknüpften Kunden (für den Hinweis bei „Kunden per E-Mail einladen“).
+  const kundenEmail = useMemo(() => {
+    if (!f.kunde) return ''
+    const bereich = KUNDEN_BEREICHE.find((b) => b.id === f.kunde?.bereich)
+    return (bereich?.get(state).find((k) => k.id === f.kunde?.id)?.email ?? '').trim()
+  }, [f.kunde, state])
+
   async function speichern(trotz = false) {
     setLaeuft(true)
     setFehler('')
     setUeberschneidung('')
     try {
-      await speichereTerminRemote({
+      // gast_einladen steht nicht im Typ TerminEingabe (emailGateway.ts) — über eine Variable mitgeben.
+      const eingabe = {
         id: f.id,
         titel: f.titel.trim(),
         beschreibung: f.beschreibung,
@@ -510,7 +562,9 @@ function TerminFormular({
         teilnehmer: f.teilnehmer,
         kunde: f.kunde,
         trotzUeberschneidung: trotz,
-      })
+        ...(f.kunde && f.gastEinladen ? { gast_einladen: true } : f.warEingeladen ? { gast_einladen: false } : {}),
+      }
+      await speichereTerminRemote(eingabe)
       onGespeichert()
     } catch (err) {
       if (err instanceof TerminUeberschneidung) setUeberschneidung(err.message)
@@ -591,7 +645,7 @@ function TerminFormular({
         {f.kunde ? (
           <div className="flex items-center gap-2 text-sm text-slate-700">
             {f.kunde.name} <span className="text-xs text-slate-400">({kundeBereichLabel(f.kunde.bereich as KundeBereich)})</span>
-            <button type="button" onClick={() => setF({ ...f, kunde: null })} className="text-xs text-slate-400 hover:text-rose-600">entfernen</button>
+            <button type="button" onClick={() => setF({ ...f, kunde: null, gastEinladen: false })} className="text-xs text-slate-400 hover:text-rose-600">entfernen</button>
           </div>
         ) : (
           <div>
@@ -610,6 +664,19 @@ function TerminFormular({
           </div>
         )}
       </Field>
+      {f.kunde && (
+        <label className="mb-3 flex items-start gap-2 text-sm text-slate-700">
+          <input type="checkbox" className="mt-0.5" checked={!!f.gastEinladen} onChange={(e) => setF({ ...f, gastEinladen: e.target.checked })} />
+          <span>
+            Kunden per E-Mail einladen
+            <span className="block text-xs text-slate-500">
+              {kundenEmail
+                ? f.warEingeladen && !f.gastEinladen ? `Beim Speichern bekommt ${kundenEmail} eine Absage.` : `Einladung mit Kalenderdatei an ${kundenEmail}${f.id ? ' — bei einem geänderten Termin mit den neuen Angaben' : ''}. Titel und Ort sieht der Kunde, die Notiz nicht.`
+                : 'In der Akte ist keine E-Mail-Adresse zu sehen — die Einladung geht nur raus, wenn dort eine hinterlegt ist.'}
+            </span>
+          </span>
+        </label>
+      )}
       <Field label="Notiz (optional)">
         <textarea className={inputClass} rows={3} value={f.beschreibung} onChange={(e) => setF({ ...f, beschreibung: e.target.value })} />
       </Field>
@@ -633,6 +700,7 @@ function TerminFormular({
 
 function TerminDetail({
   termin,
+  zusatz,
   ich,
   namen,
   onSchliessen,
@@ -640,6 +708,7 @@ function TerminDetail({
   onGeloescht,
 }: {
   termin: Termin
+  zusatz?: BuchungsZusatz
   ich: string
   namen: Map<string, string>
   onSchliessen: () => void
@@ -676,6 +745,11 @@ function TerminDetail({
 
   return (
     <Modal open onClose={onSchliessen} title={termin.titel} width="max-w-md">
+      {zusatz?.quelle === 'buchung' && (
+        <p className="mb-2 inline-flex items-center gap-1 rounded-full bg-accent-50 px-2 py-0.5 text-xs font-medium text-accent-700">
+          <Globe size={12} /> Online gebucht
+        </p>
+      )}
       <p className="text-sm text-slate-700">
         {termin.ganztags ? `${datumLang(v)}, ganztägig` : `${datumLang(v)}, ${uhr(v)}–${uhr(b)} Uhr`}
       </p>
@@ -697,6 +771,23 @@ function TerminDetail({
         </button>
       )}
       {termin.kundeId && !aktenPfad && termin.kundeName && <p className="mt-2 text-sm text-slate-500">Kunde: {termin.kundeName}</p>}
+      {zusatz?.gast && (zusatz.gast.name || zusatz.gast.email || zusatz.gast.telefon) && (
+        <div className="mt-3 rounded-lg border border-slate-200 p-3 text-sm text-slate-700">
+          <p className="mb-1 text-xs font-medium text-slate-500">{zusatz.quelle === 'buchung' ? 'Gebucht von' : 'Gast'}</p>
+          {zusatz.gast.name && <p className="font-medium">{zusatz.gast.name}</p>}
+          {zusatz.gast.email && (
+            <a href={`mailto:${zusatz.gast.email}`} className="mt-1 flex items-center gap-1.5 text-accent-600 hover:underline">
+              <Mail size={13} /> {zusatz.gast.email}
+            </a>
+          )}
+          {zusatz.gast.telefon && (
+            <a href={`tel:${zusatz.gast.telefon.replace(/[^\d+]/g, '')}`} className="mt-1 flex items-center gap-1.5 text-accent-600 hover:underline">
+              <Phone size={13} /> {zusatz.gast.telefon}
+            </a>
+          )}
+          {zusatz.gast.nachricht && <p className="mt-2 whitespace-pre-wrap text-slate-600">{zusatz.gast.nachricht}</p>}
+        </div>
+      )}
       {termin.beschreibung && <p className="mt-3 whitespace-pre-wrap rounded-lg bg-slate-50 p-3 text-sm text-slate-700">{termin.beschreibung}</p>}
       {fehler && <p className="mt-3 text-xs text-rose-600">{fehler}</p>}
       <div className="mt-5 flex justify-end gap-2">
@@ -709,7 +800,7 @@ function TerminDetail({
   )
 }
 
-function EinstellungenFenster({ ich, onSchliessen, onAbo }: { ich: string; onSchliessen: () => void; onAbo: () => void }) {
+function EinstellungenFenster({ ich, onSchliessen, onAbo, onBuchung }: { ich: string; onSchliessen: () => void; onAbo: () => void; onBuchung: () => void }) {
   const { session } = useAuth()
   const [e, setE] = useState<KalenderEinstellungen | null>(null)
   const [telegram, setTelegram] = useState<boolean | null>(null)
@@ -769,6 +860,11 @@ function EinstellungenFenster({ ich, onSchliessen, onAbo }: { ich: string; onSch
           <p className="mb-2 mt-5 text-sm font-medium text-slate-700">Termine auf dem Handy und in Outlook</p>
           <button onClick={onAbo} className="flex items-center gap-1.5 text-sm font-medium text-accent-600 hover:underline">
             <CalendarPlus size={14} /> In meinen Kalender übernehmen …
+          </button>
+          <p className="mb-2 mt-5 text-sm font-medium text-slate-700">Online-Terminbuchung</p>
+          <p className="mb-1.5 text-xs text-slate-500">Eine eigene Seite, auf der Kunden selbst einen freien Termin bei dir buchen.</p>
+          <button onClick={onBuchung} className="flex items-center gap-1.5 text-sm font-medium text-accent-600 hover:underline">
+            <Globe size={14} /> Online-Terminbuchung einrichten …
           </button>
           {gespeichert && <p className="mt-3 text-xs text-emerald-600">Gespeichert.</p>}
           {fehler && <p className="mt-3 text-xs text-rose-600">{fehler}</p>}
@@ -896,6 +992,203 @@ function KalenderAboFenster({ onSchliessen }: { onSchliessen: () => void }) {
       <div className="mt-5 flex justify-end">
         <PrimaryButton onClick={onSchliessen}>Fertig</PrimaryButton>
       </div>
+    </Modal>
+  )
+}
+
+// Online-Terminbuchung: eigene öffentliche Seite, auf der Kunden selbst einen freien Termin buchen.
+// Frei ist, was in den hier eingestellten Zeiten liegt und im eigenen Kalender nicht belegt ist
+// (Server: email-gateway/buchung.ts). Kunden sehen nie, was sonst im Kalender steht.
+function BuchungsFenster({ onSchliessen }: { onSchliessen: () => void }) {
+  const [b, setB] = useState<BuchungsEinstellungen | null>(null)
+  const [vorlauf, setVorlauf] = useState('')
+  const [tageVoraus, setTageVoraus] = useState('')
+  const [kennung, setKennung] = useState<string | null>(null)
+  const [aktivGespeichert, setAktivGespeichert] = useState(false)
+  const [laeuft, setLaeuft] = useState(false)
+  const [fehler, setFehler] = useState('')
+  const [gespeichert, setGespeichert] = useState(false)
+  const [kopiert, setKopiert] = useState(false)
+  const feldRef = useRef<HTMLInputElement>(null)
+
+  function uebernehmen(r: { buchung: BuchungsEinstellungen; kennung: string | null }) {
+    setB(r.buchung)
+    setVorlauf(String(r.buchung.vorlauf_std))
+    setTageVoraus(String(r.buchung.tage_voraus))
+    setKennung(r.kennung)
+    setAktivGespeichert(r.buchung.aktiv)
+  }
+
+  useEffect(() => {
+    ladeBuchungsEinstellungen()
+      .then(uebernehmen)
+      .catch((err) => setFehler(err instanceof Error ? err.message : 'Einstellungen konnten nicht geladen werden.'))
+  }, [])
+
+  function aendern(patch: Partial<BuchungsEinstellungen>) {
+    if (!b) return
+    setB({ ...b, ...patch })
+    setGespeichert(false)
+  }
+
+  function setzeZeiten(tag: string, liste: Zeitraum[]) {
+    if (!b) return
+    aendern({ zeiten: { ...b.zeiten, [tag]: liste } })
+  }
+
+  async function speichern() {
+    if (!b) return
+    const v = Number(vorlauf)
+    const t = Number(tageVoraus)
+    if (!Number.isInteger(v) || v < 0) return setFehler('Mindestvorlauf bitte als ganze Zahl von Stunden angeben.')
+    if (!Number.isInteger(t) || t < 1 || t > 90) return setFehler('„Wie weit im Voraus“ bitte als ganze Zahl von 1 bis 90 Tagen angeben.')
+    setLaeuft(true)
+    setFehler('')
+    setGespeichert(false)
+    try {
+      uebernehmen(await speichereBuchungsEinstellungen({ ...b, vorlauf_std: v, tage_voraus: t }))
+      setGespeichert(true)
+    } catch (err) {
+      setFehler(err instanceof Error ? err.message : 'Konnte nicht gespeichert werden.')
+    } finally {
+      setLaeuft(false)
+    }
+  }
+
+  const link = kennung ? buchungsLink(kennung) : ''
+
+  async function kopieren() {
+    try {
+      await navigator.clipboard.writeText(link)
+      setKopiert(true)
+    } catch {
+      feldRef.current?.select()
+      setFehler('Kopieren ging nicht automatisch — der Link ist markiert, bitte selbst kopieren.')
+    }
+  }
+
+  return (
+    <Modal
+      open
+      onClose={onSchliessen}
+      title="Online-Terminbuchung"
+      width="max-w-lg"
+      aktionen={
+        <>
+          <SecondaryButton onClick={onSchliessen} className="text-xs">Schließen</SecondaryButton>
+          <PrimaryButton onClick={speichern} disabled={!b || laeuft} className="text-xs">
+            <Check size={13} /> {laeuft ? 'Speichert …' : 'Speichern'}
+          </PrimaryButton>
+        </>
+      }
+    >
+      {!b ? (
+        fehler ? <p className="text-sm text-rose-600">{fehler}</p> : <p className="text-sm text-slate-400">Wird geladen …</p>
+      ) : (
+        <div>
+          <p className="mb-3 text-sm text-slate-600">
+            Kunden sehen auf einer eigenen Seite deine freien Zeiten und buchen selbst. Du bekommst eine Telegram-Nachricht, der Kunde eine Bestätigung per E-Mail. Was sonst in deinem Kalender steht, sieht niemand.
+          </p>
+          <label className="mb-4 flex items-center gap-2 rounded-lg border border-slate-200 p-3 text-sm font-medium text-slate-700">
+            <input type="checkbox" checked={b.aktiv} onChange={(e) => aendern({ aktiv: e.target.checked })} />
+            Kunden können online einen Termin bei mir buchen
+          </label>
+
+          {kennung && aktivGespeichert && (
+            <div className="mb-4">
+              <p className="mb-1.5 text-sm font-medium text-slate-700">Link zu deiner Buchungsseite</p>
+              <input ref={feldRef} readOnly value={link} onFocus={(ev) => ev.target.select()} className={`${inputClass} font-mono text-xs`} aria-label="Link zur Buchungsseite" />
+              <div className="mt-2 flex flex-wrap gap-2">
+                <SecondaryButton onClick={kopieren} className="text-xs">
+                  <Copy size={13} /> {kopiert ? 'Kopiert' : 'Link kopieren'}
+                </SecondaryButton>
+                <a href={link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50">
+                  <Globe size={13} /> Seite ansehen
+                </a>
+              </div>
+              <p className="mt-1.5 text-xs text-slate-500">Den Link kannst du in Mails, in die Signatur oder auf die Webseite setzen.</p>
+            </div>
+          )}
+          {kennung && !aktivGespeichert && <p className="mb-4 rounded-lg bg-slate-50 p-3 text-xs text-slate-500">Die Buchungsseite ist abgeschaltet. Beim Einschalten gilt wieder derselbe Link.</p>}
+
+          <Field label="Titel des Termins">
+            <input className={inputClass} value={b.titel} maxLength={80} onChange={(e) => aendern({ titel: e.target.value })} />
+          </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Dauer">
+              <select className={inputClass} value={b.dauer_min} onChange={(e) => aendern({ dauer_min: Number(e.target.value) })}>
+                {DAUER_WAHL.map((d) => <option key={d} value={d}>{d} Minuten</option>)}
+              </select>
+            </Field>
+            <Field label="Pause davor und danach">
+              <select className={inputClass} value={b.puffer_min} onChange={(e) => aendern({ puffer_min: Number(e.target.value) })}>
+                {PUFFER_WAHL.map((d) => <option key={d} value={d}>{d === 0 ? 'keine' : `${d} Minuten`}</option>)}
+              </select>
+            </Field>
+            <Field label="Frühestens (Stunden vorher)">
+              <input type="number" min={0} max={720} className={inputClass} value={vorlauf} onChange={(e) => { setVorlauf(e.target.value); setGespeichert(false) }} />
+            </Field>
+            <Field label="Höchstens (Tage im Voraus)">
+              <input type="number" min={1} max={90} className={inputClass} value={tageVoraus} onChange={(e) => { setTageVoraus(e.target.value); setGespeichert(false) }} />
+            </Field>
+          </div>
+
+          <p className="mb-2 mt-1 text-xs font-medium text-slate-500">Buchbare Zeiten je Wochentag</p>
+          <div className="mb-3 space-y-1.5">
+            {WOCHENTAG_NAMEN.map((w) => {
+              const liste = b.zeiten[w.nr] ?? []
+              return (
+                <div key={w.nr} className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-slate-100 pb-1.5 text-sm last:border-0">
+                  <label className="flex w-14 items-center gap-1.5 font-medium text-slate-700">
+                    <input type="checkbox" checked={liste.length > 0} onChange={(e) => setzeZeiten(w.nr, e.target.checked ? [['09:00', '17:00']] : [])} />
+                    {w.kurz}
+                  </label>
+                  {liste.length === 0 && <span className="text-xs text-slate-400">nicht buchbar</span>}
+                  {liste.map((z, i) => (
+                    <span key={i} className="flex items-center gap-1">
+                      <input
+                        type="time"
+                        className="rounded-md border border-slate-200 px-1.5 py-1 text-xs"
+                        value={z[0]}
+                        aria-label={`${w.lang}, Zeitraum ${i + 1}, von`}
+                        onChange={(e) => setzeZeiten(w.nr, liste.map((x, j) => (j === i ? [e.target.value, x[1]] : x)))}
+                      />
+                      –
+                      <input
+                        type="time"
+                        className="rounded-md border border-slate-200 px-1.5 py-1 text-xs"
+                        value={z[1]}
+                        aria-label={`${w.lang}, Zeitraum ${i + 1}, bis`}
+                        onChange={(e) => setzeZeiten(w.nr, liste.map((x, j) => (j === i ? [x[0], e.target.value] : x)))}
+                      />
+                      {i === 1 && (
+                        <button type="button" onClick={() => setzeZeiten(w.nr, liste.slice(0, 1))} className="text-xs text-slate-400 hover:text-rose-600" title="Zweiten Zeitraum entfernen">
+                          ✕
+                        </button>
+                      )}
+                    </span>
+                  ))}
+                  {liste.length === 1 && (
+                    <button type="button" onClick={() => setzeZeiten(w.nr, [...liste, [liste[0][1] < '14:00' ? '14:00' : liste[0][1], '18:00']])} className="text-xs text-accent-600 hover:underline">
+                      + zweiter Zeitraum
+                    </button>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+
+          <Field label="Ort (optional, z. B. Adresse oder „Telefon“)">
+            <input className={inputClass} value={b.ort} maxLength={200} onChange={(e) => aendern({ ort: e.target.value })} />
+          </Field>
+          <Field label="Hinweis für den Kunden (optional)">
+            <textarea className={inputClass} rows={3} value={b.hinweis} maxLength={1000} onChange={(e) => aendern({ hinweis: e.target.value })} placeholder="z. B. Bitte bringen Sie Ihre letzten Unterlagen mit." />
+          </Field>
+
+          {gespeichert && <p className="text-xs text-emerald-600">Gespeichert.</p>}
+          {fehler && <p className="text-xs text-rose-600">{fehler}</p>}
+        </div>
+      )}
     </Modal>
   )
 }
