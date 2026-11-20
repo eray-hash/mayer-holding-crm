@@ -28,6 +28,7 @@ import { loescheTelegramNachricht, sensibelHinweis, sensibleArt, sensiblerEingan
 import { kollegenBenachrichtigen, type MitteilungsWege, schickeMitteilung, todoAendern, todoAnlegen, todoErledigen } from './teamWerkzeuge.ts'
 import { fuehrePflegeWerkzeugAus, istPflegeWerkzeug, type PflegeAnfrage, PFLEGE_WERKZEUGE } from './pflegeWerkzeuge.ts'
 import { DOKUMENT_WERKZEUGE, fuehreDokumentWerkzeugAus, istDokumentWerkzeug } from './dokumentErstellen.ts'
+import { fuehreKvWerkzeugAus, istKvWerkzeug, KV_WERKZEUGE } from './kostenvoranschlagWerkzeuge.ts'
 import { fuehreGesendetWerkzeugAus, GESENDET_WERKZEUGE, istGesendetWerkzeug } from './gesendetWerkzeug.ts'
 import { BRIEF_WERKZEUGE, fuehrePrivatWerkzeugAus, istPrivatWerkzeug, msErlaubt, OUTLOOK_WERKZEUGE, PRIVAT_HINWEIS, privatFaehigkeiten } from './outlookWerkzeuge.ts'
 import { datumDeutsch, empfaengerVon, findeEmpfaenger, ladeAnhaengeFuerVersand, MAIL_SPALTEN, type MailZeile, volltextVon, VOLLTEXT_HOECHSTENS, type WeiterleitungEntwurf, weiterleitungsBetreff, weiterleitungsText } from './mailWerkzeuge.ts'
@@ -1491,6 +1492,7 @@ export const TOOLS = [
   },
   ...PFLEGE_WERKZEUGE,
   ...DOKUMENT_WERKZEUGE,
+  ...KV_WERKZEUGE,
   ...GESENDET_WERKZEUGE,
   {
     name: 'todo_erledigen',
@@ -1534,6 +1536,8 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
 
   // PDF (Merkblatt, Schreiben, Zusammenfassung) erstellen und in der Akte ablegen — dokumentErstellen.ts.
   if (istDokumentWerkzeug(name)) return await fuehreDokumentWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
+  // Kostenvoranschläge anlegen, auflisten, ändern — kostenvoranschlagWerkzeuge.ts.
+  if (istKvWerkzeug(name)) return await fuehreKvWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
   // Gesendete Mails (auch aus Outlook über info@ verschickt) — gesendetWerkzeug.ts.
   if (istGesendetWerkzeug(name)) return await fuehreGesendetWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter })
 
@@ -3100,7 +3104,8 @@ So arbeitest du:
 - Kollegen Bescheid geben: Bittet der Mitarbeiter, einem Kollegen etwas auszurichten oder ihm kurz Bescheid zu geben ("sag Hasan, dass die Akte angelegt ist"), schickst du das mit kollegen_benachrichtigen. Dafür ist kein Termin nötig. Sag danach, wem du was geschickt hast und wer nicht mit Telegram verbunden ist.
 - To-dos ohne Kundenakte: Will der Mitarbeiter sich oder einem Bereich eine Aufgabe notieren, die zu keinem Kunden gehört ("schreib mir auf: Steuerunterlagen bis Freitag sortieren"), legst du sie mit todo_anlegen an, standardmäßig in seiner eigenen To-do-Liste. Gehört die Aufgabe zu einer Kundenakte, nimmst du aufgabe_setzen. Erledigtes hakst du mit todo_erledigen ab.
 - Gesendete Mails: Was einem Kunden geschrieben oder geschickt wurde (auch Briefe und Mails, die aus Outlook oder Webmail über info@ oder das eigene Postfach rausgingen), findest du mit gesendete_mails (nach kunde_id, Suchbegriff, Zeitraum; mit mail_id ganz lesen). Sie werden alle paar Minuten automatisch aus dem Gesendet-Ordner ins CRM übernommen und der Akte des Empfängers zugeordnet.
-- Dokumente als Datei: Bittet jemand um ein Merkblatt, ein Schreiben, eine Zusammenfassung oder eine Übersicht „als Datei“, „als PDF“, „zum Ausdrucken“ oder „zum Mitgeben“, schreib den Text vollständig selbst (Inhalte vorher mit kundenakte_lesen, dokument_inhalt oder den Gesprächsprotokollen holen) und erstelle daraus mit dokument_erstellen eine PDF in der Akte des Kunden, statt nur Text zum Kopieren zu liefern. Titel und Text nur auf Deutsch (z. B. „Merkblatt“ statt „Handout“); bestätige danach in einer Zeile, wie die Datei heißt und in welcher Akte sie liegt.
+- Kostenvoranschläge: Das CRM hat eine Seite „Kostenvoranschläge“ und in jeder Akte einen Reiter dafür. Will jemand Kostenvoranschläge erfassen, oder schickt er ein Foto/Dokument mit einer Liste von Kostenvoranschlägen und will sie eingetragen haben, legst du jede Zeile mit kostenvoranschlag_anlegen an (Name, Beschreibung, Betrag, Status; „bez.“ = bezahlt; Summenzeilen nicht). Gehören sie eindeutig zu einer Akte, gib kunde_id an, sonst ohne. Fragen nach Kostenvoranschlägen, Summen oder Status beantwortest du mit kostenvoranschlaege_auflisten, Änderungen (z. B. „Breh ist bezahlt“, „gehört zu Akte X“) mit kostenvoranschlag_aendern. Löschen geht nur im CRM.
+- Dokumente als Datei: Bittet jemand um ein Merkblatt, ein Schreiben, eine Zusammenfassung oder eine Übersicht „als Datei“, „als PDF“, „zum Ausdrucken“ oder „zum Mitgeben“, schreib den Text vollständig selbst (Inhalte vorher mit kundenakte_lesen, dokument_inhalt oder den Gesprächsprotokollen holen) und erstelle daraus mit dokument_erstellen eine PDF in der Akte des Kunden, statt nur Text zum Kopieren zu liefern; will er eine Word-Datei, dasselbe mit format=word. Will er eine Excel-Datei oder Tabelle (z. B. eine Liste von einem Foto: Namen links, Zahlen rechts), schreib die Zeilen selbst aus und erstelle sie mit tabelle_erstellen (Zahlen als Zahlen). Ohne passende Kundenakte legst du solche Dateien in den Ungeklärten Eingängen (k_eingang_ungeklaert) ab bzw. bei eigenen Unterlagen des Hauses in k_intern_holding. Will er die Datei „hier“, „in Telegram“ oder „schick sie mir“, schick sie danach mit datei_senden direkt in den Chat; das geht auch mit jeder anderen Datei aus einer Akte. Titel und Text nur auf Deutsch (z. B. „Merkblatt“ statt „Handout“); bestätige danach in einer Zeile, wie die Datei heißt und in welcher Akte sie liegt.
 - Wünsche an das CRM: Kannst du etwas, worum der Mitarbeiter bittet, nicht tun, weil dir dafür die Möglichkeit fehlt (nicht, weil ein Kunde oder eine Angabe fehlt oder ein Bereich nicht freigegeben ist), oder sagt er "wäre gut, wenn …", "Wunsch: …" oder "könnte das CRM …", hältst du das mit wunsch_notieren fest: Titel und Beschreibung auf Ebene der Funktion, ohne Kundennamen, Beträge oder Inhalte aus Unterlagen. Sag ihm danach offen in einem kurzen Satz, dass du es als Wunsch für die Geschäftsführung notiert hast.
 - Internet: Bittet dich der Mitarbeiter ausdrücklich, etwas im Internet nachzusehen oder zu recherchieren ("recherchier den Laden", "was findest du online über die Firma X"), nutzt du internet_recherche. Gib dabei alle Anhaltspunkte aus dem Gespräch oder der Akte mit (Firmenname, Ort, Webseite), damit keine gleichnamige Firma erwischt wird. Recherchiere nur Geschäftliches und Öffentliches: Firmen, Geschäftsführer und Inhaber in ihrer beruflichen Rolle, Webseite, Handelsregister, Bewertungen, Presse. Zum Privatleben von Personen (Gesundheit, Familie, Beziehungen, Privatanschrift) recherchierst du nie; sag das in einem Satz. Ohne ausdrückliche Bitte recherchierst du nicht, auch nicht beim Ablegen von Dateien. Sag beim Weitergeben, dass es aus dem Internet stammt und veraltet oder falsch sein kann, und nenne die Quellenadressen. Ins CRM übernimmst du davon nur etwas, wenn der Mitarbeiter es ausdrücklich verlangt.
 

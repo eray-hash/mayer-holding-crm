@@ -1,0 +1,265 @@
+// Assistent-Werkzeug "datei_senden": schickt eine Datei aus den Dokumenten einer Kundenakte per
+// Telegram (sendDocument) an den Mitarbeiter, der gerade mit dem Assistenten spricht. Anlass: Am
+// 20.11.2026 wollte ein Mitarbeiter die eben erstellte Datei direkt im Chat haben — der Assistent konnte
+// sie nur in der Akte ablegen.
+//
+// Dokumente liegen an mehreren Orten (siehe email-gateway/index.ts, ladeDokumentBytes): im CRM
+// hochgeladene und vom Assistenten erstellte im privaten Eimer "kunden-dokumente" (url = Pfad),
+// Mail- und Telegram-Anhänge im Eimer "email-anhaenge" (url = volle Adresse, die nicht mehr offen
+// abrufbar sein muss), Anhänge aus persönlichen Postfächern mit Vorsatz "privat:" (Eimer
+// "postfach-anhaenge"). Gelesen wird immer mit dem Dienst-Client; nur fremde Adressen per fetch.
+//
+// Rechte wie beim Erstellen (darfAkte aus rechte.ts): private Akten anderer gibt es nicht. Sensible
+// Unterlagen (Ausweis, Kontoauszug … — dieselbe Erkennung wie sensibel.ts) gehen nicht über Telegram,
+// weil mit Telegram kein Auftragsverarbeitungsvertrag besteht; ausgenommen sind Dateien, die der
+// Assistent selbst erstellt hat (quelle "assistent").
+
+import { type AkteFuerRechte, darfAkte as darfAkteStandard, istPrivat, nichtFreigegeben, type RechteMitarbeiter } from './rechte.ts'
+import { sensibleArt } from './sensibel.ts'
+
+// deno-lint-ignore no-explicit-any
+type Supa = any
+
+/** Telegram-Bots dürfen Dateien bis 50 MB schicken. */
+export const TELEGRAM_GRENZE = 50 * 1024 * 1024
+
+export const DATEI_SENDEN_WERKZEUG = {
+  name: 'datei_senden',
+  description:
+    'Schickt eine Datei aus den Dokumenten einer Kundenakte (PDF, Word, Excel, Foto, Scan …) direkt als Datei in den Telegram-Chat des Mitarbeiters, mit dem du gerade sprichst. Verwenden, wenn der Mitarbeiter eine Datei "hier", "in Telegram", "aufs Handy" haben möchte oder "schick mir …" sagt — auch gleich nach dokument_erstellen oder tabelle_erstellen. Die Datei wird mit dokument_id (aus einer früheren Antwort, z. B. von dokument_erstellen, tabelle_erstellen oder kundenakte_lesen) oder einem Suchbegriff aus dem Dateinamen gewählt; bei mehreren Treffern kommt eine Liste zum Nachfragen. Sensible Unterlagen (Ausweis, Kontoauszug, Steuer-, Gehalts- und Gesundheitsunterlagen, unterschriebene Verträge) werden aus Datenschutzgründen nicht über Telegram verschickt.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      kunde_id: { type: 'string', description: 'Die Akte, in der die Datei liegt (für Unterlagen des Hauses k_intern_holding).' },
+      dokument_id: { type: 'string', description: 'Kennung des Dokuments (dokument_id), wenn bekannt.' },
+      name: { type: 'string', description: 'Sonst: Dateiname oder ein Wort daraus, z. B. "Mieterliste".' },
+      bildunterschrift: { type: 'string', description: 'Optional: kurzer Text unter der Datei (höchstens 1000 Zeichen).' },
+    },
+    required: ['kunde_id'],
+  },
+}
+
+export type SendeKontext = {
+  supabase: Supa
+  mitarbeiter: RechteMitarbeiter & { name: string; id?: string | null }
+  protokolliere: (text: string) => void
+  darfAkte?: (m: RechteMitarbeiter, akte: AkteFuerRechte) => boolean
+  /** Chat-ID, falls der Aufrufer sie kennt; sonst aus mitarbeiter.telegram_chat_id. */
+  chatId?: number | string | null
+  /** Bot-Schlüssel; ohne Angabe TELEGRAM_BOT_TOKEN. Fehlt er (lokaler Test), wird nur protokolliert. */
+  botToken?: string | null
+  /** Für Tests: Ersatz für fetch (Telegram und fremde Adressen). */
+  abruf?: typeof fetch
+}
+
+type Dok = { id?: string; name?: string; typ?: string; url?: string; groesse?: string; datum?: string; quelle?: string }
+
+function kundeName(k: { firma?: string | null; ansprechpartner?: string | null }): string {
+  const firma = String(k.firma ?? '').trim()
+  const ap = String(k.ansprechpartner ?? '').trim()
+  return ap && ap !== firma ? `${firma} (${ap})` : firma || ap
+}
+
+function einfach(s: string): string {
+  return String(s ?? '')
+    .toLowerCase()
+    .replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+}
+
+function formatGroesse(bytes: number): string {
+  return bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function liste(doks: Dok[]): string {
+  return doks
+    .slice(0, 10)
+    .map((d) => `- „${d.name ?? 'ohne Namen'}"${d.datum ? ` (${d.datum}${d.groesse ? `, ${d.groesse}` : ''})` : ''} dokument_id=${d.id ?? '?'}`)
+    .join('\n')
+}
+
+/** Sucht das Dokument nach Kennung oder Teil des Namens. */
+export function findeDokument(doks: Dok[], id: string, suche: string): { dok: Dok } | { meldung: string } {
+  if (id) {
+    const d = doks.find((x) => x.id === id)
+    if (d) return { dok: d }
+    if (!suche) return { meldung: `Kein Dokument mit dokument_id=${id} in dieser Akte.${doks.length ? ` Vorhanden sind u. a.:\n${liste(doks)}` : ''}` }
+  }
+  if (!suche) return { meldung: doks.length ? `Welche Datei? Gib dokument_id oder name an. Vorhanden sind u. a.:\n${liste(doks)}` : 'Diese Akte hat keine Dokumente.' }
+  const s = einfach(suche)
+  const genau = doks.filter((d) => einfach(d.name ?? '') === s || einfach(String(d.name ?? '').replace(/\.[a-z0-9]{2,5}$/i, '')) === s)
+  if (genau.length === 1) return { dok: genau[0] }
+  const woerter = s.split(' ').filter(Boolean)
+  const treffer = doks.filter((d) => {
+    const n = einfach(d.name ?? '')
+    return woerter.every((w) => n.includes(w))
+  })
+  if (treffer.length === 1) return { dok: treffer[0] }
+  if (treffer.length === 0) return { meldung: `Keine Datei zu „${suche}" in dieser Akte.${doks.length ? ` Vorhanden sind u. a.:\n${liste(doks)}` : ''}` }
+  return { meldung: `Mehrere Dateien passen zu „${suche}" — welche soll es sein?\n${liste(treffer)}` }
+}
+
+/** Wo liegt die Datei? Eimer + Pfad (mit dem Dienst-Client lesbar) oder eine fremde Adresse. */
+export function speicherOrt(url: string, basisUrl = Deno.env.get('SUPABASE_URL') ?? ''): { eimer: string; pfad: string; oeffentlich?: string } | { adresse: string } | null {
+  const u = String(url ?? '').trim()
+  if (!u) return null
+  if (u.startsWith('objekt-dokumente:')) return { eimer: 'objekt-dokumente', pfad: u.slice('objekt-dokumente:'.length) }
+  if (u.startsWith('privat:')) return { eimer: 'postfach-anhaenge', pfad: u.slice('privat:'.length) }
+  if (/^https?:\/\//i.test(u)) {
+    const m = u.match(/\/storage\/v1\/object\/(?:public|sign|authenticated)\/([^/]+)\/([^?#]+)/)
+    const eigenerSpeicher = !basisUrl || u.startsWith(basisUrl.replace(/\/+$/, ''))
+    if (m && eigenerSpeicher) {
+      let pfad = m[2]
+      try {
+        pfad = decodeURIComponent(pfad)
+      } catch {
+        // Pfad bleibt wie er ist
+      }
+      return { eimer: m[1], pfad, oeffentlich: u }
+    }
+    return { adresse: u }
+  }
+  return { eimer: 'kunden-dokumente', pfad: u.replace(/^\/+/, '') }
+}
+
+class DateiFehler extends Error {}
+
+async function ladeBytes(supabase: Supa, url: string, abruf: typeof fetch): Promise<Uint8Array<ArrayBuffer>> {
+  const ort = speicherOrt(url)
+  if (!ort) throw new DateiFehler('Zu diesem Dokument ist keine Datei hinterlegt.')
+  const zuGross = (n: number) => new DateiFehler(`Die Datei ist ${formatGroesse(n)} groß — Telegram nimmt höchstens 50 MB. Sie lässt sich im CRM in der Akte unter Dokumente öffnen.`)
+  const perAdresse = async (adresse: string) => {
+    const res = await abruf(adresse, { signal: AbortSignal.timeout(30_000) })
+    if (!res.ok) throw new DateiFehler(`Die Datei ließ sich nicht laden (${res.status}).`)
+    const laenge = Number(res.headers.get('content-length') ?? 0)
+    if (laenge > TELEGRAM_GRENZE) {
+      await res.body?.cancel().catch(() => {})
+      throw zuGross(laenge)
+    }
+    return new Uint8Array(await res.arrayBuffer())
+  }
+  let bytes: Uint8Array<ArrayBuffer>
+  if ('adresse' in ort) {
+    bytes = await perAdresse(ort.adresse)
+  } else {
+    const { data, error } = await supabase.storage.from(ort.eimer).download(ort.pfad)
+    if (error || !data) {
+      // Öffentliche Adresse: zur Not direkt abrufen.
+      if (ort.oeffentlich && /\/object\/public\//.test(ort.oeffentlich)) bytes = await perAdresse(ort.oeffentlich)
+      else throw new DateiFehler(`Die Datei ist im Speicher nicht (mehr) vorhanden (${error?.message ?? 'unbekannt'}).`)
+    } else {
+      if (data.size > TELEGRAM_GRENZE) throw zuGross(data.size)
+      bytes = new Uint8Array(await data.arrayBuffer())
+    }
+  }
+  if (bytes.length > TELEGRAM_GRENZE) throw zuGross(bytes.length)
+  if (bytes.length === 0) throw new DateiFehler('Die Datei ist leer.')
+  return bytes
+}
+
+const TYP_NACH_ENDUNG: Record<string, string> = {
+  pdf: 'application/pdf',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  csv: 'text/csv',
+  txt: 'text/plain',
+}
+const ENDUNG_NACH_TYP: Record<string, string> = Object.fromEntries(Object.entries(TYP_NACH_ENDUNG).filter(([e]) => e !== 'jpeg').map(([e, t]) => [t, e]))
+
+/** Dateiname für Telegram: ohne Pfadzeichen, mit Endung. */
+export function sendeName(dok: Dok): string {
+  // deno-lint-ignore no-control-regex
+  let n = String(dok.name ?? '').replace(/[\\/\u0000-\u001F]+/g, ' ').replace(/\s+/g, ' ').trim() || 'Datei'
+  const endung = ENDUNG_NACH_TYP[String(dok.typ ?? '')]
+  if (!/\.[a-z0-9]{2,5}$/i.test(n) && endung) n = `${n}.${endung}`
+  return n.length > 120 ? n.slice(-120) : n
+}
+
+function telegramFehler(status: number, beschreibung: string, wer: string): string {
+  if (status === 413 || /too large|too big/i.test(beschreibung)) return 'Telegram hat die Datei als zu groß abgelehnt (höchstens 50 MB). Sie lässt sich im CRM in der Akte unter Dokumente öffnen.'
+  if (/chat not found/i.test(beschreibung)) return `Der Telegram-Chat von ${wer} ist nicht erreichbar. Er muss sich im CRM unter Einstellungen neu mit Telegram verbinden.`
+  if (status === 403 || /blocked|deactivated/i.test(beschreibung)) return `Telegram lässt die Nachricht nicht zu: ${wer} hat den Bot gestoppt oder blockiert.`
+  if (status === 429) return 'Telegram bremst gerade (zu viele Nachrichten). Bitte in einer Minute noch einmal versuchen.'
+  return `Telegram hat die Datei abgelehnt (${status}${beschreibung ? `: ${beschreibung}` : ''}).`
+}
+
+// deno-lint-ignore no-explicit-any
+export async function fuehreDateiSendenAus(input: any, k: SendeKontext): Promise<string> {
+  const { supabase, mitarbeiter, protokolliere } = k
+  const darf = k.darfAkte ?? darfAkteStandard
+  const abruf = k.abruf ?? fetch
+  const kundeId = String(input?.kunde_id ?? '').trim()
+  const dokId = String(input?.dokument_id ?? '').trim()
+  const suche = String(input?.name ?? input?.suchbegriff ?? '').trim()
+  const unterschrift = String(input?.bildunterschrift ?? '').trim().slice(0, 1000)
+  if (!kundeId) return 'Fehler: kunde_id fehlt. Ermittle sie mit kunden_suchen.'
+
+  const { data: akte, error: ladeFehler } = await supabase.from('kunden').select('id, bereich, firma, ansprechpartner, verantwortlich_email, dokumente').eq('id', kundeId).maybeSingle()
+  if (ladeFehler) return `Fehler beim Laden der Akte: ${ladeFehler.message}`
+  const keinKunde = 'Fehler: Es gibt keinen Kunden mit dieser kunde_id. Ermittle die richtige ID mit kunden_suchen.'
+  if (!akte) return keinKunde
+  if (!darf(mitarbeiter, akte)) return istPrivat(akte) ? keinKunde : nichtFreigegeben(akte.bereich, mitarbeiter.name)
+  const akteName = kundeName(akte)
+
+  const doks: Dok[] = Array.isArray(akte.dokumente) ? akte.dokumente : []
+  const gefunden = findeDokument(doks, dokId, suche)
+  if ('meldung' in gefunden) return gefunden.meldung
+  const dok = gefunden.dok
+  const name = sendeName(dok)
+
+  const sensibel = dok.quelle === 'assistent' ? null : sensibleArt([dok.name])
+  if (sensibel) {
+    return `Nicht gesendet: „${dok.name}" ist eine sensible Unterlage (${sensibel}). Solche Unterlagen verschicke ich aus Datenschutzgründen nicht über Telegram (mit Telegram besteht kein Auftragsverarbeitungsvertrag). Sag dem Mitarbeiter, dass er sie im CRM in der Akte von ${akteName} unter Dokumente öffnen kann.`
+  }
+
+  // Chat des Mitarbeiters, der gerade schreibt.
+  let chatId = k.chatId ?? null
+  if (!chatId) {
+    const spalte = mitarbeiter.id ? 'id' : 'email'
+    const wert = mitarbeiter.id ?? mitarbeiter.email
+    if (wert) {
+      const { data: m } = await supabase.from('mitarbeiter').select('telegram_chat_id').eq(spalte, wert).maybeSingle()
+      chatId = m?.telegram_chat_id ?? null
+    }
+  }
+  if (!chatId) return `Nicht gesendet: Für ${mitarbeiter.name} ist kein Telegram-Chat verbunden. Er kann sich im CRM unter Einstellungen mit Telegram verbinden; bis dahin öffnet er die Datei im CRM in der Akte von ${akteName} unter Dokumente.`
+
+  let bytes: Uint8Array<ArrayBuffer>
+  try {
+    bytes = await ladeBytes(supabase, String(dok.url ?? ''), abruf)
+  } catch (e) {
+    return `Nicht gesendet: ${e instanceof DateiFehler ? e.message : `Die Datei ließ sich nicht laden (${e instanceof Error ? e.message : String(e)}).`}`
+  }
+
+  const typ = dok.typ || TYP_NACH_ENDUNG[name.split('.').pop()?.toLowerCase() ?? ''] || 'application/octet-stream'
+  const token = k.botToken === undefined ? Deno.env.get('TELEGRAM_BOT_TOKEN') : k.botToken
+  if (!token) {
+    console.log(`[Telegram-Datei -> ${chatId}] ${name} (${formatGroesse(bytes.length)}, ${typ})${unterschrift ? ` — ${unterschrift}` : ''}`)
+    protokolliere(`„${name}" aus der Akte ${akteName} an ${mitarbeiter.name} geschickt (Testlauf, nicht wirklich gesendet)`)
+    return `Testlauf ohne Bot-Schlüssel: „${name}" (${formatGroesse(bytes.length)}) wäre jetzt in den Telegram-Chat von ${mitarbeiter.name} gegangen, wurde aber nur protokolliert.`
+  }
+
+  const form = new FormData()
+  form.append('chat_id', String(chatId))
+  form.append('document', new Blob([bytes], { type: typ }), name)
+  if (unterschrift) form.append('caption', unterschrift)
+  let res: Response
+  try {
+    res = await abruf(`https://api.telegram.org/bot${token}/sendDocument`, { method: 'POST', body: form, signal: AbortSignal.timeout(90_000) })
+  } catch (e) {
+    return `Nicht gesendet: Telegram war nicht erreichbar (${e instanceof Error ? e.message : String(e)}). Bitte gleich noch einmal versuchen.`
+  }
+  // deno-lint-ignore no-explicit-any
+  const antwort: any = await res.json().catch(() => null)
+  if (!res.ok || !antwort?.ok) {
+    const meldung = telegramFehler(antwort?.error_code ?? res.status, String(antwort?.description ?? ''), mitarbeiter.name)
+    console.error('sendDocument fehlgeschlagen:', res.status, antwort?.description ?? '')
+    return `Nicht gesendet: ${meldung}`
+  }
+  protokolliere(`„${name}" aus der Akte ${akteName} per Telegram an ${mitarbeiter.name} geschickt`)
+  return `Gesendet: „${name}" (${formatGroesse(bytes.length)}) liegt jetzt als Datei im Telegram-Chat von ${mitarbeiter.name}. Bestätige das in deiner Antwort nur kurz, ohne die Datei noch einmal zu beschreiben.`
+}
