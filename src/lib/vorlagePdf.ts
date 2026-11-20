@@ -25,7 +25,7 @@ function sicher(text: string): string {
     .replace(/[^\u0000-ÿ€–—‘’‚“”„•…]/g, '?')
 }
 
-type Wort = { text: string; breite: number; kasten?: 'leer' | 'an'; linie?: boolean; nachLeer: boolean; fett?: boolean }
+type Wort = { text: string; breite: number; kasten?: 'leer' | 'an'; linie?: boolean; feld?: boolean; nachLeer: boolean; fett?: boolean }
 
 export function erzeugeVorlagePdf(params: {
   text: string
@@ -116,7 +116,7 @@ export function erzeugeVorlagePdf(params: {
         const wert = params.werte[t.name]?.trim()
         // Ob nach dem Feld ein Abstand folgt, bestimmt der Text dahinter (z. B. kein Abstand vor einem Punkt).
         if (!wert) {
-          liste.push({ text: '', breite: inTabelle ? 14 : 42, linie: true, nachLeer: false })
+          liste.push({ text: '', breite: inTabelle ? 14 : 42, linie: true, feld: true, nachLeer: false })
           continue
         }
         const fett = t.fett || grundStil === 'bold'
@@ -150,6 +150,13 @@ export function erzeugeVorlagePdf(params: {
     for (const w of liste) {
       const akt = zeilen[zeilen.length - 1]
       const abstand = akt.length && akt[akt.length - 1].nachLeer ? leer : 0
+      // Ein leeres Feld rutscht nicht in die nächste Zeile, solange noch ein brauchbares Stück Linie passt.
+      const rest = breite - x - abstand
+      if (w.feld && akt.length && x + abstand + w.breite > breite && rest >= 18) {
+        akt.push({ ...w, breite: rest })
+        x = breite
+        continue
+      }
       if (akt.length && x + abstand + w.breite > breite) {
         zeilen.push([w])
         x = w.breite
@@ -192,8 +199,20 @@ export function erzeugeVorlagePdf(params: {
     grundGroesse = groesse
     schrift(stil, groesse)
     const x0 = LINKS + Math.min(einzug, 12) * 1.6
-    for (const z of umbrechen(worte(teile), textBreite() - (x0 - LINKS))) {
-      platz(zeilenhoehe)
+    const breite = textBreite() - (x0 - LINKS)
+    const leer = doc.getTextWidth(' ')
+    for (let z of umbrechen(worte(teile), breite)) {
+      // Endet die Zeile mit einem leeren Feld hinter einer Bezeichnung (z. B. "Anschrift: ____"), reicht
+      // die Linie bis zum Rand und die Zeile bekommt etwas Luft darüber — Platz zum Ausfüllen von Hand.
+      const letztes = z[z.length - 1]
+      const vonHand = !inTabelle && !!letztes?.feld && z.length > 1 && /:$/.test(z[z.length - 2].text)
+      if (vonHand) {
+        const x = z.slice(0, -1).reduce((summe, w) => summe + w.breite + (w.nachLeer ? leer : 0), 0)
+        z = [...z.slice(0, -1), { ...letztes, breite: Math.max(letztes.breite, breite - x) }]
+      }
+      const vorlauf = vonHand ? 2.6 : 0
+      platz(vorlauf + zeilenhoehe)
+      y += vorlauf
       schrift(stil, groesse)
       zeichneZeile(z, x0, y)
       y += zeilenhoehe

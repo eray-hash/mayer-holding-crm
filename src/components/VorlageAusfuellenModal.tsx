@@ -282,12 +282,12 @@ export function VorlageAusfuellenModal({
               if (b.art === 'zeile') return <p key={i} style={b.einzug ? { paddingLeft: `${Math.min(b.einzug, 12) * 0.45}rem` } : undefined}>{zeigeTeile(b.teile)}</p>
               return (
                 <div key={i} className="my-2 overflow-x-auto">
-                  <table className="w-full border-collapse text-xs">
+                  <table className={`w-full border-collapse ${b.rahmenlos ? 'text-sm' : 'text-xs'}`}>
                     <tbody>
                       {b.zeilen.map((zeile, z) => (
                         <tr key={z} className={z === 0 && hatKopfzeile(b.zeilen) ? 'bg-slate-50 font-medium' : ''}>
                           {zeile.map((zelle, s) => (
-                            <td key={s} className="border border-slate-200 px-2 py-1 align-top">
+                            <td key={s} className={`${b.rahmenlos ? '' : 'border border-slate-200 '}px-2 py-1 align-top`}>
                               {zeigeTeile(zelle)}
                             </td>
                           ))}
