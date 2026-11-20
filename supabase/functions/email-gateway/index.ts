@@ -233,6 +233,17 @@ import { loescheTermin, sendeErinnerungen, sendeTelegram, speichereTermin } from
 import { aboLink, kalenderAboAntwort } from './kalenderAbo.ts'
 import { MS_AKTIONEN, msAbgleichAlle, msAktion, msRueckrufAntwort } from './privatMicrosoft.ts'
 import { BRIEF_AKTIONEN, briefAktion } from './briefe.ts'
+import { AUSFUEHRER } from './vormerkungen.ts'
+
+// Bereich Privat: einen CRM-Termin absagen, nachdem der Mitarbeiter die Vormerkung des Assistenten bestätigt hat
+// (hier registriert, weil die Absage an einen eingeladenen Kunden über sendMail geht).
+AUSFUEHRER.crm_termin_absagen = async (admin, ich, p) => {
+  const muster = ich.replace(/[\\%_]/g, (z) => `\\${z}`)
+  const { data: m } = await admin.from('mitarbeiter').select('name, rolle, ist_admin').ilike('email', muster).maybeSingle()
+  const r = await loescheTermin(admin, { email: ich, name: m?.name ?? '', istGf: m?.rolle === 'geschaeftsfuehrung' || !!m?.ist_admin }, String(p.terminId ?? ''), (to, subject, text, anhaenge) => sendMail(to, subject, text, undefined, anhaenge))
+  if (!r.ok) throw new Error(r.fehler)
+  return r.art === 'abgesagt' ? 'Termin abgesagt, die Beteiligten wurden benachrichtigt.' : 'Aus dem Termin ausgetragen.'
+}
 import { BUCHUNGS_AKTIONEN, buchungAktion } from './buchung.ts'
 import { sendeTodoErinnerungen } from './todoErinnerung.ts'
 import { holeGesendeteMails } from './gesendetAbruf.ts'

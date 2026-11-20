@@ -29,6 +29,7 @@ import { kollegenBenachrichtigen, type MitteilungsWege, schickeMitteilung, todoA
 import { fuehrePflegeWerkzeugAus, istPflegeWerkzeug, type PflegeAnfrage, PFLEGE_WERKZEUGE } from './pflegeWerkzeuge.ts'
 import { DOKUMENT_WERKZEUGE, fuehreDokumentWerkzeugAus, istDokumentWerkzeug } from './dokumentErstellen.ts'
 import { fuehreGesendetWerkzeugAus, GESENDET_WERKZEUGE, istGesendetWerkzeug } from './gesendetWerkzeug.ts'
+import { BRIEF_WERKZEUGE, fuehrePrivatWerkzeugAus, istPrivatWerkzeug, msErlaubt, OUTLOOK_WERKZEUGE, PRIVAT_HINWEIS, privatFaehigkeiten } from './outlookWerkzeuge.ts'
 import { datumDeutsch, empfaengerVon, findeEmpfaenger, ladeAnhaengeFuerVersand, MAIL_SPALTEN, type MailZeile, volltextVon, VOLLTEXT_HOECHSTENS, type WeiterleitungEntwurf, weiterleitungsBetreff, weiterleitungsText } from './mailWerkzeuge.ts'
 
 const BOT_TOKEN = Deno.env.get('TELEGRAM_BOT_TOKEN')
@@ -930,6 +931,9 @@ function fuerVerlauf(msgs: Nachricht[]): Nachricht[] {
                 // (Größe des Zustands, Datenschutz) — im Verlauf bleibt nur ein Vermerk.
                 b?.type === 'image'
                   ? { type: 'text', text: BILD_VERMERK }
+                  : b?.type === 'tool_result' && Array.isArray(b.content)
+                    ? // Anhänge (PDF/Bild aus Hotmail) nur für ihren Zug — nie im gespeicherten Verlauf.
+                      { ...b, content: b.content.map((x: any) => (x?.type === 'document' || x?.type === 'image' ? { type: 'text', text: '(Anhang war nur in diesem Zug sichtbar — bei Bedarf erneut lesen)' } : x)) }
                   : b?.type === 'tool_result' && typeof b.content === 'string' && b.content.length > 2500
                     ? { ...b, content: `${b.content.slice(0, 2500)} … (für den Verlauf gekürzt — bei Bedarf Werkzeug erneut aufrufen)` }
                     : b,
@@ -1565,6 +1569,16 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
       return meine.length === 0 ? 'In diesem Zeitraum stehen keine Termine im Kalender.' : JSON.stringify(meine)
     }
 
+    if (name === 'termin_absagen' && msErlaubt(ich)) {
+      // Bereich Privat (Regel des Desktop-Assistenten): Absagen/Löschen nur nach Bestätigung durch den Mitarbeiter.
+      const { data: t } = await supabase.from('termine').select('titel, beginn, besitzer_email').eq('id', String(input.termin_id ?? '')).maybeSingle()
+      if (!t) return 'Fehler: Diesen Termin gibt es nicht (mehr). Ermittle die termin_id mit termine_zeigen.'
+      const beschreibung = `Termin absagen: ${t.titel} (${berlinText(t.beginn, t.beginn, false)})`.slice(0, 200)
+      const vm = await rufeKalender({ action: 'vormerkung_anlegen', art: 'crm_termin_absagen', beschreibung, parameter: { terminId: String(input.termin_id), bezug: t.titel } })
+      if (!vm.ok) return `Fehler: ${vm.daten?.error ?? 'Vormerken fehlgeschlagen'}`
+      protokolliere(`⏸ Vorgemerkt (wartet auf Bestätigung): ${beschreibung}`)
+      return `⏸ VORGEMERKT: ${beschreibung}. Noch nichts abgesagt — er bestätigt per Knopf in Telegram oder im CRM unter Privat → Zu bestätigen.`
+    }
     if (name === 'termin_absagen') {
       const ergebnis = await rufeKalender({ action: 'termin_loeschen', id: String(input.termin_id ?? '') })
       if (!ergebnis.ok) return `Fehler: ${ergebnis.daten?.error ?? `Absagen fehlgeschlagen (${ergebnis.status})`}`
@@ -3008,7 +3022,7 @@ const ANTWORT_TOKENS = 4000
 const ANTWORT_TOKENS_GROSS = 12000
 
 // deno-lint-ignore no-explicit-any
-async function claude(system: unknown[], messages: unknown[], maxTokens = ANTWORT_TOKENS): Promise<any> {
+async function claude(system: unknown[], messages: unknown[], maxTokens = ANTWORT_TOKENS, werkzeuge: unknown[] = TOOLS): Promise<any> {
   if (!ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY ist nicht gesetzt.')
   // Mengengrenze (429) oder Überlast (529) des KI-Dienstes: kurz warten und noch einmal versuchen,
   // statt dem Mitarbeiter sofort einen Fehler zu zeigen.
@@ -3016,7 +3030,7 @@ async function claude(system: unknown[], messages: unknown[], maxTokens = ANTWOR
     const res = await kiAufruf('telegram-gateway', 'https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({ model: AGENT_MODEL, max_tokens: maxTokens, system, tools: TOOLS, messages }),
+      body: JSON.stringify({ model: AGENT_MODEL, max_tokens: maxTokens, system, tools: werkzeuge, messages }),
     })
     const data = await res.json().catch(() => ({}))
     if (res.ok) return data
@@ -3057,6 +3071,9 @@ export async function agentAntwort(supabase: Supa, mitarbeiter: Mitarbeiter, sta
   const messages = (): Nachricht[] => [...state.zuege.flatMap((zug) => zug.msgs), ...neu]
 
   const wochentag = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', weekday: 'long' }).format(new Date())
+  // Bereich Privat (Hotmail, Briefe): nur für freigeschaltete Mitarbeiter (MS_ERLAUBT), Hotmail nur mit verbundenem Konto.
+  const privat = await privatFaehigkeiten(supabase, mitarbeiter.email ?? '').catch(() => ({ briefe: false, outlook: false }))
+  const werkzeuge = privat.briefe ? [...TOOLS, ...BRIEF_WERKZEUGE, ...(privat.outlook ? OUTLOOK_WERKZEUGE : [])] : TOOLS
   const system = [
     { type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } },
     {
@@ -3074,6 +3091,7 @@ export async function agentAntwort(supabase: Supa, mitarbeiter: Mitarbeiter, sta
         siehtAlleBereiche(mitarbeiter)
           ? 'Aktenpflege (nur Geschäftsführung und Admins, also auch für diesen Mitarbeiter): Sagt er z. B. „verschiebe X nach Erben", verschiebst du die Akte mit kunde_bereich_wechseln. Sagt er „X und Y sind dieselbe Firma" oder „führe X und Y zusammen", nimmst du kunden_zusammenfuehren; welche Akte bleibt, entscheidet er; sagt er nichts dazu, schlägst du die vollständigere vor. Beides wie beim Löschen: erst beschreiben und fragen, ausführen erst nach seiner klaren Bestätigung in der nächsten Nachricht.'
           : '',
+        privat.briefe ? PRIVAT_HINWEIS + (privat.outlook ? '' : '\n(Hotmail ist noch nicht verbunden — dafür im CRM unter Privat → Einstellungen.)') : '',
         state.aktionen.length > 0
           ? `Was du in diesem Chat zuletzt im CRM getan hast (älteste zuerst):\n${state.aktionen.slice(-10).map((a) => `- ${a.text}`).join('\n')}`
           : 'Du hast in diesem Chat bisher noch nichts im CRM verändert.',
@@ -3087,13 +3105,13 @@ export async function agentAntwort(supabase: Supa, mitarbeiter: Mitarbeiter, sta
   const aktionenVorher = state.aktionen.length
   let gross = false
   for (let schritt = 0; schritt < 12; schritt++) {
-    let data = await claude(system, messages())
+    let data = await claude(system, messages(), ANTWORT_TOKENS, werkzeuge)
     // Abgeschnittene Antwort (meist ein langer Notiztext im Werkzeug-Aufruf): denselben Schritt einmal
     // mit mehr Platz wiederholen — aber nur, wenn die Laufzeit des Servers dafür noch reicht.
     if (data.stop_reason === 'max_tokens' && !gross && restlaufzeitMs() > 150_000) {
       gross = true
       console.warn('Antwort abgeschnitten (max_tokens) — Schritt wird mit mehr Platz wiederholt.')
-      data = await claude(system, messages(), ANTWORT_TOKENS_GROSS)
+      data = await claude(system, messages(), ANTWORT_TOKENS_GROSS, werkzeuge)
     }
     // deno-lint-ignore no-explicit-any
     const bloecke: any[] = data.content ?? []
@@ -3104,9 +3122,12 @@ export async function agentAntwort(supabase: Supa, mitarbeiter: Mitarbeiter, sta
     neu.push({ role: 'assistant', content: bloecke })
     const ergebnisse = []
     for (const b of bloecke.filter((x) => x.type === 'tool_use')) {
-      let ergebnis: string
+      let ergebnis: string | unknown[]
       try {
-        ergebnis = await fuehreWerkzeugAus(b.name, b.input ?? {}, ctx)
+        ergebnis =
+          privat.briefe && istPrivatWerkzeug(b.name)
+            ? await fuehrePrivatWerkzeugAus(b.name, b.input ?? {}, { supabase, email: mitarbeiter.email ?? '', protokolliere: (text) => state.aktionen.push({ z: new Date().toISOString(), text }) })
+            : await fuehreWerkzeugAus(b.name, b.input ?? {}, ctx)
       } catch (err) {
         console.error(`Werkzeug ${b.name} fehlgeschlagen:`, err)
         ergebnis = `Fehler im Werkzeug: ${err instanceof Error ? err.message : String(err)}`
