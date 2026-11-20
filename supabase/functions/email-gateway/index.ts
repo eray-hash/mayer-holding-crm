@@ -1574,7 +1574,10 @@ const xmlText = (t: string) =>
 // mit ihrem zuletzt gespeicherten Ergebnis. Das alte .xls-Format ist kein ZIP und wird nicht unterstützt.
 function xlsxText(bytes: Uint8Array, maxZeichen = 80_000): string {
   const zip = unzipSync(bytes, { filter: (f) => /^xl\/(workbook\.xml|sharedStrings\.xml|styles\.xml|_rels\/workbook\.xml\.rels|worksheets\/[^/]+\.xml)$/.test(f.name) })
-  const lies = (name: string) => (zip[name] ? strFromU8(zip[name]) : '')
+  // Manche Programme (z. B. mit dem OpenXML-Baukasten von Microsoft erzeugte Dateien) schreiben jedes
+  // Element mit Vorsilbe, etwa <x:sheet> statt <sheet>. Excel liest beides; die Vorsilben werden hier
+  // entfernt, damit die Suche unten beide Schreibweisen findet (Fall vom 19.11.2026: Datei schien leer).
+  const lies = (name: string) => (zip[name] ? strFromU8(zip[name]).replace(/<(\/?)[A-Za-z][\w.-]*:(?=[A-Za-z])/g, '<$1') : '')
   if (!zip['xl/workbook.xml']) throw new Error('keine Excel-Datei im .xlsx-Format')
 
   const texte = [...lies('xl/sharedStrings.xml').matchAll(/<si>([\s\S]*?)<\/si>/g)].map((m) => xmlText([...m[1].matchAll(/<t(?:\s[^>]*)?>([^<]*)<\/t>/g)].map((t) => t[1]).join('')))
