@@ -9,6 +9,7 @@ import { jeKunde, ladeOffeneWiedervorlagen, type Wiedervorlage } from '../../lib
 import { istSammelakte } from '../../data/sammelakten'
 import { seedMailVorlagen } from '../../data/mailVorlagen'
 import { today } from '../../lib/dates'
+import { ladeAlleWillkommen, willkommenText, type WillkommenNachricht } from '../../lib/willkommen'
 import {
   AMPEL_LABEL, berechneAmpel, offeneWiedervorlagen, standVon, umsatzVon, unterlagenVon,
   type AmpelErgebnis, type NaechsteWv, type Stand, type UnterlagenStand,
@@ -23,6 +24,7 @@ export type Zeile = {
   umsatz: { netto: number; anzahl: number; ohneBetrag: number }
   ampel: AmpelErgebnis
   unterlagen?: UnterlagenStand
+  /** Anzeigetext zur Willkommensnachricht (automatisch vorgemerkt/gesendet oder von Hand mit der Vorlage geschickt). */
   willkommen?: string
   /** Offene Wiedervorlagen (Follow-up der Akte und Tabelle wiedervorlagen), früheste zuerst. */
   wv: NaechsteWv[]
@@ -65,6 +67,7 @@ export function useChecklisteDaten() {
   const { oeffentlicheKundenBereiche } = useBereichsRechte()
   const [kvs, setKvs] = useState<Kostenvoranschlag[]>([])
   const [willkommen, setWillkommen] = useState<Map<string, string>>(new Map())
+  const [willkommenAuto, setWillkommenAuto] = useState<Map<string, WillkommenNachricht>>(new Map())
   const [wvListe, setWvListe] = useState<Wiedervorlage[]>([])
   const wvLaden = () => ladeOffeneWiedervorlagen().then(setWvListe).catch((e) => setFehler(e instanceof Error ? e.message : 'Wiedervorlagen ließen sich nicht laden.'))
   const [fehler, setFehler] = useState('')
@@ -75,7 +78,8 @@ export function useChecklisteDaten() {
     ladeKostenvoranschlaege()
       .then((l) => aktiv && setKvs(l))
       .catch((e) => aktiv && setFehler(e instanceof Error ? e.message : 'Kostenvoranschläge ließen sich nicht laden.'))
-    // Willkommensnachricht: gesendete Mails mit dem Betreff der Vorlage „Willkommen als Interessent“.
+    ladeAlleWillkommen().then((m) => aktiv && setWillkommenAuto(m)).catch(() => undefined)
+    // Willkommensnachricht von Hand: gesendete Mails mit dem Betreff der Vorlage „Willkommen als Interessent“.
     supabase
       ?.from('gesendete_emails')
       .select('kunde_id, gesendet_am')
@@ -119,14 +123,14 @@ export function useChecklisteDaten() {
           umsatz: umsatzVon(eigeneKvs),
           ampel: berechneAmpel(k, b.id, { heute, rechnungen: state.rechnungen, kvs: eigeneKvs, wiedervorlagen: eigeneWv }),
           unterlagen: unterlagenVon(k),
-          willkommen: willkommen.get(k.id),
+          willkommen: willkommenAuto.has(k.id) ? willkommenText(willkommenAuto.get(k.id)!) : willkommen.has(k.id) ? `von Hand gesendet am ${willkommen.get(k.id)!.slice(8, 10)}.${willkommen.get(k.id)!.slice(5, 7)}.` : undefined,
           wv: offeneWiedervorlagen(k, eigeneWv),
         })
       }
     }
     return zeilen
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state, kvJeKunde, wvJeKunde, willkommen, heute, oeffentlicheKundenBereiche.map((b) => b.id).join()])
+  }, [state, kvJeKunde, wvJeKunde, willkommen, willkommenAuto, heute, oeffentlicheKundenBereiche.map((b) => b.id).join()])
 
   return { alle, kvs, wvListe, wvJeKunde, wvLaden, fehler, heute }
 }

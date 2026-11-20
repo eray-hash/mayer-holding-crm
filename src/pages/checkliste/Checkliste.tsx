@@ -11,6 +11,8 @@ import { useBereichsRechte } from '../../lib/bereichsRechte'
 import { holeLeistungen } from '../../lib/leistungen'
 import { checklisteVorschlag } from '../../lib/emailGateway'
 import { WiedervorlagenListe } from '../../components/WiedervorlagenListe'
+import { WillkommenSchalter } from '../../components/WillkommenSchalter'
+import { WillkommenHinweis } from '../../components/WillkommenHinweis'
 import { fmtEURCent, today } from '../../lib/dates'
 import {
   AMPEL_LABEL, AMPEL_RANG, gewichtet,
@@ -78,6 +80,8 @@ export function Checkliste() {
         </div>
         <SecondaryButton onClick={() => navigate('/besprechung')}>Zur Wochenbesprechung</SecondaryButton>
       </div>
+
+      <WillkommenSchalter nutzerName={nutzer.name} />
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Card className="p-3">
@@ -172,7 +176,7 @@ export function Checkliste() {
                       <span className="block text-xs text-slate-400">{z.bereichLabel}{k.verantwortlich ? ` · ${k.verantwortlich}` : ''}</span>
                     </td>
                     <td className="px-3 py-2"><StandAnzeige s={z.stand} /></td>
-                    <td className="px-3 py-2 text-xs text-slate-500">{z.willkommen ? `gesendet ${kurzDatum(z.willkommen)}` : '–'}</td>
+                    <td className="px-3 py-2 text-xs text-slate-500">{z.willkommen ?? '–'}</td>
                     <td className="max-w-[260px] px-3 py-2 text-xs text-slate-700">{k.sachverhalt || <span className="text-slate-300">–</span>}</td>
                     <td className="px-3 py-2 text-xs">
                       <span className="block text-slate-700">{k.firma && k.firma !== k.ansprechpartner ? k.firma : '–'}</span>
@@ -424,6 +428,7 @@ export function ChecklisteBearbeiten({
           </p>
 
           <div>
+            <div className="mb-3"><WillkommenHinweis kundeId={k.id} nutzerName={nutzerName} nurLesen={nurLesen} /></div>
             <span className={feld}>Wiedervorlagen</span>
             {offenesFollowUp && (
               <label className="mb-2 flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700">

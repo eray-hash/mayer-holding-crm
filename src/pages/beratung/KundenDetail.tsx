@@ -21,6 +21,7 @@ import { NdaSection } from '../../components/NdaSection'
 import { DokumenteSection } from '../../components/DokumenteSection'
 import { KostenvoranschlaegeSection, useKvNutzer } from '../../components/KostenvoranschlaegeSection'
 import { WiedervorlagenListe } from '../../components/WiedervorlagenListe'
+import { WillkommenHinweis } from '../../components/WillkommenHinweis'
 import { KommunikationSection } from '../../components/KommunikationSection'
 import { LoeschenKundeButton } from '../../components/LoeschenKundeButton'
 import { SendEmailModal } from '../../components/SendEmailModal'
@@ -189,6 +190,7 @@ export function KundenDetail() {
               <div className={`text-sm ${overdue ? 'font-medium text-rose-600' : 'text-slate-700'}`}>{fmtDate(kunde.followUp.date)} — {kunde.followUp.note}</div>
             </div>
             <div className="mt-4 border-t border-slate-100 pt-4">
+              <div className="mb-3"><WillkommenHinweis kundeId={kunde.id} nutzerName={nutzer.name} nurLesen={nutzer.nurLesen} /></div>
               <h3 className="mb-3 text-sm font-semibold text-slate-700">Wiedervorlagen</h3>
               <WiedervorlagenListe kundeId={kunde.id} bereich="beratung" verantwortlich={kunde.verantwortlich} nutzerName={nutzer.name} nurLesen={nutzer.nurLesen} />
             </div>

@@ -262,6 +262,7 @@ import { istDienstSchluessel, sendeTagesmeldungen, tagesmeldungTest } from './ta
 import { pruefeBonitaet } from './bonitaet.ts'
 import { lieseKontoauszug } from './kontoauszug.ts'
 import { erstelleChecklisteVorschlag } from './checklisteVorschlag.ts'
+import { versendeWillkommen } from './willkommen.ts'
 import { beantworteKundenUnterlagen } from './kundenUnterlagen.ts'
 import { pruefeWunschAnalyse, wunschAnalyseTest } from './wunschAnalyse.ts'
 import { pruefeSuperuserWochenbericht, superuserAuswertung, superuserWochenberichtTest } from './superuser.ts'
@@ -3321,6 +3322,12 @@ Deno.serve((req: Request) => mitAnlass(async () => {
         return { gesendet: 0 }
       })
       if (todoErinnerung.gesendet > 0) console.log(`To-do-Erinnerungen: ${todoErinnerung.gesendet} gesendet.`)
+      // Fällige automatische Willkommensnachrichten (willkommen.ts) — nur bei eingeschaltetem Schalter; wirft nie.
+      const willkommen = await versendeWillkommen(admin, (to, subject, text, html) => sendMail(to, subject, text, html)).catch((err) => {
+        console.error('Willkommensnachrichten fehlgeschlagen:', err)
+        return { gesendet: 0, fehler: 0 }
+      })
+      if (willkommen.gesendet > 0 || willkommen.fehler > 0) console.log(`Willkommensnachrichten: ${willkommen.gesendet} gesendet, ${willkommen.fehler} Fehler.`)
       // Im selben Takt (die Funktion bremst sich selbst auf alle fünf Minuten): neue Treffer zwischen
       // Gesuchen und Objekten erkennen und den Zuständigen per Telegram melden.
       const treffer = body.ohneTreffer === true ? { gelaufen: false, neu: 0, benachrichtigt: 0 } : await pruefeNeueTreffer(admin, sendeTelegram)
@@ -4364,6 +4371,21 @@ Deno.serve((req: Request) => mitAnlass(async () => {
     }
 
     // Interne Bonitätseinschätzung eines Kunden (siehe bonitaet.ts) — nur mit eigenem Login, antwortet nach höchstens rund 100 Sekunden.
+    // „Jetzt senden“ einer vorgemerkten Willkommensnachricht aus der Akte (willkommen.ts) — mit Login und Recht auf die Akte.
+    if (body.action === 'willkommen_jetzt') {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const aufrufer = await ermittleAufrufer(req, admin, body)
+      if (!aufrufer) {
+        return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
+      }
+      if (typeof body.kundeId !== 'string' || !body.kundeId.trim()) {
+        return new Response(JSON.stringify({ error: 'kundeId fehlt.' }), { status: 400, headers })
+      }
+      if (!(await darfKundeServer(admin, aufrufer.email, body.kundeId))) return keinRecht(headers)
+      const ergebnis = await versendeWillkommen(admin, (to, subject, text, html) => sendMail(to, subject, text, html), { kundeId: body.kundeId.trim() })
+      return new Response(JSON.stringify(ergebnis), { headers })
+    }
+
     if (body.action === 'bonitaet_pruefen') {
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
       const aufrufer = await ermittleAufrufer(req, admin, body)
@@ -4617,7 +4639,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       return new Response(JSON.stringify({ ok: true }), { headers })
     }
 
-    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "bewertung_recherche_start", "bewertung_recherche_schritt", "kunden_umfeld_recherche", "steuer_analyse_start", "steuer_analyse_schritt", "dokument_lesen", "dokument_inhalte", "postfaecher_liste", "postfach_verbinden", "postfach_trennen", "postfach_abruf", "postfach_ordner", "mail_zuordnen", "mail_freigeben", "mail_anhang_url", "termin_speichern", "termin_loeschen", "termin_erinnerungen", "tagesmeldung_test", "kontoauszug_auslesen", "checkliste_vorschlag", "gesendet_abruf" oder "firmenwissen_answer"' }), { status: 400, headers })
+    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "bewertung_recherche_start", "bewertung_recherche_schritt", "kunden_umfeld_recherche", "steuer_analyse_start", "steuer_analyse_schritt", "dokument_lesen", "dokument_inhalte", "postfaecher_liste", "postfach_verbinden", "postfach_trennen", "postfach_abruf", "postfach_ordner", "mail_zuordnen", "mail_freigeben", "mail_anhang_url", "termin_speichern", "termin_loeschen", "termin_erinnerungen", "tagesmeldung_test", "kontoauszug_auslesen", "checkliste_vorschlag", "willkommen_jetzt", "gesendet_abruf" oder "firmenwissen_answer"' }), { status: 400, headers })
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }
