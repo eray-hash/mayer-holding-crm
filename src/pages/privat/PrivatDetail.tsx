@@ -18,6 +18,7 @@ import { KundeHinweise } from '../../components/PruefHinweisBadge'
 import { SelbstauskunftSection } from '../../components/SelbstauskunftSection'
 import { NdaSection } from '../../components/NdaSection'
 import { DokumenteSection } from '../../components/DokumenteSection'
+import { KostenvoranschlaegeSection } from '../../components/KostenvoranschlaegeSection'
 import { KommunikationSection } from '../../components/KommunikationSection'
 import { LoeschenKundeButton } from '../../components/LoeschenKundeButton'
 import { AktenReiter, type Reiter } from '../../components/AktenReiter'
@@ -42,6 +43,7 @@ const REITER: Reiter[] = [
   { id: 'selbstauskunft', label: 'Selbstauskunft' },
   { id: 'nda', label: 'NDA' },
   { id: 'dokumente', label: 'Dokumente' },
+  { id: 'kostenvoranschlaege', label: 'Kostenvoranschläge' },
   { id: 'kommunikation', label: 'Kommunikation' },
 ]
 
@@ -231,6 +233,7 @@ export function PrivatDetail() {
       {tab === 'selbstauskunft' && <SelbstauskunftSection bereich="privat" kundeId={kontakt.id} kundeName={kontakt.ansprechpartner || kontakt.firma} />}
       {tab === 'nda' && <NdaSection bereich="privat" kundeId={kontakt.id} />}
       {tab === 'dokumente' && <DokumenteSection bereich="privat" kundeId={kontakt.id} />}
+      {tab === 'kostenvoranschlaege' && <KostenvoranschlaegeSection kunde={kontakt} bereich="privat" />}
       {tab === 'kommunikation' && <KommunikationSection kundeId={kontakt.id} />}
 
       <Modal open={uebernehmen} onClose={() => setUebernehmen(false)} title="In den öffentlichen Bereich übernehmen" width="max-w-md">

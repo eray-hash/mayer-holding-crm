@@ -1,13 +1,13 @@
 import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { Users, ChevronLeft, ChevronRight, Lock, Sun, UserCog, ListTodo, Mail, CalendarDays, Settings, PenLine, AtSign, ListChecks, PauseCircle, Stethoscope, ChevronDown, Briefcase, Building2, LayoutGrid, FileText } from 'lucide-react'
+import { Users, ChevronLeft, ChevronRight, Lock, Sun, UserCog, ListTodo, Mail, CalendarDays, Settings, PenLine, AtSign, ListChecks, PauseCircle, Stethoscope, ChevronDown, Briefcase, Building2, LayoutGrid, FileText, Calculator } from 'lucide-react'
 import { UngeklaertSideLink } from './UngeklaertSideLink'
 import { useAuth } from '../context/AuthContext'
 import { useMsStatus } from '../lib/microsoftKonto'
 import { PRIVAT_ARTEN } from '../data/privatArten'
 
 // Seiten des Bereichs Privat, die NICHT zur Kontaktliste gehören (für die Markierung „Meine Kontakte“).
-const ANDERE_SEITEN = ['/privat/todo', '/privat/postfach', '/privat/kalender', '/privat/einstellungen', '/privat/brief', '/privat/hotmail', '/privat/offen', '/privat/bestaetigen', '/privat/systemcheck', '/privat/art', '/privat/immobilien', '/privat/projekte', '/privat/vorlagen']
+const ANDERE_SEITEN = ['/privat/todo', '/privat/postfach', '/privat/kalender', '/privat/einstellungen', '/privat/brief', '/privat/hotmail', '/privat/offen', '/privat/bestaetigen', '/privat/systemcheck', '/privat/art', '/privat/immobilien', '/privat/projekte', '/privat/vorlagen', '/privat/kostenvoranschlaege']
 
 export function SidebarPrivat({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
   const location = useLocation()
@@ -62,6 +62,7 @@ export function SidebarPrivat({ collapsed, onToggle }: { collapsed: boolean; onT
         )}
         {ms?.erlaubt && <SideLink to="/privat/projekte" icon={<LayoutGrid size={17} />} label="Projekte" collapsed={collapsed} active={isActive('/privat/projekte')} />}
         {ms?.erlaubt && <SideLink to="/privat/vorlagen/beratung/vollmacht" icon={<FileText size={17} />} label="Vorlagen" collapsed={collapsed} active={isActive('/privat/vorlagen')} />}
+        <SideLink to="/privat/kostenvoranschlaege" icon={<Calculator size={17} />} label="Kostenvoranschläge" collapsed={collapsed} active={isActive('/privat/kostenvoranschlaege')} />
         <SideLink to="/privat/postfach" icon={<Mail size={17} />} label="Mein Postfach" collapsed={collapsed} active={isActive('/privat/postfach')} />
         {ms?.erlaubt && ms.verbunden && (
           <>

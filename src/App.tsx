@@ -66,6 +66,7 @@ import { MeinProfil } from './pages/profil/MeinProfil'
 import { MitarbeiterVerwalten } from './pages/admin/MitarbeiterVerwalten'
 import { Wuensche } from './pages/admin/Wuensche'
 import { AufgabenUebersicht } from './pages/aufgaben/AufgabenUebersicht'
+import { Kostenvoranschlaege } from './pages/kostenvoranschlaege/Kostenvoranschlaege'
 import { SuperuserSeite } from './pages/superuser/SuperuserSeite'
 import { ProjekteListe } from './pages/projekte/ProjekteListe'
 import { PortalLogin } from './pages/portal/PortalLogin'
@@ -104,6 +105,8 @@ function AdminRoutesContent() {
         <Route path="/superuser" element={<SuperuserSeite />} />
         {/* Für alle: Was jemand sieht, begrenzt die Datenbank (Bereichsrechte) schon im App-Zustand. */}
         <Route path="/auswertungen" element={<Auswertungen />} />
+        {/* Für alle: Sichtbarkeit regelt die Datenbank (Bereichsrechte, private Einträge nur für den Besitzer). */}
+        <Route path="/kostenvoranschlaege" element={<Kostenvoranschlaege />} />
         <Route path="/kampagnen" element={<Kampagnen />} />
         <Route path="/profil" element={<MeinProfil />} />
         <Route path="/mitarbeiter" element={<RequireAdmin><MitarbeiterVerwalten /></RequireAdmin>} />
@@ -123,6 +126,7 @@ function AdminRoutesContent() {
         <Route path="/privat/art/:art" element={<PrivatArtListe />} />
         <Route path="/privat/art/:art/:id" element={<PrivatDetail />} />
         <Route path="/privat/projekte" element={<ProjekteListe />} />
+        <Route path="/privat/kostenvoranschlaege" element={<Kostenvoranschlaege key="privat" privat />} />
         <Route path="/privat/immobilien" element={<PrivatObjektListe />} />
         <Route path="/privat/immobilien/objekte/:id" element={<PrivatObjektDetail />} />
         <Route path="/privat/immobilien/kunden" element={<PrivatImmoKundenListe />} />

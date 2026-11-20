@@ -23,7 +23,7 @@ import {
   ChevronDown,
   Phone,
   Lock,
-  Search, CalendarDays, BarChart3, Lightbulb, ListChecks, Eye, ShieldCheck } from 'lucide-react'
+  Search, CalendarDays, BarChart3, Lightbulb, ListChecks, Eye, ShieldCheck, Calculator } from 'lucide-react'
 import type { Bereich } from '../types'
 import { useApp } from '../context/AppContext'
 import { useAuth } from '../context/AuthContext'
@@ -223,6 +223,15 @@ export function Layout({ children }: { children: ReactNode }) {
             <BarChart3 size={16} />
           </button>
           <button
+            // Kostenvoranschläge (20.11.2026): im Bereich Privat die eigenen privaten, sonst alle.
+            onClick={() => navigate(imPrivatBereich ? '/privat/kostenvoranschlaege' : '/kostenvoranschlaege')}
+            className="hidden rounded-lg p-2 text-slate-500 hover:bg-slate-100 sm:inline-flex"
+            title={imPrivatBereich ? 'Meine Kostenvoranschläge' : 'Kostenvoranschläge'}
+            aria-label="Kostenvoranschläge"
+          >
+            <Calculator size={16} />
+          </button>
+          <button
             // Im privaten Bereich führt das Symbol ins eigene Postfach, sonst ins gemeinsame (Wunsch von Markus, 20.11.2026).
             onClick={() => navigate(imPrivatBereich ? '/privat/postfach' : '/postfach')}
             className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
@@ -413,10 +422,17 @@ export function Layout({ children }: { children: ReactNode }) {
               {/* Auf dem Handy ist in der Kopfleiste kein Platz für das Auswertungs-Symbol. */}
               <button
                 onClick={() => { setDrawerOpen(false); navigate('/auswertungen') }}
-                className="mb-6 flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm font-medium text-slate-700 hover:bg-slate-50 sm:hidden"
+                className="mb-1 flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm font-medium text-slate-700 hover:bg-slate-50 sm:hidden"
               >
                 <BarChart3 size={17} className="text-slate-400" />
                 Auswertungen
+              </button>
+              <button
+                onClick={() => { setDrawerOpen(false); navigate('/kostenvoranschlaege') }}
+                className="mb-6 flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm font-medium text-slate-700 hover:bg-slate-50 sm:hidden"
+              >
+                <Calculator size={17} className="text-slate-400" />
+                Kostenvoranschläge
               </button>
 
               <h3 className="mb-2 px-3 text-xs font-semibold uppercase tracking-wide text-slate-400 md:hidden">Bereich wechseln</h3>

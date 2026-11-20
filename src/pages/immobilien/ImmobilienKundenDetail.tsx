@@ -18,6 +18,7 @@ import { KundeHinweise } from '../../components/PruefHinweisBadge'
 import { SelbstauskunftSection } from '../../components/SelbstauskunftSection'
 import { NdaSection } from '../../components/NdaSection'
 import { DokumenteSection } from '../../components/DokumenteSection'
+import { KostenvoranschlaegeSection } from '../../components/KostenvoranschlaegeSection'
 import { KommunikationSection } from '../../components/KommunikationSection'
 import { LoeschenKundeButton } from '../../components/LoeschenKundeButton'
 import { AktenReiter } from '../../components/AktenReiter'
@@ -34,6 +35,7 @@ const TABS = [
   { id: 'selbstauskunft', label: 'Selbstauskunft' },
   { id: 'nda', label: 'NDA' },
   { id: 'dokumente', label: 'Dokumente' },
+  { id: 'kostenvoranschlaege', label: 'Kostenvoranschläge' },
   { id: 'kommunikation', label: 'Kommunikation' },
 ]
 
@@ -158,6 +160,8 @@ export function ImmobilienKundenDetail({ privat }: { privat?: boolean } = {}) {
       {tab === 'nda' && <NdaSection bereich={bereich} kundeId={kunde.id} />}
 
       {tab === 'dokumente' && <DokumenteSection bereich={bereich} kundeId={kunde.id} />}
+
+      {tab === 'kostenvoranschlaege' && <KostenvoranschlaegeSection kunde={kunde} bereich={bereich} />}
 
       {tab === 'kommunikation' && <KommunikationSection kundeId={kunde.id} />}
 

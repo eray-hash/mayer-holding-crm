@@ -19,6 +19,7 @@ import { KundeHinweise } from '../../components/PruefHinweisBadge'
 import { SelbstauskunftSection } from '../../components/SelbstauskunftSection'
 import { NdaSection } from '../../components/NdaSection'
 import { DokumenteSection } from '../../components/DokumenteSection'
+import { KostenvoranschlaegeSection } from '../../components/KostenvoranschlaegeSection'
 import { KommunikationSection } from '../../components/KommunikationSection'
 import { LoeschenKundeButton } from '../../components/LoeschenKundeButton'
 import { AktenReiter, type Reiter } from '../../components/AktenReiter'
@@ -33,6 +34,7 @@ const REITER: Reiter[] = [
   { id: 'selbstauskunft', label: 'Selbstauskunft' },
   { id: 'nda', label: 'NDA' },
   { id: 'dokumente', label: 'Dokumente' },
+  { id: 'kostenvoranschlaege', label: 'Kostenvoranschläge' },
   { id: 'kommunikation', label: 'Kommunikation' },
 ]
 
@@ -136,6 +138,7 @@ export function BetriebsuebergabeDetail() {
       {tab === 'selbstauskunft' && <SelbstauskunftSection bereich="betriebsuebergabe" kundeId={mandant.id} kundeName={mandant.ansprechpartner} />}
       {tab === 'nda' && <NdaSection bereich="betriebsuebergabe" kundeId={mandant.id} />}
       {tab === 'dokumente' && <DokumenteSection bereich="betriebsuebergabe" kundeId={mandant.id} />}
+      {tab === 'kostenvoranschlaege' && <KostenvoranschlaegeSection kunde={mandant} bereich="betriebsuebergabe" />}
       {tab === 'kommunikation' && <KommunikationSection kundeId={mandant.id} />}
 
       <Modal open={editFollowUp} onClose={() => setEditFollowUp(false)} title="Follow-up bearbeiten">
