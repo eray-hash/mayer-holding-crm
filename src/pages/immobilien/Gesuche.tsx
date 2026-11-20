@@ -7,14 +7,11 @@ import { Card, EmptyState, Field, inputClass, Modal, PrimaryButton } from '../..
 import { GesuchFormular } from '../../components/GesuchFormular'
 import { alleGesuche, budgetText, eckdatenTexte, passendeObjekte, pruefe } from '../../lib/gesuche'
 import { entdecktText, neueTrefferMeldungen, NEU_TAGE, paarSchluessel } from '../../lib/trefferMeldungen'
-import { kundeBereichLabel, kundeDetailPfad } from '../../data/kundenBereiche'
+import { kundeBereichLabel } from '../../data/kundenBereiche'
 import { CURRENT_USER } from '../../data/constants'
 import { fmtDate, fmtEUR, today, uid } from '../../lib/dates'
-import type { Gesuch, Kunde, KundeBereich } from '../../types'
-
-function kontaktPfad(bereich: KundeBereich, kundeId: string): string {
-  return bereich === 'immobilienkunden' ? `/immobilien/kunden/${kundeId}?tab=stammdatenblatt` : kundeDetailPfad(bereich, kundeId)
-}
+import type { Gesuch, Kunde } from '../../types'
+import { immoKunden, immoKundenBereich, immoObjekte, immoPfade, privateGesuche } from './privatModus'
 
 /** Kleine Marke für Paare, die der Server in den letzten Tagen neu entdeckt hat. */
 function NeuMarke() {
@@ -27,23 +24,32 @@ const NEUE_ZUERST = 5
 const NEUE_ZUERST_HANDY = 3
 
 /** Alle Gesuche auf einen Blick — wer sucht was, und welche Objekte aus dem Bestand dazu passen.
- *  Ein neues Gesuch ist in einer Minute erfasst: Kontakt wählen (oder neu anlegen), Wunsch eintragen. */
-export function Gesuche() {
+ *  Ein neues Gesuch ist in einer Minute erfasst: Kontakt wählen (oder neu anlegen), Wunsch eintragen.
+ *  `privat`: nur die Gesuche der eigenen privaten Immobilien-Kontakte, abgeglichen nur mit den eigenen
+ *  privaten Objekten — nie mit dem Mayer-Bestand. */
+export function Gesuche({ privat }: { privat?: boolean } = {}) {
   const { state, dispatch } = useApp()
-  const { mitarbeiter } = useAuth()
+  const { mitarbeiter, session } = useAuth()
+  const pfade = immoPfade(privat)
+  const objekte = immoObjekte(state, privat)
+  const kontakte = immoKunden(state, privat)
+  const kontaktPfad = pfade.kontakt
   const [suche, setSuche] = useState('')
   const [auchErledigte, setAuchErledigte] = useState(false)
   const [offen, setOffen] = useState<string | null>(null)
   const [neu, setNeu] = useState(false)
   const [alleNeuen, setAlleNeuen] = useState(false)
 
-  const alle = useMemo(() => alleGesuche(state), [state])
+  const alle = useMemo(() => (privat ? privateGesuche(state) : alleGesuche(state)), [state, privat])
 
   // Vom Server neu entdeckte Treffer (Regel für „neu": siehe src/lib/trefferMeldungen.ts). Gezeigt wird
   // nur, was nach dem Abgleich dieser Seite auch jetzt noch passt — überholte Meldungen räumt der Server
   // erst bei seinem nächsten Lauf ab. Auch ob es ein Treffer oder „zu prüfen" ist, kommt aus dem Abgleich
   // der Seite, damit Karte und Liste nie Verschiedenes sagen.
+  // Privat: keine Meldungen — die Mayer-Treffer-Meldungen betreffen nur Mayer-Objekte und -Gesuche. Private
+  // Treffer kommen später als abteilung_eintraege (art 'privat_treffer'); bis dahin zeigt die Karte nichts.
   const neueTreffer = useMemo(() => {
+    if (privat) return []
     const liste = []
     for (const meldung of neueTrefferMeldungen(state.trefferMeldungen ?? [])) {
       const z = alle.find((x) => x.gesuch.id === meldung.gesuchId && x.kunde.id === meldung.kundeId)
@@ -54,7 +60,7 @@ export function Gesuche() {
       liste.push({ meldung, gesuch: z.gesuch, kunde: z.kunde, bereich: z.bereich, objekt, sicher: t.offen.length === 0 })
     }
     return liste
-  }, [alle, state.objekte, state.trefferMeldungen])
+  }, [alle, state.objekte, state.trefferMeldungen, privat])
   const neuePaare = useMemo(() => new Set(neueTreffer.map((n) => paarSchluessel(n.gesuch.id, n.objekt.id))), [neueTreffer])
 
   const zeilen = useMemo(() => {
@@ -62,9 +68,9 @@ export function Gesuche() {
     return alle
       .filter((z) => auchErledigte || !z.gesuch.erledigt)
       .filter((z) => !begriff || `${z.kunde.firma} ${z.kunde.ansprechpartner} ${z.gesuch.titel} ${z.gesuch.lage} ${z.gesuch.objekttypen.join(' ')} ${z.gesuch.notizen}`.toLowerCase().includes(begriff))
-      .map((z) => ({ ...z, treffer: passendeObjekte(z.gesuch, state.objekte) }))
+      .map((z) => ({ ...z, treffer: passendeObjekte(z.gesuch, objekte) }))
       .sort((a, b) => b.gesuch.erstelltAm.localeCompare(a.gesuch.erstelltAm))
-  }, [alle, state.objekte, suche, auchErledigte])
+  }, [alle, objekte, suche, auchErledigte])
 
   return (
     <div>
@@ -72,7 +78,7 @@ export function Gesuche() {
         <div>
           <h1 className="text-xl font-semibold text-slate-800">Gesuche</h1>
           <p className="text-sm text-slate-500">
-            {zeilen.length} {zeilen.length === 1 ? 'Gesuch' : 'Gesuche'} · wird laufend mit den {state.objekte.length} Objekten abgeglichen
+            {zeilen.length} {zeilen.length === 1 ? 'Gesuch' : 'Gesuche'} · wird laufend mit den {objekte.length} {privat ? 'eigenen ' : ''}Objekten abgeglichen
           </p>
         </div>
         <PrimaryButton onClick={() => setNeu(true)}>
@@ -92,7 +98,7 @@ export function Gesuche() {
             {(alleNeuen ? neueTreffer : neueTreffer.slice(0, NEUE_ZUERST)).map((n, i) => (
               <li key={n.meldung.id} className={`${!alleNeuen && i >= NEUE_ZUERST_HANDY ? 'hidden sm:flex' : 'flex'} flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2 text-sm`}>
                 <div className="min-w-0 flex-1 basis-60 break-words">
-                  <Link to={`/immobilien/objekte/${n.objekt.id}`} className="font-medium text-accent-600 hover:underline">
+                  <Link to={pfade.objekt(n.objekt.id)} className="font-medium text-accent-600 hover:underline">
                     {n.objekt.bezeichnung}
                   </Link>
                   <span className="text-slate-500"> passt zu „{n.gesuch.titel}“ von </span>
@@ -153,7 +159,7 @@ export function Gesuche() {
                       {kunde.firma}
                     </Link>
                     <div className="text-xs text-slate-400">
-                      {bereich === 'immobilienkunden' ? 'Immobilien-Kontakt' : kundeBereichLabel(bereich)} · {fmtDate(g.erstelltAm)}
+                      {bereich === 'immobilienkunden' ? 'Immobilien-Kontakt' : privat ? 'Eigener Kontakt' : kundeBereichLabel(bereich)} · {fmtDate(g.erstelltAm)}
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
@@ -176,7 +182,7 @@ export function Gesuche() {
                   <ul className="space-y-1 bg-slate-50 px-4 py-3">
                     {treffer.map((t) => (
                       <li key={t.objekt.id} className="text-sm">
-                        <Link to={`/immobilien/objekte/${t.objekt.id}`} className="font-medium text-accent-600 hover:underline">
+                        <Link to={pfade.objekt(t.objekt.id)} className="font-medium text-accent-600 hover:underline">
                           {t.objekt.bezeichnung}
                         </Link>
                         {neuePaare.has(paarSchluessel(g.id, t.objekt.id)) && (
@@ -204,19 +210,24 @@ export function Gesuche() {
       <Modal open={neu} onClose={() => setNeu(false)} title="Neues Gesuch">
         {neu && (
           <NeuesGesuch
-            kontakte={state.immobilienKunden}
+            kontakte={kontakte}
             onAbbrechen={() => setNeu(false)}
             onSpeichern={(kontakt, gesuch) => {
+              const bereich = immoKundenBereich(privat)
               if (typeof kontakt === 'string') {
-                const k = state.immobilienKunden.find((x) => x.id === kontakt)
-                if (k) dispatch({ type: 'UPDATE_KUNDE_IN_BEREICH', bereich: 'immobilienkunden', id: k.id, patch: { gesuche: [gesuch, ...(k.gesuche ?? [])], letzteAktivitaet: today() } })
+                const k = kontakte.find((x) => x.id === kontakt)
+                if (k) dispatch({ type: 'UPDATE_KUNDE_IN_BEREICH', bereich, id: k.id, patch: { gesuche: [gesuch, ...(k.gesuche ?? [])], letzteAktivitaet: today() } })
               } else {
                 const wer = mitarbeiter?.name ?? CURRENT_USER
+                // Privat: der neue Kontakt gehört dem eigenen Login und wird als Immobilien-Kontakt geführt.
+                const ich = (session?.user.email ?? '').toLowerCase()
+                if (privat && !ich) return
                 dispatch({
                   type: 'ADD_KUNDE_IN_BEREICH',
-                  bereich: 'immobilienkunden',
+                  bereich,
                   kunde: {
-                    id: uid('ik'),
+                    ...(privat ? { privatArt: 'immobilienkunden' as const, verantwortlichEmail: ich } : {}),
+                    id: uid(privat ? 'priv' : 'ik'),
                     firma: kontakt.name,
                     ansprechpartner: kontakt.name,
                     email: kontakt.email,

@@ -20,10 +20,17 @@ import { ObjektlisteWeitergeben } from '../../components/ObjektlisteWeitergeben'
 import { useAuth } from '../../context/AuthContext'
 import { CURRENT_USER } from '../../data/constants'
 import { fmtDate, isOverdue, today, uid, fmtEUR } from '../../lib/dates'
+import { immoObjekte, immoPfade } from './privatModus'
 import type { Objekt, Prioritaet, ObjektGruppe, ObjektTyp } from '../../types'
 
-export function ObjektListe() {
+/** `privat`: der private Immobilien-Bereich des angemeldeten Mitarbeiters — nur eigene Objekte, neue Objekte
+ *  bekommen den eigenen Login als Besitzer, keine Weitergabe-Liste und kein Verantwortlichen-Filter. */
+export function ObjektListe({ privat }: { privat?: boolean } = {}) {
   const { state, dispatch } = useApp()
+  const { session, mitarbeiter } = useAuth()
+  const pfade = immoPfade(privat)
+  const objekte = immoObjekte(state, privat)
+  const ich = (session?.user.email ?? '').toLowerCase()
   const { advanceObjekt } = useAdvanceStatus()
   const navigate = useNavigate()
   const [params, setParams] = useSearchParams()
@@ -34,7 +41,10 @@ export function ObjektListe() {
   // Bei jedem neuen Objekt automatisch ein 1-Seiten-Exposé erstellen (Whitelabel) — Punkt 12 der
   // Bugfix-Liste. Läuft bewusst asynchron nach dem Anlegen, damit das Anlegen selbst nicht auf die
   // KI-Antwort warten muss; das Exposé füllt sich in der Objektakte nach, sobald es fertig ist.
-  function erstelleObjektMitExpose(o: Objekt) {
+  function erstelleObjektMitExpose(neu: Objekt) {
+    // Privat: Besitzer = eigener Login — damit landet das Objekt in privatObjekte und nur man selbst sieht es.
+    const o: Objekt = privat ? { ...neu, privatBesitzer: ich } : neu
+    if (privat && !ich) return
     dispatch({ type: 'ADD_OBJEKT', objekt: o })
     if (!isEmailGatewayConfigured) return
     generateExpose(o.bezeichnung, o.adresse, o.typ, o.kaufpreis)
@@ -48,13 +58,12 @@ export function ObjektListe() {
   const [fVerantwortlich, setFVerantwortlich] = useState('')
   const [fOverdue, setFOverdue] = useState(false)
   // Objektliste zum Weitergeben: Objekte ankreuzen, als „nicht öffentlich" kennzeichnen, Auswahl ausgeben.
-  const { mitarbeiter } = useAuth()
   const [fMarkt, setFMarkt] = useState<'' | 'nicht-oeffentlich' | 'oeffentlich'>('')
   const [auswahl, setAuswahl] = useState<Set<string>>(new Set())
   const [weitergebenOpen, setWeitergebenOpen] = useState(false)
 
   const filtered = useMemo(() => {
-    return state.objekte
+    return objekte
       .filter((o) => !gruppe || o.gruppe === gruppe)
       .filter((o) => !fStatus || o.status === fStatus)
       .filter((o) => !fPrio || o.prioritaet === fPrio)
@@ -62,9 +71,9 @@ export function ObjektListe() {
       .filter((o) => !fOverdue || isOverdue(o.followUp.date, o.followUp.done))
       .filter((o) => !fMarkt || (fMarkt === 'nicht-oeffentlich' ? !!o.offMarket : !o.offMarket))
       .sort((a, b) => PRIORITAET_ORDER[a.prioritaet] - PRIORITAET_ORDER[b.prioritaet])
-  }, [state.objekte, gruppe, fStatus, fPrio, fVerantwortlich, fOverdue, fMarkt])
+  }, [objekte, gruppe, fStatus, fPrio, fVerantwortlich, fOverdue, fMarkt])
 
-  const gewaehlt = state.objekte.filter((o) => auswahl.has(o.id))
+  const gewaehlt = objekte.filter((o) => auswahl.has(o.id))
   const alleSichtbarenGewaehlt = filtered.length > 0 && filtered.every((o) => auswahl.has(o.id))
 
   function schalte(id: string) {
@@ -84,8 +93,8 @@ export function ObjektListe() {
     <div>
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold text-slate-800">Objekte {gruppe && `– ${gruppeLabel(gruppe as ObjektGruppe)}`}</h1>
-          <p className="text-sm text-slate-500">{filtered.length} von {state.objekte.length} Objekten</p>
+          <h1 className="text-xl font-semibold text-slate-800">{privat ? 'Meine Objekte (privat)' : 'Objekte'} {gruppe && `– ${gruppeLabel(gruppe as ObjektGruppe)}`}</h1>
+          <p className="text-sm text-slate-500">{filtered.length} von {objekte.length} Objekten</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex rounded-lg border border-slate-200 bg-white p-0.5">
@@ -122,10 +131,12 @@ export function ObjektListe() {
           <option value="">Alle Prioritäten</option>
           {PRIORITAETEN.map((p) => <option key={p} value={p}>{p}</option>)}
         </select>
-        <select value={fVerantwortlich} onChange={(e) => setFVerantwortlich(e.target.value)} className={`${inputClass} w-auto`}>
-          <option value="">Alle Verantwortlichen</option>
-          {MITARBEITER.map((m) => <option key={m} value={m}>{m}</option>)}
-        </select>
+        {!privat && (
+          <select value={fVerantwortlich} onChange={(e) => setFVerantwortlich(e.target.value)} className={`${inputClass} w-auto`}>
+            <option value="">Alle Verantwortlichen</option>
+            {MITARBEITER.map((m) => <option key={m} value={m}>{m}</option>)}
+          </select>
+        )}
         <select value={fMarkt} onChange={(e) => setFMarkt(e.target.value as typeof fMarkt)} className={`${inputClass} w-auto`} aria-label="Öffentlich oder nicht öffentlich">
           <option value="">Öffentlich und nicht öffentlich</option>
           <option value="nicht-oeffentlich">Nur nicht öffentliche (Off-Market)</option>
@@ -142,9 +153,12 @@ export function ObjektListe() {
           <span className="font-medium text-accent-800">
             {auswahl.size} {auswahl.size === 1 ? 'Objekt' : 'Objekte'} ausgewählt
           </span>
-          <PrimaryButton onClick={() => setWeitergebenOpen(true)}>
-            <Share2 size={14} /> Liste zum Weitergeben
-          </PrimaryButton>
+          {/* Die Weitergabe-Liste hält fest, wer welche Objekte bekam (Mayer-Nachweis) — privat nicht. */}
+          {!privat && (
+            <PrimaryButton onClick={() => setWeitergebenOpen(true)}>
+              <Share2 size={14} /> Liste zum Weitergeben
+            </PrimaryButton>
+          )}
           <SecondaryButton onClick={() => kennzeichne(true)}>
             <EyeOff size={14} /> Als nicht öffentlich kennzeichnen
           </SecondaryButton>
@@ -185,7 +199,7 @@ export function ObjektListe() {
                 const overdue = isOverdue(o.followUp.date, o.followUp.done)
                 const node = IMMOBILIEN_STATUS[o.status]
                 return (
-                  <tr key={o.id} onClick={() => navigate(`/immobilien/objekte/${o.id}`)} className="cursor-pointer border-b border-slate-50 last:border-0 hover:bg-slate-50/60">
+                  <tr key={o.id} onClick={() => navigate(pfade.objekt(o.id))} className="cursor-pointer border-b border-slate-50 last:border-0 hover:bg-slate-50/60">
                     <td className="py-3 pl-4" onClick={(e) => e.stopPropagation()}>
                       <input type="checkbox" className="rounded" checked={auswahl.has(o.id)} onChange={() => schalte(o.id)} aria-label={`${o.bezeichnung} auswählen`} />
                     </td>
@@ -233,23 +247,24 @@ export function ObjektListe() {
       ) : (
         <StatusBoard
           bereich="immobilien"
-          basePath="/immobilien/objekte"
+          basePath={pfade.objekteBasis}
           onAdvance={(id) => advanceObjekt(id)}
           items={filtered.map((o) => ({ id: o.id, title: o.bezeichnung, subtitle: o.adresse, prioritaet: o.prioritaet, status: o.status, followUp: o.followUp }))}
         />
       )}
 
-      {weitergebenOpen && (
+      {weitergebenOpen && !privat && (
         <ObjektlisteWeitergeben open={weitergebenOpen} onClose={() => setWeitergebenOpen(false)} objekte={gewaehlt} absender={mitarbeiter?.name ?? CURRENT_USER} />
       )}
       {addOpen && (
-        <NeuesObjektModal open={addOpen} onClose={() => setAddOpen(false)} onCreate={erstelleObjektMitExpose} />
+        <NeuesObjektModal open={addOpen} onClose={() => setAddOpen(false)} onCreate={erstelleObjektMitExpose} eigenerName={privat ? (mitarbeiter?.name ?? CURRENT_USER) : undefined} />
       )}
       {immoRadarOpen && (
         <ImmoRadarUebernehmenModal
           open={immoRadarOpen}
           onClose={() => setImmoRadarOpen(false)}
           onCreate={erstelleObjektMitExpose}
+          eigenerName={privat ? (mitarbeiter?.name ?? CURRENT_USER) : undefined}
         />
       )}
     </div>
@@ -271,7 +286,8 @@ const OBJEKT_TYP_MAPPING: Record<string, ObjektTyp> = {
   'Garage/Stellplatz': 'Gewerbe',
 }
 
-function ImmoRadarUebernehmenModal({ open, onClose, onCreate }: { open: boolean; onClose: () => void; onCreate: (o: Objekt) => void }) {
+// eigenerName gesetzt (privater Bereich): man ist selbst verantwortlich, die Auswahl entfällt.
+function ImmoRadarUebernehmenModal({ open, onClose, onCreate, eigenerName }: { open: boolean; onClose: () => void; onCreate: (o: Objekt) => void; eigenerName?: string }) {
   const [listings, setListings] = useState<ImmoRadarTreffer[] | null>(null)
   const [ladeFehler, setLadeFehler] = useState('')
   const [suche, setSuche] = useState('')
@@ -283,7 +299,7 @@ function ImmoRadarUebernehmenModal({ open, onClose, onCreate }: { open: boolean;
   const [kaufpreis, setKaufpreis] = useState(500000)
   const [immoRadarLink, setImmoRadarLink] = useState('')
   const [lukrativitaet, setLukrativitaet] = useState<string>(LUKRATIVITAET_OPTIONS[1])
-  const [verantwortlich, setVerantwortlich] = useState(MITARBEITER[0])
+  const [verantwortlich, setVerantwortlich] = useState(eigenerName ?? MITARBEITER[0])
 
   useEffect(() => {
     if (!open || listings !== null) return
@@ -409,11 +425,13 @@ function ImmoRadarUebernehmenModal({ open, onClose, onCreate }: { open: boolean;
           <Field label="ImmoRadar-Link (Original-Inserat)">
             <input className={inputClass} value={immoRadarLink} onChange={(e) => setImmoRadarLink(e.target.value)} />
           </Field>
-          <Field label="Verantwortlich">
-            <select className={inputClass} value={verantwortlich} onChange={(e) => setVerantwortlich(e.target.value)}>
-              {MITARBEITER.map((m) => <option key={m} value={m}>{m}</option>)}
-            </select>
-          </Field>
+          {!eigenerName && (
+            <Field label="Verantwortlich">
+              <select className={inputClass} value={verantwortlich} onChange={(e) => setVerantwortlich(e.target.value)}>
+                {MITARBEITER.map((m) => <option key={m} value={m}>{m}</option>)}
+              </select>
+            </Field>
+          )}
           <div className="mt-4 flex justify-end gap-2">
             <button onClick={schliessenUndZuruecksetzen} className="rounded-lg border border-slate-200 px-3.5 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50">Abbrechen</button>
             <PrimaryButton onClick={submit}>Objekt übernehmen</PrimaryButton>
@@ -424,7 +442,7 @@ function ImmoRadarUebernehmenModal({ open, onClose, onCreate }: { open: boolean;
   )
 }
 
-function NeuesObjektModal({ open, onClose, onCreate }: { open: boolean; onClose: () => void; onCreate: (o: Objekt) => void }) {
+function NeuesObjektModal({ open, onClose, onCreate, eigenerName }: { open: boolean; onClose: () => void; onCreate: (o: Objekt) => void; eigenerName?: string }) {
   const [bezeichnung, setBezeichnung] = useState('')
   const [adresse, setAdresse] = useState('')
   const [gruppe, setGruppe] = useState<ObjektGruppe>('aktuell')
@@ -433,7 +451,7 @@ function NeuesObjektModal({ open, onClose, onCreate }: { open: boolean; onClose:
   const [prioritaet, setPrioritaet] = useState<Prioritaet>('Mittel')
   const [status, setStatus] = useState('akquise')
   const [followUpDate, setFollowUpDate] = useState(today())
-  const [verantwortlich, setVerantwortlich] = useState(MITARBEITER[0])
+  const [verantwortlich, setVerantwortlich] = useState(eigenerName ?? MITARBEITER[0])
 
   function submit() {
     if (!bezeichnung.trim()) return
@@ -481,11 +499,13 @@ function NeuesObjektModal({ open, onClose, onCreate }: { open: boolean; onClose:
         </select>
       </Field>
       <Field label="Follow-up-Datum"><input type="date" className={inputClass} value={followUpDate} onChange={(e) => setFollowUpDate(e.target.value)} /></Field>
-      <Field label="Verantwortlich">
-        <select className={inputClass} value={verantwortlich} onChange={(e) => setVerantwortlich(e.target.value)}>
-          {MITARBEITER.map((m) => <option key={m} value={m}>{m}</option>)}
-        </select>
-      </Field>
+      {!eigenerName && (
+        <Field label="Verantwortlich">
+          <select className={inputClass} value={verantwortlich} onChange={(e) => setVerantwortlich(e.target.value)}>
+            {MITARBEITER.map((m) => <option key={m} value={m}>{m}</option>)}
+          </select>
+        </Field>
+      )}
       <div className="mt-4 flex justify-end gap-2">
         <button onClick={onClose} className="rounded-lg border border-slate-200 px-3.5 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50">Abbrechen</button>
         <PrimaryButton onClick={submit}>Objekt anlegen</PrimaryButton>

@@ -66,7 +66,9 @@ export function PublicSelbstauskunft() {
   }
   const bereich: KundeBereich = bereichRoh
 
-  const fragen = DEFAULT_FRAGENKATALOG.filter((f) => f.bereich === bereich)
+  // Private Kontakte: Fragenkatalog des Bereichs, nach dem sie geführt werden (kunden.privat_art).
+  const katalogBereich = bereich === 'privat' ? (kunde?.privatArt ?? kunde?.privat_art ?? 'privat') : bereich
+  const fragen = DEFAULT_FRAGENKATALOG.filter((f) => f.bereich === katalogBereich)
   const bereitsEingereicht = !!kunde.selbstauskunft
 
   function setAntwort(frageId: string, wert: string) {

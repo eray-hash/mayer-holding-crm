@@ -414,7 +414,8 @@ export async function sammleProbleme(admin: Db, von: Date, bis: Date, namen: str
   }
 
   await sicher('Objekt-Bewertungen', async () => {
-    const { data, error } = await admin.from('objekte').select('id, bewertung').in('bewertung->>status', ['fehler', 'laeuft'])
+    // Private Objekte (Bereich Privat) gehören einem Einzelnen und zählen im Bericht an die Admins nicht mit.
+    const { data, error } = await admin.from('objekte').select('id, bewertung').in('bewertung->>status', ['fehler', 'laeuft']).is('privat_besitzer', null)
     if (error) throw new Error(error.message)
     const z = zaehleZustaende(((data ?? []) as { bewertung?: unknown }[]).map((o) => o.bewertung), vonMs, bisMs)
     dazu(z.fehler, 'Objektbewertung scheiterte', 'Die Bewertung eines Objekts endete mit einem Fehler.')
@@ -424,10 +425,11 @@ export async function sammleProbleme(admin: Db, von: Date, bis: Date, namen: str
   await sicher('Analysen der Kunden', async () => {
     const { data, error } = await admin
       .from('kunden')
-      .select('id, steuer_analyse, unternehmensbewertung_recherche')
+      .select('id, bereich, steuer_analyse, unternehmensbewertung_recherche')
       .or('steuer_analyse->>status.in.(fehler,laeuft),unternehmensbewertung_recherche->>status.in.(fehler,laeuft)')
     if (error) throw new Error(error.message)
-    const zeilen = (data ?? []) as { steuer_analyse?: unknown; unternehmensbewertung_recherche?: unknown }[]
+    // Private Kontakte zählen nicht mit (wie private Objekte oben).
+    const zeilen = ((data ?? []) as { bereich?: string | null; steuer_analyse?: unknown; unternehmensbewertung_recherche?: unknown }[]).filter((k) => k.bereich !== 'privat')
     const steuer = zaehleZustaende(zeilen.map((k) => k.steuer_analyse), vonMs, bisMs)
     const recherche = zaehleZustaende(zeilen.map((k) => k.unternehmensbewertung_recherche), vonMs, bisMs)
     dazu(steuer.fehler, 'Steuer-Analyse scheiterte', 'Die Steuer-Analyse einer Kundenakte endete mit einem Fehler.')
@@ -437,11 +439,12 @@ export async function sammleProbleme(admin: Db, von: Date, bis: Date, namen: str
   })
 
   await sicher('Bonitätseinschätzungen', async () => {
-    const { data, error } = await admin.from('kunden').select('id, bonitaet').gte('bonitaet->>erstelltAm', vonIso)
+    const { data, error } = await admin.from('kunden').select('id, bereich, bonitaet').gte('bonitaet->>erstelltAm', vonIso)
     if (error) throw new Error(error.message)
     let ohne = 0
     let register = 0
-    for (const k of (data ?? []) as { bonitaet?: unknown }[]) {
+    for (const k of (data ?? []) as { bereich?: string | null; bonitaet?: unknown }[]) {
+      if (k.bereich === 'privat') continue
       const b = alsObjekt(k.bonitaet)
       const t = zeit(b?.erstelltAm)
       if (!b || !(t > vonMs && t <= bisMs)) continue

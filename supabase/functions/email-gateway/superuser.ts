@@ -21,6 +21,7 @@
 import { ermittleAufrufer } from './postfach.ts'
 import { berlinZeit, plusTage, istDienstSchluessel } from './tagesmeldung.ts'
 import { ordneAufgabenZu, ordneZu, personenNamen, OBJEKT_ABGESCHLOSSEN, type RohAufgabe } from '../_shared/aufgabenKern.ts'
+import { nurMayerObjekte } from '../_shared/privatZugriff.ts'
 
 // deno-lint-ignore no-explicit-any
 type Db = any
@@ -178,13 +179,15 @@ async function ladeGrunddaten(admin: Db, tage: number, jetzt: Date): Promise<Gru
   const vonIso = new Date(Date.parse(`${von}T00:00:00Z`) - 2 * 3600000).toISOString()
   const emailZuName = new Map(team.map((m) => [m.email, m.name]))
 
-  const [kunden, objekte, mails, termine] = await Promise.all([
+  const [kunden, alleObjekte, mails, termine] = await Promise.all([
     ladeAlle(admin, 'kunden', 'id, bereich, firma, ansprechpartner, activities, follow_up, verantwortlich, status'),
-    ladeAlle(admin, 'objekte', 'id, bezeichnung, status, activities, follow_up, verantwortlich'),
+    ladeAlle(admin, 'objekte', 'id, bezeichnung, status, activities, follow_up, verantwortlich, privat_besitzer'),
     ladeAlle(admin, 'gesendete_emails', 'id, von, an, an_name, betreff, gesendet_am, besitzer_email, kunde_id, kunde_bereich, kunde_name', (q) => q.gte('gesendet_am', vonIso)),
     ladeAlle(admin, 'termine', 'id, titel, beginn, besitzer_email, erstellt_am, quelle, kunde_name', (q) => q.gte('erstellt_am', vonIso)),
   ])
 
+  // Private Objekte (Bereich Privat) gehören nur ihrem Besitzer — wie private Kontakte: weder in Listen noch in Zahlen.
+  const objekte = nurMayerObjekte(alleObjekte)
   const eintraege: Eintrag[] = []
   for (const k of kunden) {
     if (k.bereich === 'privat') continue // private Kontakte gehören nur ihrem Besitzer
@@ -205,6 +208,7 @@ async function ladeGrunddaten(admin: Db, tage: number, jetzt: Date): Promise<Gru
   for (const m of mails) {
     const d = tag(m.gesendet_am)
     if (!d || d < von) continue
+    if (m.kunde_bereich === 'privat') continue // Mails an private Kontakte gehören wie die Kontakte nur dem Besitzer
     // Absender: privates Postfach → Besitzer; sonst über die Absenderadresse, falls sie einem Mitarbeiter gehört.
     const wer = (m.besitzer_email && emailZuName.get(String(m.besitzer_email).toLowerCase())) || emailZuName.get(String(m.von ?? '').toLowerCase()) || null
     eintraege.push({

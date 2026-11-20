@@ -6,7 +6,8 @@ import { ERBEN_CHECKLISTE, KANZLEI_ANSCHRIFT, MANDANTENFRAGEBOGEN_ERBEN as F } f
 import { holePublicKunde, sendePublicFormular, type PublicKunde } from '../../lib/emailGateway'
 import { DatenschutzHinweis } from '../../components/DatenschutzHinweis'
 
-export function PublicMandantenfragebogenErben() {
+// `bereich` 'privat': derselbe Fragebogen für einen privaten Erben-Kontakt.
+export function PublicMandantenfragebogenErben({ bereich = 'erben' }: { bereich?: 'erben' | 'privat' } = {}) {
   const { mandantId } = useParams()
   const [mandant, setMandant] = useState<PublicKunde | null | undefined>(undefined)
   const [submitted, setSubmitted] = useState(false)
@@ -19,7 +20,7 @@ export function PublicMandantenfragebogenErben() {
 
   useEffect(() => {
     if (!mandantId) return
-    holePublicKunde('erben', mandantId, 'mandantenfragebogen')
+    holePublicKunde(bereich, mandantId, 'mandantenfragebogen')
       .then((k) => {
         setMandant(k)
         if (k?.unterlagenCheckliste) setCheckliste(k.unterlagenCheckliste)
@@ -66,7 +67,7 @@ export function PublicMandantenfragebogenErben() {
       .join(' ')
     try {
       await sendePublicFormular({
-        bereich: 'erben',
+        bereich,
         kundeId: mandantId!,
         aktivitaetText: activityText,
         aktivitaetUser: `${mandant!.ansprechpartner} (Formular)`,

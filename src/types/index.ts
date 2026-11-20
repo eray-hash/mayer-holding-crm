@@ -18,6 +18,9 @@ export type Bereich =
 // bereichsübergreifende Objekt-Kunde-Zuweisung.
 export type KundeBereich = Exclude<Bereich, 'immobilien'>
 
+/** Bereiche, nach denen ein privater Kontakt geführt werden kann (kunden.privat_art). */
+export type PrivatArt = Exclude<KundeBereich, 'privat'>
+
 export type Prioritaet = 'Hoch' | 'Mittel' | 'Niedrig'
 
 export type StatusNode = {
@@ -294,6 +297,9 @@ export type Kunde = {
   // Nur für bereich 'privat' gesetzt: E-Mail des Mitarbeiters, dem dieser Kontakt gehört — Grundlage
   // der Datenbank-Berechtigung (RLS), die private Kontakte/Protokolle auf den Besitzer beschränkt.
   verantwortlichEmail?: string
+  // Nur bei bereich 'privat': nach welchem Bereich (Statusablauf, Vorlagen, Fragenkatalog) der private Kontakt
+  // geführt wird — leer = „Allgemein“. Beim Übernehmen ins Mayer-CRM ist das der Zielbereich (20.11.2026).
+  privatArt?: PrivatArt
   letzteAktivitaet: string
   activities: ActivityEntry[]
   unterlagenCheckliste?: Record<string, boolean>
@@ -516,6 +522,8 @@ export type Finanzierung = {
 
 export type Objekt = {
   id: string
+  // Gesetzt = privates Objekt dieses Mitarbeiters (nur für ihn sichtbar, Datenbank-Regel); leer = Mayer-Objekt.
+  privatBesitzer?: string
   bezeichnung: string
   adresse: string
   gruppe: ObjektGruppe

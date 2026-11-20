@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
-import { ArrowLeft, Folder, FolderOpen, File, Upload, Plus, Radar, ExternalLink, Users, Sparkles, CheckCircle2, XCircle, Trash2, Send } from 'lucide-react'
+import { ArrowLeft, ArrowRightLeft, Folder, FolderOpen, File, Upload, Plus, Radar, ExternalLink, Users, Sparkles, CheckCircle2, XCircle, Trash2, Send } from 'lucide-react'
 import { useApp, type AppData } from '../../context/AppContext'
 import { StatusWidget } from '../../components/StatusWidget'
 import { Card, Modal, Field, inputClass, PrimaryButton, SecondaryButton, EmptyState, StatusBadge } from '../../components/ui'
 import { FormularLinkButtons } from '../../components/FormularLink'
 import { useEigentuemerPfad } from '../../lib/eigentuemerLink'
-import { KUNDEN_BEREICHE, kundeBereichLabel, kundeDetailPfad } from '../../data/kundenBereiche'
+import { KUNDEN_BEREICHE, kundeBereichLabel } from '../../data/kundenBereiche'
 import { useBereichsRechte } from '../../lib/bereichsRechte'
 import { alleGesuche, budgetText, eckdatenTexte, passendeGesuche } from '../../lib/gesuche'
 import { fmtDate, isOverdue, today, uid, fmtEUR } from '../../lib/dates'
@@ -26,6 +26,7 @@ import { ObjektUnterlagenAnfordern } from '../../components/ObjektUnterlagenAnfo
 import { ObjektBewertungSection } from '../../components/ObjektBewertungSection'
 import { ExposePdfKnopf } from '../../components/ExposePdf'
 import { ObjektAnGesucheSenden } from '../../components/ObjektAnGesucheSenden'
+import { immoPfade, immoObjekte, privateGesuche } from './privatModus'
 
 const TABS = [
   { id: 'uebersicht', label: 'Übersicht' },
@@ -40,6 +41,12 @@ const TABS = [
   { id: 'vorschlaege', label: 'Gesuche & Vorschläge' },
 ]
 
+// Privater Bereich: ohne die Abläufe des Mayer-Teams — Fragen an die Geschäftsführung, Weitergaben (Nachweis
+// im gemeinsamen Verzeichnis), Abrechnung (Zeiterfassung), Finanzierungen und Vorschläge liegen in Tabellen,
+// die alle Kollegen mit Immobilien-Freigabe sehen. „Gesuche“ gleicht nur mit den eigenen Gesuchen ab.
+const NUR_MAYER_TABS = new Set(['fragen', 'weitergaben', 'abrechnung', 'finanzierung'])
+const TABS_PRIVAT = TABS.filter((t) => !NUR_MAYER_TABS.has(t.id)).map((t) => (t.id === 'vorschlaege' ? { ...t, label: 'Gesuche' } : t))
+
 const VORSCHLAG_STATUS_LABEL: Record<string, string> = { offen: 'Offen', akzeptiert: 'Angenommen', abgelehnt: 'Abgelehnt' }
 const VORSCHLAG_STATUS_COLOR: Record<string, string> = {
   offen: 'bg-slate-100 text-slate-600',
@@ -47,25 +54,31 @@ const VORSCHLAG_STATUS_COLOR: Record<string, string> = {
   abgelehnt: 'bg-rose-100 text-rose-700',
 }
 
-export function ObjektDetail() {
+// `privat`: Akte eines eigenen privaten Objekts (state.privatObjekte), mit Knopf „Ins Mayer-CRM übernehmen“.
+export function ObjektDetail({ privat }: { privat?: boolean } = {}) {
   const { id } = useParams()
   const [params, setParams] = useSearchParams()
   const navigate = useNavigate()
   const { state, dispatch } = useApp()
+  const { darf } = useBereichsRechte()
+  const pfade = immoPfade(privat)
+  const [uebernehmenOpen, setUebernehmenOpen] = useState(false)
   const [finOpen, setFinOpen] = useState(false)
   const [vorschlagOpen, setVorschlagOpen] = useState(false)
   const [uploadOpen, setUploadOpen] = useState(false)
   const [anGesucheOpen, setAnGesucheOpen] = useState(false)
   const [oeffneFehler, setOeffneFehler] = useState('')
 
-  const objekt = state.objekte.find((o) => o.id === id)
-  const tab = params.get('tab') ?? 'uebersicht'
+  const objekt = immoObjekte(state, privat).find((o) => o.id === id)
+  const rohTab = params.get('tab') ?? 'uebersicht'
+  // Privat: ein Mayer-Reiter aus einem alten Link (?tab=weitergaben …) fällt auf die Übersicht zurück.
+  const tab = privat && NUR_MAYER_TABS.has(rohTab) ? 'uebersicht' : rohTab
   const ordner = params.get('ordner') as DokumentOrdnerName | null
 
   if (!objekt) {
     return (
       <div>
-        <button onClick={() => navigate('/immobilien')} className="mb-4 flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700">
+        <button onClick={() => navigate(pfade.objektListe)} className="mb-4 flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700">
           <ArrowLeft size={14} /> Zurück
         </button>
         <EmptyState text="Objekt nicht gefunden." />
@@ -77,7 +90,8 @@ export function ObjektDetail() {
   const finanzierungen = state.finanzierungen.filter((f) => f.objektId === objekt.id)
   const vorschlaege = state.objektVorschlaege.filter((v) => v.objektId === objekt.id)
   // Wer sucht so etwas? Abgleich des Objekts gegen alle erfassten Gesuche.
-  const gesuchTreffer = passendeGesuche(objekt, alleGesuche(state))
+  // Privat: nur die Gesuche der eigenen privaten Kontakte — ein privates Objekt geht nie an Mayer-Kontakte.
+  const gesuchTreffer = passendeGesuche(objekt, privat ? privateGesuche(state) : alleGesuche(state))
   const objektId = objekt.id
 
   function setTab(t: string) {
@@ -133,7 +147,7 @@ export function ObjektDetail() {
 
   return (
     <div>
-      <button onClick={() => navigate('/immobilien')} className="mb-4 flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700">
+      <button onClick={() => navigate(pfade.objektListe)} className="mb-4 flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700">
         <ArrowLeft size={14} /> Zurück zur Objektliste
       </button>
 
@@ -165,13 +179,21 @@ export function ObjektDetail() {
               )}
             </div>
           </div>
-          <select
-            value={objekt.prioritaet}
-            onChange={(e) => dispatch({ type: 'SET_OBJEKT_PRIORITAET', id: objekt.id, prioritaet: e.target.value as Prioritaet })}
-            className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-medium"
-          >
-            {PRIORITAETEN.map((p) => <option key={p} value={p}>{p}</option>)}
-          </select>
+          {privat ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <PrioritaetWahl objekt={objekt} />
+              <button
+                onClick={() => setUebernehmenOpen(true)}
+                disabled={!darf('immobilien')}
+                title={darf('immobilien') ? undefined : 'Dafür fehlt die Freigabe für den Bereich Immobilien.'}
+                className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <ArrowRightLeft size={13} /> Ins Mayer-CRM übernehmen
+              </button>
+            </div>
+          ) : (
+            <PrioritaetWahl objekt={objekt} />
+          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-6 border-t border-slate-100 pt-4">
@@ -196,7 +218,7 @@ export function ObjektDetail() {
       </Card>
 
       <div className="mb-4 flex gap-1 overflow-x-auto border-b border-slate-200">
-        {TABS.map((t) => (
+        {(privat ? TABS_PRIVAT : TABS).map((t) => (
           <button
             key={t.id}
             onClick={() => setTab(t.id)}
@@ -224,7 +246,8 @@ export function ObjektDetail() {
               <div className={`text-sm ${overdue ? 'font-medium text-rose-600' : 'text-slate-700'}`}>{fmtDate(objekt.followUp.date)} — {objekt.followUp.note}</div>
             </div>
 
-            <div className="mt-4 border-t border-slate-100 pt-4">
+            {/* Die Eigentümer-Seite ist öffentlich erreichbar (geheimer Link) — für private Objekte nicht anbieten. */}
+            {!privat && <div className="mt-4 border-t border-slate-100 pt-4">
               <div className="mb-2 text-xs font-medium text-slate-400">Eigentümer</div>
               {objekt.eigentuemer ? (
                 <dl className="space-y-1 text-sm">
@@ -239,7 +262,7 @@ export function ObjektDetail() {
               <div className="mt-2">
                 <EigentuemerLinkKnoepfe objekt={objekt} />
               </div>
-            </div>
+            </div>}
           </Card>
 
           <Card className="p-5 lg:col-span-1">
@@ -301,7 +324,8 @@ export function ObjektDetail() {
 
       {tab === 'dokumente' && !ordner && (
         <div>
-          <ObjektUnterlagenAnfordern objekt={objekt} />
+          {/* Unterlagen anfordern schickt den Link zur öffentlichen Eigentümer-Seite, meist aus dem gemeinsamen Postfach. */}
+          {!privat && <ObjektUnterlagenAnfordern objekt={objekt} />}
           <div className="mb-3 flex justify-end">
             <PrimaryButton onClick={() => setUploadOpen(true)}>
               <Sparkles size={14} /> Dokument hochladen (KI sortiert automatisch)
@@ -396,14 +420,14 @@ export function ObjektDetail() {
 
       {tab === 'kurzpruefung' && <ObjektKurzpruefungBlatt key={objekt.id} objekt={objekt} />}
 
-      {tab === 'fragen' && <ObjektFragenSection key={objekt.id} objekt={objekt} />}
+      {tab === 'fragen' && !privat && <ObjektFragenSection key={objekt.id} objekt={objekt} />}
 
-      {tab === 'weitergaben' && <ObjektWeitergabenSection key={objekt.id} objekt={objekt} />}
+      {tab === 'weitergaben' && !privat && <ObjektWeitergabenSection key={objekt.id} objekt={objekt} />}
 
-      {tab === 'abrechnung' && <ObjektAbrechnungSection key={objekt.id} objekt={objekt} />}
+      {tab === 'abrechnung' && !privat && <ObjektAbrechnungSection key={objekt.id} objekt={objekt} />}
       {tab === 'bewertung' && <ObjektBewertungSection key={objekt.id} objekt={objekt} />}
 
-      {tab === 'finanzierung' && (
+      {tab === 'finanzierung' && !privat && (
         <div>
           <div className="mb-3 flex justify-end">
             <PrimaryButton onClick={() => setFinOpen(true)}><Plus size={14} /> Finanzierung anlegen</PrimaryButton>
@@ -438,7 +462,8 @@ export function ObjektDetail() {
           <Card className="mb-4 p-4">
             <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
               <h3 className="text-sm font-semibold text-slate-700">Passende Gesuche</h3>
-              {gesuchTreffer.length > 0 && (
+              {/* Privat kein Versand: er hält eine Weitergabe im gemeinsamen Verzeichnis fest. */}
+              {gesuchTreffer.length > 0 && !privat && (
                 <SecondaryButton onClick={() => setAnGesucheOpen(true)}><Send size={13} /> An passende Gesuche schicken</SecondaryButton>
               )}
             </div>
@@ -448,7 +473,7 @@ export function ObjektDetail() {
               <ul className="mt-2 space-y-2">
                 {gesuchTreffer.map((t) => (
                   <li key={`${t.kunde.id}:${t.gesuch.id}`} className="text-sm">
-                    <a href={`#${t.bereich === 'immobilienkunden' ? `/immobilien/kunden/${t.kunde.id}?tab=stammdatenblatt` : kundeDetailPfad(t.bereich, t.kunde.id)}`} className="font-medium text-accent-600 hover:underline">
+                    <a href={`#${pfade.kontakt(t.bereich, t.kunde.id)}`} className="font-medium text-accent-600 hover:underline">
                       {t.kunde.firma}
                     </a>
                     <span className="text-slate-600"> sucht: {t.gesuch.titel}</span>
@@ -461,6 +486,8 @@ export function ObjektDetail() {
               </ul>
             )}
           </Card>
+          {!privat && (
+          <>
           <div className="mb-3 flex justify-end">
             <PrimaryButton onClick={() => setVorschlagOpen(true)}><Plus size={14} /> Diesem Kunden vorschlagen</PrimaryButton>
           </div>
@@ -483,10 +510,12 @@ export function ObjektDetail() {
             ))}
             {vorschlaege.length === 0 && <EmptyState text="Noch keinem Kunden vorgeschlagen." />}
           </div>
+          </>
+          )}
         </div>
       )}
 
-      {anGesucheOpen && <ObjektAnGesucheSenden objekt={objekt} treffer={gesuchTreffer} onClose={() => setAnGesucheOpen(false)} />}
+      {anGesucheOpen && !privat && <ObjektAnGesucheSenden objekt={objekt} treffer={gesuchTreffer} onClose={() => setAnGesucheOpen(false)} />}
 
       <Modal open={finOpen} onClose={() => setFinOpen(false)} title="Finanzierung anlegen">
         <FinanzierungForm
@@ -509,6 +538,30 @@ export function ObjektDetail() {
           }}
         />
       </Modal>
+
+      {privat && (
+        <Modal open={uebernehmenOpen} onClose={() => setUebernehmenOpen(false)} title="Ins Mayer-CRM übernehmen">
+          <p className="mb-2 text-sm text-slate-700">
+            „{objekt.bezeichnung}" wird aus deinem privaten Bereich in den gemeinsamen Objektbestand der Mayer Holding verschoben.
+          </p>
+          <p className="mb-4 text-sm text-slate-600">
+            Danach sehen und bearbeiten alle Kollegen mit Freigabe für Immobilien das Objekt samt Unterlagen, Verlauf und Bewertung.
+            Zurück in den privaten Bereich geht es nicht.
+          </p>
+          <div className="flex justify-end gap-2">
+            <SecondaryButton onClick={() => setUebernehmenOpen(false)}>Abbrechen</SecondaryButton>
+            <PrimaryButton
+              onClick={() => {
+                dispatch({ type: 'OBJEKT_INS_MAYER_CRM', id: objektId })
+                setUebernehmenOpen(false)
+                navigate(`/immobilien/objekte/${objektId}`)
+              }}
+            >
+              <ArrowRightLeft size={14} /> Ja, übernehmen
+            </PrimaryButton>
+          </div>
+        </Modal>
+      )}
 
       <ObjektDokumentUploadModal
         open={uploadOpen}
@@ -850,6 +903,19 @@ function EigentuemerLinkKnoepfe({ objekt }: { objekt: Objekt }) {
   const pfad = useEigentuemerPfad(objekt)
   if (!pfad) return <p className="text-xs text-slate-400">Link zur Eigentümer-Seite wird vorbereitet …</p>
   return <FormularLinkButtons pfad={pfad} />
+}
+
+function PrioritaetWahl({ objekt }: { objekt: Objekt }) {
+  const { dispatch } = useApp()
+  return (
+    <select
+      value={objekt.prioritaet}
+      onChange={(e) => dispatch({ type: 'SET_OBJEKT_PRIORITAET', id: objekt.id, prioritaet: e.target.value as Prioritaet })}
+      className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-medium"
+    >
+      {PRIORITAETEN.map((p) => <option key={p} value={p}>{p}</option>)}
+    </select>
+  )
 }
 
 function Row({ label, value }: { label: string; value: string }) {

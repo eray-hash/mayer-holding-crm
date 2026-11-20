@@ -12,7 +12,7 @@
 // Die Datei kennt index.ts nicht (kein Kreis-Import): Status-Listen und Gesprächszustand reicht der
 // Aufrufer herein.
 
-import { bereichName, darfAkte, darfBereich, SAMMELAKTEN, siehtAlleBereiche, type RechteMitarbeiter } from './rechte.ts'
+import { bereichName, darfAkte, darfBereich, istPrivat, SAMMELAKTEN, siehtAlleBereiche, type RechteMitarbeiter } from './rechte.ts'
 
 // deno-lint-ignore no-explicit-any
 type Supa = any
@@ -88,14 +88,21 @@ function frisch(z: string): boolean {
   return Date.now() - new Date(z).getTime() < GUELTIG_MS
 }
 
-// Private Kontakte sind für den Assistenten tabu (wie ladeKunde in index.ts).
+// Private Kontakte werden hier weder verschoben noch zusammengeführt (aus dem privaten Bereich holt sie
+// in_oeffentlich_holen in index.ts). Den privaten Kontakt eines Kollegen gibt es für den Mitarbeiter nicht.
 async function ladeGanzeAkte(supabase: Supa, id: unknown): Promise<Zeile | null> {
   if (typeof id !== 'string' || !id) return null
-  const { data } = await supabase.from('kunden').select('*').eq('id', id).neq('bereich', 'privat').maybeSingle()
+  const { data } = await supabase.from('kunden').select('*').eq('id', id).maybeSingle()
   return (data as Zeile | null) ?? null
 }
 
 const KEIN_KUNDE = 'Fehler: Es gibt keinen Kunden mit dieser kunde_id. Ermittle die richtige ID mit kunden_suchen.'
+
+/** Meldung für einen privaten Kontakt: dem Besitzer der Weg über in_oeffentlich_holen, allen anderen „gibt es nicht". */
+function privatMeldung(mitarbeiter: RechteMitarbeiter, k: Zeile, was: string): string {
+  if (!darfAkte(mitarbeiter, k)) return KEIN_KUNDE
+  return `Nicht möglich: ${name(k)} ist ein privater Kontakt; ${was} geht hier nicht. In einen Bereich der Holding holst du ihn mit in_oeffentlich_holen (art=kontakt).`
+}
 
 function nichtErlaubt(was: string): string {
   return `Nicht erlaubt: ${was} darf nur die Geschäftsführung oder ein Admin. Sag dem Mitarbeiter, dass er die Geschäftsführung darum bitten kann.`
@@ -117,6 +124,7 @@ async function bereichWechseln(input: Zeile, ctx: PflegeKontext): Promise<string
   if (!ZIEL_BEREICHE.includes(nach)) return `Fehler: unbekannter Ziel-Bereich. Möglich: ${ZIEL_BEREICHE.map((b) => `${b} (${bereichName(b)})`).join(', ')}.`
   const k = await ladeGanzeAkte(supabase, input.kunde_id)
   if (!k) return KEIN_KUNDE
+  if (istPrivat(k)) return privatMeldung(mitarbeiter, k, 'Verschieben')
   if (SAMMELAKTEN.includes(k.id)) return 'Nicht möglich: Das ist eine Sammelakte für Eingänge, kein Kunde. Sie bleibt, wo sie ist; einzelne Dokumente daraus legst du beim richtigen Kunden ab.'
   if (!darfAkte(mitarbeiter, k) || !darfBereich(mitarbeiter, nach)) return nichtErlaubt('Akten in einen anderen Bereich verschieben')
   const von = String(k.bereich)
@@ -202,6 +210,8 @@ async function zusammenfuehren(input: Zeile, ctx: PflegeKontext): Promise<string
   if (!siehtAlleBereiche(mitarbeiter)) return nichtErlaubt('Akten zusammenführen')
   const [b, e] = await Promise.all([ladeGanzeAkte(supabase, input.behalte_id), ladeGanzeAkte(supabase, input.entferne_id)])
   if (!b || !e) return KEIN_KUNDE
+  if (istPrivat(b)) return privatMeldung(mitarbeiter, b, 'Zusammenführen')
+  if (istPrivat(e)) return privatMeldung(mitarbeiter, e, 'Zusammenführen')
   if (b.id === e.id) return 'Das ist zweimal dieselbe Akte. Es gibt nichts zusammenzuführen.'
   if (SAMMELAKTEN.includes(b.id) || SAMMELAKTEN.includes(e.id)) return 'Nicht möglich: Eine der beiden ist eine Sammelakte für Eingänge, kein Kunde. Einzelne Dokumente daraus legst du beim richtigen Kunden ab.'
   if (!darfAkte(mitarbeiter, b) || !darfAkte(mitarbeiter, e)) return nichtErlaubt('Akten zusammenführen')

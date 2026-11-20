@@ -11,6 +11,8 @@ export type ProjektBereich =
   | 'akademie'
   | 'finanzierungen'
   | 'intern'
+  // Private Projekte (nur für den Besitzer, Datenbank-Regel auf besitzer_email)
+  | 'privat'
 
 export type ProjektKind = 'kunde' | 'eigen'
 export type ProjektStatus = 'geplant' | 'in_arbeit' | 'pausiert' | 'abgeschlossen'
@@ -59,6 +61,8 @@ export type Meilenstein = {
 export type Projekt = {
   id: string
   bereich: ProjektBereich
+  // Nur bei bereich 'privat': Login-Adresse des Besitzers.
+  besitzerEmail?: string
   name: string
   kind: ProjektKind
   status: ProjektStatus
@@ -86,4 +90,5 @@ export const PROJEKT_BEREICH_LABEL: Record<ProjektBereich, string> = {
   akademie: 'Akademie',
   finanzierungen: 'Finanzierungen',
   intern: 'Intern',
+  privat: 'Privat',
 }

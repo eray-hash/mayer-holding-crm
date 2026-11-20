@@ -2,10 +2,11 @@
 // „Aufgaben nach Mitarbeiter“ im CRM (Kern in ../_shared/aufgabenKern.ts). Der Assistent arbeitet
 // mit vollen Datenbankrechten, deshalb filtert diese Datei selbst nach den Rechten des Fragenden:
 // Bereichs-To-dos, Kundenakten, Objekte und Projekte nur aus freigegebenen Bereichen; eigene
-// To-do-Listen nur die eigene und die ausdrücklich für ihn freigegebenen; private Kontakte nie.
+// To-do-Listen nur die eigene und die ausdrücklich für ihn freigegebenen; private Kontakte und private
+// Objekte nur die eigenen (darfAkte / darfObjekt), die von Kollegen nie.
 
 import { alsIso, LAGE_TEXT, OBJEKT_ABGESCHLOSSEN, nachPerson, ordneAufgabenZu, ordneZu, personenNamen, type RohAufgabe } from '../_shared/aufgabenKern.ts'
-import { darfAkte, darfBereich, darfObjekte, type RechteMitarbeiter } from './rechte.ts'
+import { darfAkte, darfBereich, darfObjekt, type RechteMitarbeiter } from './rechte.ts'
 
 const BEREICH_NAME: Record<string, string> = {
   beratung: 'Unternehmensberatung',
@@ -16,6 +17,7 @@ const BEREICH_NAME: Record<string, string> = {
   betriebsformen: 'Betriebsformen',
   akademie: 'Akademie',
   finanzierungen: 'Finanzierungen',
+  privat: 'Privat (nur für dich)',
 }
 
 // deno-lint-ignore no-explicit-any
@@ -38,8 +40,8 @@ export async function aufgabenUebersicht(
     supabase.from('mitarbeiter').select('name, email').eq('aktiv', true),
     supabase.from('todos').select('id, aufgabe, kunde_projekt, zustaendig, erledigen_bis, geplante_wiedervorlage, erledigt_am, bereich, besitzer_email').is('erledigt_am', null),
     supabase.from('todo_freigaben').select('besitzer_email, empfaenger_email'),
-    supabase.from('kunden').select('id, bereich, firma, ansprechpartner, verantwortlich, follow_up').neq('bereich', 'privat'),
-    darfObjekte(fragender) ? supabase.from('objekte').select('id, bezeichnung, verantwortlich, follow_up, status') : Promise.resolve({ data: [] }),
+    supabase.from('kunden').select('id, bereich, firma, ansprechpartner, verantwortlich, follow_up, verantwortlich_email'),
+    supabase.from('objekte').select('id, bezeichnung, verantwortlich, follow_up, status, privat_besitzer'),
     supabase.from('projekte').select('id, bereich, name, verantwortlich, meilensteine'),
   ])
   const teamListe = ((team ?? []) as { name: string; email: string | null }[]).filter((m) => m.name)
@@ -91,8 +93,8 @@ export async function aufgabenUebersicht(
   // deno-lint-ignore no-explicit-any
   for (const o of (objekteRes.data ?? []) as any[]) {
     const fu = o.follow_up
-    if (!fu || fu.done || !(String(fu.note ?? '').trim() || fu.date) || OBJEKT_ABGESCHLOSSEN.includes(o.status)) continue
-    roh.push({ id: `fu:${o.id}`, art: 'followup', titel: String(fu.note ?? '').trim() || 'Follow-up', bezug: `Objekt ${o.bezeichnung}`, bereich: 'Immobilien', zustaendig: o.verantwortlich, datum: fu.date, datumArt: 'Follow-up' })
+    if (!fu || fu.done || !(String(fu.note ?? '').trim() || fu.date) || OBJEKT_ABGESCHLOSSEN.includes(o.status) || !darfObjekt(fragender, o)) continue
+    roh.push({ id: `fu:${o.id}`, art: 'followup', titel: String(fu.note ?? '').trim() || 'Follow-up', bezug: `Objekt ${o.bezeichnung}`, bereich: o.privat_besitzer ? 'Privat (nur für dich)' : 'Immobilien', zustaendig: o.verantwortlich, datum: fu.date, datumArt: 'Follow-up' })
   }
   // deno-lint-ignore no-explicit-any
   for (const p of (projekte ?? []) as any[]) {

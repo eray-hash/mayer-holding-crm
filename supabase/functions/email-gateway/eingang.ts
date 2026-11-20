@@ -12,6 +12,8 @@
 //   machen. Diese Zeilen schreibt nur der Server; das Fenster liest sie nur.
 // - Sammelakte und Ziel werden unmittelbar vor dem Schreiben frisch gelesen, damit eine gleichzeitige
 //   Änderung (Telegram, Kollegen) möglichst nicht verloren geht.
+// - Private Kontakte und private Objekte sind kein Ziel: Sammelakte und Protokoll sehen alle Mitarbeiter.
+import { istPrivatesObjekt } from '../_shared/privatZugriff.ts'
 
 // Der Dienst-Zugang zur Datenbank — in postfach.ts genauso typisiert, dort aber nicht exportiert.
 // deno-lint-ignore no-explicit-any
@@ -338,9 +340,12 @@ function objektName(o: { bezeichnung?: string | null }): string {
 
 async function legeBeiObjektAb(admin: Db, auswahl: Auswahl, objektId: string, ordner: string, wer: string): Promise<Lauf> {
   if (!OBJEKT_ORDNER.includes(ordner)) return { ok: false, fehler: 'Bitte einen Ordner der Objektakte wählen.' }
-  const { data: objekt, error } = await admin.from('objekte').select('id, bezeichnung, dokumente, activities').eq('id', objektId).maybeSingle()
+  const { data: objekt, error } = await admin.from('objekte').select('id, bezeichnung, dokumente, activities, privat_besitzer').eq('id', objektId).maybeSingle()
   if (error) return { ok: false, fehler: `Das Objekt ließ sich nicht laden: ${error.message}` }
   if (!objekt) return { ok: false, fehler: 'Dieses Objekt gibt es nicht (mehr).' }
+  // Wie bei privaten Kontakten: Die ungeklärten Eingänge und ihr Ablage-Protokoll sehen alle Mitarbeiter,
+  // ein privates Objekt gehört einem Einzelnen — also gar nicht erst hinein.
+  if (istPrivatesObjekt(objekt)) return { ok: false, fehler: 'In ein privates Objekt lässt sich von hier aus nichts ablegen.' }
 
   const heute = heuteInBerlin()
   const dokumente: Ordner = { ...alsOrdner(objekt.dokumente) }

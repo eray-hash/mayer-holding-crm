@@ -20,7 +20,7 @@ import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2.1
 import { PDFDocument, degrees } from 'npm:pdf-lib@1.17.1'
 import { aktuellePerson, kiAufruf, mitAnlass, setzeAnlass, setzePerson } from '../_shared/kiVerbrauch.ts'
 import { entschaerfe, kuerze as kuerzeWunsch, merkeWunsch } from '../_shared/wuensche.ts'
-import { bereichName, darfAkte, darfBereich, darfObjekte, freigegebeneBereiche, istEingeschraenkt, nichtFreigegeben, siehtAlleBereiche } from './rechte.ts'
+import { type AkteFuerRechte, bereichName, darfAkte, darfBereich, darfObjekt, darfObjekte, freigegebeneBereiche, istEingeschraenkt, istFremdePrivatakte, istPrivat, nichtFreigegeben, siehtAlleBereiche } from './rechte.ts'
 import { aufgabenUebersicht } from './aufgaben.ts'
 import { type AbteilungZeile, alleObjektDokumente, lesenVonSelbst, leseRef, OBJEKT_SPALTEN, objektakteText, objektStatus, type ObjektRow, sucheObjekte } from './objektakte.ts'
 import { richteFotoAus } from './bildDrehung.ts'
@@ -237,9 +237,12 @@ type KundeRow = {
   follow_up: { date?: string; note?: string; done?: boolean } | null
   activities: Activity[] | null
   dokumente: Dokument[] | null
+  // Nur bei privaten Kontakten (bereich "privat"): Besitzer und welchem Bereichs-Ablauf (Statusnetz) er folgt.
+  verantwortlich_email?: string | null
+  privat_art?: string | null
 }
 
-const KUNDE_SPALTEN = 'id, bereich, firma, ansprechpartner, email, telefon, status, prioritaet, verantwortlich, follow_up, activities, dokumente'
+const KUNDE_SPALTEN = 'id, bereich, firma, ansprechpartner, email, telefon, status, prioritaet, verantwortlich, follow_up, activities, dokumente, verantwortlich_email, privat_art'
 
 const BEREICH_LABEL: Record<string, string> = {
   beratung: 'Unternehmensberatung',
@@ -307,6 +310,34 @@ const START_STATUS: Record<string, string> = {
   akademie: 'interessent', finanzierungen: 'interessent', immobilienkunden: 'interessent',
 }
 
+// Private Kontakte (bereich "privat") folgen wahlweise dem Ablauf eines Bereichs (kunden.privat_art,
+// Werte wie kunden.bereich); ohne privat_art gilt das schlichte Privat-Netz (neu → … → erledigt).
+// Wie src/data/statusNetworks.ts getStatusMap mit der Art des privaten Kontakts.
+const PRIVAT_ARTEN = NEUANLAGE_BEREICHE
+const PRIVAT_START_STATUS = 'neu'
+
+/** Schlüssel des Statusnetzes, das für diese Akte gilt (bei privaten Kontakten mit privat_art deren Bereich). */
+function statusNetzVon(k: { bereich: string; privat_art?: string | null }): string {
+  if (k.bereich === 'privat' && k.privat_art && PRIVAT_ARTEN.includes(k.privat_art)) return k.privat_art
+  return k.bereich
+}
+
+/** Erlaubte Status (Kennung → Bezeichnung) für diese Akte. */
+function statusNetz(k: { bereich: string; privat_art?: string | null }): Record<string, string> {
+  return STATUS_JE_BEREICH[statusNetzVon(k)] ?? {}
+}
+
+/** Anfangsstatus eines Statusnetzes ("privat" = schlichtes Privat-Netz). */
+function startStatusVon(netz: string): string {
+  return START_STATUS[netz] ?? PRIVAT_START_STATUS
+}
+
+/** Bereich einer Akte, wie ihn der Mitarbeiter lesen soll. */
+function bereichAnzeige(k: { bereich: string; privat_art?: string | null }): string {
+  if (k.bereich !== 'privat') return BEREICH_LABEL[k.bereich] ?? k.bereich
+  return `Privat (nur für dich sichtbar${k.privat_art && BEREICH_LABEL[k.privat_art] ? `, Ablauf wie ${BEREICH_LABEL[k.privat_art]}` : ''})`
+}
+
 function norm(s: string | null | undefined): string {
   return (s ?? '').toLowerCase().replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss')
 }
@@ -345,12 +376,12 @@ function sucheKunden(kunden: KundeRow[], begriff: string): KundeRow[] {
     .map((x) => x.k)
 }
 
+// Lädt jede Akte, auch private Kontakte. Der Assistent arbeitet mit vollen Datenbankrechten — wer was
+// sehen darf, prüft danach ladeErlaubteAkte (darfAkte: private Akten nur ihr Besitzer). Direkt
+// aufgerufen wird ladeKunde nur für die beiden Sammelakten.
 async function ladeKunde(supabase: Supa, id: unknown): Promise<KundeRow | null> {
   if (typeof id !== 'string' || !id) return null
-  // Private Kontakte ("Privat — nur für dich sichtbar") sind für den Assistenten tabu: Er arbeitet
-  // mit vollen Datenbankrechten und würde sie sonst jedem Mitarbeiter zeigen. Bis es einen eigenen,
-  // nach Besitzer getrennten Zugriff gibt, sieht er sie gar nicht.
-  const { data } = await supabase.from('kunden').select(KUNDE_SPALTEN).eq('id', id).neq('bereich', 'privat').maybeSingle()
+  const { data } = await supabase.from('kunden').select(KUNDE_SPALTEN).eq('id', id).maybeSingle()
   return (data as KundeRow | null) ?? null
 }
 
@@ -359,6 +390,7 @@ function kundeName(k: { firma: string; ansprechpartner: string }): string {
 }
 
 const KEIN_KUNDE = 'Fehler: Es gibt keinen Kunden mit dieser kunde_id. Ermittle die richtige ID mit kunden_suchen.'
+const KEIN_OBJEKT = 'Fehler: Es gibt kein Objekt mit dieser objekt_id. Ermittle die richtige ID mit objekte_suchen.'
 
 // Zwei feste Akten, damit JEDE geschickte Datei sofort sichtbar im CRM liegt und nicht in einem
 // Zwischenspeicher auf eine Antwort wartet (Vorgabe vom 13.11.2026, nachdem sechs Dateien liegen
@@ -416,43 +448,65 @@ async function ladeZielAkte(supabase: Supa, input: { kunde_id?: unknown; ziel?: 
 
 /**
  * Die eine Stelle, an der jedes Werkzeug eine Akte holt: lädt sie (Kunde nach kunde_id oder eine
- * Sammelakte nach ziel) und prüft, ob der Bereich für den Mitarbeiter freigegeben ist. Liefert
- * sonst den Text für das Werkzeug-Ergebnis — ohne Namen oder Inhalte der Akte.
+ * Sammelakte nach ziel) und prüft, ob der Mitarbeiter sie sehen darf. Liefert sonst den Text für das
+ * Werkzeug-Ergebnis — ohne Namen oder Inhalte der Akte. Den privaten Kontakt eines Kollegen gibt es
+ * für ihn schlicht nicht (gleiche Meldung wie bei einer falschen kunde_id, kein „nicht freigegeben").
  */
 async function ladeErlaubteAkte(supabase: Supa, mitarbeiter: RechteTraeger, input: { kunde_id?: unknown; ziel?: unknown }): Promise<KundeRow | string> {
   const k = await ladeZielAkte(supabase, input)
-  if (!k) return KEIN_KUNDE
+  if (!k || istFremdePrivatakte(mitarbeiter, k)) return KEIN_KUNDE
   if (!darfAkte(mitarbeiter, k)) return nichtFreigegeben(k.bereich, mitarbeiter.name)
   return k
 }
 
-type RechteTraeger = { name: string; rolle?: string | null; ist_admin?: boolean | null; bereiche?: string[] | null }
+type RechteTraeger = { name: string; email?: string | null; rolle?: string | null; ist_admin?: boolean | null; bereiche?: string[] | null }
 
-// Bereich der Akten zu einer Liste von kunde_id (für Mails und Termine, die nur die Kennung tragen).
-async function bereicheDerAkten(supabase: Supa, ids: string[]): Promise<Map<string, string>> {
+// Bereich und Besitzer der Akten zu einer Liste von kunde_id (für Mails und Termine, die nur die Kennung tragen).
+type AkteRecht = { bereich: string | null; verantwortlich_email: string | null }
+async function bereicheDerAkten(supabase: Supa, ids: string[]): Promise<Map<string, AkteRecht>> {
   const eindeutig = [...new Set(ids.filter(Boolean))]
   if (eindeutig.length === 0) return new Map()
-  const { data } = await supabase.from('kunden').select('id, bereich').in('id', eindeutig)
-  return new Map(((data ?? []) as { id: string; bereich: string }[]).map((k) => [k.id, k.bereich]))
+  const { data } = await supabase.from('kunden').select('id, bereich, verantwortlich_email').in('id', eindeutig)
+  return new Map(((data ?? []) as (AkteRecht & { id: string })[]).map((k) => [k.id, { bereich: k.bereich, verantwortlich_email: k.verantwortlich_email }]))
 }
 
-// Gehört eine Rechnung zu einer Akte, deren Bereich für den Mitarbeiter nicht freigegeben ist? Dann
-// deren Bereich, sonst null. Rechnungen privater Kontakte bleiben wie bisher (eigene Regeln dort).
+// Gehört eine Rechnung zu einer Akte, die der Mitarbeiter nicht sehen darf? Dann deren Bereich
+// ("privat" beim privaten Kontakt eines Kollegen), sonst null.
 async function rechnungInFremdemBereich(supabase: Supa, m: RechteTraeger, kundeId: unknown): Promise<string | null> {
-  if (siehtAlleBereiche(m) || typeof kundeId !== 'string' || !kundeId) return null
-  const { data } = await supabase.from('kunden').select('id, bereich').eq('id', kundeId).maybeSingle()
-  if (!data || data.bereich === 'privat' || darfAkte(m, data)) return null
+  if (typeof kundeId !== 'string' || !kundeId) return null
+  const { data } = await supabase.from('kunden').select('id, bereich, verantwortlich_email').eq('id', kundeId).maybeSingle()
+  if (!data || darfAkte(m, data)) return null
   return String(data.bereich)
 }
 
+// Die Akte hinter einer Zuordnung (Mail, Termin) für die Rechteprüfung. Nachgeschlagenes geht vor dem
+// mitgespeicherten Bereich (der kann seit dem Verschieben veraltet sein); Besitzer kennt nur das Nachschlagen.
+function zugeordneteAkte(kundeId: string, bereich: string | null | undefined, nachgeschlagen: Map<string, AkteRecht>): AkteFuerRechte {
+  const n = nachgeschlagen.get(kundeId)
+  return { id: kundeId, bereich: n?.bereich || bereich || null, verantwortlich_email: n?.verantwortlich_email ?? null }
+}
+
 // Darf der Mitarbeiter etwas sehen, das einer Akte zugeordnet ist (Mail, Termin)? Ohne Zuordnung: ja.
-// Ist der Bereich nicht mitgespeichert, wird er über die Kennung nachgeschlagen; eine nicht mehr
-// vorhandene Akte gibt keinen Bereich preis und sperrt nichts.
-function darfZuordnung(m: RechteTraeger, kundeId: string | null | undefined, bereich: string | null | undefined, nachgeschlagen: Map<string, string>): boolean {
+// Eine nicht mehr vorhandene Akte ohne mitgespeicherten Bereich gibt keinen Bereich preis und sperrt
+// nichts. Private Akten nur für ihren Besitzer — ohne nachgeschlagenen Besitzer für niemanden.
+function darfZuordnung(m: RechteTraeger, kundeId: string | null | undefined, bereich: string | null | undefined, nachgeschlagen: Map<string, AkteRecht>): boolean {
   if (!kundeId) return true
-  const b = bereich || nachgeschlagen.get(kundeId)
-  if (!b) return true
-  return darfAkte(m, { id: kundeId, bereich: b })
+  const akte = zugeordneteAkte(kundeId, bereich, nachgeschlagen)
+  if (!akte.bereich) return true
+  return darfAkte(m, akte)
+}
+
+/**
+ * Prüft eine einzelne Zuordnung (Mail eines gemeinsamen Postfachs) samt Nachschlagen. null = erlaubt,
+ * sonst der Text fürs Werkzeug-Ergebnis: beim privaten Kontakt eines Kollegen `keinTreffer` (es gibt
+ * ihn für den Mitarbeiter nicht), sonst „nicht freigegeben" mit dem Bereich.
+ */
+async function pruefeZuordnung(supabase: Supa, m: RechteTraeger, kundeId: string | null | undefined, bereich: string | null | undefined, keinTreffer: string): Promise<string | null> {
+  if (!kundeId) return null
+  const nachgeschlagen = await bereicheDerAkten(supabase, [String(kundeId)])
+  if (darfZuordnung(m, kundeId, bereich, nachgeschlagen)) return null
+  const akte = zugeordneteAkte(String(kundeId), bereich, nachgeschlagen)
+  return istPrivat(akte) ? keinTreffer : nichtFreigegeben(akte.bereich, m.name)
 }
 
 // ---------- Dateien ----------
@@ -681,11 +735,15 @@ export async function werteDateiAus(supabase: Supa, bytes: Uint8Array, dateiname
         'Aus dem früheren Eingang vorhanden:',
         ...frueher.map((d, i) => {
           const kunde = referenzen.kunden.find((k) => (k.dokumente ?? []).some((x) => x.url.includes(`/${BUCKET}/${ORDNER}/${d.name}`)))
+          // Den privaten Kontakt eines Kollegen nie nennen, nicht einmal seinen Bereich.
+          const sichtbar = !!kunde && (mitarbeiter ? darfAkte(mitarbeiter, kunde) : !istPrivat(kunde))
           const lage = !kunde
             ? 'noch keiner Akte zugeordnet'
-            : !mitarbeiter || darfAkte(mitarbeiter, kunde)
+            : sichtbar
               ? `liegt in der Akte von ${kundeName(kunde)}`
-              : 'liegt bereits in einer Akte aus einem Bereich, der für den Mitarbeiter nicht freigegeben ist (nicht noch einmal ablegen)'
+              : istPrivat(kunde)
+                ? 'ist bereits abgelegt (nicht noch einmal ablegen)'
+                : 'liegt bereits in einer Akte aus einem Bereich, der für den Mitarbeiter nicht freigegeben ist (nicht noch einmal ablegen)'
           return `${i + 1}. pfad=${ORDNER}/${d.name} | Name: ${anzeigeName(d.name)} | ${lage}`
         }),
       ].join('\n')
@@ -837,14 +895,17 @@ async function listeOrdner(supabase: Supa): Promise<OrdnerDatei[]> {
   return ((data ?? []) as OrdnerDatei[]).filter((d) => d.metadata) // Unterordner haben keine Metadaten
 }
 
-// Alles, was irgendeine Kunden- oder Objektakte an Dateien referenziert, als ein durchsuchbarer Text.
-type ReferenzKunde = Pick<KundeRow, 'id' | 'bereich' | 'firma' | 'ansprechpartner' | 'dokumente'>
-async function ladeReferenzen(supabase: Supa): Promise<{ text: string; objekteText: string; kunden: ReferenzKunde[] }> {
+// Alles, was irgendeine Kunden- oder Objektakte an Dateien referenziert, als ein durchsuchbarer Text —
+// auch private Akten und Objekte (nur zum Erkennen „liegt schon irgendwo"); wer was davon sehen darf,
+// prüfen die Aufrufer mit darfAkte / darfObjekt.
+type ReferenzKunde = Pick<KundeRow, 'id' | 'bereich' | 'firma' | 'ansprechpartner' | 'dokumente' | 'verantwortlich_email'>
+type ReferenzObjekt = { privat_besitzer: string | null; dokumente: unknown }
+async function ladeReferenzen(supabase: Supa): Promise<{ text: string; objekte: ReferenzObjekt[]; kunden: ReferenzKunde[] }> {
   const [{ data: kunden }, { data: objekte }] = await Promise.all([
-    supabase.from('kunden').select('id, bereich, firma, ansprechpartner, dokumente'),
-    supabase.from('objekte').select('dokumente'),
+    supabase.from('kunden').select('id, bereich, firma, ansprechpartner, dokumente, verantwortlich_email'),
+    supabase.from('objekte').select('privat_besitzer, dokumente'),
   ])
-  return { text: JSON.stringify([kunden ?? [], objekte ?? []]), objekteText: JSON.stringify(objekte ?? []), kunden: (kunden ?? []) as ReferenzKunde[] }
+  return { text: JSON.stringify([kunden ?? [], objekte ?? []]), objekte: (objekte ?? []) as ReferenzObjekt[], kunden: (kunden ?? []) as ReferenzKunde[] }
 }
 
 // ---------- Gesprächszustand ----------
@@ -968,7 +1029,7 @@ const STATUS_HINWEIS = Object.entries(STATUS_JE_BEREICH)
 export const TOOLS = [
   {
     name: 'kunden_suchen',
-    description: 'Sucht Kunden/Mandanten in allen Bereichen, die für den Mitarbeiter freigegeben sind, nach Name, Firma oder E-Mail. Liefert die kunde_id, die alle anderen Werkzeuge brauchen. Immer zuerst aufrufen, wenn ein Kunde genannt wird, dessen kunde_id du im Gespräch noch nicht ermittelt hast.',
+    description: 'Sucht Kunden/Mandanten in allen Bereichen, die für den Mitarbeiter freigegeben sind, und in seinen eigenen privaten Kontakten (Bereich „Privat"), nach Name, Firma oder E-Mail. Liefert die kunde_id, die alle anderen Werkzeuge brauchen. Immer zuerst aufrufen, wenn ein Kunde genannt wird, dessen kunde_id du im Gespräch noch nicht ermittelt hast.',
     input_schema: {
       type: 'object',
       properties: { suchbegriff: { type: 'string', description: 'Name, Firma oder E-Mail, z. B. "Lipps" oder "Simpfendörfer".' } },
@@ -1065,11 +1126,12 @@ export const TOOLS = [
   },
   {
     name: 'kunde_anlegen',
-    description: 'Legt eine neue Kundenakte an. Vorher mit kunden_suchen prüfen, dass es den Kunden noch nicht gibt. Bittet der Mitarbeiter im Gespräch darum und ist der Bereich unklar, frag nach. Legst du die Akte an, weil eine geschickte Datei oder weitergeleitete Nachricht zu jemandem gehört, den es noch nicht gibt, fragst du NICHT: Du wählst den Bereich nach der Art der Unterlage und setzt automatisch=true mit einer Begründung.',
+    description: 'Legt eine neue Kundenakte an. Vorher mit kunden_suchen prüfen, dass es den Kunden noch nicht gibt. Bittet der Mitarbeiter im Gespräch darum und ist der Bereich unklar, frag nach. Legst du die Akte an, weil eine geschickte Datei oder weitergeleitete Nachricht zu jemandem gehört, den es noch nicht gibt, fragst du NICHT: Du wählst den Bereich nach der Art der Unterlage und setzt automatisch=true mit einer Begründung. bereich=privat nur, wenn der Mitarbeiter ausdrücklich einen privaten Kontakt (nur für ihn sichtbar) will — nie automatisch für geschickte Dateien.',
     input_schema: {
       type: 'object',
       properties: {
-        bereich: { type: 'string', enum: NEUANLAGE_BEREICHE, description: 'beratung = Unternehmensberatung, immobilienkunden = Immobilien.' },
+        bereich: { type: 'string', enum: [...NEUANLAGE_BEREICHE, 'privat'], description: 'beratung = Unternehmensberatung, immobilienkunden = Immobilien, privat = privater Kontakt des Mitarbeiters (nur er sieht ihn).' },
+        privat_art: { type: 'string', enum: PRIVAT_ARTEN, description: 'Nur bei bereich=privat, optional: nach dem Ablauf (Status) welches Bereichs der private Kontakt geführt wird. Ohne Angabe: einfacher Privat-Ablauf.' },
         name: { type: 'string', description: 'Firmenname, bei Privatpersonen der volle Name.' },
         ansprechpartner: { type: 'string' },
         email: { type: 'string' },
@@ -1082,7 +1144,7 @@ export const TOOLS = [
   },
   {
     name: 'kunde_aendern',
-    description: `Ändert Stammdaten, Status, Priorität oder Zuständigkeit eines Kunden. Nur die Felder angeben, die sich ändern. Gültige Status-Werte je Bereich:\n${STATUS_HINWEIS}`,
+    description: `Ändert Stammdaten, Status, Priorität oder Zuständigkeit eines Kunden. Nur die Felder angeben, die sich ändern. Gültige Status-Werte je Bereich (ein privater Kontakt mit Ablauf eines Bereichs nimmt dessen Status, sonst die von privat):\n${STATUS_HINWEIS}`,
     input_schema: {
       type: 'object',
       properties: {
@@ -1310,7 +1372,7 @@ export const TOOLS = [
         art: { type: 'string', enum: ['mail', 'gesendete_mail', 'kontakt'] },
         kennung: { type: 'string', description: 'mail_id bzw. kontakt_id aus privater_bereich.' },
         kunde_id: { type: 'string', description: 'Nur bei Mails, optional: öffentliche Kundenakte, der die Mail zugeordnet wird.' },
-        bereich: { type: 'string', enum: NEUANLAGE_BEREICHE, description: 'Nur bei art=kontakt: in welchen Bereich der Kontakt kommt.' },
+        bereich: { type: 'string', enum: NEUANLAGE_BEREICHE, description: 'Nur bei art=kontakt: in welchen Bereich der Kontakt kommt. Folgt der Kontakt schon dem Ablauf eines Bereichs, ist das ohne Angabe das Ziel.' },
       },
       required: ['art', 'kennung'],
     },
@@ -1538,10 +1600,15 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
       const { data } = await supabase.from('termine').select('id, titel, ort, beginn, ende, ganztags, besitzer_email, teilnehmer, kunde_id, kunde_bereich, kunde_name').lt('beginn', bis.toISOString()).gt('ende', von.toISOString()).order('beginn')
       // deno-lint-ignore no-explicit-any
       const alle = (data ?? []) as any[]
-      // Die verknüpfte Akte nur nennen, wenn ihr Bereich für den Mitarbeiter freigegeben ist.
-      const nachgeschlagen = siehtAlleBereiche(mitarbeiter) ? new Map<string, string>() : await bereicheDerAkten(supabase, alle.filter((t) => t.kunde_id && !t.kunde_bereich).map((t) => String(t.kunde_id)))
+      // Die verknüpfte Akte nur nennen, wenn der Mitarbeiter sie sehen darf (Bereich freigegeben bzw.
+      // eigener privater Kontakt). Den privaten Kontakt eines Kollegen nennt er gar nicht.
+      const nachgeschlagen = await bereicheDerAkten(supabase, alle.filter((t) => t.kunde_id).map((t) => String(t.kunde_id)))
       // deno-lint-ignore no-explicit-any
-      const kundeVon = (t: any) => (!t.kunde_name ? undefined : darfZuordnung(mitarbeiter, t.kunde_id, t.kunde_bereich, nachgeschlagen) ? t.kunde_name : 'Akte aus einem nicht freigegebenen Bereich')
+      const kundeVon = (t: any) => {
+        if (!t.kunde_name) return undefined
+        if (darfZuordnung(mitarbeiter, t.kunde_id, t.kunde_bereich, nachgeschlagen)) return t.kunde_name
+        return istPrivat(zugeordneteAkte(String(t.kunde_id), t.kunde_bereich, nachgeschlagen)) ? undefined : 'Akte aus einem nicht freigegebenen Bereich'
+      }
       // deno-lint-ignore no-explicit-any
       const beteiligt = (t: any, wer: string) => String(t.besitzer_email).toLowerCase() === wer || (t.teilnehmer ?? []).includes(wer)
       // deno-lint-ignore no-explicit-any
@@ -1738,17 +1805,22 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     const kennung = String(input.kennung ?? '')
     if (!kennung) return 'Fehler: kennung fehlt.'
     if (input.art === 'kontakt') {
-      const bereich = String(input.bereich ?? '')
+      const { data: k } = await supabase.from('kunden').select(KUNDE_SPALTEN).eq('id', kennung).eq('bereich', 'privat').maybeSingle()
+      if (!k || !darfAkte(mitarbeiter, k)) return 'Fehler: Diesen privaten Kontakt gibt es bei diesem Mitarbeiter nicht.'
+      const kontakt = k as KundeRow
+      // Ohne Angabe: der Bereich, dessen Ablauf der private Kontakt schon folgt.
+      const bereich = String(input.bereich || kontakt.privat_art || '')
       if (!NEUANLAGE_BEREICHE.includes(bereich)) return `Fehler: Für einen Kontakt muss der Ziel-Bereich angegeben werden. Erlaubt: ${NEUANLAGE_BEREICHE.join(', ')}.`
       if (!darfBereich(mitarbeiter, bereich)) return nichtFreigegeben(bereich, mitarbeiter.name)
-      const { data: k } = await supabase.from('kunden').select(KUNDE_SPALTEN).eq('id', kennung).eq('bereich', 'privat').eq('verantwortlich_email', ich).maybeSingle()
-      if (!k) return 'Fehler: Diesen privaten Kontakt gibt es bei diesem Mitarbeiter nicht.'
-      const kontakt = k as KundeRow
+      // Folgte er schon dem Ablauf dieses Bereichs, bleibt sein Status; sonst Anfangsstatus des Bereichs.
+      const statusBleibt = !!kontakt.status && !!STATUS_JE_BEREICH[bereich]?.[kontakt.status] && statusNetzVon(kontakt) === bereich
       const { error } = await supabase
         .from('kunden')
         .update({
           bereich,
-          status: START_STATUS[bereich],
+          // privat_art muss mit dem Verlassen von "privat" leer werden (Prüfregel der Datenbank).
+          privat_art: null,
+          status: statusBleibt ? kontakt.status : startStatusVon(bereich),
           verantwortlich_email: null,
           letzte_aktivitaet: heute,
           activities: [{ id: crypto.randomUUID(), date: heute, text: `Aus dem privaten Bereich von ${mitarbeiter.name} in den öffentlichen Bereich übernommen (über den Assistenten).`, user: mitarbeiter.name }, ...(kontakt.activities ?? [])],
@@ -1763,6 +1835,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     const zielOderFehler = input.kunde_id ? await ladeErlaubteAkte(supabase, mitarbeiter, { kunde_id: input.kunde_id }) : null
     if (typeof zielOderFehler === 'string') return zielOderFehler
     const ziel = zielOderFehler
+    if (ziel && istPrivat(ziel)) return 'Fehler: Beim Holen in den öffentlichen Bereich muss die Zielakte eine Akte der Holding sein, kein privater Kontakt. Ohne kunde_id landet die Mail einfach im gemeinsamen Postfach.'
     if (input.art === 'gesendete_mail') {
       const { data: m } = await supabase.from('gesendete_emails').select('id, betreff').eq('id', kennung).eq('besitzer_email', ich).maybeSingle()
       if (!m) return 'Fehler: Diese Mail liegt nicht im privaten Gesendet-Ordner dieses Mitarbeiters.'
@@ -1807,14 +1880,12 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
         .is('besitzer_email', null)
         .limit(1)
         .maybeSingle()
-      if (!m) return 'Fehler: Diese Mail gibt es im gemeinsamen Postfach nicht.'
-      // Einer Akte zugeordnete Mails nur, wenn deren Bereich freigegeben ist.
-      if (!siehtAlleBereiche(mitarbeiter) && m.zugewiesener_kunde_id) {
-        const nachgeschlagen = m.zugewiesener_bereich ? new Map<string, string>() : await bereicheDerAkten(supabase, [String(m.zugewiesener_kunde_id)])
-        if (!darfZuordnung(mitarbeiter, m.zugewiesener_kunde_id, m.zugewiesener_bereich, nachgeschlagen)) {
-          return nichtFreigegeben(m.zugewiesener_bereich || nachgeschlagen.get(String(m.zugewiesener_kunde_id)), mitarbeiter.name)
-        }
-      }
+      const keineMail = 'Fehler: Diese Mail gibt es im gemeinsamen Postfach nicht.'
+      if (!m) return keineMail
+      // Einer Akte zugeordnete Mails nur, wenn der Mitarbeiter die Akte sehen darf (Bereich freigegeben
+      // bzw. eigener privater Kontakt) — das gilt auch für Geschäftsführung und Admins.
+      const gesperrt = await pruefeZuordnung(supabase, mitarbeiter, m.zugewiesener_kunde_id, m.zugewiesener_bereich, keineMail)
+      if (gesperrt) return gesperrt
       // Weitergeleitete Mails tragen den vollen Text in den Rohdaten, abgeholte im Ausschnitt.
       const roh = m.rohdaten && typeof m.rohdaten === 'object' ? (m.rohdaten as Record<string, unknown>) : {}
       const voll = typeof roh.plain === 'string' && roh.plain.trim().length > String(m.ausschnitt ?? '').length ? roh.plain : String(m.ausschnitt ?? '')
@@ -1844,11 +1915,10 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     // Vom Mail-Anbieter als Werbung markierte Mails weglassen.
     // deno-lint-ignore no-explicit-any
     let roh = ((data ?? []) as any[]).filter((m) => !/\*\s?SPAM\s?\*/i.test(String(m.betreff ?? '')))
-    // Mails, die einer Akte aus einem nicht freigegebenen Bereich zugeordnet sind, fallen still weg.
-    if (!siehtAlleBereiche(mitarbeiter)) {
-      const nachgeschlagen = await bereicheDerAkten(supabase, roh.filter((m) => m.zugewiesener_kunde_id && !m.zugewiesener_bereich).map((m) => String(m.zugewiesener_kunde_id)))
-      roh = roh.filter((m) => darfZuordnung(mitarbeiter, m.zugewiesener_kunde_id, m.zugewiesener_bereich, nachgeschlagen))
-    }
+    // Mails, die einer Akte aus einem nicht freigegebenen Bereich oder dem privaten Kontakt eines
+    // Kollegen zugeordnet sind, fallen still weg.
+    const nachgeschlagen = await bereicheDerAkten(supabase, roh.filter((m) => m.zugewiesener_kunde_id).map((m) => String(m.zugewiesener_kunde_id)))
+    roh = roh.filter((m) => darfZuordnung(mitarbeiter, m.zugewiesener_kunde_id, m.zugewiesener_bereich, nachgeschlagen))
     const liste = roh.slice(0, 20)
     if (liste.length === 0) return `Im gemeinsamen Postfach liegt aus den letzten ${tage} Tagen keine ${suche ? 'passende ' : ''}Mail.`
     return JSON.stringify(
@@ -1871,6 +1941,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     const kennung = String(input.mail_id ?? '').trim()
     if (!kennung || kennung.length > 400 || /[\s"]/.test(kennung)) return 'Fehler: mail_id ist ungültig — exakt aus der Liste von gemeinsames_postfach oder privater_bereich übernehmen.'
     const istUuid = /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(kennung)
+    const keineMail = 'Fehler: Diese Mail gibt es weder im gemeinsamen Postfach noch im eigenen privaten Postfach dieses Mitarbeiters. Private Mails von Kollegen sind nicht lesbar.'
     let mail: MailZeile | null = null
     if (ich) {
       const { data } = await supabase.from('eingegangene_emails').select(MAIL_SPALTEN).eq(istUuid ? 'id' : 'message_id', kennung).eq('besitzer_email', ich).limit(1).maybeSingle()
@@ -1879,14 +1950,12 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     if (!mail) {
       const { data } = await supabase.from('eingegangene_emails').select(MAIL_SPALTEN).eq(istUuid ? 'id' : 'message_id', kennung).is('besitzer_email', null).limit(1).maybeSingle()
       mail = (data as MailZeile | null) ?? null
-      if (mail && !siehtAlleBereiche(mitarbeiter) && mail.zugewiesener_kunde_id) {
-        const nachgeschlagen = mail.zugewiesener_bereich ? new Map<string, string>() : await bereicheDerAkten(supabase, [String(mail.zugewiesener_kunde_id)])
-        if (!darfZuordnung(mitarbeiter, mail.zugewiesener_kunde_id, mail.zugewiesener_bereich, nachgeschlagen)) {
-          return nichtFreigegeben(mail.zugewiesener_bereich || nachgeschlagen.get(String(mail.zugewiesener_kunde_id)), mitarbeiter.name)
-        }
+      if (mail) {
+        const gesperrt = await pruefeZuordnung(supabase, mitarbeiter, mail.zugewiesener_kunde_id, mail.zugewiesener_bereich, keineMail)
+        if (gesperrt) return gesperrt
       }
     }
-    if (!mail) return 'Fehler: Diese Mail gibt es weder im gemeinsamen Postfach noch im eigenen privaten Postfach dieses Mitarbeiters. Private Mails von Kollegen sind nicht lesbar.'
+    if (!mail) return keineMail
     const privat = !!mail.besitzer_email
     const anhaenge = (mail.anhaenge ?? []).map((a) => `${a.filename ?? 'Anhang'} (${formatGroesse(Number(a.size ?? 0))})`)
 
@@ -1985,20 +2054,15 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     if (!ich) return 'Fehler: Für diesen Mitarbeiter ist keine E-Mail-Adresse hinterlegt.'
     const ziel = await ladeErlaubteAkte(supabase, mitarbeiter, { kunde_id: input.kunde_id })
     if (typeof ziel === 'string') return ziel
-    // Eine Mail, die schon einer Akte aus einem nicht freigegebenen Bereich gehört, bleibt dort.
-    if (!siehtAlleBereiche(mitarbeiter)) {
-      const mailId = String(input.mail_id ?? '').trim()
-      const istKennung = /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(mailId)
-      const { data: vorher } = mailId
-        ? await supabase.from('eingegangene_emails').select('zugewiesener_kunde_id, zugewiesener_bereich').eq(istKennung ? 'id' : 'message_id', mailId).is('besitzer_email', null).limit(1).maybeSingle()
-        : { data: null }
-      if (vorher?.zugewiesener_kunde_id) {
-        const nachgeschlagen = vorher.zugewiesener_bereich ? new Map<string, string>() : await bereicheDerAkten(supabase, [String(vorher.zugewiesener_kunde_id)])
-        if (!darfZuordnung(mitarbeiter, vorher.zugewiesener_kunde_id, vorher.zugewiesener_bereich, nachgeschlagen)) {
-          return nichtFreigegeben(vorher.zugewiesener_bereich || nachgeschlagen.get(String(vorher.zugewiesener_kunde_id)), mitarbeiter.name)
-        }
-      }
-    }
+    // Eine Mail, die schon einer Akte gehört, die der Mitarbeiter nicht sehen darf (anderer Bereich,
+    // privater Kontakt eines Kollegen), bleibt dort — auch für Geschäftsführung und Admins.
+    const mailId = String(input.mail_id ?? '').trim()
+    const istKennung = /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(mailId)
+    const { data: vorher } = mailId
+      ? await supabase.from('eingegangene_emails').select('zugewiesener_kunde_id, zugewiesener_bereich').eq(istKennung ? 'id' : 'message_id', mailId).is('besitzer_email', null).limit(1).maybeSingle()
+      : { data: null }
+    const gesperrt = await pruefeZuordnung(supabase, mitarbeiter, vorher?.zugewiesener_kunde_id, vorher?.zugewiesener_bereich, 'Fehler: Diese Mail gibt es im gemeinsamen Postfach nicht.')
+    if (gesperrt) return gesperrt
     // Über die Mail-Funktion: dort werden die Anhänge in die Akte gelegt und der Verlauf ergänzt.
     const antwort = await fetch(`${SUPABASE_URL}/functions/v1/email-gateway`, {
       method: 'POST',
@@ -2012,9 +2076,9 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
   }
 
   if (name === 'kunden_suchen') {
-    const { data } = await supabase.from('kunden').select(KUNDE_SPALTEN).neq('bereich', 'privat')
-    // Erst nach Bereich filtern, dann suchen: Treffer aus anderen Bereichen tauchen weder auf noch
-    // verdrängen sie erlaubte Treffer, und ihre Zahl verrät nichts.
+    const { data } = await supabase.from('kunden').select(KUNDE_SPALTEN)
+    // Erst nach Rechten filtern, dann suchen: Treffer aus anderen Bereichen und private Kontakte von
+    // Kollegen tauchen weder auf noch verdrängen sie erlaubte Treffer, und ihre Zahl verrät nichts.
     const sichtbar = ((data ?? []) as KundeRow[]).filter((k) => darfAkte(mitarbeiter, k))
     const treffer = sucheKunden(sichtbar, String(input.suchbegriff ?? ''))
     if (treffer.length === 0) {
@@ -2025,12 +2089,12 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     return JSON.stringify(
       treffer.map((k) => ({
         kunde_id: k.id,
-        bereich: BEREICH_LABEL[k.bereich] ?? k.bereich,
+        bereich: bereichAnzeige(k),
         firma: k.firma,
         ansprechpartner: k.ansprechpartner,
         email: k.email,
         telefon: k.telefon,
-        status: STATUS_JE_BEREICH[k.bereich]?.[k.status ?? ''] ?? k.status,
+        status: statusNetz(k)[k.status ?? ''] ?? k.status,
       })),
     )
   }
@@ -2060,9 +2124,9 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     const fu = k.follow_up
     return kuerze(
       [
-        `Kunde: ${k.firma} | Ansprechpartner: ${k.ansprechpartner || '—'} | Bereich: ${BEREICH_LABEL[k.bereich] ?? k.bereich} (${k.bereich})`,
+        `Kunde: ${k.firma} | Ansprechpartner: ${k.ansprechpartner || '—'} | Bereich: ${bereichAnzeige(k)} (${k.bereich}${k.privat_art ? `, Ablauf ${k.privat_art}` : ''})`,
         `E-Mail: ${k.email || '—'} | Telefon: ${k.telefon || '—'} | Verantwortlich: ${k.verantwortlich || '—'} | Priorität: ${k.prioritaet || '—'}`,
-        `Status: ${k.status ?? '—'} (${STATUS_JE_BEREICH[k.bereich]?.[k.status ?? ''] ?? 'unbekannt'})`,
+        `Status: ${k.status ?? '—'} (${statusNetz(k)[k.status ?? ''] ?? 'unbekannt'})`,
         `Follow-up: ${fu?.note ? `${fu.note} — fällig ${deDatum(fu.date)}${fu.done ? ' (erledigt)' : ''}` : 'keines'}`,
         `Fehlende Stammdaten: ${fehlend.length > 0 ? fehlend.join(', ') : 'keine'}`,
         '',
@@ -2093,9 +2157,10 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
   if (name === 'dokument_inhalt') {
     let dok: Dokument | undefined
     if (input.objekt_id && !input.kunde_id) {
-      if (!darfObjekte(mitarbeiter)) return nichtFreigegeben('immobilien', mitarbeiter.name)
-      const { data: obj } = await supabase.from('objekte').select('id, dokumente').eq('id', String(input.objekt_id)).maybeSingle()
-      if (!obj) return 'Fehler: Es gibt kein Objekt mit dieser objekt_id. Ermittle die richtige ID mit objekte_suchen.'
+      const { data: obj } = await supabase.from('objekte').select('id, dokumente, privat_besitzer').eq('id', String(input.objekt_id)).maybeSingle()
+      // Private Objekte von Kollegen gibt es für den Mitarbeiter nicht; Objekte der Holding nur mit Immobilien-Rechten.
+      if (!obj || (obj.privat_besitzer && !darfObjekt(mitarbeiter, obj))) return KEIN_OBJEKT
+      if (!darfObjekt(mitarbeiter, obj)) return nichtFreigegeben('immobilien', mitarbeiter.name)
       const treffer = alleObjektDokumente(obj as unknown as ObjektRow).find((x) => x.dok.id === input.dokument_id)
       if (!treffer) return 'Fehler: Dieses Dokument gibt es in der Objektakte nicht. Lies die Akte neu (objektakte_lesen).'
       dok = leseRef(treffer.dok)
@@ -2192,24 +2257,37 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
   if (name === 'kunde_anlegen') {
     const bereich = String(input.bereich ?? '')
     const firma = String(input.name ?? '').trim()
-    if (!NEUANLAGE_BEREICHE.includes(bereich)) return `Fehler: ungültiger Bereich. Erlaubt: ${NEUANLAGE_BEREICHE.join(', ')}.`
+    // Privater Kontakt: gehört dem, der ihn anlegt (verantwortlich_email), und folgt wahlweise dem Ablauf eines Bereichs.
+    const privat = bereich === 'privat'
+    const ich = String(mitarbeiter.email ?? '').trim().toLowerCase()
+    const privatArt = privat && input.privat_art ? String(input.privat_art) : null
+    if (!NEUANLAGE_BEREICHE.includes(bereich) && !privat) return `Fehler: ungültiger Bereich. Erlaubt: ${NEUANLAGE_BEREICHE.join(', ')} oder privat.`
     if (!firma) return 'Fehler: name fehlt.'
-    if (!darfBereich(mitarbeiter, bereich)) {
+    if (privat && !ich) return 'Fehler: Für diesen Mitarbeiter ist keine E-Mail-Adresse hinterlegt — ein privater Kontakt lässt sich ihm nicht zuordnen.'
+    if (privatArt && !PRIVAT_ARTEN.includes(privatArt)) return `Fehler: ungültige privat_art. Erlaubt: ${PRIVAT_ARTEN.join(', ')}.`
+    if (!privat && !darfBereich(mitarbeiter, bereich)) {
       return `${nichtFreigegeben(bereich, mitarbeiter.name)} Dort kann er keine Akte anlegen. Gehört eine geschickte Datei oder weitergeleitete Nachricht dorthin, lege sie unter ziel=ungeklaert ab und sag ihm, dass die Geschäftsführung sie zuordnen muss.`
     }
-    const { data: alle } = await supabase.from('kunden').select(KUNDE_SPALTEN).neq('bereich', 'privat')
+    // Dubletten: alle Akten der Holding und die eigenen privaten Kontakte — private Kontakte von
+    // Kollegen zählen nicht (es gibt sie für ihn nicht, und sie dürfen nicht erwähnt werden).
+    const { data: alleRoh } = await supabase.from('kunden').select(KUNDE_SPALTEN)
+    const alle = ((alleRoh ?? []) as KundeRow[]).filter((k) => !istFremdePrivatakte(mitarbeiter, k))
     const email = String(input.email ?? '').trim()
     const automatisch = input.automatisch === true
     const begruendung = String(input.begruendung ?? '').trim().replace(/\.$/, '')
-    const doppelt = ((alle ?? []) as KundeRow[]).find(
+    const doppelt = alle.find(
       (k) => norm(k.firma) === norm(firma) || norm(k.ansprechpartner) === norm(firma) || (email && norm(k.email) === norm(email)),
     )
     if (doppelt && !darfAkte(mitarbeiter, doppelt)) {
       // Kein Name, keine Kennung: nur, dass es die Akte schon gibt — sonst entstünde eine doppelte.
       return `Nicht angelegt: Eine Akte mit diesem Namen oder dieser E-Mail-Adresse gibt es schon, und zwar in einem Bereich, der für ${mitarbeiter.name} nicht freigegeben ist. Gehört eine geschickte Datei dazu, lege sie unter ziel=ungeklaert ab und sag ihm, dass die Geschäftsführung sie zuordnen muss.`
     }
-    if (doppelt) return `Nicht angelegt: Es gibt bereits ${kundeName(doppelt)} im Bereich ${BEREICH_LABEL[doppelt.bereich] ?? doppelt.bereich} (kunde_id=${doppelt.id}).`
+    if (doppelt) {
+      return `Nicht angelegt: Es gibt bereits ${kundeName(doppelt)} im Bereich ${bereichAnzeige(doppelt)} (kunde_id=${doppelt.id}).${istPrivat(doppelt) && !privat ? ' Soll er in einen Bereich der Holding, holt in_oeffentlich_holen (art=kontakt) ihn dorthin.' : ''}`
+    }
     const id = `k_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`
+    const netz = statusNetzVon({ bereich, privat_art: privatArt })
+    const startStatus = startStatusVon(netz)
     const { error } = await supabase.from('kunden').insert({
       id,
       bereich,
@@ -2218,9 +2296,10 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
       email,
       telefon: String(input.telefon ?? '').trim(),
       prioritaet: 'Mittel',
-      status: START_STATUS[bereich],
+      status: startStatus,
       follow_up: { date: heute, note: automatisch ? 'Automatisch angelegte Akte prüfen (Bereich, Stammdaten)' : 'Erstkontakt aufnehmen', done: false },
       verantwortlich: mitarbeiter.name,
+      ...(privat ? { verantwortlich_email: ich, privat_art: privatArt } : {}),
       letzte_aktivitaet: heute,
       activities: [
         {
@@ -2238,8 +2317,9 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
         : {}),
     })
     if (error) return `Fehler beim Anlegen: ${error.message}`
-    protokolliere(`Kunde ${firma} im Bereich ${BEREICH_LABEL[bereich]} ${automatisch ? 'automatisch ' : ''}angelegt (kunde_id=${id})`)
-    return `Angelegt: ${firma}, Bereich ${BEREICH_LABEL[bereich]}, Status „${STATUS_JE_BEREICH[bereich][START_STATUS[bereich]]}", verantwortlich ${mitarbeiter.name}. kunde_id=${id}`
+    const anzeige = bereichAnzeige({ bereich, privat_art: privatArt })
+    protokolliere(`Kunde ${firma} im Bereich ${anzeige} ${automatisch ? 'automatisch ' : ''}angelegt (kunde_id=${id})`)
+    return `Angelegt: ${firma}, Bereich ${anzeige}, Status „${STATUS_JE_BEREICH[netz]?.[startStatus] ?? startStatus}", verantwortlich ${mitarbeiter.name}. kunde_id=${id}`
   }
 
   if (name === 'kunde_aendern') {
@@ -2259,6 +2339,8 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
       geaendert.push(`Priorität: ${input.prioritaet}`)
     }
     if (typeof input.verantwortlich === 'string') {
+      // Ein privater Kontakt gehört seinem Besitzer; weitergeben geht nur über in_oeffentlich_holen.
+      if (istPrivat(k)) return 'Nicht geändert: Bei einem privaten Kontakt bleibt der Mitarbeiter selbst verantwortlich. Soll ein Kollege ihn übernehmen, muss er ihn zuerst mit in_oeffentlich_holen in einen Bereich holen.'
       const { data: team } = await supabase.from('mitarbeiter').select('name').eq('aktiv', true)
       const namen = ((team ?? []) as { name: string }[]).map((m) => m.name)
       const treffer = namen.find((n) => norm(n) === norm(input.verantwortlich)) ?? namen.find((n) => norm(n).includes(norm(input.verantwortlich)))
@@ -2267,8 +2349,8 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
       geaendert.push(`verantwortlich: ${treffer}`)
     }
     if (typeof input.status === 'string') {
-      const erlaubt = STATUS_JE_BEREICH[k.bereich] ?? {}
-      if (!erlaubt[input.status]) return `Fehler: ungültiger Status für ${k.bereich}. Erlaubt: ${Object.entries(erlaubt).map(([id, l]) => `${id} (${l})`).join(', ')}.`
+      const erlaubt = statusNetz(k)
+      if (!erlaubt[input.status]) return `Fehler: ungültiger Status für ${statusNetzVon(k)}. Erlaubt: ${Object.entries(erlaubt).map(([id, l]) => `${id} (${l})`).join(', ')}.`
       patch.status = input.status
       geaendert.push(`Status: ${erlaubt[input.status]}`)
     }
@@ -2350,7 +2432,8 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
       if (k.id !== AKTE_UNGEKLAERT && referenzen.kunden.some((x) => x.id === AKTE_UNGEKLAERT && (x.dokumente ?? []).some((d) => d.url === url))) ausUngeklaert.push(url)
       const andererKunde = referenzen.kunden.find((x) => x.id !== k.id && x.id !== AKTE_UNGEKLAERT && (x.dokumente ?? []).some((d) => d.url === url))
       if (andererKunde && !darfAkte(mitarbeiter, andererKunde)) {
-        meldungen.push(`„${name}": liegt bereits in einer Akte aus einem Bereich, der für ${mitarbeiter.name} nicht freigegeben ist — nicht noch einmal abgelegt.`)
+        // Den privaten Kontakt eines Kollegen nicht erwähnen, nicht einmal als Bereich.
+        meldungen.push(istPrivat(andererKunde) ? `„${name}": ist bereits abgelegt — nicht noch einmal abgelegt.` : `„${name}": liegt bereits in einer Akte aus einem Bereich, der für ${mitarbeiter.name} nicht freigegeben ist — nicht noch einmal abgelegt.`)
         continue
       }
       if (andererKunde && input.mehrfach !== true) {
@@ -2424,6 +2507,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     const { data: vorhanden } = await supabase.from('rechnungen').select('id, kunde_id, status').eq('nummer', nummer).limit(1)
     if (vorhanden && vorhanden.length > 0) {
       const fremd = await rechnungInFremdemBereich(supabase, mitarbeiter, vorhanden[0].kunde_id)
+      if (fremd === 'privat') return `Nicht erfasst: Die Rechnungsnummer ${nummer} ist bereits vergeben. Bitte eine andere Nummer verwenden.`
       if (fremd) return `Nicht erfasst: Die Rechnungsnummer ${nummer} ist bereits vergeben, bei einer Akte aus einem Bereich, der für ${mitarbeiter.name} nicht freigegeben ist.`
       return `Nicht erfasst: Die Rechnung ${nummer} steht bereits in der Rechnungsübersicht (Status ${vorhanden[0].status}).`
     }
@@ -2464,6 +2548,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     const { data: treffer } = await supabase.from('rechnungen').select('id, kunde_id, status, betrag_brutto').eq('nummer', nummer).limit(1)
     if (!treffer || treffer.length === 0) return `Es gibt keine erfasste Rechnung mit der Nummer ${nummer}.`
     const fremd = await rechnungInFremdemBereich(supabase, mitarbeiter, treffer[0].kunde_id)
+    if (fremd === 'privat') return `Es gibt keine erfasste Rechnung mit der Nummer ${nummer}.`
     if (fremd) return nichtFreigegeben(fremd, mitarbeiter.name)
     const { error } = await supabase.from('rechnungen').update({ status: input.status, ...(input.status === 'Bezahlt' ? { mahnstufe: null } : {}) }).eq('id', treffer[0].id)
     if (error) return `Fehler beim Speichern: ${error.message}`
@@ -2519,13 +2604,16 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
   }
 
   if (name === 'objekte_suchen') {
-    if (!darfObjekte(mitarbeiter)) return nichtFreigegeben('immobilien', mitarbeiter.name)
-    const { data } = await supabase.from('objekte').select('id, bezeichnung, adresse, typ, status, kaufpreis, verantwortlich, eigentuemer, verkaufsdaten')
-    const treffer = sucheObjekte((data ?? []) as unknown as ObjektRow[], String(input.suchbegriff ?? ''))
-    if (treffer.length === 0) return 'Keine Treffer. Es gibt im CRM kein Immobilien-Objekt, das dazu passt.'
+    // Objekte der Holding mit Immobilien-Rechten, dazu die eigenen privaten Objekte; private Objekte von Kollegen nie.
+    const { data } = await supabase.from('objekte').select('id, bezeichnung, adresse, typ, status, kaufpreis, verantwortlich, eigentuemer, verkaufsdaten, privat_besitzer')
+    const sichtbar = ((data ?? []) as unknown as ObjektRow[]).filter((o) => darfObjekt(mitarbeiter, { privat_besitzer: o.privat_besitzer }))
+    if (!darfObjekte(mitarbeiter) && sichtbar.length === 0) return nichtFreigegeben('immobilien', mitarbeiter.name)
+    const treffer = sucheObjekte(sichtbar, String(input.suchbegriff ?? ''))
+    if (treffer.length === 0) return darfObjekte(mitarbeiter) ? 'Keine Treffer. Es gibt im CRM kein Immobilien-Objekt, das dazu passt.' : 'Keine Treffer unter seinen privaten Objekten. Objekte der Holding (Bereich Immobilien) sind für ihn nicht freigegeben.'
     return JSON.stringify(
       treffer.map((o) => ({
         objekt_id: o.id,
+        ...(o.privat_besitzer ? { privat: 'privates Objekt (nur für dich sichtbar)' } : {}),
         bezeichnung: o.bezeichnung,
         adresse: o.adresse,
         objektart: o.typ,
@@ -2538,9 +2626,10 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
   }
 
   if (name === 'objektakte_lesen') {
-    if (!darfObjekte(mitarbeiter)) return nichtFreigegeben('immobilien', mitarbeiter.name)
-    const { data: obj } = await supabase.from('objekte').select(OBJEKT_SPALTEN).eq('id', String(input.objekt_id ?? '')).maybeSingle()
-    if (!obj) return 'Fehler: Es gibt kein Objekt mit dieser objekt_id. Ermittle die richtige ID mit objekte_suchen.'
+    const { data: obj } = await supabase.from('objekte').select(`${OBJEKT_SPALTEN}, privat_besitzer`).eq('id', String(input.objekt_id ?? '')).maybeSingle()
+    // Private Objekte von Kollegen gibt es für den Mitarbeiter nicht; Objekte der Holding nur mit Immobilien-Rechten.
+    if (!obj || (obj.privat_besitzer && !darfObjekt(mitarbeiter, obj))) return KEIN_OBJEKT
+    if (!darfObjekt(mitarbeiter, obj)) return nichtFreigegeben('immobilien', mitarbeiter.name)
     const o = obj as unknown as ObjektRow
     const [{ data: eintraege }, inhalte] = await Promise.all([
       supabase.from('abteilung_eintraege').select('id, art, daten').in('art', ['frage', 'weitergabe', 'treffer', 'zeit', 'abrechnung']),
@@ -2550,19 +2639,23 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     const kundenIds = [...new Set(zeilen.filter((x) => x.art === 'treffer' && x.id.endsWith(`|${o.id}`)).map((x) => String(x.daten.kundeId)))]
     const kundenNamen = new Map<string, string>()
     if (kundenIds.length) {
-      const { data: kunden } = await supabase.from('kunden').select('id, bereich, firma, ansprechpartner').in('id', kundenIds)
+      const { data: kunden } = await supabase.from('kunden').select('id, bereich, firma, ansprechpartner, verantwortlich_email').in('id', kundenIds)
       for (const k of (kunden ?? []) as KundeRow[]) if (darfAkte(mitarbeiter, k)) kundenNamen.set(k.id, kundeName(k))
     }
-    return objektakteText(o, { eintraege: zeilen, inhalte, kundenNamen })
+    const text = objektakteText(o, { eintraege: zeilen, inhalte, kundenNamen })
+    return o.privat_besitzer ? `PRIVATES OBJEKT (nur für ${mitarbeiter.name} sichtbar, nicht für Kollegen)\n${text}` : text
   }
 
   if (name === 'firmenueberblick') {
     const [{ data: kunden }, { data: objekte }] = await Promise.all([
-      supabase.from('kunden').select('id, bereich, firma, ansprechpartner, status, verantwortlich, letzte_aktivitaet, follow_up, kaeuferprofil').neq('bereich', 'privat'),
-      darfObjekte(mitarbeiter) ? supabase.from('objekte').select('bezeichnung, adresse, typ, status, verantwortlich, eigentuemer') : Promise.resolve({ data: [] as unknown[] }),
+      supabase.from('kunden').select('id, bereich, firma, ansprechpartner, status, verantwortlich, letzte_aktivitaet, follow_up, kaeuferprofil, verantwortlich_email, privat_art'),
+      supabase.from('objekte').select('bezeichnung, adresse, typ, status, verantwortlich, eigentuemer, privat_besitzer'),
     ])
+    // Akten der freigegebenen Bereiche und die eigenen privaten Kontakte; private Kontakte von Kollegen nie.
     // deno-lint-ignore no-explicit-any
     const sichtbar = ((kunden ?? []) as any[]).filter((k) => darfAkte(mitarbeiter, k))
+    // deno-lint-ignore no-explicit-any
+    const sichtbareObjekte = ((objekte ?? []) as any[]).filter((o) => darfObjekt(mitarbeiter, o))
     const zeilen: string[] = [`Heute: ${deDatum(heute)}`]
     if (istEingeschraenkt(mitarbeiter)) zeilen.push(`Nur die Bereiche, die für ${mitarbeiter.name} freigegeben sind: ${freigegebeneBereiche(mitarbeiter).map(bereichName).join(', ')}.`)
     zeilen.push('', 'FÄLLIGE UND ÜBERFÄLLIGE FOLLOW-UPS:')
@@ -2574,8 +2667,8 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     for (const k of sichtbar) {
       const teile = [
         `${k.firma}${k.ansprechpartner && k.ansprechpartner !== k.firma ? ` (${k.ansprechpartner})` : ''}`,
-        BEREICH_LABEL[k.bereich] ?? k.bereich,
-        `Status: ${STATUS_JE_BEREICH[k.bereich]?.[k.status] ?? k.status}`,
+        bereichAnzeige(k),
+        `Status: ${statusNetz(k)[k.status] ?? k.status}`,
         `Verantwortlich: ${k.verantwortlich || '—'}`,
         `Letzte Aktivität: ${deDatum(k.letzte_aktivitaet)}`,
       ]
@@ -2585,10 +2678,9 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
       }
       zeilen.push(`- ${teile.join(' · ')}`)
     }
-    if (darfObjekte(mitarbeiter)) zeilen.push('', 'IMMOBILIEN-OBJEKTE:')
-    // deno-lint-ignore no-explicit-any
-    for (const o of (objekte ?? []) as any[]) {
-      zeilen.push(`- ${o.bezeichnung} (${o.adresse}) · Typ: ${o.typ} · Status: ${o.status} · Verantwortlich: ${o.verantwortlich || '—'}${o.eigentuemer?.name ? ` · Eigentümer: ${o.eigentuemer.name}` : ''}`)
+    if (sichtbareObjekte.length > 0) zeilen.push('', 'IMMOBILIEN-OBJEKTE:')
+    for (const o of sichtbareObjekte) {
+      zeilen.push(`- ${o.bezeichnung} (${o.adresse})${o.privat_besitzer ? ' · privat (nur für dich sichtbar)' : ''} · Typ: ${o.typ} · Status: ${o.status} · Verantwortlich: ${o.verantwortlich || '—'}${o.eigentuemer?.name ? ` · Eigentümer: ${o.eigentuemer.name}` : ''}`)
     }
     return kuerze(zeilen.join('\n'), 40000)
   }
@@ -2599,14 +2691,19 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     const dateiName = pfad.slice(ORDNER.length + 1)
     const datei = (await listeOrdner(supabase)).find((d) => d.name === dateiName)
     if (!datei) return 'Fehler: Diese Datei gibt es in der Ablage nicht.'
-    // Liegt die Datei schon in Akten (oder bei Objekten), muss mindestens eine davon freigegeben sein.
-    if (!siehtAlleBereiche(mitarbeiter)) {
+    // Liegt die Datei schon in Akten (oder bei Objekten), muss der Mitarbeiter mindestens eine davon
+    // sehen dürfen — das gilt auch für Geschäftsführung und Admins, denn private Akten und Objekte von
+    // Kollegen sieht niemand außer ihrem Besitzer. Liegt sie nur dort, gibt es sie für ihn nicht.
+    {
       const referenzen = await ladeReferenzen(supabase)
       const marke = `/${BUCKET}/${pfad}`
-      const inAkten = referenzen.kunden.filter((k) => k.bereich !== 'privat' && (k.dokumente ?? []).some((d) => d.url.includes(marke)))
-      const inObjekten = referenzen.objekteText.includes(marke)
-      if ((inAkten.length > 0 || inObjekten) && !inAkten.some((k) => darfAkte(mitarbeiter, k)) && !(inObjekten && darfObjekte(mitarbeiter))) {
-        return nichtFreigegeben(inAkten[0]?.bereich ?? 'immobilien', mitarbeiter.name)
+      const inAkten = referenzen.kunden.filter((k) => (k.dokumente ?? []).some((d) => d.url.includes(marke)))
+      const inObjekten = referenzen.objekte.filter((o) => JSON.stringify(o.dokumente ?? null).includes(marke))
+      const sichtbar = inAkten.some((k) => darfAkte(mitarbeiter, k)) || inObjekten.some((o) => darfObjekt(mitarbeiter, o))
+      if ((inAkten.length > 0 || inObjekten.length > 0) && !sichtbar) {
+        const oeffentlich = inAkten.find((k) => !istPrivat(k))
+        if (!oeffentlich && !inObjekten.some((o) => !o.privat_besitzer)) return 'Fehler: Diese Datei gibt es in der Ablage nicht.'
+        return nichtFreigegeben(oeffentlich?.bereich ?? 'immobilien', mitarbeiter.name)
       }
     }
     const dok: Dokument = { id: 'vorab', name: anzeigeName(dateiName), typ: datei.metadata?.mimetype ?? 'application/octet-stream', datum: heute, groesse: '', url: supabase.storage.from(BUCKET).getPublicUrl(pfad).data.publicUrl }
@@ -2976,6 +3073,7 @@ So arbeitest du:
 - Gemeinsames Postfach: Du kannst das gemeinsame Postfach der Firma lesen (gemeinsames_postfach). Sagt jemand, von einem Kunden sei eine Mail gekommen, oder fragt nach Unterlagen aus einer Mail, sieh dort nach, statt zu sagen, dass dir nichts vorliegt. Mails bekannter Absender werden automatisch ihrer Akte zugeordnet, die Anhänge liegen dann in den Dokumenten der Akte. Ist eine Mail noch keiner Akte zugeordnet und ist klar, zu wem sie gehört, ordne sie mit mail_zuordnen zu; ist es unklar, frag nach. Den Inhalt von Anhängen liest du über die Akte (dokument_inhalt), nicht über das Postfach.
 - Mails ganz lesen und weiterleiten: Die Postfach-Listen zeigen nur den Anfang. Geht es um Einzelheiten (Termin, Uhrzeit, Ort, Link, Betrag, Frist), lies die Mail mit mail_lesen ganz, bevor du antwortest — sag nie, du sähest nur den Anfang. Will jemand eine Mail an einen Kollegen oder eine Adresse weiterleiten, nimm mail_weiterleiten: erst die Fassung zeigen, erst nach seiner Zustimmung in der nächsten Nachricht mit senden=true senden.
 - Privater Bereich: Jeder Mitarbeiter hat einen privaten Bereich (eigenes Postfach, eigene Kontakte), den nur er selbst sieht. Du zeigst daraus nur etwas, wenn er ausdrücklich danach fragt (privater_bereich), und holst nur dann etwas in den öffentlichen Bereich (in_oeffentlich_holen), wenn er es klar verlangt. Passen mehrere Mails oder Kontakte, fragst du nach, welche gemeint ist. Bei einem Kontakt brauchst du den Ziel-Bereich; nennt er keinen, frag danach. Sag nach dem Rüberholen in einem Satz, wo es jetzt liegt.
+- Private Kontakte (Bereich „Privat"): Die eigenen privaten Kontakte des Mitarbeiters bearbeitest du wie jede andere Akte (suchen, lesen, Notizen, Aufgaben, Status, Dokumente, PDFs, Protokolle, Termine); kunden_suchen findet sie mit. Folgt ein privater Kontakt dem Ablauf eines Bereichs, gelten dessen Status. Einen neuen privaten Kontakt legst du nur an, wenn er das ausdrücklich will (kunde_anlegen mit bereich=privat). Private Kontakte und private Objekte sieht nur ihr Besitzer: Du sprichst über sie ausschließlich mit ihm und erwähnst sie nie gegenüber Kollegen, auch nicht gegenüber der Geschäftsführung.
 - Beziehe "er", "sie", "ihm", "seine Akte" auf den Kunden, um den es im Gespräch zuletzt ging. Ist nicht eindeutig, welcher Kunde gemeint ist (mehrere Treffer, kein Treffer, kein Bezug), frag kurz nach, statt zu raten. Lege niemals etwas bei einem Kunden ab, der nur vielleicht gemeint ist; bei Dateien nimmst du in diesem Fall die Sammelakte ziel=ungeklaert, statt zu fragen.
 - Fragt der Mitarbeiter im Gespräch nach einem Kunden, den es noch nicht gibt, sag das und biete an, ihn anzulegen. Frag nach dem Bereich, wenn er nicht klar ist. Sagt der Mitarbeiter klar, dass und wo er angelegt werden soll, leg ihn an. Für geschickte Dateien und weitergeleitete Nachrichten gilt das nicht: Dort legst du selbst an, ohne zu fragen (siehe unten).
 - Dateien: Jede geschickte Datei ist bereits sicher gespeichert, bevor du davon erfährst. Eine Nachricht, die mit "[Datei-Eingang" beginnt, kommt vom System und beschreibt, was angekommen ist. Du legst JEDE dieser Dateien noch im selben Zug mit dateien_ablegen in eine Akte. Du fragst vorher nicht nach und lässt nichts offen: Wer dir Dateien schickt, liest deine Rückfragen oft nicht, und dann bliebe die Datei liegen. Die Regeln, in dieser Reihenfolge:

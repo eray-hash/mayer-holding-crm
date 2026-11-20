@@ -1,0 +1,5 @@
+export { PrivatObjektListe } from './PrivatObjektListe'
+export { PrivatObjektDetail } from './PrivatObjektDetail'
+export { PrivatImmoKundenListe } from './PrivatImmoKundenListe'
+export { PrivatImmoKundeDetail } from './PrivatImmoKundeDetail'
+export { PrivatGesuche } from './PrivatGesuche'

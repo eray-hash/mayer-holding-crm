@@ -57,6 +57,7 @@ import { seedMailVorlagen } from '../data/mailVorlagen'
 import { seedPrivatKunden } from '../data/seedPrivat'
 import {
   getNextMainStep,
+  getStatusMap,
   BERATUNG_STATUS,
   IMMOBILIEN_STATUS,
   IMMOBILIEN_FOLGEAUFGABE,
@@ -86,6 +87,9 @@ export type AppData = {
   vertraege: Beratungsvertrag[]
   vorlagenBeratung: Vorlage[]
   objekte: Objekt[]
+  // Private Objekte des angemeldeten Mitarbeiters (objekte.privat_besitzer) — getrennt, damit sie in keiner
+  // Mayer-Ansicht (Immobilien, Suche, Auswertungen) auftauchen.
+  privatObjekte: Objekt[]
   finanzierungen: Finanzierung[]
   vorlagenImmobilien: Vorlage[]
   fondsInvestoren: FondsInvestor[]
@@ -160,6 +164,7 @@ function leereGeteilteEntities(data: AppData): AppData {
     privatKunden: [],
     immobilienKunden: [],
     objekte: [],
+    privatObjekte: [],
     protokolle: [],
     objektVorschlaege: [],
     vorlagenBeratung: [],
@@ -204,6 +209,7 @@ function buildSeed(): AppData {
     vertraege: seedVertraege,
     vorlagenBeratung: seedVorlagen,
     objekte: seedObjekte,
+    privatObjekte: [],
     finanzierungen: seedFinanzierungen,
     vorlagenImmobilien: seedVorlagenImmobilien,
     fondsInvestoren: seedFondsInvestoren,
@@ -266,6 +272,7 @@ function loadInitial(): AppData {
         if (!Array.isArray(parsed.fondsDokumenteAllgemein)) parsed.fondsDokumenteAllgemein = seedFondsDokumenteAllgemein
         if (parsed.rolle === undefined) parsed.rolle = null
         if (!Array.isArray(parsed.projekte)) parsed.projekte = seedProjekte
+        if (!Array.isArray(parsed.privatObjekte)) parsed.privatObjekte = []
         if (!Array.isArray(parsed.erbenMandanten)) parsed.erbenMandanten = seedErbenMandanten
         if (!Array.isArray(parsed.vorlagenErben)) parsed.vorlagenErben = seedVorlagenErben
         if (!Array.isArray(parsed.betriebsuebergabeMandanten)) parsed.betriebsuebergabeMandanten = seedBetriebsuebergabeMandanten
@@ -340,6 +347,7 @@ type Action =
   | { type: 'DELETE_RECHNUNG'; id: string }
   | { type: 'ADD_PROTOKOLL'; protokoll: Protokoll }
   | { type: 'ADD_OBJEKT'; objekt: Objekt }
+  | { type: 'OBJEKT_INS_MAYER_CRM'; id: string }
   | { type: 'UPDATE_OBJEKT'; id: string; patch: Partial<Objekt> }
   | { type: 'SET_OBJEKT_STATUS'; id: string; status: string; followUp?: FollowUp }
   | { type: 'SET_OBJEKT_FOLLOWUP'; id: string; followUp: FollowUp }
@@ -483,6 +491,12 @@ function ersetzeOderVoran<T extends { id: string }>(liste: T[], eintrag: T): T[]
   return liste.some((x) => x.id === eintrag.id) ? liste.map((x) => (x.id === eintrag.id ? eintrag : x)) : [eintrag, ...liste]
 }
 
+/** Ändert ein Objekt, egal ob Mayer-Objekt oder privates Objekt (eigene Liste privatObjekte). */
+function mitObjekt(state: AppData, id: string, f: (o: Objekt) => Objekt): AppData {
+  if (state.privatObjekte.some((o) => o.id === id)) return { ...state, privatObjekte: state.privatObjekte.map((o) => (o.id === id ? f(o) : o)) }
+  return { ...state, objekte: state.objekte.map((o) => (o.id === id ? f(o) : o)) }
+}
+
 function reducer(state: AppData, action: Action): AppData {
   switch (action.type) {
     case 'SET_BEREICH':
@@ -574,18 +588,23 @@ function reducer(state: AppData, action: Action): AppData {
       }
     }
     case 'ADD_OBJEKT':
-      return { ...state, objekte: [action.objekt, ...state.objekte] }
+      return action.objekt.privatBesitzer ? { ...state, privatObjekte: [action.objekt, ...state.privatObjekte] } : { ...state, objekte: [action.objekt, ...state.objekte] }
+    case 'OBJEKT_INS_MAYER_CRM': {
+      // Privates Objekt ins Mayer-CRM übernehmen: Besitzer leeren, in die gemeinsame Liste verschieben.
+      const o = state.privatObjekte.find((x) => x.id === action.id)
+      if (!o) return state
+      const activity = { id: uid('act'), date: today(), text: 'Aus dem privaten Bereich ins Mayer-CRM übernommen', user: CURRENT_USER }
+      return {
+        ...state,
+        privatObjekte: state.privatObjekte.filter((x) => x.id !== action.id),
+        objekte: [{ ...o, privatBesitzer: undefined, activities: [activity, ...o.activities] }, ...state.objekte],
+      }
+    }
     case 'OBJEKT_VOM_SERVER':
     case 'UPDATE_OBJEKT':
-      return {
-        ...state,
-        objekte: state.objekte.map((o) => (o.id === action.id ? { ...o, ...action.patch } : o)),
-      }
+      return mitObjekt(state, action.id, (o) => ({ ...o, ...action.patch }))
     case 'SET_OBJEKT_STATUS': {
-      return {
-        ...state,
-        objekte: state.objekte.map((o) => {
-          if (o.id !== action.id) return o
+      return mitObjekt(state, action.id, (o) => {
           const oldLabel = IMMOBILIEN_STATUS[o.status]?.label ?? o.status
           const newLabel = IMMOBILIEN_STATUS[action.status]?.label ?? action.status
           const activity = {
@@ -608,30 +627,19 @@ function reducer(state: AppData, action: Action): AppData {
             followUp: action.followUp ?? automatischesFollowUp ?? o.followUp,
             activities: [activity, ...o.activities],
           }
-        }),
-      }
+        })
     }
     case 'SET_OBJEKT_FOLLOWUP':
-      return {
-        ...state,
-        objekte: state.objekte.map((o) => (o.id === action.id ? { ...o, followUp: action.followUp } : o)),
-      }
+      return mitObjekt(state, action.id, (o) => ({ ...o, followUp: action.followUp }))
     case 'SET_OBJEKT_PRIORITAET':
-      return {
-        ...state,
-        objekte: state.objekte.map((o) => (o.id === action.id ? { ...o, prioritaet: action.prioritaet } : o)),
-      }
+      return mitObjekt(state, action.id, (o) => ({ ...o, prioritaet: action.prioritaet }))
     case 'ADD_FINANZIERUNG':
       return { ...state, finanzierungen: [action.finanzierung, ...state.finanzierungen] }
     case 'ADD_DOKUMENT':
-      return {
-        ...state,
-        objekte: state.objekte.map((o) => {
-          if (o.id !== action.objektId) return o
-          const existing = o.dokumente[action.ordner] ?? []
-          return { ...o, dokumente: { ...o.dokumente, [action.ordner]: [action.dokument, ...existing] } }
-        }),
-      }
+      return mitObjekt(state, action.objektId, (o) => {
+        const existing = o.dokumente[action.ordner] ?? []
+        return { ...o, dokumente: { ...o.dokumente, [action.ordner]: [action.dokument, ...existing] } }
+      })
     case 'ADD_PROJEKT':
       return { ...state, projekte: [action.projekt, ...state.projekte] }
     case 'ADD_MEILENSTEIN':
@@ -908,8 +916,10 @@ function reducer(state: AppData, action: Action): AppData {
         ...state,
         privatKunden: state.privatKunden.map((k) => {
           if (k.id !== action.id) return k
-          const oldLabel = PRIVAT_STATUS[k.status]?.label ?? k.status
-          const newLabel = PRIVAT_STATUS[action.status]?.label ?? action.status
+          // Private Kontakte mit Art laufen nach dem Statusablauf dieses Bereichs (kunden.privat_art).
+          const ablauf = k.privatArt ? getStatusMap(k.privatArt) : PRIVAT_STATUS
+          const oldLabel = ablauf[k.status]?.label ?? k.status
+          const newLabel = ablauf[action.status]?.label ?? action.status
           const activity = {
             id: uid('act'),
             date: today(),
@@ -1118,6 +1128,7 @@ function reducer(state: AppData, action: Action): AppData {
         privatKunden: action.data.kunden.privat,
         immobilienKunden: action.data.kunden.immobilienkunden,
         objekte: action.data.objekte,
+        privatObjekte: action.data.privatObjekte,
         protokolle: action.data.protokolle,
         objektVorschlaege: action.data.objektVorschlaege,
         vorlagenBeratung: action.data.vorlagen.beratung,
@@ -1450,7 +1461,7 @@ export function useAdvanceStatus() {
       dispatch({ type: 'SET_KUNDE_STATUS', id, status, followUp })
     },
     advanceObjekt(id: string, followUp?: FollowUp) {
-      const obj = state.objekte.find((o) => o.id === id)
+      const obj = state.objekte.find((o) => o.id === id) ?? state.privatObjekte.find((o) => o.id === id)
       if (!obj) return
       const next = getNextMainStep('immobilien', obj.status)
       if (next) dispatch({ type: 'SET_OBJEKT_STATUS', id, status: next, followUp })
@@ -1506,7 +1517,7 @@ export function useAdvanceStatus() {
     advancePrivatKontakt(id: string, followUp?: FollowUp) {
       const kontakt = state.privatKunden.find((k) => k.id === id)
       if (!kontakt) return
-      const next = getNextMainStep('privat', kontakt.status)
+      const next = getNextMainStep(kontakt.privatArt ?? 'privat', kontakt.status)
       if (next) dispatch({ type: 'SET_PRIVAT_STATUS', id, status: next, followUp })
     },
     setPrivatStatus(id: string, status: string, followUp?: FollowUp) {

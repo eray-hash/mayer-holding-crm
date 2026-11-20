@@ -353,6 +353,9 @@ export type PublicKunde = {
   selbstauskunft?: import('../types').Selbstauskunft
   ndaUnterschrieben?: boolean
   unterlagenCheckliste?: Record<string, boolean>
+  // Nur private Kontakte: nach welchem Bereich sie geführt werden (für den passenden Fragenkatalog).
+  privatArt?: string
+  privat_art?: string
 }
 
 /** `formular`: Nur das Selbstauskunft-Formular bekommt die gespeicherte Selbstauskunft, nur der

@@ -7,7 +7,11 @@
 //   (`rohdaten.objekt`).
 // - Ein zweiter Lauf mit derselben Mail und demselben Objekt legt nichts doppelt an: Jede Datei
 //   bekommt eine feste Kennung aus Mail und Dateiname.
+//
+// - Private Objekte (objekte.privat_besitzer gesetzt) nur für ihren Besitzer (`wer.email`); an der Mail im
+//   gemeinsamen Postfach steht dann nicht die Bezeichnung, sondern nur „privates Objekt“.
 import { gemeinsamerAblagePfad, ladeGemeinsameDatei } from './postfach.ts'
+import { darfObjekt, istPrivatesObjekt } from '../_shared/privatZugriff.ts'
 
 // Der Dienst-Zugang zur Datenbank — in postfach.ts genauso typisiert, dort aber nicht exportiert.
 // deno-lint-ignore no-explicit-any
@@ -90,7 +94,7 @@ function vorhandeneKennungen(dokumente: Ordner): Set<string> {
 }
 
 // `mailId` ist die Zeilen-Kennung (uuid) oder die Message-ID der Mail.
-export async function ordneMailObjektZu(admin: Db, mailId: string, objektId: string, wer: { name: string }): Promise<ObjektZuordnung> {
+export async function ordneMailObjektZu(admin: Db, mailId: string, objektId: string, wer: { name: string; email?: string }): Promise<ObjektZuordnung> {
   const gesucht = String(mailId ?? '').trim()
   const objektKennung = String(objektId ?? '').trim()
   if (!gesucht) return { ok: false, fehler: 'Es fehlt die Angabe, welche Mail gemeint ist.' }
@@ -123,9 +127,12 @@ export async function ordneMailObjektZu(admin: Db, mailId: string, objektId: str
   if (mail.besitzer_email) return { ok: false, fehler: 'Diese Mail liegt in einem persönlichen Postfach. Einem Objekt lassen sich nur Mails aus dem gemeinsamen Postfach zuordnen.' }
 
   // ---- Das Objekt ----
-  const { data: objekt, error: objektFehler } = await admin.from('objekte').select('id, bezeichnung, dokumente, activities').eq('id', objektKennung).maybeSingle()
+  const { data: objekt, error: objektFehler } = await admin.from('objekte').select('id, bezeichnung, dokumente, activities, privat_besitzer').eq('id', objektKennung).maybeSingle()
   if (objektFehler) return { ok: false, fehler: `Das Objekt ließ sich nicht laden: ${objektFehler.message}` }
   if (!objekt) return { ok: false, fehler: 'Dieses Objekt gibt es nicht.' }
+  const privat = istPrivatesObjekt(objekt)
+  // Ein fremdes privates Objekt gilt als nicht vorhanden (keine Auskunft, dass es das Objekt gibt).
+  if (privat && !darfObjekt(objekt, String(wer?.email ?? ''), false)) return { ok: false, fehler: 'Dieses Objekt gibt es nicht.' }
 
   // ---- Anhänge in die Ablage des Objekts kopieren ----
   const heute = heuteInBerlin()
@@ -213,7 +220,8 @@ export async function ordneMailObjektZu(admin: Db, mailId: string, objektId: str
   const { data: mailFrisch, error: mailLeseFehler } = await admin.from('eingegangene_emails').select('rohdaten').eq('id', mail.id).maybeSingle()
   if (mailLeseFehler) return { ok: false, fehler: `Die Zuordnung ließ sich an der Mail nicht vermerken: ${mailLeseFehler.message}` }
   const roh = mailFrisch?.rohdaten
-  const vermerk = { id: objekt.id, bezeichnung: objekt.bezeichnung ?? '' }
+  // Die Mail sehen alle Mitarbeiter: bei einem privaten Objekt ohne dessen Bezeichnung.
+  const vermerk = { id: objekt.id, bezeichnung: privat ? 'privates Objekt' : (objekt.bezeichnung ?? '') }
   const rohdaten =
     roh && typeof roh === 'object' && !Array.isArray(roh)
       ? { ...(roh as Record<string, unknown>), objekt: vermerk }

@@ -51,6 +51,9 @@ import { PrivatBrief } from './pages/privat/PrivatBrief'
 import { PrivatHotmail } from './pages/privat/PrivatHotmail'
 import { PrivatBestaetigen } from './pages/privat/PrivatBestaetigen'
 import { PrivatSystemcheck } from './pages/privat/PrivatSystemcheck'
+import { PrivatArtListe } from './pages/privat/PrivatArtListe'
+import { PrivatVorlagen } from './pages/privat/PrivatVorlagen'
+import { PrivatGesuche, PrivatImmoKundeDetail, PrivatImmoKundenListe, PrivatObjektDetail, PrivatObjektListe } from './pages/privat/immobilien'
 import { Kalender } from './pages/kalender/Kalender'
 import { Auswertungen } from './pages/auswertungen/Auswertungen'
 import { PostfachEinrichtenHinweis } from './components/PostfachEinstellungen'
@@ -117,6 +120,16 @@ function AdminRoutesContent() {
         <Route path="/privat/hotmail" element={<PrivatHotmail />} />
         <Route path="/privat/bestaetigen" element={<PrivatBestaetigen />} />
         <Route path="/privat/systemcheck" element={<PrivatSystemcheck />} />
+        <Route path="/privat/art/:art" element={<PrivatArtListe />} />
+        <Route path="/privat/art/:art/:id" element={<PrivatDetail />} />
+        <Route path="/privat/projekte" element={<ProjekteListe />} />
+        <Route path="/privat/immobilien" element={<PrivatObjektListe />} />
+        <Route path="/privat/immobilien/objekte/:id" element={<PrivatObjektDetail />} />
+        <Route path="/privat/immobilien/kunden" element={<PrivatImmoKundenListe />} />
+        <Route path="/privat/immobilien/kunden/:id" element={<PrivatImmoKundeDetail />} />
+        <Route path="/privat/immobilien/gesuche" element={<PrivatGesuche />} />
+        <Route path="/privat/vorlagen/:art/:kind" element={<PrivatVorlagen />} />
+        <Route path="/privat/vorlagen/:art" element={<PrivatVorlagen />} />
         <Route path="/privat/offen" element={<PrivatHotmail key="offen" start="offen" />} />
         <Route path="/privat/kalender" element={<Kalender privat />} />
         <Route path="/privat/todo" element={<ToDoListe />} />
@@ -338,6 +351,9 @@ function AppRoutes() {
         <Route path="/formular/expose/:vorschlagId" element={<PublicExpose />} />
         <Route path="/formular/mandantenfragebogen/erben/:mandantId" element={<PublicMandantenfragebogenErben />} />
         <Route path="/formular/vollmacht/beratung/:typ/:kundeId" element={<PublicVollmachtBeratung />} />
+        <Route path="/formular/vollmacht/privat/:mandantId" element={<PublicVollmachtErben bereich="privat" />} />
+        <Route path="/formular/mandantenfragebogen/privat/:mandantId" element={<PublicMandantenfragebogenErben bereich="privat" />} />
+        <Route path="/formular/vollmacht/privat/:typ/:kundeId" element={<PublicVollmachtBeratung bereich="privat" />} />
         <Route path="/formular/selbstauskunft/:bereich/:kundeId" element={<PublicSelbstauskunft />} />
         {/* Mit geheimem Zeichen (seit 19.11.2026). Alte Links ohne Zeichen landen auf derselben Seite und
             bekommen dort den Hinweis, dass der Link abgelaufen ist. */}

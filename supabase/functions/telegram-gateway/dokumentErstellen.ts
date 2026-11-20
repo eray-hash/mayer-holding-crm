@@ -13,7 +13,7 @@
 // Aufrufer herein, die Rechte kommen aus rechte.ts.
 
 import { PDFDocument, type PDFFont, type PDFPage, rgb, StandardFonts } from 'npm:pdf-lib@1.17.1'
-import { darfAkte as darfAkteStandard, nichtFreigegeben, type RechteMitarbeiter, SAMMELAKTEN } from './rechte.ts'
+import { type AkteFuerRechte, darfAkte as darfAkteStandard, istPrivat, nichtFreigegeben, type RechteMitarbeiter, SAMMELAKTEN } from './rechte.ts'
 
 // deno-lint-ignore no-explicit-any
 type Supa = any
@@ -25,7 +25,7 @@ export type DokumentKontext = {
   /** Heutiges Datum JJJJ-MM-TT (Berlin). Ohne Angabe selbst ermittelt. */
   heute?: string
   /** Nur falls index.ts eine eigene Prüfung hat; sonst gilt darfAkte aus rechte.ts. */
-  darfAkte?: (m: RechteMitarbeiter, akte: { id?: string | null; bereich?: string | null }) => boolean
+  darfAkte?: (m: RechteMitarbeiter, akte: AkteFuerRechte) => boolean
 }
 
 const BUCKET = 'kunden-dokumente'
@@ -81,11 +81,12 @@ export async function fuehreDokumentWerkzeugAus(name: string, input: any, k: Dok
   if (!inhalt) return 'Fehler: inhalt ist leer. Schreib den vollständigen Text des Dokuments in inhalt.'
   if (inhalt.length > MAX_ZEICHEN) return `Fehler: inhalt ist zu lang (${inhalt.length} Zeichen, höchstens ${MAX_ZEICHEN}). Kürze den Text oder teile ihn auf mehrere Dokumente auf.`
 
-  // Private Kontakte sind für den Assistenten tabu (wie ladeKunde in index.ts).
-  const { data: akte, error: ladeFehler } = await supabase.from('kunden').select('id, bereich, firma, ansprechpartner').eq('id', kundeId).neq('bereich', 'privat').maybeSingle()
+  // Private Kontakte nur für ihren Besitzer (darfAkte); den eines Kollegen gibt es für den Mitarbeiter nicht.
+  const { data: akte, error: ladeFehler } = await supabase.from('kunden').select('id, bereich, firma, ansprechpartner, verantwortlich_email').eq('id', kundeId).maybeSingle()
   if (ladeFehler) return `Fehler beim Laden der Akte: ${ladeFehler.message}`
-  if (!akte) return 'Fehler: Es gibt keinen Kunden mit dieser kunde_id. Ermittle die richtige ID mit kunden_suchen.'
-  if (!darf(mitarbeiter, akte)) return nichtFreigegeben(akte.bereich, mitarbeiter.name)
+  const keinKunde = 'Fehler: Es gibt keinen Kunden mit dieser kunde_id. Ermittle die richtige ID mit kunden_suchen.'
+  if (!akte) return keinKunde
+  if (!darf(mitarbeiter, akte)) return istPrivat(akte) ? keinKunde : nichtFreigegeben(akte.bereich, mitarbeiter.name)
   const akteName = kundeName(akte)
 
   let pdf: { bytes: Uint8Array; seiten: number }

@@ -2,17 +2,24 @@ import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Plus, List, LayoutGrid, ArrowRight } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
+import { useAuth } from '../../context/AuthContext'
 import { IMMOBILIEN_KUNDEN_STATUS, getNextMainStep } from '../../data/statusNetworks'
-import { PRIORITAET_ORDER, MITARBEITER, PRIORITAETEN } from '../../data/constants'
+import { PRIORITAET_ORDER, MITARBEITER, PRIORITAETEN, CURRENT_USER } from '../../data/constants'
 import { PriorityBadge, StatusBadge, PrimaryButton, Modal, Field, inputClass } from '../../components/ui'
 import { StatusBoard } from '../../components/StatusBoard'
 import { fmtDate, isOverdue, today, uid } from '../../lib/dates'
 import type { Kunde, Prioritaet } from '../../types'
+import { immoKunden, immoKundenBereich, immoPfade } from './privatModus'
 
 // Kunden-/Interessentenliste für den Immobilienbereich — wie bei den übrigen Bereichen eine eigene
 // Liste getrennt von den Objekten selbst (Eigentümer-Kontakte, Kaufinteressenten, Mietinteressenten).
-export function ImmobilienKundenListe() {
+// `privat`: die eigenen privaten Immobilien-Kontakte (Bereich „privat“, privatArt 'immobilienkunden').
+export function ImmobilienKundenListe({ privat }: { privat?: boolean } = {}) {
   const { state, dispatch } = useApp()
+  const { session, mitarbeiter } = useAuth()
+  const kunden = immoKunden(state, privat)
+  const bereich = immoKundenBereich(privat)
+  const pfade = immoPfade(privat)
   const navigate = useNavigate()
   const [view, setView] = useState<'liste' | 'board'>('liste')
   const [addOpen, setAddOpen] = useState(false)
@@ -23,27 +30,38 @@ export function ImmobilienKundenListe() {
   const [fOverdue, setFOverdue] = useState(false)
 
   const filtered = useMemo(() => {
-    return state.immobilienKunden
+    return kunden
       .filter((k) => !fStatus || k.status === fStatus)
       .filter((k) => !fPrio || k.prioritaet === fPrio)
       .filter((k) => !fVerantwortlich || k.verantwortlich === fVerantwortlich)
       .filter((k) => !fOverdue || isOverdue(k.followUp.date, k.followUp.done))
       .sort((a, b) => PRIORITAET_ORDER[a.prioritaet] - PRIORITAET_ORDER[b.prioritaet])
-  }, [state.immobilienKunden, fStatus, fPrio, fVerantwortlich, fOverdue])
+  }, [kunden, fStatus, fPrio, fVerantwortlich, fOverdue])
 
   function advance(id: string) {
-    const kunde = state.immobilienKunden.find((k) => k.id === id)
+    const kunde = kunden.find((k) => k.id === id)
     if (!kunde) return
     const next = getNextMainStep('immobilienkunden', kunde.status)
-    if (next) dispatch({ type: 'UPDATE_KUNDE_IN_BEREICH', bereich: 'immobilienkunden', id, patch: { status: next } })
+    if (next) dispatch({ type: 'UPDATE_KUNDE_IN_BEREICH', bereich, id, patch: { status: next } })
+  }
+
+  function anlegen(k: Kunde) {
+    if (!privat) {
+      dispatch({ type: 'ADD_KUNDE_IN_BEREICH', bereich: 'immobilienkunden', kunde: k })
+      return
+    }
+    // Privat: gehört dem eigenen Login (Datenbank-Regel) und wird nach dem Immobilien-Ablauf geführt.
+    const ich = (session?.user.email ?? '').toLowerCase()
+    if (!ich) return
+    dispatch({ type: 'ADD_KUNDE_IN_BEREICH', bereich: 'privat', kunde: { ...k, id: uid('priv'), privatArt: 'immobilienkunden', verantwortlichEmail: ich } })
   }
 
   return (
     <div>
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold text-slate-800">Kunden</h1>
-          <p className="text-sm text-slate-500">{filtered.length} von {state.immobilienKunden.length} Kunden</p>
+          <h1 className="text-xl font-semibold text-slate-800">{privat ? 'Meine Kunden (privat)' : 'Kunden'}</h1>
+          <p className="text-sm text-slate-500">{filtered.length} von {kunden.length} Kunden</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex rounded-lg border border-slate-200 bg-white p-0.5">
@@ -77,10 +95,12 @@ export function ImmobilienKundenListe() {
           <option value="">Alle Prioritäten</option>
           {PRIORITAETEN.map((p) => <option key={p} value={p}>{p}</option>)}
         </select>
-        <select value={fVerantwortlich} onChange={(e) => setFVerantwortlich(e.target.value)} className={`${inputClass} w-auto`}>
-          <option value="">Alle Verantwortlichen</option>
-          {MITARBEITER.map((m) => <option key={m} value={m}>{m}</option>)}
-        </select>
+        {!privat && (
+          <select value={fVerantwortlich} onChange={(e) => setFVerantwortlich(e.target.value)} className={`${inputClass} w-auto`}>
+            <option value="">Alle Verantwortlichen</option>
+            {MITARBEITER.map((m) => <option key={m} value={m}>{m}</option>)}
+          </select>
+        )}
         <label className="flex items-center gap-1.5 text-sm text-slate-600">
           <input type="checkbox" checked={fOverdue} onChange={(e) => setFOverdue(e.target.checked)} className="rounded" />
           nur überfällige Follow-ups
@@ -109,7 +129,7 @@ export function ImmobilienKundenListe() {
                 return (
                   <tr
                     key={k.id}
-                    onClick={() => navigate(`/immobilien/kunden/${k.id}`)}
+                    onClick={() => navigate(pfade.kunde(k.id))}
                     className="cursor-pointer border-b border-slate-50 last:border-0 hover:bg-slate-50/60"
                   >
                     <td className="px-4 py-3 font-medium text-slate-800">{k.firma}</td>
@@ -147,7 +167,7 @@ export function ImmobilienKundenListe() {
       ) : (
         <StatusBoard
           bereich="immobilienkunden"
-          basePath="/immobilien/kunden"
+          basePath={pfade.kundenListe}
           onAdvance={advance}
           items={filtered.map((k) => ({
             id: k.id,
@@ -164,14 +184,16 @@ export function ImmobilienKundenListe() {
         <NeuerKundeModal
           open={addOpen}
           onClose={() => setAddOpen(false)}
-          onCreate={(k) => dispatch({ type: 'ADD_KUNDE_IN_BEREICH', bereich: 'immobilienkunden', kunde: k })}
+          onCreate={anlegen}
+          eigenerName={privat ? (mitarbeiter?.name ?? CURRENT_USER) : undefined}
         />
       )}
     </div>
   )
 }
 
-function NeuerKundeModal({ open, onClose, onCreate }: { open: boolean; onClose: () => void; onCreate: (k: Kunde) => void }) {
+// eigenerName gesetzt (privater Bereich): man ist selbst verantwortlich, die Auswahl entfällt.
+function NeuerKundeModal({ open, onClose, onCreate, eigenerName }: { open: boolean; onClose: () => void; onCreate: (k: Kunde) => void; eigenerName?: string }) {
   const [firma, setFirma] = useState('')
   const [ansprechpartner, setAnsprechpartner] = useState('')
   const [email, setEmail] = useState('')
@@ -179,7 +201,7 @@ function NeuerKundeModal({ open, onClose, onCreate }: { open: boolean; onClose: 
   const [prioritaet, setPrioritaet] = useState<Prioritaet>('Mittel')
   const [status, setStatus] = useState('interessent')
   const [followUpDate, setFollowUpDate] = useState(today())
-  const [verantwortlich, setVerantwortlich] = useState(MITARBEITER[0])
+  const [verantwortlich, setVerantwortlich] = useState(eigenerName ?? MITARBEITER[0])
 
   function submit() {
     if (!firma.trim()) return
@@ -217,11 +239,13 @@ function NeuerKundeModal({ open, onClose, onCreate }: { open: boolean; onClose: 
         </select>
       </Field>
       <Field label="Follow-up-Datum"><input type="date" className={inputClass} value={followUpDate} onChange={(e) => setFollowUpDate(e.target.value)} /></Field>
-      <Field label="Verantwortlich">
-        <select className={inputClass} value={verantwortlich} onChange={(e) => setVerantwortlich(e.target.value)}>
-          {MITARBEITER.map((m) => <option key={m} value={m}>{m}</option>)}
-        </select>
-      </Field>
+      {!eigenerName && (
+        <Field label="Verantwortlich">
+          <select className={inputClass} value={verantwortlich} onChange={(e) => setVerantwortlich(e.target.value)}>
+            {MITARBEITER.map((m) => <option key={m} value={m}>{m}</option>)}
+          </select>
+        </Field>
+      )}
       <div className="mt-4 flex justify-end gap-2">
         <button onClick={onClose} className="rounded-lg border border-slate-200 px-3.5 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50">Abbrechen</button>
         <PrimaryButton onClick={submit}>Kunde anlegen</PrimaryButton>

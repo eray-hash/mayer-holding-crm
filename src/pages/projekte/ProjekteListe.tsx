@@ -7,6 +7,7 @@ import { Modal, Field, inputClass, PrimaryButton, EmptyState } from '../../compo
 import { MITARBEITER, PRIORITAETEN } from '../../data/constants'
 import { uid } from '../../lib/dates'
 import type { ProjektBereich, ProjektKind } from '../../types/project'
+import { useAuth } from '../../context/AuthContext'
 import type { Prioritaet } from '../../types'
 
 export function ProjekteListe() {
@@ -115,6 +116,7 @@ function NeuesProjektModal({
   const [kind, setKind] = useState<ProjektKind>('kunde')
   const [prioritaet, setPrioritaet] = useState<Prioritaet>('Mittel')
   const [verantwortlich, setVerantwortlich] = useState(MITARBEITER[0])
+  const { session } = useAuth()
 
   function submit() {
     if (!name.trim()) return
@@ -128,6 +130,8 @@ function NeuesProjektModal({
       verantwortlich,
       aktuelleAufgabe: null,
       meilensteine: [{ id: uid('meil'), titel: 'Allgemein', eta: null, sortOrder: 1, aufgaben: [] }],
+      // Private Projekte gehören dem Anlegenden (Datenbank-Regel auf besitzer_email).
+      ...(bereich === 'privat' ? { besitzerEmail: (session?.user.email ?? '').toLowerCase() } : {}),
     })
     setName('')
     onClose()

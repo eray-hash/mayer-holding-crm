@@ -157,7 +157,8 @@ export async function fuehreGesendetWerkzeugAus(name: string, input: any, k: Ges
     const akten = await ladeAkten(supabase, [z])
     if (!darfGesendeteSehen(mitarbeiter, ich, z, akten)) {
       const bereich = z.kunde_bereich || akten.get(String(z.kunde_id))?.bereich
-      if (bereich === 'privat') return 'Fehler: Diese gesendete Mail gehört zu einem privaten Kontakt eines Kollegen und ist nicht lesbar.'
+      // Den privaten Kontakt eines Kollegen nicht einmal andeuten: dieselbe Meldung wie bei einer unbekannten Mail.
+      if (bereich === 'privat') return 'Fehler: Diese gesendete Mail gibt es nicht (oder sie liegt im privaten Postfach eines Kollegen).'
       return nichtFreigegeben(bereich, mitarbeiter.name)
     }
     const text = String(z.text ?? '')

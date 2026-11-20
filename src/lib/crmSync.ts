@@ -95,6 +95,8 @@ function kundeToRow(bereich: KundeBereich, k: Kunde) {
     follow_up: k.followUp,
     verantwortlich: k.verantwortlich,
     verantwortlich_email: k.verantwortlichEmail ?? null,
+    // Die Art gibt es nur im privaten Bereich (Datenbank-Prüfung) — beim Übernehmen in einen Bereich leeren.
+    privat_art: bereich === 'privat' ? (k.privatArt ?? null) : null,
     letzte_aktivitaet: k.letzteAktivitaet,
     activities: k.activities,
     unterlagen_checkliste: k.unterlagenCheckliste ?? null,
@@ -132,6 +134,7 @@ function rowToKunde(row: any): Kunde {
     followUp: row.follow_up,
     verantwortlich: row.verantwortlich,
     verantwortlichEmail: row.verantwortlich_email ?? undefined,
+    privatArt: row.privat_art ?? undefined,
     letzteAktivitaet: row.letzte_aktivitaet,
     activities: row.activities ?? [],
     unterlagenCheckliste: row.unterlagen_checkliste ?? undefined,
@@ -177,6 +180,7 @@ function objektToRow(o: Objekt) {
     eigentuemer: o.eigentuemer ?? null,
     expose_text: o.exposeText ?? null,
     unterlagen_anforderungen: o.unterlagenAnforderungen ?? null,
+    privat_besitzer: o.privatBesitzer ?? null,
     // `bewertung` fehlt hier mit Absicht: Die Spalte schreibt nur der Server (mehrstufiger Lauf).
   }
 }
@@ -208,6 +212,7 @@ function rowToObjekt(row: any): Objekt {
     unterlagenAnforderungen: row.unterlagen_anforderungen ?? undefined,
     // Nur lesen: `eigentuemer_token` fehlt in objektToRow mit Absicht (die Datenbank vergibt es).
     eigentuemerToken: row.eigentuemer_token ?? undefined,
+    privatBesitzer: row.privat_besitzer ?? undefined,
   }
 }
 
@@ -405,6 +410,7 @@ function projektToRow(p: Projekt) {
     verknuepft_kunde_id: p.verknuepftKundeId ?? null,
     verknuepft_objekt_id: p.verknuepftObjektId ?? null,
     meilensteine: p.meilensteine,
+    besitzer_email: p.bereich === 'privat' ? (p.besitzerEmail ?? null) : null,
   }
 }
 
@@ -421,6 +427,7 @@ function rowToProjekt(row: any): Projekt {
     verknuepftKundeId: row.verknuepft_kunde_id ?? undefined,
     verknuepftObjektId: row.verknuepft_objekt_id ?? undefined,
     meilensteine: row.meilensteine ?? [],
+    besitzerEmail: row.besitzer_email ?? undefined,
   }
 }
 
@@ -964,9 +971,11 @@ export function syncAfterDispatch(prev: AppData, next: AppData, meldeServerStand
     }
   }
 
+  // Mayer-Objekte und private Objekte (eigene Liste, siehe privatObjekte) — gleiche Schreiblogik. Wechselt ein
+  // Objekt die Liste (privat → Mayer-CRM), gilt die alte Fassung aus der anderen Liste als „vorher“.
   let objekteVorher: Map<string, Objekt> | null = null
-  for (const o of diffById(prev.objekte, next.objekte)) {
-    if (!objekteVorher) objekteVorher = new Map(prev.objekte.map((x) => [x.id, x]))
+  for (const o of [...diffById(prev.objekte, next.objekte), ...diffById(prev.privatObjekte, next.privatObjekte)]) {
+    if (!objekteVorher) objekteVorher = new Map([...prev.objekte, ...prev.privatObjekte].map((x) => [x.id, x]))
     const vorher = objekteVorher.get(o.id)
     const schluessel = `objekt:${o.id}`
     offeneSchreibvorgaenge++
@@ -996,6 +1005,7 @@ export function syncAfterDispatch(prev: AppData, next: AppData, meldeServerStand
 export type HydratedData = {
   kunden: Record<KundeBereich, Kunde[]>
   objekte: Objekt[]
+  privatObjekte: Objekt[]
   protokolle: Protokoll[]
   objektVorschlaege: ObjektVorschlag[]
   vorlagen: Record<Bereich, Vorlage[]>
@@ -1139,7 +1149,10 @@ export async function hydrateFromSupabase(): Promise<HydratedData | null> {
 
   return {
     kunden,
-    objekte: (objekteRes.data ?? []).map(rowToObjekt),
+    // Private Objekte (nur die eigenen, Datenbank-Regel) in eine eigene Liste — so erscheinen sie nie in den
+    // Mayer-Immobilien, der Suche oder den Auswertungen.
+    objekte: (objekteRes.data ?? []).filter((r: { privat_besitzer?: string | null }) => !r.privat_besitzer).map(rowToObjekt),
+    privatObjekte: (objekteRes.data ?? []).filter((r: { privat_besitzer?: string | null }) => !!r.privat_besitzer).map(rowToObjekt),
     protokolle: (protokolleRes.data ?? []).map(rowToProtokoll),
     objektVorschlaege: (vorschlaegeRes.data ?? []).map(rowToVorschlag),
     vorlagen,

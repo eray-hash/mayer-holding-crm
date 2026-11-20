@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import { Plus, List, LayoutGrid, ArrowRight, ClipboardList } from 'lucide-react'
 import { useApp, useAdvanceStatus } from '../../context/AppContext'
 import { useAuth } from '../../context/AuthContext'
-import { PRIVAT_STATUS } from '../../data/statusNetworks'
+import { PRIVAT_STATUS, getNextMainStep, getStatusMap } from '../../data/statusNetworks'
+import { privatArtInfo } from '../../data/privatArten'
 import { PRIORITAET_ORDER, PRIORITAETEN } from '../../data/constants'
 import { PriorityBadge, StatusBadge, PrimaryButton, SecondaryButton, Modal, Field, inputClass } from '../../components/ui'
 import { StatusBoard } from '../../components/StatusBoard'
@@ -103,7 +104,9 @@ export function PrivatListe() {
             <tbody>
               {filtered.map((k) => {
                 const overdue = isOverdue(k.followUp.date, k.followUp.done)
-                const node = PRIVAT_STATUS[k.status]
+                // Kontakte mit Art (privater Unterbereich) laufen nach dem Ablauf ihres Bereichs.
+                const node = (k.privatArt ? getStatusMap(k.privatArt) : PRIVAT_STATUS)[k.status]
+                const art = privatArtInfo(k.privatArt)
                 return (
                   <tr
                     key={k.id}
@@ -111,20 +114,25 @@ export function PrivatListe() {
                     className="cursor-pointer border-b border-slate-50 last:border-0 hover:bg-slate-50/60"
                   >
                     <td className="px-4 py-3 font-medium text-slate-800">{k.firma}</td>
-                    <td className="px-4 py-3 text-slate-500">{k.ansprechpartner}</td>
+                    <td className="px-4 py-3 text-slate-500">
+                      {k.ansprechpartner}
+                      {art && <span className="ml-1 rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-500">{art.label}</span>}
+                    </td>
                     <td className="px-4 py-3"><PriorityBadge value={k.prioritaet} /></td>
-                    <td className="px-4 py-3"><StatusBadge label={node.label} color={node.color} /></td>
+                    <td className="px-4 py-3">{node ? <StatusBadge label={node.label} color={node.color} /> : <span className="text-xs text-slate-400">{k.status}</span>}</td>
                     <td className="px-4 py-3">
                       <div className={overdue ? 'font-medium text-rose-600' : 'text-slate-600'}>{fmtDate(k.followUp.date)}</div>
                       <div className="text-xs text-slate-400">{k.followUp.note}</div>
                     </td>
                     <td className="px-4 py-3 text-slate-400">{fmtDate(k.letzteAktivitaet)}</td>
                     <td className="px-4 py-3 text-right">
-                      {node.next.length > 0 && (
+                      {node && node.next.length > 0 && (
                         <button
                           onClick={(e) => {
                             e.stopPropagation()
-                            advancePrivatKontakt(k.id)
+                            if (!k.privatArt) return advancePrivatKontakt(k.id)
+                            const next = getNextMainStep(k.privatArt, k.status)
+                            if (next) dispatch({ type: 'SET_PRIVAT_STATUS', id: k.id, status: next })
                           }}
                           className="inline-flex items-center gap-1 rounded-md bg-accent-50 px-2 py-1 text-xs font-medium text-accent-700 hover:bg-accent-100"
                         >
@@ -146,7 +154,8 @@ export function PrivatListe() {
           bereich="privat"
           basePath="/privat/kontakte"
           onAdvance={(id) => advancePrivatKontakt(id)}
-          items={filtered.map((k) => ({
+          // Das Board zeigt den allgemeinen Ablauf — Kontakte mit Art haben ihr Board im jeweiligen Unterbereich.
+          items={filtered.filter((k) => !k.privatArt).map((k) => ({
             id: k.id,
             title: k.firma,
             subtitle: k.ansprechpartner,

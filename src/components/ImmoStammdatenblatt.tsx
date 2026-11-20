@@ -28,8 +28,10 @@ const LEER: ImmoStammdaten = { rollen: [], bietetAn: '', sonstiges: '' }
 /** Das Stammdatenblatt der Immobilienabteilung als Reiter in der Akte eines Kontakts: wer ist die Person,
  *  in welcher Rolle, mit welchem Auftrag — was sucht sie (Gesuche, mit Abgleich gegen den Objektbestand),
  *  was bietet sie an. Vorlage: Papierformular „Stammdaten", Version 1 vom 21.10.26. */
-export function ImmoStammdatenblatt({ kunde }: { kunde: Kunde }) {
+// `privat`: Akte eines privaten Immobilien-Kontakts (Bereich „privat“) — Gesuche nur gegen die eigenen privaten Objekte.
+export function ImmoStammdatenblatt({ kunde, privat }: { kunde: Kunde; privat?: boolean }) {
   const { state, dispatch } = useApp()
+  const objektPfad = (id: string) => (privat ? `/privat/immobilien/objekte/${id}` : `/immobilien/objekte/${id}`)
   const [entwurf, setEntwurf] = useState<ImmoStammdaten>(kunde.immoStammdaten ?? LEER)
   const [gespeichert, setGespeichert] = useState(false)
   const [gesuchOffen, setGesuchOffen] = useState<Gesuch | 'neu' | null>(null)
@@ -43,7 +45,7 @@ export function ImmoStammdatenblatt({ kunde }: { kunde: Kunde }) {
   }
 
   function aendereKunde(patch: Partial<Kunde>) {
-    dispatch({ type: 'UPDATE_KUNDE_IN_BEREICH', bereich: 'immobilienkunden', id: kunde.id, patch: { ...patch, letzteAktivitaet: today() } })
+    dispatch({ type: 'UPDATE_KUNDE_IN_BEREICH', bereich: privat ? 'privat' : 'immobilienkunden', id: kunde.id, patch: { ...patch, letzteAktivitaet: today() } })
   }
 
   function speichern() {
@@ -182,7 +184,7 @@ export function ImmoStammdatenblatt({ kunde }: { kunde: Kunde }) {
         {gesuche.length === 0 && <EmptyState text="Noch kein Gesuch erfasst." />}
         <div className="space-y-3">
           {gesuche.map((g) => {
-            const treffer = passendeObjekte(g, state.objekte)
+            const treffer = passendeObjekte(g, privat ? state.privatObjekte : state.objekte)
             return (
               <div key={g.id} className={`rounded-lg border border-slate-100 p-3 ${g.erledigt ? 'opacity-60' : ''}`}>
                 <div className="flex flex-wrap items-start justify-between gap-2">
@@ -223,7 +225,7 @@ export function ImmoStammdatenblatt({ kunde }: { kunde: Kunde }) {
                     <ul className="space-y-1">
                       {treffer.map((t) => (
                         <li key={t.objekt.id} className="text-sm">
-                          <Link to={`/immobilien/objekte/${t.objekt.id}`} className="font-medium text-accent-600 hover:underline">
+                          <Link to={objektPfad(t.objekt.id)} className="font-medium text-accent-600 hover:underline">
                             {t.objekt.bezeichnung}
                           </Link>
                           <span className="text-xs text-slate-500">

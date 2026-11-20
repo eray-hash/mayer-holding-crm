@@ -258,6 +258,7 @@ import { beantworteKundenUnterlagen } from './kundenUnterlagen.ts'
 import { pruefeWunschAnalyse, wunschAnalyseTest } from './wunschAnalyse.ts'
 import { pruefeSuperuserWochenbericht, superuserAuswertung, superuserWochenberichtTest } from './superuser.ts'
 import { aktuellePerson, kiAufruf, mitAnlass, setzeAnlass, setzePerson } from '../_shared/kiVerbrauch.ts'
+import { darfObjekt, darfPrivatKunde, istPrivaterKunde, istPrivatesObjekt } from '../_shared/privatZugriff.ts'
 
 const ALLOWED_ORIGINS = [
   'https://eray-hash.github.io',
@@ -274,6 +275,8 @@ const AKTEN_FUER_ALLE = new Set(['k_eingang_ungeklaert', 'k_intern_holding'])
 
 // deno-lint-ignore no-explicit-any
 async function darfBereichServer(admin: any, email: string, bereich: string | null | undefined): Promise<boolean> {
+  // „privat“ ist kein Bereich mit Freigabe: Ob jemand einen privaten Kontakt sehen darf, entscheidet allein
+  // der Besitzer (darfKundeServer) — wer nur einen Bereich kennt, kann das hier nicht prüfen.
   if (!bereich || bereich === 'privat' || bereich === 'intern') return true
   const { data } = await admin.from('mitarbeiter').select('rolle, ist_admin, aktiv, bereiche, email').eq('aktiv', true)
   // deno-lint-ignore no-explicit-any
@@ -288,10 +291,91 @@ async function darfBereichServer(admin: any, email: string, bereich: string | nu
 async function darfKundeServer(admin: any, email: string, kundeId: unknown): Promise<boolean> {
   const id = String(kundeId ?? '')
   if (!id || AKTEN_FUER_ALLE.has(id)) return true
-  const { data } = await admin.from('kunden').select('bereich').eq('id', id).maybeSingle()
+  const { data } = await admin.from('kunden').select('bereich, verantwortlich_email').eq('id', id).maybeSingle()
   // Gibt es die Akte nicht, meldet das die Aktion selbst.
   if (!data) return true
+  // Private Kontakte sieht nur ihr Besitzer — auch keine Geschäftsführung (wie die Regel in der Datenbank).
+  if (istPrivaterKunde(data)) return darfPrivatKunde(data, email)
   return await darfBereichServer(admin, email, data.bereich)
+}
+
+// ---------- Private Objekte und Kontakte (Bereich Privat, seit 20.11.2026) ----------
+// Private Objekte (objekte.privat_besitzer gesetzt) sieht nur ihr Besitzer, Mayer-Objekte nur, wer den
+// Bereich Immobilien darf. Die Regeln selbst stehen in _shared/privatZugriff.ts.
+
+/** Objekt-Recht eines angemeldeten Mitarbeiters. Gibt es das Objekt nicht, zählt das Immobilien-Recht
+ *  (die Aktion meldet das Fehlen dann selbst). */
+// deno-lint-ignore no-explicit-any
+async function darfObjektServer(admin: any, email: string, objektId: unknown): Promise<boolean> {
+  const id = String(objektId ?? '')
+  const { data } = id ? await admin.from('objekte').select('privat_besitzer').eq('id', id).maybeSingle() : { data: null }
+  if (data && istPrivatesObjekt(data)) return darfObjekt(data, email, false)
+  return await darfBereichServer(admin, email, 'immobilien')
+}
+
+/** Wer ruft auf — für Aktionen, die auch die eigenen Server-Funktionen aufrufen (Fortsetzungsschritte,
+ *  Dokumente lesen). Der Dienst-Schlüssel OHNE imAuftragVon ist eine eigene Funktion, die vorher schon
+ *  geprüft hat (z. B. der Startaufruf einer Bewertung): `dienst`. Sonst gilt die Login-Adresse der Person
+ *  (eigener Login oder imAuftragVon); null, wenn sie nicht zu einem aktiven Mitarbeiter gehört. */
+type Pruefer = { dienst: true } | { dienst: false; email: string | null }
+
+// deno-lint-ignore no-explicit-any
+async function ermittlePruefer(req: Request, admin: any, body: Record<string, unknown>): Promise<Pruefer> {
+  const token = (req.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '').trim()
+  if (token && istDienstSchluessel(token) && !String(body?.imAuftragVon ?? '').trim()) return { dienst: true }
+  const aufrufer = await ermittleAufrufer(req, admin, body)
+  return { dienst: false, email: aufrufer?.email ?? null }
+}
+
+// deno-lint-ignore no-explicit-any
+async function darfKundeAufruf(admin: any, wer: Pruefer, kundeId: unknown): Promise<boolean> {
+  if (wer.dienst) return true
+  if (!wer.email) return false
+  return await darfKundeServer(admin, wer.email, kundeId)
+}
+
+// deno-lint-ignore no-explicit-any
+async function darfObjektAufruf(admin: any, wer: Pruefer, objektId: unknown): Promise<boolean> {
+  if (wer.dienst) return true
+  if (!wer.email) return false
+  return await darfObjektServer(admin, wer.email, objektId)
+}
+
+/** Zu welcher Akte gehört eine Datei? Kunden-Dokumente liegen in der Ablage „kunden-dokumente“ unter
+ *  „<kundeId>/…“, Objekt-Dokumente (Vorsatz „objekt-dokumente:“) unter „<objektId>/…“. Ein Pfad ohne
+ *  Vorsatz kann aus beiden Ablagen stammen (ältere Aufrufe). Adressen (https, gemeinsame Ablage) gehören
+ *  keiner einzelnen Akte. */
+function dokumentAkte(url: string): { art: 'objekt' | 'unklar'; id: string } | null {
+  if (!url || gemeinsamerAblagePfad(url) || /^https?:\/\//i.test(url)) return null
+  if (url.startsWith(OBJEKT_DOKUMENT_PRAEFIX)) {
+    const id = url.slice(OBJEKT_DOKUMENT_PRAEFIX.length).split('/')[0]
+    return id ? { art: 'objekt', id } : null
+  }
+  const id = url.split('/')[0]
+  return id ? { art: 'unklar', id } : null
+}
+
+/** Darf diese Person die Datei lesen? Nur die Besitzer-Regel privater Kontakte und Objekte — die
+ *  Bereichsrechte prüft die Seite, die die Akte zeigt. `merker` spart doppelte Abfragen je Aufruf. */
+// deno-lint-ignore no-explicit-any
+async function darfDokument(admin: any, wer: Pruefer, url: string, merker: Map<string, boolean>): Promise<boolean> {
+  if (wer.dienst) return true
+  const akte = dokumentAkte(url)
+  if (!akte) return true
+  const schluessel = `${akte.art}|${akte.id}`
+  const bekannt = merker.get(schluessel)
+  if (bekannt !== undefined) return bekannt
+  let erlaubt = true
+  if (akte.art === 'unklar') {
+    const { data: kunde } = await admin.from('kunden').select('bereich, verantwortlich_email').eq('id', akte.id).maybeSingle()
+    if (kunde) erlaubt = !!wer.email && darfPrivatKunde(kunde, wer.email)
+  }
+  if (erlaubt) {
+    const { data: objekt } = await admin.from('objekte').select('privat_besitzer').eq('id', akte.id).maybeSingle()
+    if (objekt && istPrivatesObjekt(objekt)) erlaubt = !!wer.email && darfObjekt(objekt, wer.email, false)
+  }
+  merker.set(schluessel, erlaubt)
+  return erlaubt
 }
 
 function keinRecht(headers: Record<string, string>): Response {
@@ -461,6 +545,12 @@ type RechnungsErkennung = {
 // CRM, nur die manuell über "Neue Rechnung" angelegten. Fehlt einer der beiden Beträge, wird er aus
 // dem jeweils anderen mit 19% USt. berechnet (gleiche Logik wie im "Neue Rechnung"-Formular).
 async function erkenneRechnungUndLegeAn(kundeId: string, betreff: string, text: string): Promise<void> {
+  // Rechnungen sind für alle Mitarbeiter sichtbar — eine Mail an einen privaten Kontakt wird dort nicht abgelegt.
+  {
+    const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+    const { data: kunde } = await admin.from('kunden').select('bereich').eq('id', kundeId).maybeSingle()
+    if (istPrivaterKunde(kunde)) return
+  }
   const erkennung = await callClaudeTool<RechnungsErkennung>(
     `Ist die folgende, soeben an einen Kunden versendete E-Mail eine Rechnung (kein Angebot, keine Mahnung, keine allgemeine Korrespondenz)? Falls ja, extrahiere Rechnungsnummer, Netto- und Bruttobetrag (als Zahl ohne Währungssymbol, Dezimaltrennzeichen Punkt) sowie Zahlungsziel (als Datum YYYY-MM-DD), jeweils falls im Text vorhanden, sonst null.\n\nBetreff: ${betreff}\n\n${text.slice(0, 3000)}`,
     {
@@ -3183,7 +3273,8 @@ Deno.serve((req: Request) => mitAnlass(async () => {
           kunde_id: kundeId ?? null,
           kunde_name: kundeName ?? null,
           postfach_id: postfachId,
-          besitzer_email: privat ? aufrufer!.email : null,
+          // Mail an einen privaten Kontakt (auch über das gemeinsame Postfach): nur für den Absender sichtbar.
+          besitzer_email: privat ? aufrufer!.email : kundeBereich === 'privat' ? (aufrufer?.email ?? (aktuellePerson() || null)) : null,
           von: absender?.adresse ?? Deno.env.get('SMTP_USER') ?? null,
         })
         if (logFehler) console.error('Konnte gesendete Mail nicht protokollieren:', logFehler.message)
@@ -3196,7 +3287,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       // Rechnungen nirgends im CRM erfasst, nur die manuell über "Neue Rechnung" angelegten. Best
       // effort: ein Fehler hier darf den bereits erfolgreich versendeten Mailversand nicht stören.
       // Bei einer Mail an viele Empfänger (Telegram-Assistent) wäre das ein KI-Aufruf je Empfänger — abschaltbar.
-      if (kundeId && ohneRechnungsErkennung !== true && !privat) {
+      if (kundeId && ohneRechnungsErkennung !== true && !privat && kundeBereich !== 'privat') {
         try {
           await erkenneRechnungUndLegeAn(kundeId, subject, text)
         } catch (err) {
@@ -3777,7 +3868,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
       const { data, error: selectError } = await admin
         .from('kunden')
-        .select('firma, ansprechpartner, email, selbstauskunft, signaturen, unterlagen_checkliste')
+        .select('firma, ansprechpartner, email, selbstauskunft, signaturen, unterlagen_checkliste, privat_art')
         .eq('id', kundeId)
         .eq('bereich', bereich)
         .maybeSingle()
@@ -3797,6 +3888,8 @@ Deno.serve((req: Request) => mitAnlass(async () => {
             ansprechpartner: data.ansprechpartner,
             email: data.email,
             ndaUnterschrieben,
+            // Private Kontakte: welchem Mayer-Ablauf sie folgen (Fragenkatalog des Formulars), sonst leer.
+            ...(data.privat_art ? { privatArt: data.privat_art } : {}),
             ...(formular === 'selbstauskunft' ? { selbstauskunft: data.selbstauskunft ?? undefined } : {}),
             ...(formular === 'mandantenfragebogen' ? { unterlagenCheckliste: data.unterlagen_checkliste ?? undefined } : {}),
           },
@@ -4167,6 +4260,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
         return new Response(JSON.stringify({ error: 'bereich, kundeId, firma, webseite, anlass und stichtag sind Pflichtfelder' }), { status: 400, headers })
       }
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      if (!(await darfKundeAufruf(admin, await ermittlePruefer(req, admin, body), kundeId))) return keinRecht(headers)
       const gestartetAm = new Date().toISOString()
       const { error: startError } = await admin
         .from('kunden')
@@ -4214,7 +4308,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       if (body.action === 'eingang_ablegen') {
         // deno-lint-ignore no-explicit-any
         const ziel = (body.ziel ?? {}) as any
-        const erlaubt = ziel.art === 'objekt' ? await darfBereichServer(admin, aufrufer.email, 'immobilien') : await darfKundeServer(admin, aufrufer.email, ziel.id)
+        const erlaubt = ziel.art === 'objekt' ? await darfObjektServer(admin, aufrufer.email, ziel.id) : await darfKundeServer(admin, aufrufer.email, ziel.id)
         if (!erlaubt) return keinRecht(headers)
       }
       const dokumentIds = Array.isArray(body.dokumentIds) ? body.dokumentIds.map(String) : []
@@ -4236,7 +4330,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
         // deno-lint-ignore no-explicit-any
         const ziel = (log as any)?.daten?.ziel
         if (ziel) {
-          const erlaubt = ziel.art === 'objekt' ? await darfBereichServer(admin, aufrufer.email, 'immobilien') : await darfKundeServer(admin, aufrufer.email, ziel.id)
+          const erlaubt = ziel.art === 'objekt' ? await darfObjektServer(admin, aufrufer.email, ziel.id) : await darfKundeServer(admin, aufrufer.email, ziel.id)
           if (!erlaubt) return keinRecht(headers)
         }
       }
@@ -4251,8 +4345,8 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       if (!aufrufer) {
         return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
       }
-      if (!(await darfBereichServer(admin, aufrufer.email, 'immobilien'))) return keinRecht(headers)
-      const ergebnis = await ordneMailObjektZu(admin, String(body.mailId ?? ''), String(body.objektId ?? ''), { name: aufrufer.name || aufrufer.email })
+      if (!(await darfObjektServer(admin, aufrufer.email, body.objektId))) return keinRecht(headers)
+      const ergebnis = await ordneMailObjektZu(admin, String(body.mailId ?? ''), String(body.objektId ?? ''), { name: aufrufer.name || aufrufer.email, email: aufrufer.email })
       if (!ergebnis.ok) return new Response(JSON.stringify({ error: ergebnis.fehler }), { status: 400, headers })
       return new Response(JSON.stringify(ergebnis), { headers })
     }
@@ -4302,10 +4396,10 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       if (!aufrufer) {
         return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
       }
-      if (!(await darfBereichServer(admin, aufrufer.email, 'immobilien'))) return keinRecht(headers)
       if (typeof body.objektId !== 'string' || !body.objektId) {
         return new Response(JSON.stringify({ error: 'objektId fehlt.' }), { status: 400, headers })
       }
+      if (!(await darfObjektServer(admin, aufrufer.email, body.objektId))) return keinRecht(headers)
       try {
         const ergebnis =
           body.action === 'objekt_daten_vorschlag'
@@ -4324,8 +4418,8 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       if (!aufrufer) {
         return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
       }
-      if (!(await darfBereichServer(admin, aufrufer.email, 'immobilien'))) return keinRecht(headers)
       const objektId = typeof body.objektId === 'string' ? body.objektId : ''
+      if (!(await darfObjektServer(admin, aufrufer.email, objektId))) return keinRecht(headers)
       const { data: objekt } = await admin.from('objekte').select('id, bezeichnung, adresse, verkaufsdaten, dokumente, bewertung').eq('id', objektId).maybeSingle()
       if (!objekt) return new Response(JSON.stringify({ error: 'Dieses Objekt gibt es nicht (mehr).' }), { status: 404, headers })
       if (body.action === 'objekt_bewertung_verwerfen') {
@@ -4392,6 +4486,11 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       if (typeof body.objektId !== 'string' || !body.objektId) {
         return new Response(JSON.stringify({ error: 'objektId fehlt.' }), { status: 400, headers })
       }
+      // Fortsetzen aus dem Browser: dieselben Rechte wie beim Start. Die eigenen Folgeschritte (Dienst-Schlüssel) dürfen.
+      {
+        const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+        if (!(await darfObjektAufruf(admin, await ermittlePruefer(req, admin, body), body.objektId))) return keinRecht(headers)
+      }
       // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
       EdgeRuntime.waitUntil(fuehreObjektBewertungAus(body.objektId, Number(body.umleitungen) || 0, body.wiederaufnehmen === true))
       return new Response(JSON.stringify({ ok: true }), { headers })
@@ -4400,6 +4499,10 @@ Deno.serve((req: Request) => mitAnlass(async () => {
     if (body.action === 'dokument_lesen') {
       const { url, name, typ } = body
       if (!url || !name) return new Response(JSON.stringify({ error: 'url und name sind Pflichtfelder' }), { status: 400, headers })
+      {
+        const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+        if (!(await darfDokument(admin, await ermittlePruefer(req, admin, body), String(url), new Map()))) return keinRecht(headers)
+      }
       // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
       EdgeRuntime.waitUntil(leseDokument({ url: String(url), name: String(name), typ: typeof typ === 'string' ? typ : undefined }, Number(body.teil) || 0, Number(body.umleitungen) || 0))
       return new Response(JSON.stringify({ ok: true }), { headers })
@@ -4407,7 +4510,15 @@ Deno.serve((req: Request) => mitAnlass(async () => {
 
     if (body.action === 'dokument_inhalte') {
       if (!Array.isArray(body.dokumente)) return new Response(JSON.stringify({ error: 'dokumente ist ein Pflichtfeld' }), { status: 400, headers })
-      const ergebnis = await dokumentInhalte(body.dokumente, body.einlesen === true, body.volltext === true)
+      // Dateien privater Kontakte und Objekte nur für ihren Besitzer: fremde fallen still aus der Liste.
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const wer = await ermittlePruefer(req, admin, body)
+      const merker = new Map<string, boolean>()
+      const erlaubte: DokumentRef[] = []
+      for (const d of (body.dokumente as DokumentRef[]).slice(0, 200)) {
+        if (d?.url && (await darfDokument(admin, wer, String(d.url), merker))) erlaubte.push(d)
+      }
+      const ergebnis = await dokumentInhalte(erlaubte, body.einlesen === true, body.volltext === true)
       return new Response(JSON.stringify(ergebnis), { headers })
     }
 
@@ -4417,6 +4528,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
         return new Response(JSON.stringify({ error: 'bereich und kundeId sind Pflichtfelder' }), { status: 400, headers })
       }
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      if (!(await darfKundeAufruf(admin, await ermittlePruefer(req, admin, body), kundeId))) return keinRecht(headers)
       const gestartetAm = new Date().toISOString()
       const { error: startError } = await admin
         .from('kunden')
@@ -4444,6 +4556,10 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       if (!bereich || !kundeId) {
         return new Response(JSON.stringify({ error: 'bereich und kundeId sind Pflichtfelder' }), { status: 400, headers })
       }
+      {
+        const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+        if (!(await darfKundeAufruf(admin, await ermittlePruefer(req, admin, body), kundeId))) return keinRecht(headers)
+      }
       // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
       EdgeRuntime.waitUntil(fuehreSteuerSchrittAus(bereich, kundeId, Number(umleitungen) || 0, body.wiederaufnehmen === true))
       return new Response(JSON.stringify({ ok: true }), { headers })
@@ -4456,6 +4572,10 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       const { bereich, kundeId, umleitungen } = body
       if (!bereich || !kundeId) {
         return new Response(JSON.stringify({ error: 'bereich und kundeId sind Pflichtfelder' }), { status: 400, headers })
+      }
+      {
+        const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+        if (!(await darfKundeAufruf(admin, await ermittlePruefer(req, admin, body), kundeId))) return keinRecht(headers)
       }
       // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
       EdgeRuntime.waitUntil(fuehreRechercheSchrittAus(bereich, kundeId, Number(umleitungen) || 0))

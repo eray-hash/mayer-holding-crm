@@ -7,7 +7,8 @@ import { holePublicKunde, sendePublicFormular, type PublicKunde } from '../../li
 import { ALLGEMEINE_VOLLMACHT, KANZLEI_ANSCHRIFT } from '../../data/originalTexte'
 import { DatenschutzHinweis } from '../../components/DatenschutzHinweis'
 
-export function PublicVollmachtErben() {
+// `bereich` 'privat': derselbe Bogen für einen privaten Erben-Kontakt (Route /formular/vollmacht/privat/:id).
+export function PublicVollmachtErben({ bereich = 'erben' }: { bereich?: 'erben' | 'privat' } = {}) {
   const { mandantId } = useParams()
   const [mandant, setMandant] = useState<PublicKunde | null | undefined>(undefined)
   const [submitted, setSubmitted] = useState(false)
@@ -23,7 +24,7 @@ export function PublicVollmachtErben() {
 
   useEffect(() => {
     if (!mandantId) return
-    holePublicKunde('erben', mandantId)
+    holePublicKunde(bereich, mandantId)
       .then(setMandant)
       .catch(() => setMandant(null))
   }, [mandantId])
@@ -63,7 +64,7 @@ export function PublicVollmachtErben() {
 
     try {
       await sendePublicFormular({
-        bereich: 'erben',
+        bereich,
         kundeId: mandantId!,
         aktivitaetText,
         aktivitaetUser: `${mandant!.ansprechpartner} (Formular)`,

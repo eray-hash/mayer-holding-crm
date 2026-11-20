@@ -53,7 +53,8 @@ function wortlaut(typ: VollmachtTyp, a: { name: string; geburtsdatum: string; ad
   ].join('\n')
 }
 
-export function PublicVollmachtBeratung() {
+// `bereich` 'privat': dieselbe Vollmacht für einen privaten Beratungs-Kontakt.
+export function PublicVollmachtBeratung({ bereich = 'beratung' }: { bereich?: 'beratung' | 'privat' } = {}) {
   const { typ, kundeId } = useParams<{ typ: VollmachtTyp; kundeId: string }>()
   const [searchParams] = useSearchParams()
   const behoerdeEmail = searchParams.get('behoerde')
@@ -75,7 +76,7 @@ export function PublicVollmachtBeratung() {
 
   useEffect(() => {
     if (!kundeId) return
-    holePublicKunde('beratung', kundeId)
+    holePublicKunde(bereich, kundeId)
       .then(setKunde)
       .catch(() => setKunde(null))
   }, [kundeId])
@@ -141,7 +142,7 @@ export function PublicVollmachtBeratung() {
       }
 
       await sendePublicFormular({
-        bereich: 'beratung',
+        bereich,
         kundeId: kundeId!,
         aktivitaetText: `${TITEL[gueltigerTyp]} digital ausgefüllt und unterschrieben. ${details}`,
         aktivitaetUser: `${kunde!.ansprechpartner} (Formular)`,

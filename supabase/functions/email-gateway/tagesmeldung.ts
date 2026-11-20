@@ -17,10 +17,13 @@
 //   Aufrufe gleichzeitig, gewinnt nur einer; der andere sendet nichts.
 // - Bereichsrechte wie überall auf dem Server (darfBereichServer in index.ts, darf_bereich in der
 //   Datenbank): Wiedervorlagen, Aufgaben und Treffer aus Bereichen, die jemand nicht sehen darf, fehlen.
+//   Private Objekte (objekte.privat_besitzer) und private Treffer (art „privat_treffer“) nur an ihren
+//   Besitzer; Zahlen für alle (Wochenbericht) ohne private Objekte.
 // - Nie Mailtexte oder Inhalte von Dokumenten — nur Titel und Namen.
 // - Wirft nie: Fehler stehen im Protokoll, der nächste Takt versucht es erneut.
 
 import { hotmailAbschnitte } from './hotmailBriefing.ts'
+import { darfObjekt, istPrivatesObjekt, nurMayerObjekte, normalisiereAdresse } from '../_shared/privatZugriff.ts'
 
 // Der Dienst-Zugang zur Datenbank — wie in gesuchTreffer.ts.
 // deno-lint-ignore no-explicit-any
@@ -278,7 +281,7 @@ type KundeZeile = {
   follow_up?: FollowUp | null
   activities?: unknown
 }
-type ObjektZeile = { id: string; bezeichnung?: string | null; adresse?: string | null; verantwortlich?: string | null; follow_up?: FollowUp | null; activities?: unknown }
+type ObjektZeile = { id: string; bezeichnung?: string | null; adresse?: string | null; verantwortlich?: string | null; follow_up?: FollowUp | null; activities?: unknown; privat_besitzer?: string | null }
 type TerminZeile = { id: string; titel?: string | null; beginn: string; ende: string; ganztags?: boolean | null; ort?: string | null; kunde_name?: string | null; besitzer_email?: string | null; teilnehmer?: unknown }
 type TodoZeile = { id: string; besitzer_email?: string | null; bereich?: string | null; aufgabe?: string | null; kunde_projekt?: string | null; zustaendig?: string | null; erledigt_am?: string | null; erledigen_bis?: string | null; geplante_wiedervorlage?: string | null }
 type EintragZeile = { id: string; daten?: unknown }
@@ -291,6 +294,8 @@ export type Daten = {
   termine: TerminZeile[]
   todos: TodoZeile[]
   treffer: EintragZeile[]
+  /** Treffer privater Gesuche (art „privat_treffer“, daten.besitzer) — nur für ihren Besitzer. Fehlt = keine. */
+  privatTreffer?: EintragZeile[]
   fragen: EintragZeile[]
   ungeklaert: number
   /** Zeitpunkt des stillen Erststands der Treffer — was dort festgehalten wurde, ist nicht „neu“. */
@@ -328,17 +333,18 @@ export async function ladeDaten(admin: Db, heute: string): Promise<Daten> {
     if (error) throw new Error(`termine: ${error.message}`)
     return (data ?? []) as TerminZeile[]
   }
-  const [kunden, objekte, termine, todos, treffer, fragen, ungeklaert, trefferErststand] = await Promise.all([
+  const [kunden, objekte, termine, todos, treffer, privatTreffer, fragen, ungeklaert, trefferErststand] = await Promise.all([
     ladeAlle(admin, 'kunden', 'id, bereich, firma, ansprechpartner, verantwortlich, verantwortlich_email, follow_up'),
-    ladeAlle(admin, 'objekte', 'id, bezeichnung, adresse, verantwortlich, follow_up'),
+    ladeAlle(admin, 'objekte', 'id, bezeichnung, adresse, verantwortlich, follow_up, privat_besitzer'),
     termineAbfrage(),
     ladeAlle(admin, 'todos', 'id, besitzer_email, bereich, aufgabe, kunde_projekt, zustaendig, erledigt_am, erledigen_bis, geplante_wiedervorlage'),
     ladeAlle(admin, TABELLE, 'id, daten', 'treffer'),
+    ladeAlle(admin, TABELLE, 'id, daten', 'privat_treffer'),
     ladeAlle(admin, TABELLE, 'id, daten', 'frage'),
     ladeUngeklaert(admin),
     ladeErststand(admin),
   ])
-  return { kunden, objekte, termine, todos, treffer, fragen, ungeklaert, trefferErststand }
+  return { kunden, objekte, termine, todos, treffer, privatTreffer, fragen, ungeklaert, trefferErststand }
 }
 
 export async function ladeWochenDaten(admin: Db): Promise<WochenDaten> {
@@ -352,7 +358,7 @@ export async function ladeWochenDaten(admin: Db): Promise<WochenDaten> {
   }
   const [kunden, objekte, treffer, fragen, rechnungen, leadZeilen, trefferErststand] = await Promise.all([
     ladeAlle(admin, 'kunden', 'id, bereich, activities'),
-    ladeAlle(admin, 'objekte', 'id, activities'),
+    ladeAlle(admin, 'objekte', 'id, activities, privat_besitzer'),
     ladeAlle(admin, TABELLE, 'id, daten', 'treffer'),
     ladeAlle(admin, TABELLE, 'id, daten', 'frage'),
     ladeAlle(admin, 'rechnungen', 'id, datum, zahlungsziel, status, mahnstufe, betrag_brutto'),
@@ -413,17 +419,23 @@ export function morgenAbschnitte(p: Person, d: Daten, jetzt: Date): Abschnitt[] 
 
   // ---- Fällige Wiedervorlagen bei Kontakten und Objekten, für die die Person verantwortlich ist ----
   const wv: { tag: string; zeile: string }[] = []
-  const pruefeWv = (f: FollowUp | null | undefined, verantwortlich: string | null | undefined, name: string) => {
+  /** `eigenes`: die Person ist ohnehin zuständig (Besitzer eines privaten Objekts). */
+  const pruefeWv = (f: FollowUp | null | undefined, verantwortlich: string | null | undefined, name: string, eigenes = false) => {
     if (!f || f.done === true) return
     const tag = alsDatum(f.date)
-    if (!tag || tag > heute || !gehoertZu(verantwortlich, p.name)) return
+    if (!tag || tag > heute || (!eigenes && !gehoertZu(verantwortlich, p.name))) return
     wv.push({ tag, zeile: `• ${kurz(name)} – ${faelligText(tag, heute)}` })
   }
   for (const k of d.kunden) {
     if (!darfKunde(p, k)) continue
     pruefeWv(k.follow_up, k.verantwortlich, kundenName(k))
   }
-  if (darfBereich(p, 'immobilien')) for (const o of d.objekte) pruefeWv(o.follow_up, o.verantwortlich, `Objekt ${objektName(o)}`)
+  // Mayer-Objekte nach Immobilien-Recht und Verantwortlichem; private Objekte nur beim Besitzer (er ist dort immer verantwortlich).
+  const darfImmobilien = darfBereich(p, 'immobilien')
+  for (const o of d.objekte) {
+    if (!darfObjekt(o, p.email, darfImmobilien)) continue
+    pruefeWv(o.follow_up, o.verantwortlich, `Objekt ${objektName(o)}`, istPrivatesObjekt(o))
+  }
   wv.sort((a, b) => a.tag.localeCompare(b.tag))
   if (wv.length) abschnitte.push({ titel: 'Wiedervorlagen', zeilen: wv.map((x) => x.zeile) })
 
@@ -458,26 +470,35 @@ export function morgenAbschnitte(p: Person, d: Daten, jetzt: Date): Abschnitt[] 
   if (aufgaben.length) abschnitte.push({ titel: 'Aufgaben', zeilen: aufgaben.map((x) => x.zeile) })
 
   // ---- Neue Treffer der letzten 24 Stunden: gemeldet an die Person oder sie ist verantwortlich ----
-  if (darfBereich(p, 'immobilien')) {
+  // Mayer-Treffer nur mit Immobilien-Recht und nie mit einem privaten Objekt; private Treffer nur an ihren Besitzer.
+  {
     const seit = jetzt.getTime() - 24 * 3600 * 1000
     const erststand = d.trefferErststand ? Date.parse(d.trefferErststand) : NaN
     const kunden = new Map(d.kunden.map((k) => [k.id, k]))
     const objekte = new Map(d.objekte.map((o) => [o.id, o]))
     const treffer: { zeit: number; zeile: string }[] = []
-    for (const z of d.treffer) {
+    const zeilen = [
+      ...(darfBereich(p, 'immobilien') ? d.treffer.map((z) => ({ z, privat: false })) : []),
+      ...(d.privatTreffer ?? []).map((z) => ({ z, privat: true })),
+    ]
+    for (const { z, privat } of zeilen) {
       const t = alsObjekt(z.daten)
       if (!t) continue
+      if (privat && normalisiereAdresse(t.besitzer) !== p.email) continue
       const zeit = Date.parse(text(t.entdecktAm))
       if (!Number.isFinite(zeit) || zeit < seit || zeit > jetzt.getTime()) continue
       if (Number.isFinite(erststand) && zeit <= erststand) continue
       const kunde = kunden.get(text(t.kundeId))
       const objekt = objekte.get(text(t.objektId))
       if (kunde && !darfKunde(p, kunde)) continue
-      const gemeldet = Array.isArray(t.gemeldetAn) && t.gemeldetAn.some((n) => text(n).trim().toLowerCase() === p.name.toLowerCase())
-      if (!gemeldet && !gehoertZu(kunde?.verantwortlich, p.name) && !gehoertZu(objekt?.verantwortlich, p.name)) continue
+      if (objekt && (privat ? !darfObjekt(objekt, p.email, false) : istPrivatesObjekt(objekt))) continue
+      if (!privat) {
+        const gemeldet = Array.isArray(t.gemeldetAn) && t.gemeldetAn.some((n) => text(n).trim().toLowerCase() === p.name.toLowerCase())
+        if (!gemeldet && !gehoertZu(kunde?.verantwortlich, p.name) && !gehoertZu(objekt?.verantwortlich, p.name)) continue
+      }
       const objektText = objekt ? objektName(objekt) : 'Objekt'
       const kundeText = kunde ? kundenName(kunde) : 'einem Kontakt'
-      treffer.push({ zeit, zeile: `• ${kurz(objektText, 45)} passt zum Gesuch von ${kurz(kundeText, 40)}${t.art === 'pruefen' ? ' (noch zu prüfen)' : ''}` })
+      treffer.push({ zeit, zeile: `• ${kurz(objektText, 45)} passt zum Gesuch von ${kurz(kundeText, 40)}${t.art === 'pruefen' ? ' (noch zu prüfen)' : ''}${privat ? ' (privat)' : ''}` })
     }
     treffer.sort((a, b) => b.zeit - a.zeit)
     if (treffer.length) abschnitte.push({ titel: 'Neue Treffer zu Gesuchen', zeilen: treffer.map((x) => x.zeile) })
@@ -490,7 +511,8 @@ export function morgenAbschnitte(p: Person, d: Daten, jetzt: Date): Abschnitt[] 
       .filter((f): f is Record<string, unknown> => !!f && !text(f.antwort).trim())
       .sort((a, b) => text(a.erstelltAm).localeCompare(text(b.erstelltAm)))
     if (offen.length) {
-      const objekte = new Map(d.objekte.map((o) => [o.id, o]))
+      // Fragen an die Geschäftsführung betreffen Mayer-Objekte: private Objekte nicht beim Namen nennen.
+      const objekte = new Map(nurMayerObjekte(d.objekte).map((o) => [o.id, o]))
       abschnitte.push({
         titel: `Offene Fragen an die Geschäftsführung: ${offen.length}`,
         zeilen: offen.map((f) => {
@@ -618,7 +640,7 @@ export function wochenText(d: WochenDaten, jetzt: Date, bezahlt: BezahltStand | 
   )
 
   // Objekte, Treffer, Fragen, Interessenten
-  zeilen.push(`Neue Objekte: ${d.objekte.filter((o) => inWoche(erstesDatum(o.activities))).length}`)
+  zeilen.push(`Neue Objekte: ${nurMayerObjekte(d.objekte).filter((o) => inWoche(erstesDatum(o.activities))).length}`)
   const erststand = d.trefferErststand ? Date.parse(d.trefferErststand) : NaN
   const neueTreffer = d.treffer.filter((z) => {
     const zeit = Date.parse(text(alsObjekt(z.daten)?.entdecktAm))
