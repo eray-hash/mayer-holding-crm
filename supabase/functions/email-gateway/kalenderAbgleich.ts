@@ -27,6 +27,7 @@ export type MsTermin = {
   isCancelled?: boolean
   isOrganizer?: boolean
   type?: string
+  seriesMasterId?: string
   attendees?: { emailAddress?: { name?: string; address?: string }; status?: { response?: string } }[]
   lastModifiedDateTime?: string
   '@removed'?: { reason?: string }
@@ -71,6 +72,21 @@ export function ausOutlook(t: MsTermin) {
     beginn: beginn ?? new Date().toISOString(),
     ende: ende ?? beginn ?? new Date().toISOString(),
     ganztags,
+  }
+}
+
+/**
+ * Einzelne Termine einer Serie (occurrence) liefert die Änderungsabfrage von Microsoft ohne Betreff, Ort und
+ * Text — die stehen nur am Serien-Haupttermin. Fehlt der Betreff, werden sie von dort übernommen.
+ * (Am 20.11.2026 kamen so 780 Serien-Termine von Hasan als „(ohne Titel)“ ins CRM.)
+ */
+export function mitSerienKopf(t: MsTermin, kopf: Pick<MsTermin, 'subject' | 'location' | 'bodyPreview'> | null | undefined): MsTermin {
+  if (!kopf || (t.subject ?? '').trim()) return t
+  return {
+    ...t,
+    subject: kopf.subject,
+    location: (t.location?.displayName ?? '').trim() ? t.location : kopf.location,
+    bodyPreview: (t.bodyPreview ?? '').trim() ? t.bodyPreview : kopf.bodyPreview,
   }
 }
 
@@ -126,13 +142,28 @@ export async function gleicheKalenderAb(admin: Db, ich: string, budgetMs = 60_00
 
   // ---- 1) Outlook → CRM ----
   const gesehen = new Set<string>()
+  // Serien-Haupttermine (Betreff, Ort, Text) je Lauf nur einmal holen.
+  const serienKoepfe = new Map<string, Promise<MsTermin | null>>()
+  const serienKopf = (id: string) => {
+    if (!serienKoepfe.has(id)) {
+      serienKoepfe.set(
+        id,
+        graph<MsTermin>(admin, ich, `/me/events/${encodeURIComponent(id)}?$select=subject,location,bodyPreview`).catch((e) => {
+          b.fehler.push(`Serie ohne Betreff (${e instanceof Error ? e.message : e})`)
+          return null
+        }),
+      )
+    }
+    return serienKoepfe.get(id)!
+  }
   try {
     let url = delta?.link ?? `/me/calendarView/delta?startDateTime=${vonTag}&endDateTime=${bisTag}`
     for (let seite = 0; seite < 60 && url && Date.now() - start < budgetMs; seite++) {
       const d = await graph<{ value?: MsTermin[]; '@odata.nextLink'?: string; '@odata.deltaLink'?: string }>(admin, ich, url, {
         kopf: { prefer: 'outlook.timezone="W. Europe Standard Time", odata.maxpagesize=100' },
       })
-      for (const t of d.value ?? []) {
+      for (const roh of d.value ?? []) {
+        const t = !roh['@removed'] && !(roh.subject ?? '').trim() && roh.seriesMasterId ? mitSerienKopf(roh, await serienKopf(roh.seriesMasterId)) : roh
         gesehen.add(t.id)
         const vorhanden = nachMsId.get(t.id)
         if (t['@removed'] || t.isCancelled) {
@@ -169,7 +200,9 @@ export async function gleicheKalenderAb(admin: Db, ich: string, budgetMs = 60_00
           behandelt.add(t.id)
           continue
         }
-        const msNeu = !vorhanden.ms_geaendert || Date.parse(t.lastModifiedDateTime ?? '') > Date.parse(vorhanden.ms_geaendert)
+        // „(ohne Titel)“ aus einem früheren Lauf (Serien-Termine ohne Betreff): Titel jetzt nachtragen.
+        const titelNachtragen = vorhanden.titel === '(ohne Titel)' && felder.titel !== '(ohne Titel)'
+        const msNeu = titelNachtragen || !vorhanden.ms_geaendert || Date.parse(t.lastModifiedDateTime ?? '') > Date.parse(vorhanden.ms_geaendert)
         if (!msNeu) continue
         if ((await terminHash(vorhanden)) !== vorhanden.ms_hash) {
           b.konflikte++

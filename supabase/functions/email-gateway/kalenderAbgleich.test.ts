@@ -1,5 +1,5 @@
 import { assertEquals, assertNotEquals } from 'jsr:@std/assert@1'
-import { ausOutlook, darfNachOutlook, nachOutlook, terminHash, type CrmTermin } from './kalenderAbgleich.ts'
+import { ausOutlook, darfNachOutlook, mitSerienKopf, nachOutlook, terminHash, type CrmTermin } from './kalenderAbgleich.ts'
 
 const basis: CrmTermin = { id: '1', titel: 'Zahnarzt', beschreibung: '', ort: 'Ulm', beginn: '2026-11-25T09:00:00.000Z', ende: '2026-11-25T10:00:00.000Z', ganztags: false, besitzer_email: 'h@x.de', teilnehmer: [], kunde_id: null, kunde_bereich: null, gast: null, ms_id: null, ms_hash: null, ms_geaendert: null, ms_teilnehmer: null }
 
@@ -40,4 +40,15 @@ Deno.test('Mayer-Termine gehen nicht ins private Outlook', () => {
   assertEquals(darfNachOutlook({ ...basis, gast: { email: 'kunde@x.de', eingeladen: true } }), false)
   assertEquals(darfNachOutlook({ ...basis, kunde_id: 'k1', kunde_bereich: 'beratung' }), false)
   assertEquals(darfNachOutlook({ ...basis, kunde_id: 'k1', kunde_bereich: 'privat' }), true)
+})
+
+Deno.test('Serien-Termin ohne Betreff bekommt Betreff, Ort und Text vom Serien-Haupttermin', () => {
+  const einzel = { id: 'o1', type: 'occurrence', seriesMasterId: 'm1', start: { dateTime: '2026-11-20T12:00:00', timeZone: 'W. Europe Standard Time' }, end: { dateTime: '2026-11-20T13:00:00', timeZone: 'W. Europe Standard Time' } }
+  const t = mitSerienKopf(einzel, { subject: 'Mittagessen', location: { displayName: 'Ulm' }, bodyPreview: 'Notiz' })
+  assertEquals(ausOutlook(t).titel, 'Mittagessen')
+  assertEquals(ausOutlook(t).ort, 'Ulm')
+  assertEquals(t.start, einzel.start)
+  // Eigener Betreff (z. B. geänderter Einzeltermin) bleibt; ohne Haupttermin bleibt alles wie geliefert.
+  assertEquals(mitSerienKopf({ ...einzel, subject: 'Verschoben' }, { subject: 'Mittagessen' }).subject, 'Verschoben')
+  assertEquals(ausOutlook(mitSerienKopf(einzel, null)).titel, '(ohne Titel)')
 })
