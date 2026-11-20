@@ -276,6 +276,22 @@ export async function answerFirmenwissen(frage: string, kontext: string): Promis
   return data.antwort
 }
 
+/** Vorschlag des Assistenten für die Projekt-Checkliste einer Akte (Sachverhalt, Branche, Dienstleistungen,
+ *  Chance, nächste Schritte). Schreibt nichts — der Browser zeigt den Vorschlag, der Nutzer speichert. */
+export type ChecklisteVorschlag = {
+  sachverhalt?: string | null
+  branche?: string | null
+  dienstleistungen: string[]
+  chance?: { prozent: number; begruendung?: string } | null
+  naechsteSchritte?: string | null
+  vermittler?: string | null
+}
+
+export async function checklisteVorschlag(kundeId: string): Promise<ChecklisteVorschlag> {
+  const data = await call({ action: 'checkliste_vorschlag', kundeId })
+  return { ...data, dienstleistungen: Array.isArray(data.dienstleistungen) ? data.dienstleistungen : [] }
+}
+
 export async function analysierePotenzial(kontext: string): Promise<PotenzialChance[]> {
   const data = await call({ action: 'potenzial_analyse', kontext })
   return data.chancen ?? []

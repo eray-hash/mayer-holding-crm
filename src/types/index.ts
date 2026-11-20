@@ -318,7 +318,27 @@ export type Kunde = {
   bonitaet?: Bonitaetseinschaetzung
   // Wann welche Unterlagen beim Kunden angefordert wurden (neueste zuerst), siehe KundeUnterlagenAnfordern.tsx.
   unterlagenAnforderungen?: KundenUnterlagenAnforderung[]
+  // Projekt-Checkliste (Hasan und Eray, 20.11.2026), siehe lib/checkliste.ts und pages/checkliste.
+  /** Zwei, drei Sätze: worum es bei diesem Auftrag geht. */
+  sachverhalt?: string
+  branche?: string
+  /** Wer den Kunden gebracht hat; kundeId/bereich, wenn der Vermittler selbst eine Akte hat. */
+  vermittler?: Vermittler
+  /** Bezeichnungen aus der Preisliste (leistungen_preisliste) oder frei. */
+  dienstleistungen?: string[]
+  auftragChance?: AuftragChance
+  naechsteSchritte?: string
+  /** Vom Berater gesetzte Ampel; leer = berechnet (lib/checkliste.ts). */
+  ampelManuell?: AmpelManuell
 }
+
+export type Vermittler = { name: string; kundeId?: string; bereich?: KundeBereich }
+
+/** Chance, dass der Auftrag kommt. Ein Vorschlag des Assistenten ist bestaetigt=false, bis ihn ein Berater bestätigt. */
+export type AuftragChance = { prozent: number; bestaetigt: boolean; begruendung?: string; von?: string; am?: string }
+
+export type AmpelFarbe = 'gruen' | 'gelb' | 'rot'
+export type AmpelManuell = { farbe: AmpelFarbe; grund: string; von?: string; am?: string }
 
 /** Eine Anforderung von Unterlagen beim Kunden per E-Mail, mit Link zur Hochlade-Seite
  *  /formular/unterlagen/:token. Der Server (email-gateway, kundenUnterlagen.ts) findet die Akte nur

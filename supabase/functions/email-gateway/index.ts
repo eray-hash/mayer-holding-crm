@@ -196,6 +196,12 @@
 //                                                   Supabase-Select. Ergänzt den rein deterministischen
 //                                                   Unternehmensbewertung-Rechner nur um Vorschläge,
 //                                                   ersetzt ihn nicht (Nutzer-Entscheidung 2026-11-06).
+//   { action: "checkliste_vorschlag", kundeId }  -> KI-Vorschlag für die Projekt-Checkliste einer Akte
+//                                                   (Sachverhalt, Branche, Dienstleistungen aus der
+//                                                   Leistungsliste, Auftragschance, nächste Schritte,
+//                                                   Vermittler) — nur mit eigenem Login und Recht auf
+//                                                   die Akte; schreibt nichts, die Oberfläche speichert
+//                                                   (siehe checklisteVorschlag.ts).
 //
 // Alle Zugangsdaten kommen ausschließlich aus Supabase Function Secrets (nie im Code, nie im
 // Frontend). Siehe README-Abschnitt "E-Mail-Postfach-Anbindung" für die Einrichtung.
@@ -255,6 +261,7 @@ import { pruefeNeueTreffer } from './gesuchTreffer.ts'
 import { istDienstSchluessel, sendeTagesmeldungen, tagesmeldungTest } from './tagesmeldung.ts'
 import { pruefeBonitaet } from './bonitaet.ts'
 import { lieseKontoauszug } from './kontoauszug.ts'
+import { erstelleChecklisteVorschlag } from './checklisteVorschlag.ts'
 import { beantworteKundenUnterlagen } from './kundenUnterlagen.ts'
 import { pruefeWunschAnalyse, wunschAnalyseTest } from './wunschAnalyse.ts'
 import { pruefeSuperuserWochenbericht, superuserAuswertung, superuserWochenberichtTest } from './superuser.ts'
@@ -4395,6 +4402,29 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       return new Response(JSON.stringify({ ok: true, buchungen: ergebnis.buchungen, datei: ergebnis.datei }), { headers })
     }
 
+    // KI-Vorschlag für die Projekt-Checkliste einer Akte (siehe checklisteVorschlag.ts) — nur mit eigenem
+    // Login, schreibt nichts; die Oberfläche zeigt den Vorschlag und speichert, was übernommen wird.
+    if (body.action === 'checkliste_vorschlag') {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const aufrufer = await ermittleAufrufer(req, admin, body)
+      if (!aufrufer) {
+        return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
+      }
+      if (typeof body.kundeId !== 'string' || !body.kundeId.trim()) {
+        return new Response(JSON.stringify({ error: 'kundeId fehlt.' }), { status: 400, headers })
+      }
+      if (!(await darfKundeServer(admin, aufrufer.email, body.kundeId))) return keinRecht(headers)
+      try {
+        const ergebnis = await erstelleChecklisteVorschlag(admin, { kundeId: body.kundeId.trim(), email: aufrufer.email }, { callClaudeTool })
+        if (!ergebnis.ok) return new Response(JSON.stringify({ error: ergebnis.fehler }), { status: ergebnis.status, headers })
+        return new Response(JSON.stringify(ergebnis.vorschlag), { headers })
+      } catch (err) {
+        console.error('checkliste_vorschlag fehlgeschlagen:', err)
+        const grund = err instanceof Error ? err.message : String(err)
+        return new Response(JSON.stringify({ error: `Der Vorschlag für die Checkliste konnte nicht erstellt werden: ${grund}` }), { status: 500, headers })
+      }
+    }
+
     if (body.action === 'objekt_daten_vorschlag' || body.action === 'objekt_text_nach_anweisung') {
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
       const aufrufer = await ermittleAufrufer(req, admin, body)
@@ -4587,7 +4617,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       return new Response(JSON.stringify({ ok: true }), { headers })
     }
 
-    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "bewertung_recherche_start", "bewertung_recherche_schritt", "kunden_umfeld_recherche", "steuer_analyse_start", "steuer_analyse_schritt", "dokument_lesen", "dokument_inhalte", "postfaecher_liste", "postfach_verbinden", "postfach_trennen", "postfach_abruf", "postfach_ordner", "mail_zuordnen", "mail_freigeben", "mail_anhang_url", "termin_speichern", "termin_loeschen", "termin_erinnerungen", "tagesmeldung_test", "kontoauszug_auslesen", "gesendet_abruf" oder "firmenwissen_answer"' }), { status: 400, headers })
+    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "bewertung_recherche_start", "bewertung_recherche_schritt", "kunden_umfeld_recherche", "steuer_analyse_start", "steuer_analyse_schritt", "dokument_lesen", "dokument_inhalte", "postfaecher_liste", "postfach_verbinden", "postfach_trennen", "postfach_abruf", "postfach_ordner", "mail_zuordnen", "mail_freigeben", "mail_anhang_url", "termin_speichern", "termin_loeschen", "termin_erinnerungen", "tagesmeldung_test", "kontoauszug_auslesen", "checkliste_vorschlag", "gesendet_abruf" oder "firmenwissen_answer"' }), { status: 400, headers })
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }

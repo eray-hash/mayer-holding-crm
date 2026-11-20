@@ -23,7 +23,7 @@ import {
   ChevronDown,
   Phone,
   Lock,
-  Search, CalendarDays, BarChart3, Lightbulb, ListChecks, Eye, ShieldCheck, Calculator } from 'lucide-react'
+  Search, CalendarDays, BarChart3, Lightbulb, ListChecks, Eye, ShieldCheck, Calculator, ClipboardList } from 'lucide-react'
 import type { Bereich } from '../types'
 import { useApp } from '../context/AppContext'
 import { useAuth } from '../context/AuthContext'
@@ -222,6 +222,17 @@ export function Layout({ children }: { children: ReactNode }) {
           >
             <BarChart3 size={16} />
           </button>
+          {!imPrivatBereich && (
+            <button
+              // Projekt-Checkliste (Hasan und Eray, 20.11.2026): alle laufenden Fälle mit Ampel.
+              onClick={() => navigate('/checkliste')}
+              className="hidden rounded-lg p-2 text-slate-500 hover:bg-slate-100 sm:inline-flex"
+              title="Projekt-Checkliste: alle laufenden Fälle mit Umsatz, Chance und Ampel"
+              aria-label="Projekt-Checkliste"
+            >
+              <ClipboardList size={16} />
+            </button>
+          )}
           <button
             // Kostenvoranschläge (20.11.2026): im Bereich Privat die eigenen privaten, sonst alle.
             onClick={() => navigate(imPrivatBereich ? '/privat/kostenvoranschlaege' : '/kostenvoranschlaege')}
@@ -427,6 +438,15 @@ export function Layout({ children }: { children: ReactNode }) {
                 <BarChart3 size={17} className="text-slate-400" />
                 Auswertungen
               </button>
+              {!imPrivatBereich && (
+                <button
+                  onClick={() => { setDrawerOpen(false); navigate('/checkliste') }}
+                  className="mb-1 flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm font-medium text-slate-700 hover:bg-slate-50 sm:hidden"
+                >
+                  <ClipboardList size={17} className="text-slate-400" />
+                  Projekt-Checkliste
+                </button>
+              )}
               <button
                 onClick={() => { setDrawerOpen(false); navigate(imPrivatBereich ? '/privat/kostenvoranschlaege' : '/kostenvoranschlaege') }}
                 className="mb-6 flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm font-medium text-slate-700 hover:bg-slate-50 sm:hidden"

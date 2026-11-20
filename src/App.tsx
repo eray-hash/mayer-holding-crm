@@ -67,6 +67,7 @@ import { MitarbeiterVerwalten } from './pages/admin/MitarbeiterVerwalten'
 import { Wuensche } from './pages/admin/Wuensche'
 import { AufgabenUebersicht } from './pages/aufgaben/AufgabenUebersicht'
 import { Kostenvoranschlaege } from './pages/kostenvoranschlaege/Kostenvoranschlaege'
+import { Checkliste } from './pages/checkliste/Checkliste'
 import { SuperuserSeite } from './pages/superuser/SuperuserSeite'
 import { ProjekteListe } from './pages/projekte/ProjekteListe'
 import { PortalLogin } from './pages/portal/PortalLogin'
@@ -107,6 +108,7 @@ function AdminRoutesContent() {
         <Route path="/auswertungen" element={<Auswertungen />} />
         {/* Für alle: Sichtbarkeit regelt die Datenbank (Bereichsrechte, private Einträge nur für den Besitzer). */}
         <Route path="/kostenvoranschlaege" element={<Kostenvoranschlaege />} />
+        <Route path="/checkliste" element={<Checkliste />} />
         <Route path="/kampagnen" element={<Kampagnen />} />
         <Route path="/profil" element={<MeinProfil />} />
         <Route path="/mitarbeiter" element={<RequireAdmin><MitarbeiterVerwalten /></RequireAdmin>} />
