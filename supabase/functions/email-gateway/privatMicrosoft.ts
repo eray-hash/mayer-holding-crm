@@ -5,6 +5,7 @@ import { OUTLOOK_AKTIONEN, outlookAktion } from './outlook.ts'
 import { AUSFUEHRER, bestaetige, merkeVor, offeneVormerkungen, verwerfe } from './vormerkungen.ts'
 import { istDienstSchluessel } from './tagesmeldung.ts'
 import { gleicheTodosAb } from './todoAbgleich.ts'
+import { gleicheKalenderAb } from './kalenderAbgleich.ts'
 import { anmeldungAbschliessen, anmeldungStarten, MsFehler, msErlaubt, MsNichtVerbunden, msStatus, msTrennen } from '../_shared/microsoft.ts'
 
 // deno-lint-ignore no-explicit-any
@@ -84,8 +85,9 @@ export async function msRueckrufAntwort(admin: Db, url: URL): Promise<Response> 
 
 /** Ein Abgleich (To Do; später Kalender) für einen Login. */
 async function gleicheAb(admin: Db, ich: string, budgetMs = 60_000) {
-  const todo = await gleicheTodosAb(admin, ich, budgetMs)
-  return { todo }
+  const todo = await gleicheTodosAb(admin, ich, budgetMs / 2)
+  const kalender = await gleicheKalenderAb(admin, ich, budgetMs / 2)
+  return { todo, kalender }
 }
 
 /** Zeitplan (alle 3 Minuten): alle verbundenen, freigegebenen Konten abgleichen. Fehler je Konto werden vermerkt, nicht geworfen. */
@@ -96,7 +98,7 @@ export async function msAbgleichAlle(admin: Db): Promise<{ konten: number; fehle
   for (const ich of konten) {
     try {
       const r = await gleicheAb(admin, ich, 45_000)
-      fehler.push(...r.todo.fehler.map((f) => `${ich}: ${f}`))
+      fehler.push(...[...r.todo.fehler, ...r.kalender.fehler].map((f) => `${ich}: ${f}`))
     } catch (e) {
       fehler.push(`${ich}: ${e instanceof Error ? e.message : String(e)}`)
     }
