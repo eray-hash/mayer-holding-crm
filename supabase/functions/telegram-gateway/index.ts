@@ -4254,6 +4254,21 @@ export const bearbeiteAnfrage = (req: Request): Promise<Response> => mitAnlass(a
     if (!internDienst) return new Response('Unauthorized', { status: 401 })
     return await richtePrivatBotEin()
   }
+  // Prüfung des privaten Bots ohne Nachricht: erreicht er den Chat dieser Person? (getChat sendet nichts.)
+  if (body?.intern === 'privat_bot_pruefen') {
+    if (!internDienst) return new Response('Unauthorized', { status: 401 })
+    const token = privatBotToken()
+    if (!token) return new Response(JSON.stringify({ ok: false, grund: 'kein Schlüssel' }), { status: 404 })
+    const { data: m } = await supa().from('mitarbeiter').select('telegram_chat_id').ilike('email', String(body.email ?? '')).maybeSingle()
+    const rufe = async (methode: string, daten: Record<string, unknown>) => {
+      const r = await fetch(`https://api.telegram.org/bot${token}/${methode}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(daten) })
+      // deno-lint-ignore no-explicit-any
+      const j: any = await r.json().catch(() => null)
+      return { status: r.status, ok: j?.ok === true, beschreibung: j?.description ?? null, art: j?.result?.type ?? null }
+    }
+    const imRahmen = await mitBot(true, async () => ({ privat: imPrivatBot(), gleicherSchluessel: botToken(BOT_TOKEN) === token }))
+    return new Response(JSON.stringify({ chatBekannt: !!m?.telegram_chat_id, imRahmen, getMe: await rufe('getMe', {}), getChat: m?.telegram_chat_id ? await rufe('getChat', { chat_id: m.telegram_chat_id }) : null }), { headers: { 'content-type': 'application/json' } })
+  }
 
   // 3) Telegram.
   if (WEBHOOK_SECRET && req.headers.get('x-telegram-bot-api-secret-token') !== WEBHOOK_SECRET) {
