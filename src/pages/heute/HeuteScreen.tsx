@@ -1,11 +1,15 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Bot, PhoneCall, Flame, CalendarClock, StickyNote, Trash2, Check, Clock3, Users, Plane, Inbox } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { useAuth } from '../../context/AuthContext'
 import { isSupabaseConfigured } from '../../lib/supabaseClient'
 import { collectPriorityEntries, type PriorityEntry, type PriorityKind } from '../../lib/todayPriorities'
-import { collectFollowUpPriorities, followUpDetailPfad, type FollowUpEntry } from '../../lib/followUpPriorities'
+import {
+  collectFollowUpPriorities, collectWiedervorlagenFaellig, followUpDetailPfad, type FollowUpEntry, type WiedervorlageEntry,
+} from '../../lib/followUpPriorities'
+import { erledigeWiedervorlage, ladeOffeneWiedervorlagen, type Wiedervorlage } from '../../lib/wiedervorlagen'
+import { useKvNutzer } from '../../components/KostenvoranschlaegeSection'
 import { TaskDetailModal } from '../../components/kanban/TaskDetailModal'
 import { PROJEKT_BEREICH_LABEL } from '../../types/project'
 import { Card } from '../../components/ui'
@@ -48,6 +52,14 @@ function EntryRow({ e, onOpen }: { e: PriorityEntry; onOpen: () => void }) {
   )
 }
 
+function AutomatischMarke() {
+  return (
+    <span className="ml-2 inline-flex items-center gap-1 rounded bg-sky-50 px-1.5 py-0.5 align-middle text-[10px] font-medium text-sky-700" title="Vom CRM automatisch angelegt">
+      <Bot size={10} /> automatisch
+    </span>
+  )
+}
+
 function dispatchFollowUp(dispatch: ReturnType<typeof useApp>['dispatch'], bereich: FollowUpEntry['bereich'], id: string, followUp: FollowUp) {
   switch (bereich) {
     case 'beratung':
@@ -76,6 +88,43 @@ export function HeuteScreen() {
   const [openEntry, setOpenEntry] = useState<PriorityEntry | null>(null)
   const { prioritaeten, demnaechst } = collectPriorityEntries(state.projekte)
   const followUps = collectFollowUpPriorities(state)
+  const nutzer = useKvNutzer()
+  // Wiedervorlagen (Tabelle wiedervorlagen, mehrere je Akte) — einmal geladen, nach „erledigt“ neu.
+  const [offeneWv, setOffeneWv] = useState<Wiedervorlage[]>([])
+  const [wvLaeuft, setWvLaeuft] = useState<string | null>(null)
+  const [wvFehler, setWvFehler] = useState('')
+  const wvFaellig = collectWiedervorlagenFaellig(state, offeneWv)
+
+  async function wvLaden() {
+    try {
+      setOffeneWv(await ladeOffeneWiedervorlagen())
+    } catch {
+      setOffeneWv([])
+    }
+  }
+
+  useEffect(() => {
+    wvLaden()
+  }, [])
+
+  async function wvErledigt(e: WiedervorlageEntry) {
+    setWvLaeuft(e.wv.id)
+    setWvFehler('')
+    try {
+      await erledigeWiedervorlage(e.wv.id, nutzer.name)
+      await wvLaden()
+    } catch (err) {
+      setWvFehler(err instanceof Error ? err.message : 'Das hat nicht geklappt.')
+    } finally {
+      setWvLaeuft(null)
+    }
+  }
+
+  // Follow-ups und Wiedervorlagen in einer Liste, nach Datum.
+  const faelligListe: ({ typ: 'followup'; datum: string; f: FollowUpEntry } | { typ: 'wv'; datum: string; w: WiedervorlageEntry })[] = [
+    ...followUps.map((f) => ({ typ: 'followup' as const, datum: f.date, f })),
+    ...wvFaellig.map((w) => ({ typ: 'wv' as const, datum: w.wv.faellig, w })),
+  ].sort((a, b) => a.datum.localeCompare(b.datum))
 
   const istGeschaeftsfuehrung = isSupabaseConfigured && session ? mitarbeiter?.rolle === 'geschaeftsfuehrung' : state.rolle === 'geschaeftsfuehrung'
   const istGfOderAdmin = isSupabaseConfigured && session
@@ -95,6 +144,7 @@ export function HeuteScreen() {
   const vertretungen = aktuellAbwesende.map((a) => ({
     abwesenheit: a,
     followUps: followUps.filter((f) => f.verantwortlich === a.mitarbeiterName),
+    wiedervorlagen: wvFaellig.filter((w) => w.verantwortlich === a.mitarbeiterName),
     aufgaben: [...prioritaeten, ...demnaechst].filter((e) => e.aufgabe.zustaendig === a.mitarbeiterName),
   }))
 
@@ -133,7 +183,7 @@ export function HeuteScreen() {
           </button>
         </Card>
       )}
-      {vertretungen.some((v) => v.followUps.length > 0 || v.aufgaben.length > 0) && (
+      {vertretungen.some((v) => v.followUps.length > 0 || v.wiedervorlagen.length > 0 || v.aufgaben.length > 0) && (
         <Card className="mb-5 border-amber-200 bg-amber-50/40 p-5">
           <h2 className="mb-1 flex items-center gap-1.5 text-sm font-semibold text-amber-800">
             <Plane size={14} /> Vertretung
@@ -144,7 +194,7 @@ export function HeuteScreen() {
           </p>
           <div className="flex flex-col gap-4">
             {vertretungen
-              .filter((v) => v.followUps.length > 0 || v.aufgaben.length > 0)
+              .filter((v) => v.followUps.length > 0 || v.wiedervorlagen.length > 0 || v.aufgaben.length > 0)
               .map((v) => (
                 <div key={v.abwesenheit.id}>
                   <p className="mb-2 text-xs font-semibold text-amber-800">
@@ -161,6 +211,19 @@ export function HeuteScreen() {
                         </button>
                       </li>
                     ))}
+                    {v.wiedervorlagen.map((w) => (
+                      <li key={`wv-${w.wv.id}`} className="rounded-lg bg-white px-3 py-2 text-sm">
+                        <button type="button" onClick={() => navigate(w.pfad)} className="w-full text-left hover:underline">
+                          <p className="truncate text-slate-800">
+                            {w.wv.titel}
+                            {w.wv.quelle === 'regel' && <AutomatischMarke />}
+                          </p>
+                          <p className="text-xs text-slate-400">
+                            {w.name} · {w.bereichLabel} · Wiedervorlage {w.kind === 'overdue' ? 'überfällig seit' : 'fällig'} {fmtDate(w.wv.faellig)}
+                          </p>
+                        </button>
+                      </li>
+                    ))}
                     {v.aufgaben.map((e) => (
                       <EntryRow key={e.aufgabe.id} e={e} onOpen={() => setOpenEntry(e)} />
                     ))}
@@ -171,42 +234,75 @@ export function HeuteScreen() {
         </Card>
       )}
 
-      {followUps.length > 0 && (
+      {faelligListe.length > 0 && (
         <Card className="mb-5 p-5">
           <h2 className="mb-1 flex items-center gap-1.5 text-sm font-semibold text-slate-700">
-            <Users size={14} className="text-accent-600" /> Follow-ups fällig
+            <Users size={14} className="text-accent-600" /> Follow-ups und Wiedervorlagen fällig
           </h2>
           <p className="mb-3 text-xs text-slate-400">Aus den Kunden-/Mandanten-/Objektakten — direkt anklicken, erledigen oder verschieben.</p>
+          {wvFehler && <p className="mb-2 rounded-lg bg-rose-50 p-2 text-sm text-rose-600">{wvFehler}</p>}
           <ul className="flex flex-col gap-2">
-            {followUps.map((entry) => (
-              <li key={`${entry.bereich}-${entry.id}`} className="flex items-start gap-2.5 rounded-lg bg-slate-50 px-3 py-2.5 text-sm">
-                <span className="mt-0.5 shrink-0">
-                  {entry.kind === 'overdue' ? <PhoneCall size={15} className="text-rose-500" /> : <CalendarClock size={15} className="text-sky-500" />}
-                </span>
-                <button type="button" onClick={() => navigate(followUpDetailPfad(entry))} className="min-w-0 flex-1 text-left hover:underline">
-                  <p className="truncate text-slate-800">{entry.note || 'Follow-up'}</p>
-                  <p className="text-xs text-slate-400">
-                    {entry.name} · {entry.bereichLabel} · {entry.kind === 'overdue' ? 'überfällig seit' : 'fällig'} {fmtDate(entry.date)}
-                  </p>
-                </button>
-                <div className="flex flex-shrink-0 items-center gap-1">
-                  <button
-                    onClick={() => followUpVerschieben(entry, 3)}
-                    className="rounded-md p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
-                    title="Um 3 Tage verschieben"
-                  >
-                    <Clock3 size={14} />
+            {faelligListe.map((zeile) => {
+              if (zeile.typ === 'wv') {
+                const w = zeile.w
+                return (
+                  <li key={`wv-${w.wv.id}`} className="flex items-start gap-2.5 rounded-lg bg-slate-50 px-3 py-2.5 text-sm">
+                    <span className="mt-0.5 shrink-0">
+                      {w.kind === 'overdue' ? <PhoneCall size={15} className="text-rose-500" /> : <CalendarClock size={15} className="text-sky-500" />}
+                    </span>
+                    <button type="button" onClick={() => navigate(w.pfad)} className="min-w-0 flex-1 text-left hover:underline">
+                      <p className="truncate text-slate-800">
+                        {w.wv.titel}
+                        {w.wv.quelle === 'regel' && <AutomatischMarke />}
+                      </p>
+                      <p className="text-xs text-slate-400">
+                        {w.name} · {w.bereichLabel} · Wiedervorlage {w.kind === 'overdue' ? 'überfällig seit' : 'fällig'} {fmtDate(w.wv.faellig)}
+                      </p>
+                    </button>
+                    <div className="flex flex-shrink-0 items-center gap-1">
+                      <button
+                        onClick={() => wvErledigt(w)}
+                        disabled={nutzer.nurLesen || wvLaeuft !== null}
+                        className="rounded-md p-1.5 text-slate-400 hover:bg-emerald-50 hover:text-emerald-600 disabled:opacity-50"
+                        title="Als erledigt markieren"
+                      >
+                        <Check size={14} />
+                      </button>
+                    </div>
+                  </li>
+                )
+              }
+              const entry = zeile.f
+              return (
+                <li key={`${entry.bereich}-${entry.id}`} className="flex items-start gap-2.5 rounded-lg bg-slate-50 px-3 py-2.5 text-sm">
+                  <span className="mt-0.5 shrink-0">
+                    {entry.kind === 'overdue' ? <PhoneCall size={15} className="text-rose-500" /> : <CalendarClock size={15} className="text-sky-500" />}
+                  </span>
+                  <button type="button" onClick={() => navigate(followUpDetailPfad(entry))} className="min-w-0 flex-1 text-left hover:underline">
+                    <p className="truncate text-slate-800">{entry.note || 'Follow-up'}</p>
+                    <p className="text-xs text-slate-400">
+                      {entry.name} · {entry.bereichLabel} · {entry.kind === 'overdue' ? 'überfällig seit' : 'fällig'} {fmtDate(entry.date)}
+                    </p>
                   </button>
-                  <button
-                    onClick={() => followUpErledigt(entry)}
-                    className="rounded-md p-1.5 text-slate-400 hover:bg-emerald-50 hover:text-emerald-600"
-                    title="Als erledigt markieren"
-                  >
-                    <Check size={14} />
-                  </button>
-                </div>
-              </li>
-            ))}
+                  <div className="flex flex-shrink-0 items-center gap-1">
+                    <button
+                      onClick={() => followUpVerschieben(entry, 3)}
+                      className="rounded-md p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                      title="Um 3 Tage verschieben"
+                    >
+                      <Clock3 size={14} />
+                    </button>
+                    <button
+                      onClick={() => followUpErledigt(entry)}
+                      className="rounded-md p-1.5 text-slate-400 hover:bg-emerald-50 hover:text-emerald-600"
+                      title="Als erledigt markieren"
+                    >
+                      <Check size={14} />
+                    </button>
+                  </div>
+                </li>
+              )
+            })}
           </ul>
         </Card>
       )}

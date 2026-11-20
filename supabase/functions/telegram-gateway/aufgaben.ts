@@ -6,6 +6,8 @@
 // Objekte nur die eigenen (darfAkte / darfObjekt), die von Kollegen nie. Private Projekte
 // (projekte.besitzer_email) nur ihr Besitzer. Im privaten Assistenten (nurPrivat) nur seine eigene
 // To-do-Liste, seine privaten Kontakte, Objekte und Projekte — keine Bereichslisten, keine Listen von Kollegen.
+// Offene Wiedervorlagen (Tabelle wiedervorlagen, je Kundenakte) nur aus freigegebenen Bereichen —
+// darfBereich wie die Zeilenregel der Datenbank; private Kontakte haben keine.
 
 import { alsIso, LAGE_TEXT, OBJEKT_ABGESCHLOSSEN, nachPerson, ordneAufgabenZu, ordneZu, personenNamen, type RohAufgabe } from '../_shared/aufgabenKern.ts'
 import { darfAkte, darfBereich, darfObjekt, type RechteMitarbeiter } from './rechte.ts'
@@ -38,13 +40,15 @@ export async function aufgabenUebersicht(
   input: any,
   heute: string,
 ): Promise<string> {
-  const [{ data: team }, { data: todos }, { data: freigaben }, { data: kunden }, objekteRes, { data: projekte }] = await Promise.all([
+  const [{ data: team }, { data: todos }, { data: freigaben }, { data: kunden }, objekteRes, { data: projekte }, wvRes] = await Promise.all([
     supabase.from('mitarbeiter').select('name, email').eq('aktiv', true),
     supabase.from('todos').select('id, aufgabe, kunde_projekt, zustaendig, erledigen_bis, geplante_wiedervorlage, erledigt_am, bereich, besitzer_email').is('erledigt_am', null),
     supabase.from('todo_freigaben').select('besitzer_email, empfaenger_email'),
     supabase.from('kunden').select('id, bereich, firma, ansprechpartner, verantwortlich, follow_up, verantwortlich_email'),
     supabase.from('objekte').select('id, bezeichnung, verantwortlich, follow_up, status, privat_besitzer'),
     supabase.from('projekte').select('id, bereich, name, verantwortlich, meilensteine, besitzer_email'),
+    // Im privaten Assistenten gibt es keine Wiedervorlagen (private Kontakte haben keine).
+    fragender.nurPrivat === true ? Promise.resolve({ data: [] }) : supabase.from('wiedervorlagen').select('id, kunde_id, bereich, titel, faellig, verantwortlich, quelle').is('erledigt_am', null),
   ])
   const teamListe = ((team ?? []) as { name: string; email: string | null }[]).filter((m) => m.name)
   const nameZuEmail = new Map(teamListe.filter((m) => m.email).map((m) => [String(m.email).toLowerCase(), m.name]))
@@ -91,6 +95,26 @@ export async function aufgabenUebersicht(
       zustaendig: k.verantwortlich,
       datum: fu.date,
       datumArt: 'Follow-up',
+    })
+  }
+  // Wiedervorlagen der Kundenakten (von Hand oder vom CRM selbst angelegt). Schlägt die Abfrage fehl,
+  // bleibt die Übersicht wie bisher.
+  // deno-lint-ignore no-explicit-any
+  const kundeVon = new Map(((kunden ?? []) as any[]).map((k) => [k.id, k]))
+  // deno-lint-ignore no-explicit-any
+  for (const w of (wvRes?.data ?? []) as any[]) {
+    if (!w || !darfBereich(fragender, w.bereich)) continue
+    const k = kundeVon.get(w.kunde_id)
+    roh.push({
+      id: `wv:${w.id}`,
+      art: 'followup',
+      titel: `${String(w.titel ?? '').trim() || 'Wiedervorlage'}${w.quelle === 'regel' ? ' (automatisch)' : ''}`,
+      bezug: k ? [k.firma, k.ansprechpartner && k.ansprechpartner !== k.firma ? k.ansprechpartner : ''].filter(Boolean).join(' · ') : undefined,
+      bereich: BEREICH_NAME[w.bereich] ?? w.bereich,
+      zustaendig: w.verantwortlich,
+      ersatzPerson: k?.verantwortlich ?? undefined,
+      datum: w.faellig,
+      datumArt: 'Wiedervorlage',
     })
   }
   // deno-lint-ignore no-explicit-any
@@ -151,7 +175,7 @@ export async function aufgabenUebersicht(
   const gruppen = nachPerson(liste)
   const kopf = [
     `Heute: ${deDatum(heute)}. Offene Aufgaben für ${personText}${bis ? `, fällig bis ${deDatum(bis)} (inkl. überfällig)` : ''}.`,
-    'Quellen: To-do-Listen, Follow-ups in Kunden- und Objektakten, Projektaufgaben — nur, was dieser Mitarbeiter sehen darf. Im CRM: Seite „Aufgaben nach Mitarbeiter“ (Symbol mit Häkchenliste oben rechts).',
+    'Quellen: To-do-Listen, Follow-ups und Wiedervorlagen in Kunden- und Objektakten, Projektaufgaben — nur, was dieser Mitarbeiter sehen darf. Im CRM: Seite „Aufgaben nach Mitarbeiter“ (Symbol mit Häkchenliste oben rechts).',
   ]
   if (gruppen.length === 0) return [...kopf, '', 'Keine offenen Aufgaben für diese Auswahl.'].join('\n')
   const zeilen: string[] = [...kopf]

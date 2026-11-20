@@ -12,12 +12,14 @@ import { ladeKostenvoranschlaege, type Kostenvoranschlag } from '../../lib/koste
 import { holeLeistungen } from '../../lib/leistungen'
 import { supabase } from '../../lib/supabaseClient'
 import { checklisteVorschlag } from '../../lib/emailGateway'
+import { jeKunde, ladeOffeneWiedervorlagen, type Wiedervorlage } from '../../lib/wiedervorlagen'
+import { WiedervorlagenListe } from '../../components/WiedervorlagenListe'
 import { istSammelakte } from '../../data/sammelakten'
 import { seedMailVorlagen } from '../../data/mailVorlagen'
 import { fmtEURCent, today } from '../../lib/dates'
 import {
-  AMPEL_LABEL, AMPEL_RANG, berechneAmpel, gewichtet, standVon, umsatzVon, unterlagenVon,
-  type AmpelErgebnis, type Stand, type UnterlagenStand,
+  AMPEL_LABEL, AMPEL_RANG, berechneAmpel, gewichtet, offeneWiedervorlagen, standVon, umsatzVon, unterlagenVon,
+  type AmpelErgebnis, type NaechsteWv, type Stand, type UnterlagenStand,
 } from '../../lib/checkliste'
 import type { AmpelFarbe, Kunde, KundeBereich } from '../../types'
 
@@ -30,6 +32,8 @@ type Zeile = {
   ampel: AmpelErgebnis
   unterlagen?: UnterlagenStand
   willkommen?: string
+  /** Offene Wiedervorlagen (Follow-up der Akte und Tabelle wiedervorlagen), früheste zuerst. */
+  wv: NaechsteWv[]
 }
 
 const AMPEL_PUNKT: Record<AmpelFarbe, string> = { rot: 'bg-rose-500', gelb: 'bg-amber-400', gruen: 'bg-emerald-500' }
@@ -71,6 +75,8 @@ export function Checkliste() {
   const nutzer = useKvNutzer()
   const [kvs, setKvs] = useState<Kostenvoranschlag[]>([])
   const [willkommen, setWillkommen] = useState<Map<string, string>>(new Map())
+  const [wvListe, setWvListe] = useState<Wiedervorlage[]>([])
+  const wvLaden = () => ladeOffeneWiedervorlagen().then(setWvListe).catch((e) => setFehler(e instanceof Error ? e.message : 'Wiedervorlagen ließen sich nicht laden.'))
   const [fehler, setFehler] = useState('')
   const [suche, setSuche] = useState('')
   const [bereichFilter, setBereichFilter] = useState('')
@@ -82,6 +88,7 @@ export function Checkliste() {
 
   useEffect(() => {
     let aktiv = true
+    wvLaden()
     ladeKostenvoranschlaege()
       .then((l) => aktiv && setKvs(l))
       .catch((e) => aktiv && setFehler(e instanceof Error ? e.message : 'Kostenvoranschläge ließen sich nicht laden.'))
@@ -112,36 +119,41 @@ export function Checkliste() {
     return m
   }, [kvs])
 
+  const wvJeKunde = useMemo(() => jeKunde(wvListe), [wvListe])
+
   const alle: Zeile[] = useMemo(() => {
     const zeilen: Zeile[] = []
     for (const b of oeffentlicheKundenBereiche) {
       for (const k of b.get(state)) {
         if (istSammelakte(k.id)) continue
         const eigeneKvs = kvJeKunde.get(k.id) ?? []
+        const eigeneWv = wvJeKunde.get(k.id) ?? []
         zeilen.push({
           kunde: k,
           bereich: b.id,
           bereichLabel: b.label,
           stand: standVon(b.id, k.status),
           umsatz: umsatzVon(eigeneKvs),
-          ampel: berechneAmpel(k, b.id, { heute, rechnungen: state.rechnungen, kvs: eigeneKvs }),
+          ampel: berechneAmpel(k, b.id, { heute, rechnungen: state.rechnungen, kvs: eigeneKvs, wiedervorlagen: eigeneWv }),
           unterlagen: unterlagenVon(k),
           willkommen: willkommen.get(k.id),
+          wv: offeneWiedervorlagen(k, eigeneWv),
         })
       }
     }
     return zeilen
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state, kvJeKunde, willkommen, heute, oeffentlicheKundenBereiche.map((b) => b.id).join()])
+  }, [state, kvJeKunde, wvJeKunde, willkommen, heute, oeffentlicheKundenBereiche.map((b) => b.id).join()])
 
-  const neuanfragen = alle.filter((z) => z.stand.neuanfrage).length
+  const neuanfragen = alle.filter((z) => z.stand.neuanfrage && !(wvJeKunde.get(z.kunde.id)?.length)).length
   const abgeschlossene = alle.filter((z) => z.stand.abgeschlossen).length
   const verantwortliche = useMemo(() => [...new Set(alle.map((z) => z.kunde.verantwortlich).filter(Boolean))].sort(), [alle])
 
   const sichtbar = useMemo(() => {
     const s = suche.trim().toLowerCase()
     return alle
-      .filter((z) => (mitNeuanfragen ? true : !z.stand.neuanfrage))
+      // Neuanfragen aus dem Postfach ausblenden — außer, jemand hat schon eine Wiedervorlage dafür angelegt (dann ist es ein laufender Fall).
+      .filter((z) => (mitNeuanfragen ? true : !z.stand.neuanfrage || (wvJeKunde.get(z.kunde.id)?.length ?? 0) > 0))
       .filter((z) => (mitAbgeschlossenen ? true : !z.stand.abgeschlossen))
       .filter((z) => !bereichFilter || z.bereich === bereichFilter)
       .filter((z) => !ampelFilter || z.ampel.farbe === ampelFilter)
@@ -155,11 +167,11 @@ export function Checkliste() {
       .sort((a, b) => {
         const r = AMPEL_RANG[a.ampel.farbe] - AMPEL_RANG[b.ampel.farbe]
         if (r !== 0) return r
-        const wa = (a.kunde.followUp && !a.kunde.followUp.done && a.kunde.followUp.date) || '9999'
-        const wb = (b.kunde.followUp && !b.kunde.followUp.done && b.kunde.followUp.date) || '9999'
+        const wa = a.wv[0]?.datum ?? '9999'
+        const wb = b.wv[0]?.datum ?? '9999'
         return wa.localeCompare(wb)
       })
-  }, [alle, suche, bereichFilter, ampelFilter, wer, mitNeuanfragen, mitAbgeschlossenen])
+  }, [alle, suche, bereichFilter, ampelFilter, wer, mitNeuanfragen, mitAbgeschlossenen, wvJeKunde])
 
   const summe = sichtbar.reduce((s, z) => s + z.umsatz.netto, 0)
   const summeGewichtet = sichtbar.reduce((s, z) => s + gewichtet(z.umsatz.netto, z.kunde.auftragChance?.prozent), 0)
@@ -260,7 +272,7 @@ export function Checkliste() {
             <tbody>
               {sichtbar.map((z) => {
                 const k = z.kunde
-                const fu = k.followUp && !k.followUp.done && k.followUp.date ? k.followUp : undefined
+                const naechste = z.wv[0]
                 return (
                   <tr
                     key={`${z.bereich}-${k.id}`}
@@ -292,10 +304,11 @@ export function Checkliste() {
                       ) : '–'}
                     </td>
                     <td className="px-3 py-2 text-xs">
-                      {fu ? (
+                      {naechste ? (
                         <>
-                          <span className={`block tabular-nums ${fu.date < heute ? 'font-medium text-rose-600' : 'text-slate-700'}`}>{kurzDatum(fu.date)}</span>
-                          <span className="block max-w-[180px] text-slate-500">{fu.note}</span>
+                          <span className={`block tabular-nums ${naechste.datum < heute ? 'font-medium text-rose-600' : 'text-slate-700'}`}>{kurzDatum(naechste.datum)}</span>
+                          <span className="block max-w-[180px] text-slate-500">{naechste.titel}</span>
+                          {z.wv.length > 1 && <span className="block text-slate-400">+{z.wv.length - 1} weitere</span>}
                         </>
                       ) : <span className="text-slate-300">–</span>}
                     </td>
@@ -320,6 +333,7 @@ export function Checkliste() {
           nurLesen={nutzer.nurLesen}
           nutzerName={nutzer.name}
           onClose={() => setOffen(null)}
+          onWvAenderung={wvLaden}
           onAkte={() => navigate(aktePfad(offeneZeile.bereich, offeneZeile.kunde))}
           onSpeichern={(patch) => {
             dispatch({ type: 'UPDATE_KUNDE_IN_BEREICH', bereich: offeneZeile.bereich, id: offeneZeile.kunde.id, patch })
@@ -333,7 +347,7 @@ export function Checkliste() {
 }
 
 function ChecklisteBearbeiten({
-  zeile, nurLesen, nutzerName, onClose, onAkte, onSpeichern, alleAkten,
+  zeile, nurLesen, nutzerName, onClose, onAkte, onSpeichern, alleAkten, onWvAenderung,
 }: {
   zeile: Zeile
   nurLesen: boolean
@@ -342,6 +356,7 @@ function ChecklisteBearbeiten({
   onAkte: () => void
   onSpeichern: (patch: Partial<Kunde>) => void
   alleAkten: Zeile[]
+  onWvAenderung: () => void
 }) {
   const k = zeile.kunde
   const [sachverhalt, setSachverhalt] = useState(k.sachverhalt ?? '')
@@ -352,8 +367,8 @@ function ChecklisteBearbeiten({
   const [chance, setChance] = useState<string>(k.auftragChance ? String(k.auftragChance.prozent) : '')
   const [bestaetigt, setBestaetigt] = useState(k.auftragChance?.bestaetigt ?? false)
   const [begruendung, setBegruendung] = useState(k.auftragChance?.begruendung ?? '')
-  const [wvDatum, setWvDatum] = useState(k.followUp && !k.followUp.done ? k.followUp.date ?? '' : '')
-  const [wvNotiz, setWvNotiz] = useState(k.followUp && !k.followUp.done ? k.followUp.note ?? '' : '')
+  const [followUpErledigt, setFollowUpErledigt] = useState(false)
+  const offenesFollowUp = k.followUp && !k.followUp.done && (k.followUp.date || k.followUp.note?.trim()) ? k.followUp : undefined
   const [naechste, setNaechste] = useState(k.naechsteSchritte ?? '')
   const [ampel, setAmpel] = useState<'' | AmpelFarbe>(k.ampelManuell?.farbe ?? '')
   const [ampelGrund, setAmpelGrund] = useState(k.ampelManuell?.grund ?? '')
@@ -417,10 +432,7 @@ function ChecklisteBearbeiten({
       naechsteSchritte: naechste.trim() || undefined,
       ampelManuell: ampel ? { farbe: ampel, grund: ampelGrund.trim(), von: nutzerName, am: jetzt } : undefined,
     }
-    const altWv = k.followUp && !k.followUp.done ? k.followUp : undefined
-    if (wvDatum !== (altWv?.date ?? '') || wvNotiz !== (altWv?.note ?? '')) {
-      patch.followUp = wvDatum ? { date: wvDatum, note: wvNotiz.trim(), done: false } : { ...(k.followUp ?? { date: '', note: '' }), done: true }
-    }
+    if (followUpErledigt && offenesFollowUp) patch.followUp = { ...offenesFollowUp, done: true }
     onSpeichern(patch)
   }
 
@@ -523,15 +535,26 @@ function ChecklisteBearbeiten({
             Gewichteter Umsatz: {fmtEURCent(gewichtet(zeile.umsatz.netto, chance === '' ? undefined : Number(chance)))}. Den Umsatz selbst rechnet die Liste aus den Kostenvoranschlägen der Akte.
           </p>
 
-          <div className="grid gap-3 sm:grid-cols-[160px_1fr]">
-            <label className="block">
-              <span className={feld}>Wiedervorlage am</span>
-              <input type="date" value={wvDatum} onChange={(e) => setWvDatum(e.target.value)} className={`${inputClass} w-full`} />
-            </label>
-            <label className="block">
-              <span className={feld}>Was ist dann zu tun?</span>
-              <input value={wvNotiz} onChange={(e) => setWvNotiz(e.target.value)} className={`${inputClass} w-full`} placeholder="z. B. Geldeingang prüfen" />
-            </label>
+          <div>
+            <span className={feld}>Wiedervorlagen</span>
+            {offenesFollowUp && (
+              <label className="mb-2 flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700">
+                <input type="checkbox" checked={followUpErledigt} onChange={(e) => setFollowUpErledigt(e.target.checked)} />
+                <span className="flex-1">
+                  Follow-up der Akte: {offenesFollowUp.note?.trim() || 'ohne Text'}
+                  {offenesFollowUp.date ? ` · ${kurzDatum(offenesFollowUp.date)}` : ''}
+                </span>
+                <span className="text-xs text-slate-400">erledigt beim Speichern</span>
+              </label>
+            )}
+            <WiedervorlagenListe
+              kundeId={k.id}
+              bereich={zeile.bereich}
+              verantwortlich={k.verantwortlich}
+              nutzerName={nutzerName}
+              nurLesen={nurLesen}
+              onAenderung={onWvAenderung}
+            />
           </div>
 
           <label className="block">

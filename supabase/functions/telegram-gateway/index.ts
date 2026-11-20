@@ -33,6 +33,7 @@ import { kollegenBenachrichtigen, type MitteilungsWege, schickeMitteilung, todoA
 import { fuehrePflegeWerkzeugAus, istPflegeWerkzeug, type PflegeAnfrage, PFLEGE_WERKZEUGE } from './pflegeWerkzeuge.ts'
 import { DOKUMENT_WERKZEUGE, fuehreDokumentWerkzeugAus, istDokumentWerkzeug } from './dokumentErstellen.ts'
 import { fuehreKvWerkzeugAus, istKvWerkzeug, KV_WERKZEUGE } from './kostenvoranschlagWerkzeuge.ts'
+import { fuehreWvWerkzeugAus, istWvWerkzeug, WV_WERKZEUGE } from './wiedervorlageWerkzeuge.ts'
 import { fuehreGesendetWerkzeugAus, GESENDET_WERKZEUGE, istGesendetWerkzeug } from './gesendetWerkzeug.ts'
 import { BRIEF_WERKZEUGE, fuehrePrivatWerkzeugAus, istPrivatWerkzeug, msErlaubt, OBJEKT_WERKZEUGE, OUTLOOK_WERKZEUGE, PRIVAT_HINWEIS, privatFaehigkeiten } from './outlookWerkzeuge.ts'
 import { botToken, imPrivatBot, imPrivatBotErlaubt, mitBot, PRIVAT_BOT_HINWEIS, privatBotToken, privatWebhookGeheimnis, werkzeugeFuerPrivatBot } from './privatBot.ts'
@@ -1088,14 +1089,14 @@ export const TOOLS = [
   {
     name: 'aufgaben_uebersicht',
     description:
-      'Zeigt, wer welche offenen Aufgaben bis wann erledigen muss: To-dos aus den To-do-Listen, Follow-ups aus Kunden- und Objektakten und Aufgaben aus Projekten, nach Mitarbeiter gruppiert und nach Fälligkeit sortiert (Überfälliges zuerst). Für Fragen wie "was muss Quirin diese Woche machen", "wer hat überfällige Aufgaben", "was steht bei mir an", "welche Aufgaben hat Hasan bis Freitag". Berücksichtigt nur, was der Fragende sehen darf.',
+      'Zeigt, wer welche offenen Aufgaben bis wann erledigen muss: To-dos aus den To-do-Listen, Follow-ups und Wiedervorlagen aus Kunden- und Objektakten und Aufgaben aus Projekten, nach Mitarbeiter gruppiert und nach Fälligkeit sortiert (Überfälliges zuerst). Für Fragen wie "was muss Quirin diese Woche machen", "wer hat überfällige Aufgaben", "was steht bei mir an", "welche Aufgaben hat Hasan bis Freitag". Berücksichtigt nur, was der Fragende sehen darf.',
     input_schema: {
       type: 'object',
       properties: {
         mitarbeiter: { type: 'string', description: 'Name oder Vorname, z. B. "Quirin"; "ich" für den Fragenden selbst. Leer = alle Mitarbeiter.' },
         bis_datum: { type: 'string', description: 'Nur Aufgaben, die bis zu diesem Tag fällig sind, inklusive überfälliger (yyyy-mm-dd). Für "diese Woche" den kommenden Sonntag, für "heute" das heutige Datum. Leer = alle offenen, auch ohne Datum.' },
         ohne_datum: { type: 'boolean', description: 'false = Aufgaben ohne Datum weglassen. Nur nötig, wenn kein bis_datum gesetzt ist.' },
-        arten: { type: 'array', items: { type: 'string', enum: ['todo', 'followup', 'projekt'] }, description: 'Nur diese Arten. Leer = alle.' },
+        arten: { type: 'array', items: { type: 'string', enum: ['todo', 'followup', 'projekt'] }, description: 'Nur diese Arten (followup umfasst auch die Wiedervorlagen). Leer = alle.' },
       },
     },
   },
@@ -1523,6 +1524,7 @@ export const TOOLS = [
   ...PFLEGE_WERKZEUGE,
   ...DOKUMENT_WERKZEUGE,
   ...KV_WERKZEUGE,
+  ...WV_WERKZEUGE,
   ...GESENDET_WERKZEUGE,
   {
     name: 'todo_erledigen',
@@ -1568,6 +1570,8 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
   if (istDokumentWerkzeug(name)) return await fuehreDokumentWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
   // Kostenvoranschläge anlegen, auflisten, ändern — kostenvoranschlagWerkzeuge.ts.
   if (istKvWerkzeug(name)) return await fuehreKvWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
+  // Wiedervorlagen auflisten, anlegen, erledigen, verschieben — wiedervorlageWerkzeuge.ts.
+  if (istWvWerkzeug(name)) return await fuehreWvWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
   // Gesendete Mails (auch aus Outlook über info@ verschickt) — gesendetWerkzeug.ts.
   if (istGesendetWerkzeug(name)) return await fuehreGesendetWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter })
 
@@ -3171,6 +3175,7 @@ So arbeitest du:
 - To-dos ohne Kundenakte: Will der Mitarbeiter sich oder einem Bereich eine Aufgabe notieren, die zu keinem Kunden gehört ("schreib mir auf: Steuerunterlagen bis Freitag sortieren"), legst du sie mit todo_anlegen an, standardmäßig in seiner eigenen To-do-Liste. Gehört die Aufgabe zu einer Kundenakte, nimmst du aufgabe_setzen. Erledigtes hakst du mit todo_erledigen ab.
 - Gesendete Mails: Was einem Kunden geschrieben oder geschickt wurde (auch Briefe und Mails, die aus Outlook oder Webmail über info@ oder das eigene Postfach rausgingen), findest du mit gesendete_mails (nach kunde_id, Suchbegriff, Zeitraum; mit mail_id ganz lesen). Sie werden alle paar Minuten automatisch aus dem Gesendet-Ordner ins CRM übernommen und der Akte des Empfängers zugeordnet.
 - Kostenvoranschläge: Das CRM hat eine Seite „Kostenvoranschläge“ und in jeder Akte einen Reiter dafür. Will jemand Kostenvoranschläge erfassen, oder schickt er ein Foto/Dokument mit einer Liste von Kostenvoranschlägen und will sie eingetragen haben, legst du jede Zeile mit kostenvoranschlag_anlegen an (Name, Beschreibung, Betrag, Status; „bez.“ = bezahlt; Summenzeilen nicht). Gehören sie eindeutig zu einer Akte, gib kunde_id an, sonst ohne; geht es um private Geschäfte des Mitarbeiters (Bereich Privat), setze privat=true, damit nur er sie sieht. Fragen nach Kostenvoranschlägen, Summen oder Status beantwortest du mit kostenvoranschlaege_auflisten, Änderungen (z. B. „Breh ist bezahlt“, „gehört zu Akte X“) mit kostenvoranschlag_aendern. Löschen geht nur im CRM.
+- Wiedervorlagen: Jede Kundenakte hat im CRM einen Reiter „Wiedervorlagen“ (wann muss bei wem nachgefasst werden). Viele davon legt das CRM selbst an und hakt sie selbst ab, z. B. bei einem Statuswechsel der Akte, wenn ein Kostenvoranschlag erstellt oder angenommen wird, Unterlagen angefordert oder eingegangen sind, eine Rechnung verschickt oder bezahlt ist, ein Termin eingetragen oder etwas unterschrieben wurde — die musst du nicht anlegen. Fragt jemand „Was ist heute fällig?“, „Welche Wiedervorlagen habe ich diese Woche?“ oder „Was liegt bei Akte X noch an?“, nimm wiedervorlagen_auflisten (für „heute“ nur_faellig=true, für „ich“ zustaendig="ich"). Sagt er „Leg mir eine Wiedervorlage an …“ oder „erinnere mich, bei Kunde X am Freitag nachzufassen“, nimm wiedervorlage_anlegen mit kunde_id und Datum. Sagt er, eine Wiedervorlage ist „erledigt“, hak sie mit wiedervorlage_erledigen ab; will er sie auf später legen, nimm wiedervorlage_verschieben. Die id holst du vorher mit wiedervorlagen_auflisten; passen mehrere, frag nach. Private Kontakte haben keine Wiedervorlagen (dafür todo_anlegen). Für die Gesamtsicht über alle Aufgaben bleibt aufgaben_uebersicht; dort stehen die Wiedervorlagen mit drin.
 - Dokumente als Datei: Bittet jemand um ein Merkblatt, ein Schreiben, eine Zusammenfassung oder eine Übersicht „als Datei“, „als PDF“, „zum Ausdrucken“ oder „zum Mitgeben“, schreib den Text vollständig selbst (Inhalte vorher mit kundenakte_lesen, dokument_inhalt oder den Gesprächsprotokollen holen) und erstelle daraus mit dokument_erstellen eine PDF in der Akte des Kunden, statt nur Text zum Kopieren zu liefern; will er eine Word-Datei, dasselbe mit format=word. Will er eine Excel-Datei oder Tabelle (z. B. eine Liste von einem Foto: Namen links, Zahlen rechts), schreib die Zeilen selbst aus und erstelle sie mit tabelle_erstellen (Zahlen als Zahlen). Ohne passende Kundenakte legst du solche Dateien in den Ungeklärten Eingängen (k_eingang_ungeklaert) ab bzw. bei eigenen Unterlagen des Hauses in k_intern_holding. Will er die Datei „hier“, „in Telegram“ oder „schick sie mir“, schick sie danach mit datei_senden direkt in den Chat; das geht auch mit jeder anderen Datei aus einer Akte. Titel und Text nur auf Deutsch (z. B. „Merkblatt“ statt „Handout“); bestätige danach in einer Zeile, wie die Datei heißt und in welcher Akte sie liegt.
 - Wünsche an das CRM: Kannst du etwas, worum der Mitarbeiter bittet, nicht tun, weil dir dafür die Möglichkeit fehlt (nicht, weil ein Kunde oder eine Angabe fehlt oder ein Bereich nicht freigegeben ist), oder sagt er "wäre gut, wenn …", "Wunsch: …" oder "könnte das CRM …", hältst du das mit wunsch_notieren fest: Titel und Beschreibung auf Ebene der Funktion, ohne Kundennamen, Beträge oder Inhalte aus Unterlagen. Sag ihm danach offen in einem kurzen Satz, dass du es als Wunsch für die Geschäftsführung notiert hast.
 - Internet: Bittet dich der Mitarbeiter ausdrücklich, etwas im Internet nachzusehen oder zu recherchieren ("recherchier den Laden", "was findest du online über die Firma X"), nutzt du internet_recherche. Gib dabei alle Anhaltspunkte aus dem Gespräch oder der Akte mit (Firmenname, Ort, Webseite), damit keine gleichnamige Firma erwischt wird. Recherchiere nur Geschäftliches und Öffentliches: Firmen, Geschäftsführer und Inhaber in ihrer beruflichen Rolle, Webseite, Handelsregister, Bewertungen, Presse. Zum Privatleben von Personen (Gesundheit, Familie, Beziehungen, Privatanschrift) recherchierst du nie; sag das in einem Satz. Ohne ausdrückliche Bitte recherchierst du nicht, auch nicht beim Ablegen von Dateien. Sag beim Weitergeben, dass es aus dem Internet stammt und veraltet oder falsch sein kann, und nenne die Quellenadressen. Ins CRM übernimmst du davon nur etwas, wenn der Mitarbeiter es ausdrücklich verlangt.

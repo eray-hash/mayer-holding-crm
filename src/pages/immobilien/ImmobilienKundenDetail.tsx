@@ -18,7 +18,8 @@ import { KundeHinweise } from '../../components/PruefHinweisBadge'
 import { SelbstauskunftSection } from '../../components/SelbstauskunftSection'
 import { NdaSection } from '../../components/NdaSection'
 import { DokumenteSection } from '../../components/DokumenteSection'
-import { KostenvoranschlaegeSection } from '../../components/KostenvoranschlaegeSection'
+import { KostenvoranschlaegeSection, useKvNutzer } from '../../components/KostenvoranschlaegeSection'
+import { WiedervorlagenListe } from '../../components/WiedervorlagenListe'
 import { KommunikationSection } from '../../components/KommunikationSection'
 import { LoeschenKundeButton } from '../../components/LoeschenKundeButton'
 import { AktenReiter } from '../../components/AktenReiter'
@@ -54,6 +55,7 @@ export function ImmobilienKundenDetail({ privat }: { privat?: boolean } = {}) {
   const [params, setParams] = useSearchParams()
   const navigate = useNavigate()
   const { state, dispatch } = useApp()
+  const nutzer = useKvNutzer()
   const [editFollowUp, setEditFollowUp] = useState(false)
 
   const bereich = immoKundenBereich(privat)
@@ -136,6 +138,12 @@ export function ImmobilienKundenDetail({ privat }: { privat?: boolean } = {}) {
               <div className="text-xs font-medium text-slate-400">Nächste Follow-up-Aufgabe</div>
               <div className={`text-sm ${overdue ? 'font-medium text-rose-600' : 'text-slate-700'}`}>{fmtDate(kunde.followUp.date)} — {kunde.followUp.note}</div>
             </div>
+            {bereich !== 'privat' && (
+              <div className="mt-4 border-t border-slate-100 pt-4">
+                <h3 className="mb-3 text-sm font-semibold text-slate-700">Wiedervorlagen</h3>
+                <WiedervorlagenListe kundeId={kunde.id} bereich={bereich} verantwortlich={kunde.verantwortlich} nutzerName={nutzer.name} nurLesen={nutzer.nurLesen} />
+              </div>
+            )}
           </Card>
           <Card className="p-5 lg:col-span-2">
             <h3 className="mb-3 text-sm font-semibold text-slate-700">Aktivitäten-Timeline</h3>

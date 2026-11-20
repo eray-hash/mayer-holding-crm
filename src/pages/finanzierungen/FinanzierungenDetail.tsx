@@ -19,7 +19,8 @@ import { KundeHinweise } from '../../components/PruefHinweisBadge'
 import { SelbstauskunftSection } from '../../components/SelbstauskunftSection'
 import { NdaSection } from '../../components/NdaSection'
 import { DokumenteSection } from '../../components/DokumenteSection'
-import { KostenvoranschlaegeSection } from '../../components/KostenvoranschlaegeSection'
+import { KostenvoranschlaegeSection, useKvNutzer } from '../../components/KostenvoranschlaegeSection'
+import { WiedervorlagenListe } from '../../components/WiedervorlagenListe'
 import { KommunikationSection } from '../../components/KommunikationSection'
 import { LoeschenKundeButton } from '../../components/LoeschenKundeButton'
 import { AktenReiter, type Reiter } from '../../components/AktenReiter'
@@ -44,6 +45,7 @@ export function FinanzierungenDetail() {
   const [params, setParams] = useSearchParams()
   const tab = params.get('tab') ?? 'uebersicht'
   const { state, dispatch } = useApp()
+  const nutzer = useKvNutzer()
   const [editFollowUp, setEditFollowUp] = useState(false)
 
   const mandant = state.finanzierungenMandanten.find((k) => k.id === id)
@@ -120,6 +122,10 @@ export function FinanzierungenDetail() {
             <div className="mt-4 rounded-lg bg-slate-50 p-3">
               <div className="text-xs font-medium text-slate-400">Nächste Follow-up-Aufgabe</div>
               <div className={`text-sm ${overdue ? 'font-medium text-rose-600' : 'text-slate-700'}`}>{fmtDate(mandant.followUp.date)} — {mandant.followUp.note}</div>
+            </div>
+            <div className="mt-4 border-t border-slate-100 pt-4">
+              <h3 className="mb-3 text-sm font-semibold text-slate-700">Wiedervorlagen</h3>
+              <WiedervorlagenListe kundeId={mandant.id} bereich="finanzierungen" verantwortlich={mandant.verantwortlich} nutzerName={nutzer.name} nurLesen={nutzer.nurLesen} />
             </div>
           </Card>
           <Card className="p-5 lg:col-span-2">

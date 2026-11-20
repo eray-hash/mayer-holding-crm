@@ -121,22 +121,35 @@ const kurz = (iso: string) => `${iso.slice(8, 10)}.${iso.slice(5, 7)}.`
  * Gelb = Wiedervorlage diese Woche, keine Wiedervorlage gesetzt, Unterlagen fehlen seit über 7 Tagen,
  * Kostenvoranschlag seit über 7 Tagen offen. Sonst Grün. Eine vom Berater gesetzte Ampel geht vor.
  */
+/** Offene Wiedervorlagen einer Akte: das bisherige Follow-up der Akte und die Einträge der Tabelle wiedervorlagen, nach Fälligkeit. */
+export function offeneWiedervorlagen(k: Pick<Kunde, 'followUp'>, eintraege: { titel: string; faellig: string; quelle?: string }[] = []): NaechsteWv[] {
+  const liste: NaechsteWv[] = eintraege
+    .filter((w) => /^\d{4}-\d{2}-\d{2}$/.test(w.faellig ?? ''))
+    .map((w) => ({ titel: w.titel, datum: w.faellig, automatisch: w.quelle === 'regel' }))
+  const fu = k.followUp
+  if (fu && !fu.done && /^\d{4}-\d{2}-\d{2}$/.test(fu.date ?? '')) liste.push({ titel: fu.note?.trim() || 'Follow-up', datum: fu.date, automatisch: false })
+  return liste.sort((a, b) => a.datum.localeCompare(b.datum))
+}
+
+export type NaechsteWv = { titel: string; datum: string; automatisch: boolean }
+
 export function berechneAmpel(
   k: Kunde,
   bereich: KundeBereich,
-  ctx: { heute: string; rechnungen: Rechnung[]; kvs: Kostenvoranschlag[] },
+  ctx: { heute: string; rechnungen: Rechnung[]; kvs: Kostenvoranschlag[]; wiedervorlagen?: { titel: string; faellig: string; quelle?: string }[] },
 ): AmpelErgebnis {
   if (k.ampelManuell) return { farbe: k.ampelManuell.farbe, gruende: [k.ampelManuell.grund || 'vom Berater gesetzt'], manuell: true }
   const rot: string[] = []
   const gelb: string[] = []
   const stand = standVon(bereich, k.status)
-  const fu = k.followUp
-  const offeneWv = fu && !fu.done && /^\d{4}-\d{2}-\d{2}$/.test(fu.date ?? '') ? fu : undefined
-  if (offeneWv) {
-    if (offeneWv.date < ctx.heute) rot.push(`Wiedervorlage seit ${kurz(offeneWv.date)} überfällig`)
-    else if (offeneWv.date <= wochenEnde(ctx.heute)) gelb.push(`Wiedervorlage am ${kurz(offeneWv.date)}`)
-  } else {
+  const offene = offeneWiedervorlagen(k, ctx.wiedervorlagen)
+  const ueberfaellig = offene.filter((w) => w.datum < ctx.heute)
+  if (ueberfaellig.length) {
+    rot.push(`Wiedervorlage seit ${kurz(ueberfaellig[0].datum)} überfällig: ${ueberfaellig[0].titel}`)
+  } else if (offene.length === 0) {
     gelb.push('keine Wiedervorlage gesetzt')
+  } else if (offene[0].datum <= wochenEnde(ctx.heute)) {
+    gelb.push(`Wiedervorlage am ${kurz(offene[0].datum)}: ${offene[0].titel}`)
   }
   for (const r of ctx.rechnungen) {
     if (r.kundeId !== k.id || r.status === 'Bezahlt' || r.status === 'Entwurf') continue

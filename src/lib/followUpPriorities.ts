@@ -1,7 +1,8 @@
 import type { AppData } from '../context/AppContext'
 import type { KundeBereich, FollowUp } from '../types'
-import { KUNDEN_BEREICHE, kundeBereichLabel } from '../data/kundenBereiche'
+import { KUNDEN_BEREICHE, kundeBereichLabel, kundeDetailPfad } from '../data/kundenBereiche'
 import { today } from './dates'
+import type { Wiedervorlage } from './wiedervorlagen'
 
 export type FollowUpKind = 'overdue' | 'today'
 
@@ -54,6 +55,37 @@ export function collectFollowUpPriorities(state: AppData): FollowUpEntry[] {
   }
 
   return out.sort((a, b) => a.date.localeCompare(b.date))
+}
+
+export type WiedervorlageEntry = {
+  wv: Wiedervorlage
+  name: string
+  bereichLabel: string
+  kind: FollowUpKind
+  verantwortlich: string
+  pfad: string
+}
+
+// Heute fällige und überfällige Einträge aus der Tabelle wiedervorlagen (mehrere je Akte möglich,
+// teils automatisch angelegt). Nur Akten, die im App-State geladen sind — sonst fehlt der Name.
+export function collectWiedervorlagenFaellig(state: AppData, liste: Wiedervorlage[]): WiedervorlageEntry[] {
+  const heute = today()
+  const out: WiedervorlageEntry[] = []
+  for (const w of liste) {
+    if (w.erledigtAm || w.faellig > heute || w.bereich === 'privat') continue
+    const b = KUNDEN_BEREICHE.find((x) => x.id === w.bereich)
+    const k = b?.get(state).find((x) => x.id === w.kundeId)
+    if (!b || !k) continue
+    out.push({
+      wv: w,
+      name: `${k.firma} (${k.ansprechpartner})`,
+      bereichLabel: b.label,
+      kind: w.faellig < heute ? 'overdue' : 'today',
+      verantwortlich: w.verantwortlich ?? k.verantwortlich,
+      pfad: kundeDetailPfad(w.bereich, w.kundeId),
+    })
+  }
+  return out.sort((a, b) => a.wv.faellig.localeCompare(b.wv.faellig))
 }
 
 export function followUpDetailPfad(entry: FollowUpEntry): string {

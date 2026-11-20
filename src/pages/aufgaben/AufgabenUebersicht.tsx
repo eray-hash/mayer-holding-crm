@@ -6,6 +6,7 @@ import { supabase } from '../../lib/supabaseClient'
 import { MITARBEITER } from '../../data/constants'
 import { fmtDate, today } from '../../lib/dates'
 import { sammleAufgaben } from '../../lib/aufgabenSammeln'
+import { ladeOffeneWiedervorlagen, type Wiedervorlage } from '../../lib/wiedervorlagen'
 import { Card, EmptyState, inputClass } from '../../components/ui'
 import {
   type Aufgabe,
@@ -55,6 +56,12 @@ export function AufgabenUebersicht() {
   const [person, setPerson] = useState<string>('alle')
   const [zeitraum, setZeitraum] = useState<Zeitraum>('alle')
   const [arten, setArten] = useState<Record<AufgabenArt, boolean>>({ todo: true, followup: true, projekt: true })
+  const [wiedervorlagen, setWiedervorlagen] = useState<Wiedervorlage[]>([])
+
+  // Offene Wiedervorlagen (Tabelle wiedervorlagen) — erscheinen als Follow-up beim Verantwortlichen.
+  useEffect(() => {
+    ladeOffeneWiedervorlagen().then(setWiedervorlagen).catch(() => setWiedervorlagen([]))
+  }, [])
 
   // Namen und E-Mail-Adressen der Kollegen: für die Zuordnung und um eigene To-do-Listen ohne
   // „Zuständig“ ihrem Besitzer zuzuordnen.
@@ -71,8 +78,8 @@ export function AufgabenUebersicht() {
   const alle = useMemo(() => {
     const nameZuEmail = new Map(team.filter((m) => m.email).map((m) => [m.email.toLowerCase(), m.name]))
     const namen = team.length > 0 ? team.map((m) => m.name) : MITARBEITER
-    return ordneAufgabenZu(sammleAufgaben(state, nameZuEmail), namen, heute)
-  }, [state, team, heute])
+    return ordneAufgabenZu(sammleAufgaben(state, nameZuEmail, wiedervorlagen), namen, heute)
+  }, [state, team, heute, wiedervorlagen])
 
   const gefiltert = useMemo(() => alle.filter((a) => arten[a.art] && passtZeitraum(a.lage, zeitraum)), [alle, arten, zeitraum])
   const gruppen = useMemo(() => nachPerson(gefiltert), [gefiltert])
@@ -86,7 +93,7 @@ export function AufgabenUebersicht() {
           <ListChecks size={20} className="text-accent-600" /> Aufgaben nach Mitarbeiter
         </h1>
         <p className="text-sm text-slate-500">
-          Wer muss was bis wann erledigen: alle offenen To-dos, Follow-ups aus den Kunden- und Objektakten und Aufgaben aus den Projekten, die du sehen kannst. Steht eine Aufgabe bei
+          Wer muss was bis wann erledigen: alle offenen To-dos, Follow-ups und Wiedervorlagen aus den Kunden- und Objektakten und Aufgaben aus den Projekten, die du sehen kannst. Steht eine Aufgabe bei
           mehreren, erscheint sie bei jedem. Auch im Telegram-Assistenten abrufbar, z. B. „Was muss Quirin diese Woche erledigen?“
         </p>
       </div>

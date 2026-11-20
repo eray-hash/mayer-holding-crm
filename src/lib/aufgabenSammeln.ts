@@ -1,7 +1,8 @@
 import type { AppData } from '../context/AppContext'
-import { KUNDEN_BEREICHE } from '../data/kundenBereiche'
+import { KUNDEN_BEREICHE, kundeDetailPfad } from '../data/kundenBereiche'
 import { OBJEKT_ABGESCHLOSSEN, type RohAufgabe } from '../../supabase/functions/_shared/aufgabenKern.ts'
 import { followUpDetailPfad } from './followUpPriorities'
+import type { Wiedervorlage } from './wiedervorlagen'
 
 // Sammelt für die Seite „Aufgaben nach Mitarbeiter“ alle offenen Aufgaben aus dem geladenen Stand.
 // Der Stand enthält nur, was der Mitarbeiter sehen darf (Zeilenschutz in der Datenbank): Bereiche
@@ -18,7 +19,7 @@ const BEREICH_NAME: Record<string, string> = {
   finanzierungen: 'Finanzierungen',
 }
 
-export function sammleAufgaben(state: AppData, nameZuEmail: Map<string, string>): RohAufgabe[] {
+export function sammleAufgaben(state: AppData, nameZuEmail: Map<string, string>, wiedervorlagen: Wiedervorlage[] = []): RohAufgabe[] {
   const out: RohAufgabe[] = []
 
   for (const t of state.todos) {
@@ -56,6 +57,27 @@ export function sammleAufgaben(state: AppData, nameZuEmail: Map<string, string>)
         pfad: followUpDetailPfad({ bereich: b.id, id: k.id } as Parameters<typeof followUpDetailPfad>[0]),
       })
     }
+  }
+
+  // Offene Wiedervorlagen aus der Tabelle wiedervorlagen (mehrere je Akte). Art „followup“, weil der
+  // gemeinsame Kern (auch für den Assistenten) nur todo/followup/projekt kennt. Akten, die nicht im
+  // geladenen Stand sind, fehlen (kein Name, kein Recht).
+  for (const w of wiedervorlagen) {
+    if (w.erledigtAm || w.bereich === 'privat') continue
+    const b = KUNDEN_BEREICHE.find((x) => x.id === w.bereich)
+    const k = b?.get(state).find((x) => x.id === w.kundeId)
+    if (!b || !k) continue
+    out.push({
+      id: `wv:${w.id}`,
+      art: 'followup',
+      titel: w.titel || 'Wiedervorlage',
+      bezug: [k.firma, k.ansprechpartner && k.ansprechpartner !== k.firma ? k.ansprechpartner : ''].filter(Boolean).join(' · '),
+      bereich: b.label,
+      zustaendig: w.verantwortlich ?? k.verantwortlich,
+      datum: w.faellig,
+      datumArt: 'Wiedervorlage',
+      pfad: kundeDetailPfad(w.bereich, w.kundeId),
+    })
   }
 
   for (const o of state.objekte) {
