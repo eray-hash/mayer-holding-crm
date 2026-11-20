@@ -4020,6 +4020,23 @@ Deno.serve((req: Request) => mitAnlass(async () => {
     return new Response(JSON.stringify({ ok: true, an: r.an }), { headers: { 'content-type': 'application/json' } })
   }
 
+  // Datei aus einer Akte an einen Mitarbeiter schicken, angestoßen von außen (z. B. nach Erays Freigabe
+  // eine korrigierte Fassung). Nur mit dem Dienst-Schlüssel; Rechte und Sperren wie bei datei_senden —
+  // der Absender muss die Akte sehen dürfen, der Empfänger ebenfalls.
+  if (body?.intern === 'datei_an_mitarbeiter') {
+    if (!internDienst) return new Response('Unauthorized', { status: 401 })
+    if (typeof body.absenderEmail !== 'string' || typeof body.an !== 'string' || typeof body.kunde_id !== 'string') return new Response('Bad request', { status: 400 })
+    const { data: absender } = await supa().from('mitarbeiter').select('id, name, email, rolle, ist_admin, bereiche, aktiv').ilike('email', body.absenderEmail.trim()).eq('aktiv', true).maybeSingle()
+    if (!absender) return new Response(JSON.stringify({ ok: false, grund: 'Absender unbekannt' }), { status: 404 })
+    const protokoll: string[] = []
+    const text = await fuehreDokumentWerkzeugAus(
+      'datei_senden',
+      { kunde_id: body.kunde_id, dokument_id: body.dokument_id, name: body.name, bildunterschrift: body.bildunterschrift, an: body.an },
+      { supabase: supa(), mitarbeiter: absender, protokolliere: (t: string) => protokoll.push(t), heute: heuteBerlin() },
+    )
+    return new Response(JSON.stringify({ ok: text.startsWith('Gesendet'), text, protokoll }), { headers: { 'content-type': 'application/json' } })
+  }
+
   // Prüfung, ob Telegram Knopfdrücke zustellt (allowed_updates) — nur mit dem Dienst-Schlüssel, liefert keine Inhalte.
   if (body?.intern === 'webhook_info') {
     if (!istDienstSchluessel((req.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '').trim())) return new Response('Unauthorized', { status: 401 })

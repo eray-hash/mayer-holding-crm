@@ -27,7 +27,7 @@ export const TELEGRAM_GRENZE = 50 * 1024 * 1024
 export const DATEI_SENDEN_WERKZEUG = {
   name: 'datei_senden',
   description:
-    'Schickt eine Datei aus den Dokumenten einer Kundenakte (PDF, Word, Excel, Foto, Scan …) direkt als Datei in den Telegram-Chat des Mitarbeiters, mit dem du gerade sprichst. Verwenden, wenn der Mitarbeiter eine Datei "hier", "in Telegram", "aufs Handy" haben möchte oder "schick mir …" sagt — auch gleich nach dokument_erstellen oder tabelle_erstellen. Die Datei wird mit dokument_id (aus einer früheren Antwort, z. B. von dokument_erstellen, tabelle_erstellen oder kundenakte_lesen) oder einem Suchbegriff aus dem Dateinamen gewählt; bei mehreren Treffern kommt eine Liste zum Nachfragen. Sensible Unterlagen (Ausweis, Kontoauszug, Steuer-, Gehalts- und Gesundheitsunterlagen, unterschriebene Verträge) werden aus Datenschutzgründen nicht über Telegram verschickt.',
+    'Schickt eine Datei aus den Dokumenten einer Kundenakte (PDF, Word, Excel, Foto, Scan …) direkt als Datei in den Telegram-Chat des Mitarbeiters, mit dem du gerade sprichst. Verwenden, wenn der Mitarbeiter eine Datei "hier", "in Telegram", "aufs Handy" haben möchte oder "schick mir …" sagt — auch gleich nach dokument_erstellen oder tabelle_erstellen. Die Datei wird mit dokument_id (aus einer früheren Antwort, z. B. von dokument_erstellen, tabelle_erstellen oder kundenakte_lesen) oder einem Suchbegriff aus dem Dateinamen gewählt; bei mehreren Treffern kommt eine Liste zum Nachfragen. Mit "an" geht die Datei stattdessen an einen Kollegen (z. B. "schick das Merkblatt an Andreas"); er muss die Akte selbst sehen dürfen, private Akten gehen nie an andere. Sensible Unterlagen (Ausweis, Kontoauszug, Steuer-, Gehalts- und Gesundheitsunterlagen, unterschriebene Verträge) werden aus Datenschutzgründen nicht über Telegram verschickt.',
   input_schema: {
     type: 'object',
     properties: {
@@ -35,6 +35,7 @@ export const DATEI_SENDEN_WERKZEUG = {
       dokument_id: { type: 'string', description: 'Kennung des Dokuments (dokument_id), wenn bekannt.' },
       name: { type: 'string', description: 'Sonst: Dateiname oder ein Wort daraus, z. B. "Mieterliste".' },
       bildunterschrift: { type: 'string', description: 'Optional: kurzer Text unter der Datei (höchstens 1000 Zeichen).' },
+      an: { type: 'string', description: 'Optional: Name eines Kollegen, an den die Datei gehen soll (statt an den Mitarbeiter selbst). Nur wenn er das ausdrücklich will.' },
     },
     required: ['kunde_id'],
   },
@@ -191,8 +192,29 @@ export async function fuehreDateiSendenAus(input: any, k: SendeKontext): Promise
     return `Nicht gesendet: „${dok.name}" ist eine sensible Unterlage (${sensibel}). Solche Unterlagen verschicke ich aus Datenschutzgründen nicht über Telegram (mit Telegram besteht kein Auftragsverarbeitungsvertrag). Sag dem Mitarbeiter, dass er sie im CRM in der Akte von ${akteName} unter Dokumente öffnen kann.`
   }
 
-  // Chat des Mitarbeiters, der gerade schreibt.
-  let chatId = k.chatId ?? null
+  // Empfänger: der Mitarbeiter selbst oder — mit "an" — ein Kollege (Wunsch vom 20.11.2026). Der
+  // Kollege muss die Akte selbst sehen dürfen; private Akten gehen nie an andere.
+  const anName = String(input?.an ?? '').trim()
+  let empfaenger = mitarbeiter.name
+  let chatId = anName ? null : (k.chatId ?? null)
+  let beschriftung = unterschrift
+  if (anName) {
+    const { data: alle, error: mFehler } = await supabase.from('mitarbeiter').select('id, name, email, rolle, ist_admin, bereiche, telegram_chat_id, aktiv').eq('aktiv', true)
+    if (mFehler) return `Fehler beim Laden der Kollegen: ${mFehler.message}`
+    const such = einfach(anName)
+    // deno-lint-ignore no-explicit-any
+    const kandidaten = (alle ?? []).filter((m: any) => einfach(m.name ?? '') === such || einfach(m.name ?? '').split(' ').includes(such) || einfach(m.name ?? '').includes(such))
+    if (kandidaten.length === 0) return `Nicht gesendet: Einen Kollegen „${anName}" gibt es nicht.`
+    // deno-lint-ignore no-explicit-any
+    if (kandidaten.length > 1) return `Mehrere Kollegen passen zu „${anName}": ${kandidaten.map((m: any) => m.name).join(', ')}. Bitte nachfragen, wer gemeint ist.`
+    const kollege = kandidaten[0]
+    if (kollege.email && mitarbeiter.email && String(kollege.email).toLowerCase() === String(mitarbeiter.email).toLowerCase()) return await fuehreDateiSendenAus({ ...input, an: '' }, k)
+    if (!darf(kollege, akte)) return istPrivat(akte) ? 'Nicht gesendet: Dateien aus privaten Akten gehen nicht an Kollegen.' : `Nicht gesendet: ${kollege.name} darf die Akte von ${akteName} nicht sehen (Bereich nicht freigegeben).`
+    empfaenger = kollege.name
+    chatId = kollege.telegram_chat_id ?? null
+    if (!chatId) return `Nicht gesendet: ${kollege.name} ist nicht mit Telegram verbunden. Die Datei liegt in der Akte von ${akteName} unter Dokumente.`
+    beschriftung = `Von ${mitarbeiter.name}${unterschrift ? `: ${unterschrift}` : ` — „${name}" aus der Akte ${akteName}`}`.slice(0, 1000)
+  }
   if (!chatId) {
     const spalte = mitarbeiter.id ? 'id' : 'email'
     const wert = mitarbeiter.id ?? mitarbeiter.email
@@ -213,15 +235,15 @@ export async function fuehreDateiSendenAus(input: any, k: SendeKontext): Promise
   const typ = dok.typ || TYP_NACH_ENDUNG[name.split('.').pop()?.toLowerCase() ?? ''] || 'application/octet-stream'
   const token = k.botToken === undefined ? Deno.env.get('TELEGRAM_BOT_TOKEN') : k.botToken
   if (!token) {
-    console.log(`[Telegram-Datei -> ${chatId}] ${name} (${formatGroesse(bytes.length)}, ${typ})${unterschrift ? ` — ${unterschrift}` : ''}`)
-    protokolliere(`„${name}" aus der Akte ${akteName} an ${mitarbeiter.name} geschickt (Testlauf, nicht wirklich gesendet)`)
-    return `Testlauf ohne Bot-Schlüssel: „${name}" (${formatGroesse(bytes.length)}) wäre jetzt in den Telegram-Chat von ${mitarbeiter.name} gegangen, wurde aber nur protokolliert.`
+    console.log(`[Telegram-Datei -> ${chatId}] ${name} (${formatGroesse(bytes.length)}, ${typ})${beschriftung ? ` — ${beschriftung}` : ''}`)
+    protokolliere(`„${name}" aus der Akte ${akteName} an ${empfaenger} geschickt (Testlauf, nicht wirklich gesendet)`)
+    return `Testlauf ohne Bot-Schlüssel: „${name}" (${formatGroesse(bytes.length)}) wäre jetzt in den Telegram-Chat von ${empfaenger} gegangen, wurde aber nur protokolliert.`
   }
 
   const form = new FormData()
   form.append('chat_id', String(chatId))
   form.append('document', new Blob([bytes], { type: typ }), name)
-  if (unterschrift) form.append('caption', unterschrift)
+  if (beschriftung) form.append('caption', beschriftung)
   let res: Response
   try {
     res = await abruf(`https://api.telegram.org/bot${token}/sendDocument`, { method: 'POST', body: form, signal: AbortSignal.timeout(90_000) })
@@ -231,10 +253,10 @@ export async function fuehreDateiSendenAus(input: any, k: SendeKontext): Promise
   // deno-lint-ignore no-explicit-any
   const antwort: any = await res.json().catch(() => null)
   if (!res.ok || !antwort?.ok) {
-    const meldung = telegramFehler(antwort?.error_code ?? res.status, String(antwort?.description ?? ''), mitarbeiter.name)
+    const meldung = telegramFehler(antwort?.error_code ?? res.status, String(antwort?.description ?? ''), empfaenger)
     console.error('sendDocument fehlgeschlagen:', res.status, antwort?.description ?? '')
     return `Nicht gesendet: ${meldung}`
   }
-  protokolliere(`„${name}" aus der Akte ${akteName} per Telegram an ${mitarbeiter.name} geschickt`)
-  return `Gesendet: „${name}" (${formatGroesse(bytes.length)}) liegt jetzt als Datei im Telegram-Chat von ${mitarbeiter.name}. Bestätige das in deiner Antwort nur kurz, ohne die Datei noch einmal zu beschreiben.`
+  protokolliere(`„${name}" aus der Akte ${akteName} per Telegram an ${empfaenger} geschickt`)
+  return `Gesendet: „${name}" (${formatGroesse(bytes.length)}) liegt jetzt als Datei im Telegram-Chat von ${empfaenger}. Bestätige das in deiner Antwort nur kurz, ohne die Datei noch einmal zu beschreiben.`
 }

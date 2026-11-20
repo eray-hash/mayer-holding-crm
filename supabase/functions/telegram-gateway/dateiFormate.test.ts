@@ -390,3 +390,23 @@ Deno.test('datei_senden: Speicherort und Suche', () => {
   assertEquals(findeDokument(doks, '', 'Mieterliste'), { dok: doks[0] }, 'genauer Name gewinnt')
   assert('meldung' in findeDokument(doks, '', 'xyz'))
 })
+
+Deno.test('datei_senden an Kollegen: mit Absender in der Unterschrift; ohne Telegram-Verbindung oder Rechte nicht', async () => {
+  const d = db()
+  await legeAb(d, 'email-anhaenge', 'telegram/17000_liste.jpg', 'BILD')
+  const tg = falschesTelegram()
+  // Carl (Geschäftsführung) schickt an Anna (Bereich Beratung, mit Telegram) — Akte k_b ist Beratung.
+  const { k } = kontext(d, CARL, { botToken: 'TOKEN', abruf: tg.abruf })
+  const aus = await fuehreDokumentWerkzeugAus('datei_senden', { kunde_id: 'k_b', name: 'liste foto', an: 'Anna' }, k)
+  assertStringIncludes(aus, 'Telegram-Chat von Anna Alt')
+  assertEquals(tg.anfragen.length, 1)
+  assertEquals(tg.anfragen[0].form!.get('chat_id'), '4711')
+  assertStringIncludes(String(tg.anfragen[0].form!.get('caption')), 'Von Carl Kollege')
+  // Anna schickt an Carl: Carl hat keinen Telegram-Chat.
+  const k2 = kontext(d, ANNA, { botToken: 'TOKEN', abruf: tg.abruf }).k
+  assertStringIncludes(await fuehreDokumentWerkzeugAus('datei_senden', { kunde_id: 'k_b', name: 'liste foto', an: 'Carl' }, k2), 'nicht mit Telegram verbunden')
+  assertStringIncludes(await fuehreDokumentWerkzeugAus('datei_senden', { kunde_id: 'k_b', name: 'liste foto', an: 'Niemand' }, k2), 'gibt es nicht')
+  // Empfänger ohne Recht auf den Bereich: Anna darf nur Beratung — Akte in einem anderen Bereich.
+  d.tabelle('kunden').find((z) => z.id === 'k_b')!.bereich = 'erben'
+  assertStringIncludes(await fuehreDokumentWerkzeugAus('datei_senden', { kunde_id: 'k_b', name: 'liste foto', an: 'Anna' }, k), 'darf die Akte')
+})
