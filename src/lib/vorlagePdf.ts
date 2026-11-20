@@ -1,6 +1,7 @@
 import jsPDF from 'jspdf'
 import { hatKopfzeile, zerlegeVorlage, type InlineTeil, type VorlagenBlock } from './vorlagenFuellen'
 import { BRIEFKOPF, type Briefkopf } from '../data/briefkopf'
+import { MAYER_LOGO_PNG, MAYER_LOGO_VERHAELTNIS } from '../data/mayerLogo'
 
 // Erzeugt aus einer ausgefüllten Vorlage ein A4-PDF mit Briefkopf. Nutzt dieselbe Zerlegung wie die
 // Vorschau am Bildschirm (zerlegeVorlage), damit Druck und Vorschau nicht auseinanderlaufen.
@@ -9,11 +10,80 @@ import { BRIEFKOPF, type Briefkopf } from '../data/briefkopf'
 // werden deshalb gezeichnet statt als Schriftzeichen gesetzt, und alles andere Unbekannte wird in
 // `sicher` auf ein lesbares Ersatzzeichen abgebildet, statt als Fragezeichen-Salat zu erscheinen.
 
-const LINKS = 22
-const OBEN = 18
-const UNTEN = 22
 const ZEILE = 5
 const KASTEN = 3.1
+
+// ---- Kopfstile: jede Vorlage sieht aus wie ihr gescanntes Original (Scans vom 21.09.2026, SKM_C3350i…) ----
+// Maße in mm, abgenommen von den Scans bzw. dem Word-Briefbogen „AMayer Holding Ulmer Wirtschaftskanzlei 01.09.2026“.
+export type Kopfstil =
+  | 'brief' // Brief: Logo, Rücksendezeile, Leiste „Ulmer Wirtschaftskanzlei“, Fußzeile mit Balken (10100-1, 10110-6)
+  | 'fragebogen' // Logo + Rücksendezeile auf jeder Seite, Leiste im Rahmen auf Seite 1, Fußzeile (10080)
+  | 'vertrag' // Logo auf jeder Seite, unten links „1 von 4“ (10040)
+  | 'kopffelder' // kleines Logo oben links, daneben Bereich/Datum/Kunde/Telefon auf jeder Seite (10090)
+  | 'protokoll' // kleines Logo oben links, Titel und erste Zeilen daneben (10100-7)
+  | 'kooperation' // Logo, „in Kooperation“, rechts „Andreas Mayer Holding“, Fußzeile (10100-2/3)
+  | 'schlicht' // ohne Briefkopf (10100-4/5)
+  | 'schlichtSerif' // ohne Briefkopf, Serifenschrift (10100-6)
+  | 'erben' // Logo + Rücksendezeile, unten „Vertrauliche Mandantenunterlage“, blaue Überschriften (10110)
+  | 'memo' // ohne Logo, blauer Serifentitel (10120)
+  | 'feedback' // Logo blass oben rechts (10121)
+
+type Stil = {
+  schrift: 'helvetica' | 'times'
+  logo?: { x: number; y: number; breite: number; seiten: 'alle' | 'erste'; blass?: boolean }
+  rueck?: { y: number; seiten: 'alle' | 'erste' }
+  leiste?: 'frei' | 'rahmen'
+  fuss: 'mayer' | 'mayerBalken' | 'vertraulich' | 'seitenzahlLinks' | 'keiner'
+  kooperation?: boolean
+  start1: number // Textbeginn Seite 1
+  startN: number // Textbeginn Folgeseiten
+  links: number
+  rechts: number // rechter Rand (ohne Leiste)
+  unten: number
+  titelMitte?: boolean
+  titelFarbe?: [number, number, number]
+  ueberFarbe?: [number, number, number]
+  kopfFuellung?: [number, number, number] // Tabellenkopf
+  nebenLogo?: number // Text neben dem Logo beginnt bei x (solange er auf Logohöhe liegt)
+  titel?: { groesse: number; fett: boolean } // Abweichende Titelschrift
+  untertitelSchwarz?: boolean // erste Überschrift direkt nach dem Titel: schwarz, 12,5 pt (Erben-Fragebogen)
+  handZeile?: number // Luft über Zeilen zum Ausfüllen von Hand
+  kopfFelderNachVorn?: boolean // „Bereich: … / Kunde: …“ vor den Titel ziehen und auf jeder Seite neben dem Logo wiederholen
+  mitteBisParagraf?: boolean // Parteienblock (vor „§ 1“) mittig, wie die Vereinbarung im Scan
+}
+
+const LOGO_STANDARD = { x: 16.5, y: 9.4, breite: 24 }
+const BLAU: [number, number, number] = [46, 116, 181]
+const STILE: Record<Kopfstil, Stil> = {
+  brief: { schrift: 'times', logo: { ...LOGO_STANDARD, seiten: 'alle' }, rueck: { y: 41.2, seiten: 'erste' }, leiste: 'frei', fuss: 'mayerBalken', start1: 49, startN: 45, links: 21, rechts: 61, unten: 40 },
+  fragebogen: { schrift: 'helvetica', logo: { ...LOGO_STANDARD, seiten: 'alle' }, rueck: { y: 38.5, seiten: 'alle' }, leiste: 'rahmen', fuss: 'mayer', start1: 47, startN: 47, links: 21, rechts: 18, unten: 30, titel: { groesse: 10.5, fett: false }, handZeile: 4.2 },
+  vertrag: { schrift: 'times', logo: { x: 17, y: 22, breite: 22, seiten: 'alle' }, fuss: 'seitenzahlLinks', start1: 62, startN: 56, links: 21, rechts: 20, unten: 22, titel: { groesse: 16, fett: true } },
+  kopffelder: { schrift: 'helvetica', logo: { x: 15, y: 9, breite: 15, seiten: 'alle' }, fuss: 'keiner', start1: 13, startN: 13, links: 21, rechts: 18, unten: 18, nebenLogo: 34, kopfFelderNachVorn: true, titel: { groesse: 12.5, fett: true } },
+  protokoll: { schrift: 'helvetica', logo: { x: 12, y: 8, breite: 15, seiten: 'erste' }, fuss: 'keiner', start1: 13, startN: 18, links: 14, rechts: 14, unten: 18, nebenLogo: 33, titel: { groesse: 12.5, fett: false } },
+  kooperation: { schrift: 'helvetica', logo: { x: 18, y: 25, breite: 20, seiten: 'alle' }, kooperation: true, fuss: 'mayer', start1: 72, startN: 58, links: 25, rechts: 22, unten: 30, titelMitte: true, titel: { groesse: 13, fett: true }, handZeile: 3.5 },
+  schlicht: { schrift: 'helvetica', fuss: 'keiner', start1: 30, startN: 20, links: 25, rechts: 22, unten: 18, titelMitte: true, titel: { groesse: 11, fett: true }, mitteBisParagraf: true },
+  schlichtSerif: { schrift: 'times', fuss: 'keiner', start1: 52, startN: 25, links: 25, rechts: 22, unten: 22, titel: { groesse: 11, fett: false }, handZeile: 3.5 },
+  erben: { schrift: 'helvetica', logo: { x: 18, y: 12, breite: 22, seiten: 'alle' }, rueck: { y: 43.5, seiten: 'alle' }, fuss: 'vertraulich', start1: 52, startN: 50, links: 21, rechts: 18, unten: 20, titelMitte: true, titel: { groesse: 17, fett: true }, untertitelSchwarz: true, ueberFarbe: BLAU, kopfFuellung: [200, 200, 200] },
+  memo: { schrift: 'times', fuss: 'keiner', start1: 26, startN: 20, links: 23, rechts: 20, unten: 18, titel: { groesse: 15, fett: true }, titelFarbe: [79, 129, 189], ueberFarbe: [79, 129, 189] },
+  feedback: { schrift: 'helvetica', logo: { x: 177, y: 9, breite: 15, seiten: 'erste', blass: true }, fuss: 'keiner', start1: 24, startN: 18, links: 22, rechts: 20, unten: 18, kopfFuellung: [244, 204, 204] },
+}
+
+/** Kopfstil einer Vorlage nach ihrem Namen — wie das gescannte Original aussieht. */
+export function kopfstilFuer(name: string): Kopfstil {
+  const n = name.toLowerCase()
+  if (/anschreiben|rechnung/.test(n)) return 'brief'
+  if (/mandantenfragebogen.*(unternehmen|privat)/.test(n)) return 'fragebogen'
+  if (/mandantenfragebogen|nachfolgeplanung/.test(n)) return 'erben'
+  if (/beratungsvereinbarung/.test(n)) return 'vertrag'
+  if (/vollmacht.*(finanzamt|bank)/.test(n)) return 'kooperation'
+  if (/allgemeine vollmacht/.test(n)) return 'schlichtSerif'
+  if (/geheimhaltung|quellenschutz|\bnda\b/.test(n)) return 'schlicht'
+  if (/mandantenmemo/.test(n)) return 'memo'
+  if (/feedbackbogen/.test(n)) return 'feedback'
+  if (/gesprächsprotokoll|gespraechsprotokoll/.test(n)) return 'protokoll'
+  if (/beratungsfragen|steuerberater|unterlagen|checkliste/.test(n)) return 'kopffelder'
+  return 'fragebogen'
+}
 
 function sicher(text: string): string {
   return text
@@ -32,57 +102,122 @@ export function erzeugeVorlagePdf(params: {
   werte: Record<string, string>
   angekreuzt: ReadonlySet<number>
   briefkopf?: Briefkopf
+  /** Kopfstil; ohne Angabe 'fragebogen'. Passend zur Vorlage: kopfstilFuer(vorlage.name). */
+  kopfstil?: Kopfstil
 }): jsPDF {
   const kopf = params.briefkopf ?? BRIEFKOPF
+  const st = STILE[params.kopfstil ?? 'fragebogen']
+  const FAM = st.schrift
+  const LINKS = st.links
+  const UNTEN = st.unten
   const doc = new jsPDF({ unit: 'mm', format: 'a4' })
   const seitenBreite = doc.internal.pageSize.getWidth()
   const seitenHoehe = doc.internal.pageSize.getHeight()
-  const leisteBreite = kopf.seitenleiste.length > 0 ? 42 : 0
-  const breiteMitLeiste = seitenBreite - LINKS - 16 - leisteBreite - (leisteBreite ? 6 : 0)
-  const breiteOhneLeiste = seitenBreite - LINKS - 18
+  const leiste = st.leiste && kopf.seitenleiste.length > 0 ? st.leiste : undefined
+  // Leiste „frei“ (Brief) liegt rechts im Rand (st.rechts = 61); „rahmen“ (Fragebogen) verkleinert Seite 1.
+  const breiteSeite1 = leiste === 'rahmen' ? 152 - LINKS - 5 : seitenBreite - LINKS - st.rechts
+  const breiteFolge = seitenBreite - LINKS - (st.fuss === 'mayerBalken' ? st.rechts : Math.min(st.rechts, 22))
   let seite = 1
-  let y = OBEN
-  const textBreite = () => (seite === 1 ? breiteMitLeiste : breiteOhneLeiste)
+  let y = st.start1
+  const logoUnten = st.logo ? st.logo.y + st.logo.breite / MAYER_LOGO_VERHAELTNIS + 1.5 : 0
+  let kopfWiederholung = false
+  const nebenLogo = () => !!st.nebenLogo && (seite === 1 || kopfWiederholung) && y < logoUnten
+  const xStart = () => (nebenLogo() ? st.nebenLogo! : LINKS)
+  const textBreite = () => (seite === 1 ? breiteSeite1 : breiteFolge) - (xStart() - LINKS)
 
   const schrift = (stil: 'normal' | 'bold', groesse: number, grau = 20) => {
-    doc.setFont('helvetica', stil)
+    doc.setFont(FAM, stil)
     doc.setFontSize(groesse)
     doc.setTextColor(grau)
   }
+  let farbe: [number, number, number] | null = null
+  const setzeFarbe = () => {
+    if (farbe) doc.setTextColor(farbe[0], farbe[1], farbe[2])
+  }
 
-  function kopfZeichnen() {
-    schrift('bold', 13, 25)
-    doc.text(sicher(kopf.name), LINKS, OBEN)
-    schrift('normal', 8.5, 90)
-    let ky = OBEN + 5
-    for (const z of kopf.unterzeilen) {
-      doc.text(sicher(z), LINKS, ky)
-      ky += 3.8
+  /** Zeilen der Fußzeile in drei Spalten, wie im Original (links / Mitte / rechts). */
+  function fussSpalten(): string[][] {
+    const teile = kopf.fusszeilen.map((z) => z.split('·').map((t) => t.trim()).filter(Boolean))
+    const rechts = (teile[2] ?? []).flatMap((t) => (t.startsWith('GF:') && t.includes(', ') ? [t.slice(0, t.indexOf(', ')), t.slice(t.indexOf(', ') + 2)] : [t]))
+    return [teile[0] ?? [], teile[1] ?? [], rechts]
+  }
+
+  function logoZeichnen(s: number) {
+    const l = st.logo
+    if (!l || (l.seiten === 'erste' && s > 1)) return
+    const hoehe = l.breite / MAYER_LOGO_VERHAELTNIS
+    if (l.blass) {
+      const g = new (doc as unknown as { GState: new (o: { opacity: number }) => unknown }).GState({ opacity: 0.35 })
+      ;(doc as unknown as { setGState: (g: unknown) => void }).setGState(g)
     }
-    doc.setDrawColor(190)
-    doc.setLineWidth(0.3)
-    doc.line(LINKS, ky + 1, seitenBreite - 16, ky + 1)
-    y = ky + 10
+    doc.addImage(MAYER_LOGO_PNG, 'PNG', l.x, l.y, l.breite, hoehe)
+    if (l.blass) {
+      const g = new (doc as unknown as { GState: new (o: { opacity: number }) => unknown }).GState({ opacity: 1 })
+      ;(doc as unknown as { setGState: (g: unknown) => void }).setGState(g)
+    }
+  }
 
-    if (leisteBreite) {
-      const lx = seitenBreite - 16 - leisteBreite
-      let ly = y
-      doc.setDrawColor(215)
-      doc.line(lx - 4, ly - 3, lx - 4, seitenHoehe - UNTEN - 6)
+  function kopfZeichnen(s: number) {
+    logoZeichnen(s)
+    if (st.rueck && (st.rueck.seiten === 'alle' || s === 1)) {
+      const t = sicher(kopf.unterzeilen[0]?.replace(/\s*·\s*/g, ' ') ?? '')
+      doc.setFont('times', 'normal')
+      doc.setFontSize(st.schrift === 'times' ? 8.2 : 7.5)
+      doc.setTextColor(0)
+      doc.text(t, LINKS, st.rueck.y)
+      doc.setDrawColor(0)
+      doc.setLineWidth(0.15)
+      doc.line(LINKS, st.rueck.y + 0.7, LINKS + doc.getTextWidth(t), st.rueck.y + 0.7)
+    }
+    if (st.kooperation) {
+      doc.setFont('helvetica', 'normal')
+      doc.setFontSize(8)
+      doc.setTextColor(60)
+      doc.text('in Kooperation', 43, 42)
+      doc.setFont('times', 'bold')
+      doc.setFontSize(24)
+      doc.setTextColor(236, 168, 120)
+      doc.text(sicher(kopf.name === 'Mayer Consulting' ? 'Andreas Mayer Holding' : kopf.name), seitenBreite - 17, 33, { align: 'right' })
+      doc.setFont('times', 'normal')
+      doc.setFontSize(7.5)
+      const [l1, , r1] = fussSpalten()
+      const zeilen = [l1[1], l1[2], r1[0], r1[1]].filter(Boolean) as string[]
+      zeilen.forEach((z, i) => doc.text(sicher(z), seitenBreite - 17, 37.5 + i * 3.2, { align: 'right' }))
+    }
+    if (s === 1 && leiste) {
+      const lx = leiste === 'rahmen' ? 156 : 158.2
+      let ly = leiste === 'rahmen' ? 22 : 21
+      if (leiste === 'rahmen') {
+        doc.setDrawColor(60)
+        doc.setLineWidth(0.3)
+        doc.rect(152, 13, 43, 172)
+      }
       for (const eintrag of kopf.seitenleiste) {
-        if (eintrag.titel) {
-          schrift('bold', 7.5, 60)
-          doc.text(sicher(eintrag.titel), lx, ly)
-          ly += 3.6
+        if (!eintrag.zeilen.length) {
+          doc.setFont('times', 'bold')
+          doc.setFontSize(leiste === 'rahmen' ? 10.5 : 14.5)
+          doc.setTextColor(0)
+          for (const teil of eintrag.titel.split(' ')) {
+            doc.text(sicher(teil), lx, ly)
+            ly += leiste === 'rahmen' ? 4.4 : 5.6
+          }
+          ly += leiste === 'rahmen' ? 5 : 8.5
+          continue
         }
-        schrift('normal', 6.6, 105)
+        doc.setFont('times', 'bold')
+        doc.setFontSize(leiste === 'rahmen' ? 6.8 : 8.6)
+        doc.setTextColor(0)
+        doc.text(sicher(eintrag.titel), lx, ly)
+        ly += leiste === 'rahmen' ? 2.6 : 3.05
+        doc.setFont('times', 'normal')
+        doc.setFontSize(leiste === 'rahmen' ? 6.3 : 8.3)
         for (const z of eintrag.zeilen) {
-          for (const teil of doc.splitTextToSize(sicher(z), leisteBreite) as string[]) {
+          for (const teil of doc.splitTextToSize(sicher(z), leiste === 'rahmen' ? 36 : 47) as string[]) {
             doc.text(teil, lx, ly)
-            ly += 2.9
+            ly += leiste === 'rahmen' ? 2.5 : 3.05
           }
         }
-        ly += 2.4
+        ly += leiste === 'rahmen' ? 4.2 : 5.5
       }
     }
   }
@@ -90,7 +225,7 @@ export function erzeugeVorlagePdf(params: {
   function neueSeite() {
     doc.addPage()
     seite++
-    y = OBEN + 2
+    y = st.kopfFelderNachVorn ? Math.max(st.startN, logoUnten + 2) : st.startN
   }
   // Im Messlauf (hoeheVon) wird nur gerechnet: nichts gezeichnet, kein Seitenwechsel.
   let messen = false
@@ -187,7 +322,8 @@ export function erzeugeVorlagePdf(params: {
         doc.setLineWidth(0.2)
         doc.line(x, yy + 0.6, x + w.breite, yy + 0.6)
       } else {
-        doc.setFont('helvetica', w.fett ? 'bold' : 'normal')
+        doc.setFont(FAM, w.fett ? 'bold' : 'normal')
+        setzeFarbe()
         doc.text(w.text, x, yy)
       }
       x += w.breite
@@ -198,8 +334,8 @@ export function erzeugeVorlagePdf(params: {
     grundStil = stil
     grundGroesse = groesse
     schrift(stil, groesse)
-    const x0 = LINKS + Math.min(einzug, 12) * 1.6
-    const breite = textBreite() - (x0 - LINKS)
+    const x0 = xStart() + Math.min(einzug, 12) * 1.6
+    const breite = textBreite() - (x0 - xStart())
     const leer = doc.getTextWidth(' ')
     for (let z of umbrechen(worte(teile), breite)) {
       // Endet die Zeile mit einem leeren Feld hinter einer Bezeichnung (z. B. "Anschrift: ____"), reicht
@@ -210,11 +346,14 @@ export function erzeugeVorlagePdf(params: {
         const x = z.slice(0, -1).reduce((summe, w) => summe + w.breite + (w.nachLeer ? leer : 0), 0)
         z = [...z.slice(0, -1), { ...letztes, breite: Math.max(letztes.breite, breite - x) }]
       }
-      const vorlauf = vonHand ? 2.6 : 0
+      const vorlauf = vonHand ? (st.handZeile ?? 2.6) : 0
       platz(vorlauf + zeilenhoehe)
       y += vorlauf
       schrift(stil, groesse)
-      zeichneZeile(z, x0, y)
+      const zeilenBreite = () => z.reduce((summe, w, i) => summe + w.breite + (i > 0 && z[i - 1].nachLeer ? leer : 0), 0)
+      if (titelMitte) zeichneZeile(z, xStart() + (breite - zeilenBreite()) / 2, y)
+      else if (rechtsBuendig) zeichneZeile(z, xStart() + breite - zeilenBreite(), y)
+      else zeichneZeile(z, x0, y)
       y += zeilenhoehe
     }
   }
@@ -241,14 +380,15 @@ export function erzeugeVorlagePdf(params: {
       const zellen = Array.from({ length: spalten }, (_, s) => umbrechen(worte(zeile[s] ?? []), b[s] - 3))
       const hoehe = Math.max(1, ...zellen.map((z) => z.length)) * 4.2 + 2.6
       platz(hoehe)
-      let x = LINKS
+      let x = xStart()
       zellen.forEach((zelle, s) => {
         doc.setDrawColor(170)
         doc.setLineWidth(0.2)
         if (messen) {
           // nur messen
         } else if (istKopf) {
-          doc.setFillColor(242, 242, 242)
+          const f = st.kopfFuellung ?? [242, 242, 242]
+          doc.setFillColor(f[0], f[1], f[2])
           doc.rect(x, y - 3.6, b[s], hoehe, 'FD')
         } else {
           doc.rect(x, y - 3.6, b[s], hoehe)
@@ -306,7 +446,12 @@ export function erzeugeVorlagePdf(params: {
   }
 
   let leerFolge = 0
+  let titelMitte = false
+  let rechtsBuendig = false
+  let ersteUeberschrift = true
+  let paragrafErreicht = false
   function setze(block: VorlagenBlock) {
+    if (block.art !== 'ueberschrift' && block.art !== 'leer' && block.art !== 'titel') ersteUeberschrift = false
     if (block.art === 'leer') {
       if (leerFolge++ < 1) y += ZEILE * 0.7
       return
@@ -314,15 +459,35 @@ export function erzeugeVorlagePdf(params: {
     leerFolge = 0
     if (block.art === 'titel') {
       platz(12)
-      absatz(block.teile, 'bold', 14.5, 6.8)
+      farbe = st.titelFarbe ?? null
+      titelMitte = !!st.titelMitte
+      const t = st.titel ?? { groesse: 14.5, fett: true }
+      absatz(block.teile, t.fett ? 'bold' : 'normal', t.groesse, t.groesse * 0.47)
+      titelMitte = false
+      farbe = null
       y += 2
     } else if (block.art === 'ueberschrift') {
       platz(12)
       y += 1.5
-      absatz(block.teile, 'bold', 10.5, 5.4)
+      const untertitel = !!st.titelMitte && ersteUeberschrift
+      farbe = untertitel && st.untertitelSchwarz ? null : (st.ueberFarbe ?? null)
+      titelMitte = untertitel
+      ersteUeberschrift = false
+      const gross = untertitel && st.untertitelSchwarz ? 12.5 : st.titel && !st.titel.fett ? 10 : 10.5
+      absatz(block.teile, st.titel && !st.titel.fett && !untertitel ? 'normal' : 'bold', gross, gross * 0.52)
+      if (/^§\s*1\b/.test(block.teile.map((x) => (x.art === 'text' ? x.text : '')).join('').trim())) paragrafErreicht = true
+      titelMitte = false
+      farbe = null
       y += 0.8
     } else if (block.art === 'zeile') {
-      absatz(block.teile, 'normal', 9.5, ZEILE, block.einzug)
+      const roh = block.teile.map((x) => (x.art === 'text' ? x.text : '')).join('').trim()
+      if (/^§\s*1\b/.test(roh)) paragrafErreicht = true
+      titelMitte = !!st.mitteBisParagraf && !paragrafErreicht && !/^wird\b/i.test(roh)
+      // Brief: Datumszeile „Ulm, den …“ rechtsbündig wie im Original (10100-1, 10110-6)
+      rechtsBuendig = st.fuss === 'mayerBalken' && /^[A-ZÄÖÜ][\wäöüß.-]*,\s+den\b/.test(roh)
+      absatz(block.teile, 'normal', st.schrift === 'times' ? 10.5 : 9.5, ZEILE, block.einzug)
+      titelMitte = false
+      rechtsBuendig = false
     } else if (block.rahmenlos) {
       spalten(block.zeilen)
     } else {
@@ -332,7 +497,7 @@ export function erzeugeVorlagePdf(params: {
 
   /** Höhe, die Blöcke ab der aktuellen Stelle brauchen würden — ohne zu zeichnen. */
   function hoeheVon(liste: VorlagenBlock[]): number {
-    const [y0, folge0] = [y, leerFolge]
+    const [y0, folge0, erste0, paragraf0] = [y, leerFolge, ersteUeberschrift, paragrafErreicht]
     messen = true
     y = 0
     liste.forEach(setze)
@@ -340,11 +505,17 @@ export function erzeugeVorlagePdf(params: {
     messen = false
     y = y0
     leerFolge = folge0
+    ersteUeberschrift = erste0
+    paragrafErreicht = paragraf0
     return hoehe
   }
 
-  kopfZeichnen()
-  const bloecke = zerlegeVorlage(params.text)
+  const alleBloecke = zerlegeVorlage(params.text)
+  // Scans 10090/10100-7: „Bereich: … Datum: …“ und „Kunde: … Telefon: …“ stehen oben neben dem Logo, auf jeder Seite.
+  const istKopfFeld = (b: VorlagenBlock) =>
+    b.art === 'zeile' && /^(bereich|kunde|ort)\b/i.test(b.teile.map((x) => (x.art === 'text' ? x.text : '')).join('').trim())
+  const kopfFelder: VorlagenBlock[] = st.kopfFelderNachVorn ? alleBloecke.slice(0, 6).filter(istKopfFeld) : []
+  const bloecke = kopfFelder.length ? [...kopfFelder, { art: 'leer' } as VorlagenBlock, ...alleBloecke.filter((b) => !kopfFelder.includes(b))] : alleBloecke
   bloecke.forEach((block, i) => {
     if (block.art === 'ueberschrift') {
       let ende = i + 1
@@ -355,7 +526,7 @@ export function erzeugeVorlagePdf(params: {
       // sonst steht eine Überschrift nie allein am Seitenende, sondern mit mindestens zwei Zeilen Text.
       const zusammen = abschnitt.some((b) => b.art === 'tabelle' && b.rahmenlos)
       const noetig = zusammen ? hoeheVon(abschnitt) : hoeheVon([block]) + 2 * ZEILE
-      if (noetig > frei && noetig < seitenHoehe - UNTEN - OBEN - 10) neueSeite()
+      if (noetig > frei && noetig < seitenHoehe - UNTEN - st.startN - 10) neueSeite()
     }
     setze(block)
   })
@@ -363,16 +534,41 @@ export function erzeugeVorlagePdf(params: {
   const seiten = doc.getNumberOfPages()
   for (let s = 1; s <= seiten; s++) {
     doc.setPage(s)
-    doc.setDrawColor(200)
-    doc.setLineWidth(0.2)
-    doc.line(LINKS, seitenHoehe - 15, seitenBreite - 16, seitenHoehe - 15)
-    schrift('normal', 6.8, 110)
-    let fy = seitenHoehe - 11.5
-    for (const z of kopf.fusszeilen) {
-      doc.text(sicher(z), LINKS, fy)
-      fy += 3
+    kopfZeichnen(s)
+    if (s > 1 && kopfFelder.length) {
+      const [seiteVorher, yVorher] = [seite, y]
+      seite = s
+      y = st.startN
+      kopfWiederholung = true
+      kopfFelder.forEach(setze)
+      kopfWiederholung = false
+      seite = seiteVorher
+      y = yVorher
     }
-    doc.text(`Seite ${s} von ${seiten}`, seitenBreite - 16, seitenHoehe - 11.5, { align: 'right' })
+    if (st.fuss === 'mayer' || st.fuss === 'mayerBalken') {
+      if (st.fuss === 'mayerBalken') {
+        doc.setFillColor(247, 141, 75)
+        doc.rect(159.6, 262.9, 46.2, 3.6, 'F')
+      }
+      const [l, m, r] = fussSpalten()
+      doc.setFont('helvetica', 'normal')
+      doc.setFontSize(6.8)
+      doc.setTextColor(0)
+      const fy = [273.6, 276.9, 280.1, 283.4]
+      l.forEach((t, i) => doc.text(sicher(t), 21.5, fy[i] ?? fy[3] + (i - 3) * 3.3))
+      m.forEach((t, i) => doc.text(sicher(t), 101.6, fy[i] ?? fy[3] + (i - 3) * 3.3, { align: 'center' }))
+      r.forEach((t, i) => doc.text(sicher(t), 181.7, fy[i] ?? fy[3] + (i - 3) * 3.3, { align: 'right' }))
+    } else if (st.fuss === 'vertraulich') {
+      doc.setFont('helvetica', 'normal')
+      doc.setFontSize(7.5)
+      doc.setTextColor(30)
+      doc.text('Vertrauliche Mandantenunterlage', seitenBreite / 2, seitenHoehe - 9, { align: 'center' })
+    } else if (st.fuss === 'seitenzahlLinks') {
+      doc.setFont(FAM, 'normal')
+      doc.setFontSize(9)
+      doc.setTextColor(30)
+      doc.text(`${s} von ${seiten}`, LINKS, seitenHoehe - 10)
+    }
   }
   return doc
 }

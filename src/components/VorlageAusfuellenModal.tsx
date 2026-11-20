@@ -6,7 +6,7 @@ import { KUNDEN_BEREICHE } from '../data/kundenBereiche'
 import { CURRENT_USER } from '../data/constants'
 import { briefkopfAus } from '../data/briefkopf'
 import { ladeKundenDokumentHoch } from '../lib/kundenDokumenteStorage'
-import { erzeugeVorlagePdf } from '../lib/vorlagePdf'
+import { erzeugeVorlagePdf, kopfstilFuer } from '../lib/vorlagePdf'
 import {
   felderAus,
   fuelleAlsText,
@@ -111,7 +111,7 @@ export function VorlageAusfuellenModal({
   function alsPdf() {
     setFehler('')
     try {
-      erzeugeVorlagePdf({ text: vorlage.text, werte, angekreuzt, briefkopf }).save(dateiname())
+      erzeugeVorlagePdf({ text: vorlage.text, werte, angekreuzt, briefkopf, kopfstil: kopfstilFuer(vorlage.name) }).save(dateiname())
     } catch (err) {
       setFehler(err instanceof Error ? err.message : 'PDF konnte nicht erzeugt werden.')
     }
@@ -122,7 +122,7 @@ export function VorlageAusfuellenModal({
     setFehler('')
     setAblegen('laeuft')
     try {
-      const blob = erzeugeVorlagePdf({ text: vorlage.text, werte, angekreuzt, briefkopf }).output('blob')
+      const blob = erzeugeVorlagePdf({ text: vorlage.text, werte, angekreuzt, briefkopf, kopfstil: kopfstilFuer(vorlage.name) }).output('blob')
       const name = dateiname()
       const file = new File([blob], name, { type: 'application/pdf' })
       const { pfad, groesse } = await ladeKundenDokumentHoch(auswahl.kunde.id, file)
