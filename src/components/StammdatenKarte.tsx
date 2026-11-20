@@ -20,6 +20,7 @@ export function StammdatenKarte({ bereich, kunde, labels = {} }: { bereich: Kund
     ansprechpartner: kunde.ansprechpartner,
     email: kunde.email,
     telefon: kunde.telefon,
+    anschrift: kunde.anschrift ?? '',
     verantwortlich: kunde.verantwortlich,
   })
 
@@ -29,13 +30,15 @@ export function StammdatenKarte({ bereich, kunde, labels = {} }: { bereich: Kund
       ansprechpartner: kunde.ansprechpartner,
       email: kunde.email,
       telefon: kunde.telefon,
+      anschrift: kunde.anschrift ?? '',
       verantwortlich: kunde.verantwortlich,
     })
     setBearbeiten(true)
   }
 
   function speichern() {
-    dispatch({ type: 'UPDATE_KUNDE_IN_BEREICH', bereich, id: kunde.id, patch: entwurf })
+    const anschrift = entwurf.anschrift.split('\n').map((z) => z.trim()).filter(Boolean).join('\n')
+    dispatch({ type: 'UPDATE_KUNDE_IN_BEREICH', bereich, id: kunde.id, patch: { ...entwurf, anschrift } })
     setBearbeiten(false)
   }
 
@@ -49,6 +52,16 @@ export function StammdatenKarte({ bereich, kunde, labels = {} }: { bereich: Kund
         <EditRow label={ansprechpartnerLabel} value={entwurf.ansprechpartner} onChange={(v) => setEntwurf((x) => ({ ...x, ansprechpartner: v }))} />
         <EditRow label="E-Mail" value={entwurf.email} onChange={(v) => setEntwurf((x) => ({ ...x, email: v }))} />
         <EditRow label="Telefon" value={entwurf.telefon} onChange={(v) => setEntwurf((x) => ({ ...x, telefon: v }))} />
+        <div className="flex items-start justify-between gap-3">
+          <label className="flex-shrink-0 pt-2 text-slate-400">Anschrift</label>
+          <textarea
+            className={`${inputClass} text-right`}
+            rows={2}
+            value={entwurf.anschrift}
+            placeholder={'Straße Hausnummer\nPLZ Ort'}
+            onChange={(e) => setEntwurf((x) => ({ ...x, anschrift: e.target.value }))}
+          />
+        </div>
         <div className="flex items-center justify-between gap-3">
           <span className="flex-shrink-0 text-slate-400">Verantwortlich</span>
           <select
@@ -82,6 +95,10 @@ export function StammdatenKarte({ bereich, kunde, labels = {} }: { bereich: Kund
       <Row label={ansprechpartnerLabel} value={kunde.ansprechpartner} />
       <Row label="E-Mail" value={kunde.email} />
       <Row label="Telefon" value={kunde.telefon} />
+      <div className="flex justify-between gap-4">
+        <dt className="text-slate-400">Anschrift</dt>
+        <dd className="whitespace-pre-line text-right text-slate-700">{kunde.anschrift?.trim() || '—'}</dd>
+      </div>
       <Row label="Verantwortlich" value={kunde.verantwortlich} />
       <div className="pt-1 text-right">
         <button onClick={bearbeitenOeffnen} className="inline-flex items-center gap-1 text-xs font-medium text-accent-600 hover:underline">

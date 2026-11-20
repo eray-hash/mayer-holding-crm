@@ -649,6 +649,9 @@ export function KvAngebotModal({
   const nutzer = useKvNutzer()
   const [kvId, setKvId] = useState('')
   const [empfaenger, setEmpfaenger] = useState('')
+  // Anschrift getrennt vom Namen: kommt aus der Akte und kann von hier aus dort gespeichert werden.
+  const [anschrift, setAnschrift] = useState('')
+  const [anschriftSpeichern, setAnschriftSpeichern] = useState(true)
   const [betreff, setBetreff] = useState('')
   const [anrede, setAnrede] = useState('Sehr geehrte Damen und Herren,')
   const [einleitung, setEinleitung] = useState(ANGEBOT_EINLEITUNG)
@@ -670,10 +673,10 @@ export function KvAngebotModal({
     const k = waehlbar.find((x) => x.id === id)
     if (!k) return
     const akte = findeAkte(state, k.kundeId)?.kunde
-    const zeilen = akte
-      ? [akte.firma, akte.ansprechpartner && akte.ansprechpartner !== akte.firma ? akte.ansprechpartner : '', ...(akte.immoStammdaten?.adresse ?? '').split(/\n|,\s*/)]
-      : [k.name]
+    const zeilen = akte ? [akte.firma, akte.ansprechpartner && akte.ansprechpartner.trim() !== akte.firma.trim() ? akte.ansprechpartner : ''] : [k.name]
     setEmpfaenger(zeilen.map((z) => (z ?? '').trim()).filter(Boolean).join('\n'))
+    setAnschrift((akte?.anschrift?.trim() || (akte?.immoStammdaten?.adresse ?? '').split(/,\s*/).join('\n')).trim())
+    setAnschriftSpeichern(true)
     setBetreff(`Angebot${k.beschreibung ? `: ${k.beschreibung}` : ''}`)
     setPos(startPositionen(k))
   }
@@ -691,6 +694,7 @@ export function KvAngebotModal({
     else {
       setKvId('')
       setEmpfaenger('')
+      setAnschrift('')
       setBetreff('Angebot')
       setPos({ positionen: [], aufschlagProzent: 0, ustSatz: 19 })
       setMeldung('')
@@ -706,10 +710,17 @@ export function KvAngebotModal({
     if (!pos.positionen.length) return setFehler('Das Angebot braucht mindestens eine Position.')
     if (pos.positionen.some((x) => !x.bezeichnung.trim())) return setFehler('Jede Position braucht eine Bezeichnung.')
     if (!empfaenger.trim()) return setFehler('Bitte einen Empfänger angeben.')
+    const anschriftSauber = anschrift.split('\n').map((z) => z.trim()).filter(Boolean)
+    if (!anschriftSauber.length && !window.confirm('Es ist keine Anschrift eingetragen. Das Angebot trotzdem nur mit dem Namen erstellen?')) return
     setArbeitet(true)
     try {
+      // Neue oder geänderte Anschrift in der Akte merken, damit sie beim nächsten Mal (und in Vorlagen) da ist.
+      const akteJetzt = findeAkte(state, kv.kundeId)
+      if (akteJetzt && anschriftSpeichern && anschriftSauber.join('\n') !== (akteJetzt.kunde.anschrift ?? '').trim() && anschriftSauber.length) {
+        dispatch({ type: 'UPDATE_KUNDE_IN_BEREICH', bereich: akteJetzt.bereich, id: akteJetzt.kunde.id, patch: { anschrift: anschriftSauber.join('\n') } })
+      }
       const basis: Kostenvoranschlag = { ...kv, positionen: pos.positionen, aufschlagProzent: pos.aufschlagProzent, ustSatz: pos.ustSatz }
-      const angebot: AngebotAngaben = { empfaenger: empfaenger.split('\n'), betreff: betreff.trim() || 'Angebot', anrede, einleitung, schluss, gueltigBis, absender: absender.trim() || nutzer.name, datum: today() }
+      const angebot: AngebotAngaben = { empfaenger: [...empfaenger.split('\n'), ...anschriftSauber], betreff: betreff.trim() || 'Angebot', anrede, einleitung, schluss, gueltigBis, absender: absender.trim() || nutzer.name, datum: today() }
       const r = await kvPdfAblegen(basis, { state, dispatch, nutzerName: nutzer.name, art: 'angebot', angebot })
       setMeldung(r.akte ? `„${r.name}“ wurde heruntergeladen und liegt in der Akte ${akteName(r.akte.kunde)} unter Dokumente.` : `„${r.name}“ wurde heruntergeladen. Der Kostenvoranschlag hat keine Akte, deshalb wurde nichts abgelegt.`)
     } catch (err) {
@@ -753,9 +764,28 @@ export function KvAngebotModal({
             </p>
           )}
           <div className="grid grid-cols-1 gap-x-3 sm:grid-cols-2">
-            <Field label="Empfänger (eine Zeile je Angabe)">
-              <textarea className={inputClass} rows={4} value={empfaenger} onChange={(e) => setEmpfaenger(e.target.value)} />
-            </Field>
+            <div>
+              <Field label="Empfänger (Name, Firma)">
+                <textarea className={inputClass} rows={2} value={empfaenger} onChange={(e) => setEmpfaenger(e.target.value)} />
+              </Field>
+              <Field label="Anschrift">
+                <textarea className={inputClass} rows={2} value={anschrift} placeholder={'Straße Hausnummer\nPLZ Ort'} onChange={(e) => setAnschrift(e.target.value)} />
+              </Field>
+              {(() => {
+                const akteJetzt = findeAkte(state, kv.kundeId)
+                const neu = anschrift.split('\n').map((z) => z.trim()).filter(Boolean).join('\n')
+                if (!akteJetzt) return <p className="-mt-2 mb-3 text-xs text-slate-400">Ohne Akte — die Anschrift gilt nur für dieses Angebot.</p>
+                if (!akteJetzt.kunde.anschrift?.trim() && !neu) return <p className="-mt-2 mb-3 text-xs text-amber-700">In der Akte ist noch keine Anschrift hinterlegt. Trag sie hier ein — sie wird dann auch in der Akte gespeichert.</p>
+                if (neu && neu !== (akteJetzt.kunde.anschrift ?? '').trim())
+                  return (
+                    <label className="-mt-2 mb-3 flex items-center gap-2 text-xs text-slate-600">
+                      <input type="checkbox" checked={anschriftSpeichern} onChange={(e) => setAnschriftSpeichern(e.target.checked)} />
+                      Anschrift auch in der Akte {akteName(akteJetzt.kunde)} speichern
+                    </label>
+                  )
+                return null
+              })()}
+            </div>
             <div>
               <Field label="Betreff">
                 <input className={inputClass} value={betreff} onChange={(e) => setBetreff(e.target.value)} />

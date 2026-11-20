@@ -297,6 +297,8 @@ export type Kunde = {
   // Nur für bereich 'privat' gesetzt: E-Mail des Mitarbeiters, dem dieser Kontakt gehört — Grundlage
   // der Datenbank-Berechtigung (RLS), die private Kontakte/Protokolle auf den Besitzer beschränkt.
   verantwortlichEmail?: string
+  /** Postanschrift, eine Zeile je Angabe (z. B. "Hauptstraße 1\n89073 Ulm"). Seit 20.11.2026, für Angebote und Vorlagen. */
+  anschrift?: string
   // Nur bei bereich 'privat': nach welchem Bereich (Statusablauf, Vorlagen, Fragenkatalog) der private Kontakt
   // geführt wird — leer = „Allgemein“. Beim Übernehmen ins Mayer-CRM ist das der Zielbereich (20.11.2026).
   privatArt?: PrivatArt

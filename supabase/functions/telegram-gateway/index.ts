@@ -232,6 +232,7 @@ type KundeRow = {
   ansprechpartner: string
   email: string
   telefon: string | null
+  anschrift?: string | null
   status: string | null
   prioritaet: string | null
   verantwortlich: string | null
@@ -243,7 +244,7 @@ type KundeRow = {
   privat_art?: string | null
 }
 
-const KUNDE_SPALTEN = 'id, bereich, firma, ansprechpartner, email, telefon, status, prioritaet, verantwortlich, follow_up, activities, dokumente, verantwortlich_email, privat_art'
+const KUNDE_SPALTEN = 'id, bereich, firma, ansprechpartner, email, telefon, anschrift, status, prioritaet, verantwortlich, follow_up, activities, dokumente, verantwortlich_email, privat_art'
 
 const BEREICH_LABEL: Record<string, string> = {
   beratung: 'Unternehmensberatung',
@@ -1154,6 +1155,7 @@ export const TOOLS = [
         ansprechpartner: { type: 'string' },
         email: { type: 'string' },
         telefon: { type: 'string' },
+        anschrift: { type: 'string', description: 'Postanschrift, Zeilen mit Zeilenumbruch getrennt: "Straße Hausnummer\nPLZ Ort". Leer = löschen.' },
         prioritaet: { type: 'string', enum: ['Hoch', 'Mittel', 'Niedrig'] },
         verantwortlich: { type: 'string', description: 'Name eines Mitarbeiters.' },
         status: { type: 'string', description: 'Status-ID aus der Liste des jeweiligen Bereichs.' },
@@ -2129,7 +2131,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     return kuerze(
       [
         `Kunde: ${k.firma} | Ansprechpartner: ${k.ansprechpartner || '—'} | Bereich: ${bereichAnzeige(k)} (${k.bereich}${k.privat_art ? `, Ablauf ${k.privat_art}` : ''})`,
-        `E-Mail: ${k.email || '—'} | Telefon: ${k.telefon || '—'} | Verantwortlich: ${k.verantwortlich || '—'} | Priorität: ${k.prioritaet || '—'}`,
+        `E-Mail: ${k.email || '—'} | Telefon: ${k.telefon || '—'} | Anschrift: ${String(k.anschrift ?? '').trim().replace(/\n/g, ', ') || '—'} | Verantwortlich: ${k.verantwortlich || '—'} | Priorität: ${k.prioritaet || '—'}`,
         `Status: ${k.status ?? '—'} (${statusNetz(k)[k.status ?? ''] ?? 'unbekannt'})`,
         `Follow-up: ${fu?.note ? `${fu.note} — fällig ${deDatum(fu.date)}${fu.done ? ' (erledigt)' : ''}` : 'keines'}`,
         `Fehlende Stammdaten: ${fehlend.length > 0 ? fehlend.join(', ') : 'keine'}`,
@@ -2336,6 +2338,11 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
         patch[feld] = input[feld].trim()
         geaendert.push(`${feld}: ${input[feld].trim() || '(leer)'}`)
       }
+    }
+    if (typeof input.anschrift === 'string') {
+      const zeilen = input.anschrift.replace(/\\n/g, '\n').split(/\n|;\s*/).map((z: string) => z.trim()).filter(Boolean)
+      patch.anschrift = zeilen.length ? zeilen.join('\n') : null
+      geaendert.push(`Anschrift: ${zeilen.join(', ') || '(leer)'}`)
     }
     if (typeof input.prioritaet === 'string') {
       if (!['Hoch', 'Mittel', 'Niedrig'].includes(input.prioritaet)) return 'Fehler: prioritaet muss Hoch, Mittel oder Niedrig sein.'

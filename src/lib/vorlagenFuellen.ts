@@ -125,7 +125,7 @@ export function hauptfelder(text: string): string[] {
 }
 
 export type FuellKontext = {
-  kunde?: { firma?: string; ansprechpartner?: string; email?: string; telefon?: string }
+  kunde?: { firma?: string; ansprechpartner?: string; email?: string; telefon?: string; anschrift?: string }
   mitarbeiter?: string
   heute: string // schon als TT.MM.JJJJ
 }
@@ -158,8 +158,19 @@ export function autoWert(feldName: string, ctx: FuellKontext): string | undefine
   if (!kunde) return undefined
   // Durchnummerierte Zeilen (Teilnehmer 2, 3 …) meinen weitere Personen — nur die erste Zeile gehört dem Kunden.
   if (/ (?:[2-9]|\d{2,})$/.test(k)) return undefined
+  // Anschrift des Kunden (Feld in der Akte seit 20.11.2026) — nur wenn das Feld nicht erkennbar eine
+  // andere Person oder Stelle meint.
+  const anschrift = (kunde.anschrift ?? '').split('\n').map((z) => z.trim()).filter(Boolean)
+  if (
+    anschrift.length &&
+    !hat('bank', 'steuerberater', 'notar', 'finanzamt', 'ehepartner', 'ehegatte', 'kind', 'kinder', 'bevollmaechtigter', 'bevollmaechtigte', 'zeuge', 'unterzeichner', 'berater', 'bearbeiter', 'objekt', 'grundstueck')
+  ) {
+    if (hat('anschrift', 'adresse', 'wohnhaft')) return anschrift.join(', ')
+    if (hat('strasse') && !hat('plz', 'ort', 'wohnort')) return anschrift[0]
+    if (hat('plz', 'wohnort')) return anschrift.slice(1).join(', ') || undefined
+  }
   // Alles, was erkennbar eine andere Person oder Stelle meint oder was die Akte gar nicht kennt
-  // (Anschrift, Geburtsdatum, Steuernummer), bleibt leer.
+  // (Geburtsdatum, Steuernummer), bleibt leer.
   if (
     hat(
       'bank', 'steuerberater', 'notar', 'finanzamt', 'ehepartner', 'ehegatte', 'kind', 'kinder', 'bevollmaechtigter', 'bevollmaechtigte',
