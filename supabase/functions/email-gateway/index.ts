@@ -232,6 +232,7 @@ import {
 import { loescheTermin, sendeErinnerungen, sendeTelegram, speichereTermin } from './kalender.ts'
 import { aboLink, kalenderAboAntwort } from './kalenderAbo.ts'
 import { MS_AKTIONEN, msAktion, msRueckrufAntwort } from './privatMicrosoft.ts'
+import { BRIEF_AKTIONEN, briefAktion } from './briefe.ts'
 import { BUCHUNGS_AKTIONEN, buchungAktion } from './buchung.ts'
 import { sendeTodoErinnerungen } from './todoErinnerung.ts'
 import { holeGesendeteMails } from './gesendetAbruf.ts'
@@ -3322,6 +3323,10 @@ Deno.serve((req: Request) => mitAnlass(async () => {
     if (MS_AKTIONEN.has(String(body.action))) {
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
       return await msAktion(req, admin, body, headers)
+    }
+    if (BRIEF_AKTIONEN.has(String(body.action))) {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      return await briefAktion(req, admin, body, headers)
     }
 
     if (body.action === 'kalender_abo_link') {

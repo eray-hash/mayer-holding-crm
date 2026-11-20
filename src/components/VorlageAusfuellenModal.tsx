@@ -20,6 +20,7 @@ import {
 } from '../lib/vorlagenFuellen'
 import { fmtDate, today, uid } from '../lib/dates'
 import { Modal, PrimaryButton, SecondaryButton, inputClass } from './ui'
+import { AufBriefbogen } from './AufBriefbogen'
 import type { Dokument, Kunde, KundeBereich, Vorlage } from '../types'
 
 type Auswahl = { bereich: KundeBereich; kunde: Kunde }
@@ -265,6 +266,7 @@ export function VorlageAusfuellenModal({
               </PrimaryButton>
             </div>
           </div>
+          <AufBriefbogen titel={vorlage.name} text={() => fuelleAlsText(vorlage.text, werte, angekreuzt)} auswahl={auswahl} />
           {fehler && <p className="mb-2 rounded-lg bg-rose-50 p-2 text-sm text-rose-600">{fehler}</p>}
           {offen.length > 0 && (
             <p className="mb-2 rounded-lg bg-amber-50 p-2 text-xs text-amber-700">

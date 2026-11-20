@@ -5,6 +5,7 @@ import { useAuth } from '../../context/AuthContext'
 import { starteMsAnmeldung, trenneMsKonto, useMsStatus } from '../../lib/microsoftKonto'
 import { PrimaryButton, SecondaryButton } from '../../components/ui'
 import { fmtDateTime } from '../../lib/dates'
+import { BriefboegenVerwalten } from '../../components/BriefboegenVerwalten'
 
 /** Bereich Privat → Einstellungen: Microsoft-Konto (Outlook/Hotmail, To Do, Kalender) verbinden. */
 export function PrivatEinstellungen() {
@@ -127,6 +128,8 @@ function Inhalt() {
         )}
         {fehler && <p className="mt-3 text-sm text-red-600">{fehler}</p>}
       </section>
+
+      {status?.erlaubt && <BriefboegenVerwalten />}
     </div>
   )
 }

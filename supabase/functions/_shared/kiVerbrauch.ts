@@ -5,11 +5,11 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { createClient } from 'npm:@supabase/supabase-js@2.119.1'
 
-const ANLASS = new AsyncLocalStorage<{ anlass: string; person: string }>()
+const ANLASS = new AsyncLocalStorage<{ anlass: string; person: string; privat: boolean }>()
 
 /** Führt eine Anfrage in einem eigenen Rahmen aus; jeder KI-Aufruf darin (auch im Hintergrund) wird ihrem Anlass zugerechnet. */
 export function mitAnlass<T>(arbeit: () => T): T {
-  return ANLASS.run({ anlass: '', person: '' }, arbeit)
+  return ANLASS.run({ anlass: '', person: '', privat: false }, arbeit)
 }
 
 /** Setzt den Anlass der laufenden Anfrage, z. B. ihre Aktion — erst bekannt, wenn der Inhalt gelesen ist. */
@@ -23,6 +23,13 @@ export function setzeAnlass(anlass: unknown): void {
 export function setzePerson(email: unknown): void {
   const rahmen = ANLASS.getStore()
   if (rahmen && typeof email === 'string' && email.includes('@')) rahmen.person = email.trim().toLowerCase().slice(0, 200)
+}
+
+/** Kennzeichnet die laufende Anfrage als privat (Bereich Privat, Microsoft-Konto, Briefe auf eigenem Briefbogen).
+ *  Diese Kosten werden getrennt ausgewiesen und dem Mitarbeiter privat berechnet (Entscheidung vom 20.11.2026). */
+export function setzePrivat(): void {
+  const rahmen = ANLASS.getStore()
+  if (rahmen) rahmen.privat = true
 }
 
 /** Die Person der laufenden Anfrage, z. B. um sie bei einem Aufruf der eigenen Server-Funktionen weiterzugeben. */
@@ -54,6 +61,7 @@ export async function kiAufruf(funktion: string, url: string, init: RequestInit)
     // Im Hintergrund auswerten, damit der eigentliche Ablauf nicht wartet.
     const anlass = ANLASS.getStore()?.anlass ?? ''
     const person = ANLASS.getStore()?.person || null
+    const privat = ANLASS.getStore()?.privat ?? false
     const modell = (() => {
       try {
         return String(JSON.parse(String(init.body ?? '{}')).model ?? '')
@@ -74,7 +82,7 @@ export async function kiAufruf(funktion: string, url: string, init: RequestInit)
         // Haiku 5.5 kostet bei Anfragen über 100.000 Token das Fünffache — vorsichtig mit dem höheren Satz rechnen.
         const p = modell === 'claude-haiku-5-5' && ein + cacheSchreiben + cacheLesen > 100_000 ? { ein: 0.5, aus: 2.5, cacheSchreiben: 0.625, cacheLesen: 0.05 } : (PREISE[modell] ?? PREISE['claude-sonnet-5-5'])
         const kosten = (ein * p.ein + aus * p.aus + cacheSchreiben * p.cacheSchreiben + cacheLesen * p.cacheLesen) / 1_000_000 + suchen * 0.01
-        const { error } = await db().from('ki_verbrauch').insert({ funktion, anlass, person, modell, ein, aus, cache_schreiben: cacheSchreiben, cache_lesen: cacheLesen, suchen, kosten_usd: Math.round(kosten * 1_000_000) / 1_000_000 })
+        const { error } = await db().from('ki_verbrauch').insert({ funktion, anlass, person, privat, modell, ein, aus, cache_schreiben: cacheSchreiben, cache_lesen: cacheLesen, suchen, kosten_usd: Math.round(kosten * 1_000_000) / 1_000_000 })
         if (error) console.error('KI-Verbrauch nicht gespeichert:', error.message)
       })
       .catch(() => undefined)

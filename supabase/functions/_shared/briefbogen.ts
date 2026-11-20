@@ -240,7 +240,9 @@ function zeichenFilter(font: PDFFont): (text: string) => string {
 function umbrechen(text: string, font: PDFFont, groesse: number, breite: number): string[] {
   const breiteVon = (s: string) => font.widthOfTextAtSize(s, groesse)
   const zeilen: string[] = []
-  for (const roh of text.split('\n')) {
+  for (const zeileRoh of text.split('\n')) {
+    // Betrag und Einheit nicht trennen ("12.500 €", "5 %"): geschütztes Leerzeichen, das WinAnsi kennt.
+    const roh = zeileRoh.replace(/(\d) (?=[€%])/g, '$1\u00A0')
     const woerter = roh.split(/ +/).filter((w, i, alle) => w !== '' || (i === 0 && alle.length === 1))
     let zeile = ''
     for (let wort of woerter) {
