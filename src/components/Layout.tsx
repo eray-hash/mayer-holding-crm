@@ -23,7 +23,7 @@ import {
   ChevronDown,
   Phone,
   Lock,
-  Search, CalendarDays, BarChart3, Lightbulb, ListChecks, Eye, ShieldCheck, Calculator, ClipboardList } from 'lucide-react'
+  Search, CalendarDays, BarChart3, Lightbulb, ListChecks, Eye, ShieldCheck, Calculator, ClipboardList, Presentation } from 'lucide-react'
 import type { Bereich } from '../types'
 import { useApp } from '../context/AppContext'
 import { useAuth } from '../context/AuthContext'
@@ -231,6 +231,17 @@ export function Layout({ children }: { children: ReactNode }) {
               aria-label="Projekt-Checkliste"
             >
               <ClipboardList size={16} />
+            </button>
+          )}
+          {!imPrivatBereich && (
+            <button
+              // Wochenbesprechung (20.11.2026): alle Fälle in fünf Stufen, fällig je Person, Bewegung der Woche.
+              onClick={() => navigate('/besprechung')}
+              className="hidden rounded-lg p-2 text-slate-500 hover:bg-slate-100 sm:inline-flex"
+              title="Wochenbesprechung: alle Fälle in fünf Stufen, was fällig ist und was sich bewegt hat"
+              aria-label="Wochenbesprechung"
+            >
+              <Presentation size={16} />
             </button>
           )}
           <button
@@ -445,6 +456,15 @@ export function Layout({ children }: { children: ReactNode }) {
                 >
                   <ClipboardList size={17} className="text-slate-400" />
                   Projekt-Checkliste
+                </button>
+              )}
+              {!imPrivatBereich && (
+                <button
+                  onClick={() => { setDrawerOpen(false); navigate('/besprechung') }}
+                  className="mb-1 flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm font-medium text-slate-700 hover:bg-slate-50 sm:hidden"
+                >
+                  <Presentation size={17} className="text-slate-400" />
+                  Wochenbesprechung
                 </button>
               )}
               <button

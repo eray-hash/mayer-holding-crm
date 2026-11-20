@@ -185,3 +185,38 @@ export function gewichtet(netto: number, prozent: number | undefined): number {
   if (prozent === undefined || prozent === null) return 0
   return rundeCent((netto * prozent) / 100)
 }
+
+// ---------- Wochenbesprechung: fünf gemeinsame Stufen über alle Bereiche (20.11.2026) ----------
+// Jeder Bereich hat eigene Phasen; für die Besprechung werden sie auf fünf Stufen abgebildet, damit man
+// nicht 50 Phasen nebeneinander hat. Phasen außerhalb des Hauptpfads (Wiedervorlage, verloren …) stehen
+// in „Zurückgestellt“ bzw. gar nicht (abgeschlossen, verloren).
+
+export const STUFEN = ['Erstkontakt', 'Gespräch geführt', 'Angebot / Konzept', 'Auftrag läuft', 'Abrechnung'] as const
+export const STUFE_ZURUECK = 5
+
+const STUFE_JE_STATUS: Record<KundeBereich, Record<string, number>> = {
+  beratung: { lead: 0, erstkontakt: 0, termin: 0, durchgefuehrt: 1, konzept: 2, angebot: 2, unterschrieben: 3, aktives_mandat: 3, rechnung_gestellt: 4 },
+  erben: { erstkontakt: 0, bedarfsanalyse: 1, unterlagen_angefordert: 1, konzept_erstellt: 2, beratungsgespraech: 3, umsetzung: 3 },
+  betriebsuebergabe: { erstkontakt: 0, bedarfsanalyse: 1, unternehmensbewertung: 2, nachfolgekonzept: 2, nachfolgersuche: 3, verhandlung: 3, notartermin: 3 },
+  betriebsformen: { erstkontakt: 0, bedarfsanalyse: 1, konzept_erstellt: 2, beratungsgespraech: 3, umsetzung: 3, handelsregister: 3 },
+  akademie: { interessent: 0, anmeldung_eingegangen: 2, platz_bestaetigt: 3, kurs_laeuft: 3 },
+  finanzierungen: { interessent: 0, risikoprofil_erstellt: 1, beratungsgespraech: 2, zeichnung_eingegangen: 3, kapital_eingezahlt: 4 },
+  immobilienkunden: { interessent: 0, besichtigung: 1, angebot: 2, verhandlung: 2 },
+  privat: {},
+}
+
+/** Stufe (0–4) einer Akte; STUFE_ZURUECK bei „Wiedervorlage“-Stand o. Ä.; undefined bei abgeschlossen/verloren. */
+export function stufeVon(bereich: KundeBereich, status: string): number | undefined {
+  const s = STUFE_JE_STATUS[bereich]?.[status]
+  if (s !== undefined) return s
+  const knoten = STATUS_NETZ[bereich]?.status[status]
+  if (!knoten || knoten.isTerminal) return undefined
+  return STUFE_ZURUECK
+}
+
+/** Der Stand, auf den eine Akte beim Verschieben in eine Stufe gesetzt wird: die erste Phase des Bereichs in dieser Stufe. */
+export function zielStatus(bereich: KundeBereich, stufe: number): string | undefined {
+  const tabelle = STUFE_JE_STATUS[bereich] ?? {}
+  const pfad = STATUS_NETZ[bereich]?.pfad ?? []
+  return pfad.find((id) => tabelle[id] === stufe && !(bereich === 'beratung' && id === 'lead'))
+}

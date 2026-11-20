@@ -8,76 +8,23 @@ import { useApp } from '../../context/AppContext'
 import { Card, EmptyState, Modal, PrimaryButton, SecondaryButton, inputClass } from '../../components/ui'
 import { aktePfad, akteName, useKvNutzer } from '../../components/KostenvoranschlaegeSection'
 import { useBereichsRechte } from '../../lib/bereichsRechte'
-import { ladeKostenvoranschlaege, type Kostenvoranschlag } from '../../lib/kostenvoranschlaege'
 import { holeLeistungen } from '../../lib/leistungen'
-import { supabase } from '../../lib/supabaseClient'
 import { checklisteVorschlag } from '../../lib/emailGateway'
-import { jeKunde, ladeOffeneWiedervorlagen, type Wiedervorlage } from '../../lib/wiedervorlagen'
 import { WiedervorlagenListe } from '../../components/WiedervorlagenListe'
-import { istSammelakte } from '../../data/sammelakten'
-import { seedMailVorlagen } from '../../data/mailVorlagen'
 import { fmtEURCent, today } from '../../lib/dates'
 import {
-  AMPEL_LABEL, AMPEL_RANG, berechneAmpel, gewichtet, offeneWiedervorlagen, standVon, umsatzVon, unterlagenVon,
-  type AmpelErgebnis, type NaechsteWv, type Stand, type UnterlagenStand,
+  AMPEL_LABEL, AMPEL_RANG, gewichtet,
 } from '../../lib/checkliste'
 import type { AmpelFarbe, Kunde, KundeBereich } from '../../types'
-
-type Zeile = {
-  kunde: Kunde
-  bereich: KundeBereich
-  bereichLabel: string
-  stand: Stand
-  umsatz: { netto: number; anzahl: number; ohneBetrag: number }
-  ampel: AmpelErgebnis
-  unterlagen?: UnterlagenStand
-  willkommen?: string
-  /** Offene Wiedervorlagen (Follow-up der Akte und Tabelle wiedervorlagen), früheste zuerst. */
-  wv: NaechsteWv[]
-}
-
-const AMPEL_PUNKT: Record<AmpelFarbe, string> = { rot: 'bg-rose-500', gelb: 'bg-amber-400', gruen: 'bg-emerald-500' }
-const WILLKOMMEN_BETREFF = seedMailVorlagen.find((v) => v.id === 'mv-willkommen')?.betreff ?? 'Vielen Dank für Ihre Anfrage'
-
-const kurzDatum = (iso?: string) => (iso && /^\d{4}-\d{2}-\d{2}/.test(iso) ? `${iso.slice(8, 10)}.${iso.slice(5, 7)}.${iso.slice(2, 4)}` : '')
-
-function Ampel({ a }: { a: AmpelErgebnis }) {
-  return (
-    <span className="inline-flex items-center gap-1.5" title={a.gruende.join(' · ') || 'alles im Plan'}>
-      <span className={`h-3 w-3 shrink-0 rounded-full ${AMPEL_PUNKT[a.farbe]}`} />
-      <span className="text-xs text-slate-500">{AMPEL_LABEL[a.farbe]}{a.manuell ? ' (gesetzt)' : ''}</span>
-    </span>
-  )
-}
-
-function StandAnzeige({ s }: { s: Stand }) {
-  return (
-    <div className="min-w-[130px]">
-      {s.schritt && (
-        <div className="mb-1 flex gap-0.5" aria-hidden>
-          {Array.from({ length: s.schritte }, (_, i) => (
-            <span key={i} className={`h-1.5 flex-1 rounded-sm ${i < s.schritt! ? 'bg-sky-600' : 'bg-slate-200'}`} />
-          ))}
-        </div>
-      )}
-      <span className="text-xs text-slate-700">
-        {s.schritt ? `${s.schritt}/${s.schritte} ` : ''}
-        {s.label}
-      </span>
-    </div>
-  )
-}
+import { Ampel, StandAnzeige, kurzDatum, useChecklisteDaten, type Zeile } from './checklisteDaten'
 
 export function Checkliste() {
-  const { state, dispatch } = useApp()
+  const { dispatch } = useApp()
   const navigate = useNavigate()
   const { oeffentlicheKundenBereiche } = useBereichsRechte()
   const nutzer = useKvNutzer()
-  const [kvs, setKvs] = useState<Kostenvoranschlag[]>([])
-  const [willkommen, setWillkommen] = useState<Map<string, string>>(new Map())
-  const [wvListe, setWvListe] = useState<Wiedervorlage[]>([])
-  const wvLaden = () => ladeOffeneWiedervorlagen().then(setWvListe).catch((e) => setFehler(e instanceof Error ? e.message : 'Wiedervorlagen ließen sich nicht laden.'))
-  const [fehler, setFehler] = useState('')
+  const heute = today()
+  const { alle, wvJeKunde, wvLaden, fehler } = useChecklisteDaten()
   const [suche, setSuche] = useState('')
   const [bereichFilter, setBereichFilter] = useState('')
   const [ampelFilter, setAmpelFilter] = useState('')
@@ -85,66 +32,6 @@ export function Checkliste() {
   const [mitNeuanfragen, setMitNeuanfragen] = useState(false)
   const [mitAbgeschlossenen, setMitAbgeschlossenen] = useState(false)
   const [offen, setOffen] = useState<{ kundeId: string; bereich: KundeBereich } | null>(null)
-
-  useEffect(() => {
-    let aktiv = true
-    wvLaden()
-    ladeKostenvoranschlaege()
-      .then((l) => aktiv && setKvs(l))
-      .catch((e) => aktiv && setFehler(e instanceof Error ? e.message : 'Kostenvoranschläge ließen sich nicht laden.'))
-    // Willkommensnachricht: gesendete Mails mit dem Betreff der Vorlage „Willkommen als Interessent“.
-    supabase
-      ?.from('gesendete_emails')
-      .select('kunde_id, gesendet_am')
-      .eq('betreff', WILLKOMMEN_BETREFF)
-      .not('kunde_id', 'is', null)
-      .then(({ data }) => {
-        if (!aktiv || !data) return
-        const m = new Map<string, string>()
-        for (const r of data as { kunde_id: string; gesendet_am: string }[]) {
-          const alt = m.get(r.kunde_id)
-          if (!alt || r.gesendet_am < alt) m.set(r.kunde_id, r.gesendet_am)
-        }
-        setWillkommen(m)
-      })
-    return () => {
-      aktiv = false
-    }
-  }, [])
-
-  const heute = today()
-  const kvJeKunde = useMemo(() => {
-    const m = new Map<string, Kostenvoranschlag[]>()
-    for (const kv of kvs) if (kv.kundeId) m.set(kv.kundeId, [...(m.get(kv.kundeId) ?? []), kv])
-    return m
-  }, [kvs])
-
-  const wvJeKunde = useMemo(() => jeKunde(wvListe), [wvListe])
-
-  const alle: Zeile[] = useMemo(() => {
-    const zeilen: Zeile[] = []
-    for (const b of oeffentlicheKundenBereiche) {
-      for (const k of b.get(state)) {
-        if (istSammelakte(k.id)) continue
-        const eigeneKvs = kvJeKunde.get(k.id) ?? []
-        const eigeneWv = wvJeKunde.get(k.id) ?? []
-        zeilen.push({
-          kunde: k,
-          bereich: b.id,
-          bereichLabel: b.label,
-          stand: standVon(b.id, k.status),
-          umsatz: umsatzVon(eigeneKvs),
-          ampel: berechneAmpel(k, b.id, { heute, rechnungen: state.rechnungen, kvs: eigeneKvs, wiedervorlagen: eigeneWv }),
-          unterlagen: unterlagenVon(k),
-          willkommen: willkommen.get(k.id),
-          wv: offeneWiedervorlagen(k, eigeneWv),
-        })
-      }
-    }
-    return zeilen
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state, kvJeKunde, wvJeKunde, willkommen, heute, oeffentlicheKundenBereiche.map((b) => b.id).join()])
-
   const neuanfragen = alle.filter((z) => z.stand.neuanfrage && !(wvJeKunde.get(z.kunde.id)?.length)).length
   const abgeschlossene = alle.filter((z) => z.stand.abgeschlossen).length
   const verantwortliche = useMemo(() => [...new Set(alle.map((z) => z.kunde.verantwortlich).filter(Boolean))].sort(), [alle])
@@ -189,6 +76,7 @@ export function Checkliste() {
             Alle laufenden Fälle deiner Bereiche: wo sie stehen, was sie bringen und was als Nächstes fällig ist. Ein Klick auf eine Zeile öffnet das Bearbeiten.
           </p>
         </div>
+        <SecondaryButton onClick={() => navigate('/besprechung')}>Zur Wochenbesprechung</SecondaryButton>
       </div>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
@@ -346,7 +234,7 @@ export function Checkliste() {
   )
 }
 
-function ChecklisteBearbeiten({
+export function ChecklisteBearbeiten({
   zeile, nurLesen, nutzerName, onClose, onAkte, onSpeichern, alleAkten, onWvAenderung,
 }: {
   zeile: Zeile
