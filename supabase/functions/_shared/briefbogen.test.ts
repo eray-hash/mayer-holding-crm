@@ -1,7 +1,7 @@
 // Tests für briefbogen.ts – die Vorlagen (Word und PDF) werden hier im Code gebaut, keine Binärdateien.
 import { assert, assertEquals, assertRejects, assertThrows } from 'jsr:@std/assert@1'
 import { strFromU8, strToU8, unzipSync, zipSync } from 'npm:fflate@0.8.2'
-import { PDFDocument, rgb } from 'npm:pdf-lib@1.17.1'
+import { PDFDocument, PDFName, rgb } from 'npm:pdf-lib@1.17.1'
 import { type BriefDaten, briefDatum, erzeugeBriefPdf, fuelleDocx, platzhalterIn } from './briefbogen.ts'
 
 const NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"'
@@ -142,3 +142,16 @@ Deno.test('erzeugeBriefPdf: ohne Hintergrund A4, kurzer Brief eine Seite, eigene
 Deno.test('erzeugeBriefPdf: unlesbarer Briefbogen gibt deutsche Fehlermeldung', async () => {
   await assertRejects(() => erzeugeBriefPdf(new Uint8Array([1, 2, 3]), LANGER_BRIEF), Error, 'Briefbogen-PDF')
 })
+
+Deno.test('erzeugeBriefPdf: Serifenschrift auf Wunsch, **fette** Zeilen in der Unterschrift', async () => {
+  const brief: BriefDaten = { empfaenger: ['Firma'], betreff: 'Betreff', anrede: 'Sehr geehrte Damen und Herren,', absaetze: ['Text'], gruss: ['Mit freundlichen Grüßen', '', '**Andreas Mayer Holding**', '**H. Süslü**', 'Ulmer Wirtschaftskanzlei'] }
+  const schriften = async (b: Uint8Array) => {
+    const doc = await PDFDocument.load(b)
+    return doc.context.enumerateIndirectObjects().map(([, o]) => String((o as { get?: (k: unknown) => unknown }).get?.(PDFName.of('BaseFont')) ?? '')).filter(Boolean)
+  }
+  const mitSerif = await schriften(await erzeugeBriefPdf(null, brief, { serif: 1 }))
+  assert(mitSerif.includes('/Times-Roman') && mitSerif.includes('/Times-Bold'), `Times eingebettet: ${mitSerif}`)
+  const ohne = await schriften(await erzeugeBriefPdf(null, brief))
+  assert(ohne.includes('/Helvetica') && !ohne.includes('/Times-Roman'), `ohne serif bleibt Helvetica: ${ohne}`)
+})
+

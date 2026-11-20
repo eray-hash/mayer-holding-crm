@@ -189,6 +189,8 @@ export type Raender = {
   folgeseiteOben: number
   schrift: number
   zeilenhoehe: number
+  /** 1 = Serifenschrift (Times) statt Helvetica — für Briefbögen im Stil des Mayer-Briefpapiers. */
+  serif?: number
 }
 
 /** DIN 5008 Form B; je Briefbogen überschreibbar. */
@@ -219,7 +221,8 @@ function zeichenFilter(font: PDFFont): (text: string) => string {
     for (const z of sauber) {
       let e = merker.get(z)
       if (e === undefined) {
-        if (z < ' ') e = ''
+        if (z === '\n') e = '\n' // Zeilenumbruch im Absatz bleibt (umbrechen() trennt daran)
+        else if (z < ' ') e = ''
         else {
           try {
             font.encodeText(z)
@@ -272,8 +275,8 @@ export async function erzeugeBriefPdf(hintergrund: Uint8Array | null, brief: Bri
   for (const [k, v] of Object.entries(raender ?? {})) if (typeof v === 'number' && Number.isFinite(v)) r[k as keyof Raender] = v
 
   const pdf = await PDFDocument.create()
-  const normal = await pdf.embedFont(StandardFonts.Helvetica)
-  const fett = await pdf.embedFont(StandardFonts.HelveticaBold)
+  const normal = await pdf.embedFont(r.serif ? StandardFonts.TimesRoman : StandardFonts.Helvetica)
+  const fett = await pdf.embedFont(r.serif ? StandardFonts.TimesRomanBold : StandardFonts.HelveticaBold)
   const sicher = zeichenFilter(normal)
   const sicherFett = zeichenFilter(fett)
   const schwarz = rgb(0, 0, 0)
@@ -368,9 +371,16 @@ export async function erzeugeBriefPdf(hintergrund: Uint8Array | null, brief: Bri
   const gruss = brief.gruss ?? []
   if (gruss.length) {
     leer()
-    const zeilen = gruss.flatMap((g) => umbrechen(sicher(g ?? ''), normal, r.schrift, breite()))
+    // **Zeile** = fett (z. B. „**Andreas Mayer Holding**“ in der Unterschrift)
+    const zeilen = gruss.flatMap((g) => {
+      const roh = String(g ?? '')
+      const istFett = /^\*\*.*\*\*$/.test(roh.trim()) && roh.trim().length > 4
+      const font = istFett ? fett : normal
+      const text = istFett ? roh.trim().slice(2, -2) : roh
+      return umbrechen((istFett ? sicherFett : sicher)(text), font, r.schrift, breite()).map((t) => ({ t, font }))
+    })
     if (y + zeilen.length * zeile > unten() && zeilen.length * zeile <= unten() - r.folgeseiteOben * MM) umbruch()
-    for (const z of zeilen) schreibe(z, normal)
+    for (const z of zeilen) schreibe(z.t, z.font)
   }
 
   // Seitenzahlen nur bei mehr als einer Seite, klein unten rechts knapp unter dem Textbereich

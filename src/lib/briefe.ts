@@ -14,6 +14,8 @@ export type Raender = {
   folgeseiteOben: number
   schrift: number
   zeilenhoehe: number
+  /** 1 = Serifenschrift (Times) im PDF, wie das Mayer-Briefpapier */
+  serif?: number
 }
 
 export const STANDARD_RAENDER: Raender = { links: 25, rechts: 20, unten: 25, anschriftOben: 50.7, datumOben: 98.5, betreffOben: 106, folgeseiteOben: 30, schrift: 11, zeilenhoehe: 1.35 }

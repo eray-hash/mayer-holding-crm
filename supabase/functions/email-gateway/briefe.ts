@@ -50,6 +50,8 @@ export function pruefeEinstellungen(roh: unknown): BriefbogenEinstellungen {
   if (schrift !== undefined) raender.schrift = schrift
   const zeilenhoehe = zahl(r.zeilenhoehe, 1, 2.5)
   if (zeilenhoehe !== undefined) raender.zeilenhoehe = zeilenhoehe
+  const serif = zahl(r.serif, 0, 1)
+  if (serif !== undefined) raender.serif = serif
   const gruss = Array.isArray(e.gruss) ? e.gruss.map((g) => String(g ?? '').slice(0, 120)).slice(0, 8) : undefined
   const ort = typeof e.ort === 'string' && e.ort.trim() ? e.ort.trim().slice(0, 60) : undefined
   return { ...(ort ? { ort } : {}), ...(gruss ? { gruss } : {}), raender }
