@@ -4,6 +4,7 @@
 //   # Titel            → Dokumenttitel
 //   ## Abschnitt       → Zwischenüberschrift
 //   a | b | c          → Tabellenzeile (aufeinanderfolgende Zeilen bilden eine Tabelle)
+//   a || b             → Spalten ohne Rahmen nebeneinander, z. B. die Unterschriften beider Seiten
 //   **fett**           → Hervorhebung, wie im Original fett gedruckt
 //   (Leerzeichen am Zeilenanfang) → Einrückung, z. B. für Unterpunkte
 // und zwei Arten von Stellen, die beim Ausfüllen leben:
@@ -17,7 +18,7 @@
 
 export type InlineTeil =
   | { art: 'text'; text: string; fett?: boolean }
-  | { art: 'feld'; name: string }
+  | { art: 'feld'; name: string; fett?: boolean }
   | { art: 'kaestchen'; nr: number; vorbelegt: boolean }
 
 export type VorlagenBlock =
@@ -25,7 +26,7 @@ export type VorlagenBlock =
   | { art: 'ueberschrift'; teile: InlineTeil[] }
   | { art: 'zeile'; teile: InlineTeil[]; einzug: number }
   | { art: 'leer' }
-  | { art: 'tabelle'; zeilen: InlineTeil[][][] }
+  | { art: 'tabelle'; zeilen: InlineTeil[][][]; rahmenlos?: boolean }
 
 const FELD = /\{\{\s*([^{}]+?)\s*\}\}/g
 
@@ -76,7 +77,7 @@ function inline(text: string, zaehler: { nr: number }): InlineTeil[] {
     }
     for (const m of stueck.matchAll(muster)) {
       schiebe(stueck.slice(pos, m.index))
-      if (m[1] !== undefined) teile.push({ art: 'feld', name: feldName(m[1]) })
+      if (m[1] !== undefined) teile.push(fett ? { art: 'feld', name: feldName(m[1]), fett } : { art: 'feld', name: feldName(m[1]) })
       else teile.push({ art: 'kaestchen', nr: zaehler.nr++, vorbelegt: m[0] === '☒' })
       pos = m.index + m[0].length
     }
@@ -96,10 +97,15 @@ export function zerlegeVorlage(text: string): VorlagenBlock[] {
       bloecke.push({ art: 'ueberschrift', teile: inline(zeile.slice(3), zaehler) })
     } else if (zeile.startsWith('# ')) {
       bloecke.push({ art: 'titel', teile: inline(zeile.slice(2), zaehler) })
+    } else if (zeile.includes(' || ')) {
+      const zellen = zeile.split(' || ').map((z) => inline(z.trim(), zaehler))
+      const letzter = bloecke[bloecke.length - 1]
+      if (letzter?.art === 'tabelle' && letzter.rahmenlos) letzter.zeilen.push(zellen)
+      else bloecke.push({ art: 'tabelle', zeilen: [zellen], rahmenlos: true })
     } else if (zeile.includes(' | ')) {
       const zellen = zeile.split(' | ').map((z) => inline(z.trim(), zaehler))
       const letzter = bloecke[bloecke.length - 1]
-      if (letzter?.art === 'tabelle') letzter.zeilen.push(zellen)
+      if (letzter?.art === 'tabelle' && !letzter.rahmenlos) letzter.zeilen.push(zellen)
       else bloecke.push({ art: 'tabelle', zeilen: [zellen] })
     } else {
       const einzug = zeile.length - zeile.trimStart().length
@@ -114,12 +120,13 @@ export function hatKopfzeile(zeilen: InlineTeil[][][]): boolean {
   return zeilen.length > 1 && zeilen[0].every((zelle) => zelle.every((t) => t.art === 'text'))
 }
 
-/** Felder, die außerhalb von Tabellen stehen — die Hauptangaben einer Vorlage. */
+/** Felder, die außerhalb von Tabellen stehen — die Hauptangaben einer Vorlage (Spalten ohne Rahmen zählen mit, z. B. die Unterzeichner). */
 export function hauptfelder(text: string): string[] {
   const namen: string[] = []
   for (const b of zerlegeVorlage(text)) {
-    if (b.art === 'leer' || b.art === 'tabelle') continue
-    for (const t of b.teile) if (t.art === 'feld' && !namen.includes(t.name)) namen.push(t.name)
+    if (b.art === 'leer' || (b.art === 'tabelle' && !b.rahmenlos)) continue
+    const teile = b.art === 'tabelle' ? b.zeilen.flat(2) : b.teile
+    for (const t of teile) if (t.art === 'feld' && !namen.includes(t.name)) namen.push(t.name)
   }
   return namen
 }
@@ -225,6 +232,7 @@ export function fuelleAlsText(text: string, werte: Record<string, string>, angek
     .replace(/[☐☒]/g, () => (angekreuzt.has(nr++) ? '☒' : '☐'))
     .replace(FELD, (_m, roh: string) => werte[feldName(roh)]?.trim() || LEERES_FELD)
     .replace(/^##? /gm, '')
+    .replace(/ \|\| /g, '      ')
     .replace(/\*\*/g, '')
 }
 

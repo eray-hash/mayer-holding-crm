@@ -1,5 +1,5 @@
 import jsPDF from 'jspdf'
-import { hatKopfzeile, zerlegeVorlage, type InlineTeil } from './vorlagenFuellen'
+import { hatKopfzeile, zerlegeVorlage, type InlineTeil, type VorlagenBlock } from './vorlagenFuellen'
 import { BRIEFKOPF, type Briefkopf } from '../data/briefkopf'
 
 // Erzeugt aus einer ausgefüllten Vorlage ein A4-PDF mit Briefkopf. Nutzt dieselbe Zerlegung wie die
@@ -92,8 +92,10 @@ export function erzeugeVorlagePdf(params: {
     seite++
     y = OBEN + 2
   }
+  // Im Messlauf (hoeheVon) wird nur gerechnet: nichts gezeichnet, kein Seitenwechsel.
+  let messen = false
   const platz = (hoehe: number) => {
-    if (y + hoehe > seitenHoehe - UNTEN) neueSeite()
+    if (!messen && y + hoehe > seitenHoehe - UNTEN) neueSeite()
   }
 
   // Aktueller Grundstil des Absatzes; fette Textteile weichen davon ab und müssen in ihrer eigenen
@@ -117,8 +119,10 @@ export function erzeugeVorlagePdf(params: {
           liste.push({ text: '', breite: inTabelle ? 14 : 42, linie: true, nachLeer: false })
           continue
         }
+        const fett = t.fett || grundStil === 'bold'
+        schrift(fett ? 'bold' : 'normal', grundGroesse)
         const stuecke = sicher(wert).split(/\s+/)
-        stuecke.forEach((w, i) => liste.push({ text: w, breite: doc.getTextWidth(w), nachLeer: i < stuecke.length - 1 }))
+        stuecke.forEach((w, i) => liste.push({ text: w, breite: doc.getTextWidth(w), nachLeer: i < stuecke.length - 1, fett }))
         continue
       }
       const fett = t.fett || grundStil === 'bold'
@@ -158,6 +162,7 @@ export function erzeugeVorlagePdf(params: {
   }
 
   function zeichneZeile(zeile: Wort[], x0: number, yy: number) {
+    if (messen) return
     const leer = doc.getTextWidth(' ')
     let x = x0
     zeile.forEach((w, i) => {
@@ -221,7 +226,9 @@ export function erzeugeVorlagePdf(params: {
       zellen.forEach((zelle, s) => {
         doc.setDrawColor(170)
         doc.setLineWidth(0.2)
-        if (istKopf) {
+        if (messen) {
+          // nur messen
+        } else if (istKopf) {
           doc.setFillColor(242, 242, 242)
           doc.rect(x, y - 3.6, b[s], hoehe, 'FD')
         } else {
@@ -239,12 +246,51 @@ export function erzeugeVorlagePdf(params: {
     y += 2.5
   }
 
-  kopfZeichnen()
+  /**
+   * Spalten ohne Rahmen (Auszeichnung `a || b`), gleich breit nebeneinander — gedacht für die
+   * Unterschriften beider Vertragsseiten. Eine Zeile mit Unterstrich-Linie bekommt Platz zum
+   * Unterschreiben darüber; Linien am Zeilenende (auch leere Felder) reichen bis zum Spaltenrand.
+   */
+  function spalten(zeilen: InlineTeil[][][]) {
+    const anzahl = Math.max(...zeilen.map((z) => z.length))
+    const luecke = 10
+    const b = (textBreite() - luecke * (anzahl - 1)) / anzahl
+    const mitKopf = hatKopfzeile(zeilen)
+    zeilen.forEach((zeile, zi) => {
+      const istKopf = zi === 0 && mitKopf
+      grundStil = istKopf ? 'bold' : 'normal'
+      grundGroesse = 9.5
+      schrift(grundStil, grundGroesse)
+      const leer = doc.getTextWidth(' ')
+      const zellen = Array.from({ length: anzahl }, (_, s) =>
+        umbrechen(worte(zeile[s] ?? []), b).map((zl, i, alle) => {
+          const letztes = zl[zl.length - 1]
+          if (i < alle.length - 1 || !letztes?.linie) return zl
+          // Anfang der Linie = Breite aller Worte davor samt Abständen.
+          const x = zl.slice(0, -1).reduce((summe, w) => summe + w.breite + (w.nachLeer ? leer : 0), 0)
+          return [...zl.slice(0, -1), { ...letztes, breite: Math.max(letztes.breite, b - x - 2) }]
+        }),
+      )
+      const unterschrift = zeile.some((zelle) => zelle.some((t) => t.art === 'text' && /_{4,}/.test(t.text)))
+      const vorlauf = unterschrift ? 9 : 0
+      const zeilenZahl = Math.max(1, ...zellen.map((z) => z.length))
+      platz(vorlauf + zeilenZahl * ZEILE)
+      y += vorlauf
+      zellen.forEach((zelle, s) => {
+        schrift(grundStil, grundGroesse)
+        zelle.forEach((zl, i) => zeichneZeile(zl, LINKS + s * (b + luecke), y + i * ZEILE))
+      })
+      y += zeilenZahl * ZEILE + (istKopf ? 0.4 : 0.8)
+    })
+    grundStil = 'normal'
+    y += 1.5
+  }
+
   let leerFolge = 0
-  for (const block of zerlegeVorlage(params.text)) {
+  function setze(block: VorlagenBlock) {
     if (block.art === 'leer') {
       if (leerFolge++ < 1) y += ZEILE * 0.7
-      continue
+      return
     }
     leerFolge = 0
     if (block.art === 'titel') {
@@ -258,10 +304,42 @@ export function erzeugeVorlagePdf(params: {
       y += 0.8
     } else if (block.art === 'zeile') {
       absatz(block.teile, 'normal', 9.5, ZEILE, block.einzug)
+    } else if (block.rahmenlos) {
+      spalten(block.zeilen)
     } else {
       tabelle(block.zeilen)
     }
   }
+
+  /** Höhe, die Blöcke ab der aktuellen Stelle brauchen würden — ohne zu zeichnen. */
+  function hoeheVon(liste: VorlagenBlock[]): number {
+    const [y0, folge0] = [y, leerFolge]
+    messen = true
+    y = 0
+    liste.forEach(setze)
+    const hoehe = y
+    messen = false
+    y = y0
+    leerFolge = folge0
+    return hoehe
+  }
+
+  kopfZeichnen()
+  const bloecke = zerlegeVorlage(params.text)
+  bloecke.forEach((block, i) => {
+    if (block.art === 'ueberschrift') {
+      let ende = i + 1
+      while (ende < bloecke.length && bloecke[ende].art !== 'ueberschrift' && bloecke[ende].art !== 'titel') ende++
+      const abschnitt = bloecke.slice(i, ende)
+      const frei = seitenHoehe - UNTEN - y
+      // Der Unterschriftenteil (Spalten ohne Rahmen) bleibt mit seiner Überschrift auf einer Seite;
+      // sonst steht eine Überschrift nie allein am Seitenende, sondern mit mindestens zwei Zeilen Text.
+      const zusammen = abschnitt.some((b) => b.art === 'tabelle' && b.rahmenlos)
+      const noetig = zusammen ? hoeheVon(abschnitt) : hoeheVon([block]) + 2 * ZEILE
+      if (noetig > frei && noetig < seitenHoehe - UNTEN - OBEN - 10) neueSeite()
+    }
+    setze(block)
+  })
 
   const seiten = doc.getNumberOfPages()
   for (let s = 1; s <= seiten; s++) {
