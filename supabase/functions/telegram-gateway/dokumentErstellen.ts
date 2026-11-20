@@ -12,7 +12,7 @@
 // Die Datei kennt index.ts nicht (kein Kreis-Import): Datenbank, Mitarbeiter und Protokoll reicht der
 // Aufrufer herein, die Rechte kommen aus rechte.ts.
 
-import { PDFDocument, type PDFFont, type PDFPage, rgb, StandardFonts } from 'npm:pdf-lib@1.17.1'
+import { PDFDocument, type PDFEmbeddedPage, type PDFFont, type PDFPage, rgb, StandardFonts } from 'npm:pdf-lib@1.17.1'
 import { type AkteFuerRechte, darfAkte as darfAkteStandard, istPrivat, nichtFreigegeben, type RechteMitarbeiter, SAMMELAKTEN } from './rechte.ts'
 
 // deno-lint-ignore no-explicit-any
@@ -43,7 +43,7 @@ export const DOKUMENT_WERKZEUGE = [
   {
     name: 'dokument_erstellen',
     description:
-      'Erstellt aus einem von dir geschriebenen Text eine fertige PDF-Datei (Merkblatt, Schreiben oder Zusammenfassung) mit Briefkopf der Andreas Mayer Holding, Datum und Seitenzahlen und legt sie als Dokument in der Kundenakte ab. Verwenden, wenn jemand ein Merkblatt, ein Schreiben oder eine Zusammenfassung "als Datei", "als PDF" oder "zum Ausdrucken/Mitgeben" möchte. Den Inhalt (z. B. aus Gesprächsprotokollen, Vertragsnotizen oder Dokumenten der Akte) schreibst du vorher selbst vollständig aus. Für eigene Unterlagen des Hauses ohne Kundenbezug kunde_id=k_intern_holding.',
+      'Erstellt aus einem von dir geschriebenen Text eine fertige PDF-Datei (Merkblatt, Schreiben oder Zusammenfassung) mit Briefkopf der Andreas Mayer Holding (bei eigenen privaten Kontakten auf dem eigenen Briefbogen des Mitarbeiters), Datum und Seitenzahlen und legt sie als Dokument in der Kundenakte ab. Verwenden, wenn jemand ein Merkblatt, ein Schreiben oder eine Zusammenfassung "als Datei", "als PDF" oder "zum Ausdrucken/Mitgeben" möchte. Den Inhalt (z. B. aus Gesprächsprotokollen, Vertragsnotizen oder Dokumenten der Akte) schreibst du vorher selbst vollständig aus. Für eigene Unterlagen des Hauses ohne Kundenbezug kunde_id=k_intern_holding.',
     input_schema: {
       type: 'object',
       properties: {
@@ -89,9 +89,26 @@ export async function fuehreDokumentWerkzeugAus(name: string, input: any, k: Dok
   if (!darf(mitarbeiter, akte)) return istPrivat(akte) ? keinKunde : nichtFreigegeben(akte.bereich, mitarbeiter.name)
   const akteName = kundeName(akte)
 
+  // Eigene private Akte: auf dem eigenen Briefbogen (Bereich Privat → Einstellungen), nie mit Mayer-Briefkopf.
+  let eigener: EigenerKopf | undefined
+  if (istPrivat(akte)) {
+    eigener = { name: mitarbeiter.name }
+    try {
+      const besitzer = String(akte.verantwortlich_email ?? '').trim().toLowerCase()
+      const { data: boegen } = await supabase.from('briefboegen').select('name, pdf_pfad, einstellungen').eq('besitzer_email', besitzer).not('pdf_pfad', 'is', null).order('name')
+      const bogen = (boegen ?? [])[0]
+      if (bogen?.pdf_pfad) {
+        const { data: datei } = await supabase.storage.from('briefboegen').download(bogen.pdf_pfad)
+        if (datei) eigener.briefbogen = { pdf: new Uint8Array(await datei.arrayBuffer()), raender: bogen.einstellungen?.raender }
+      }
+    } catch (e) {
+      console.error('Briefbogen für privates Dokument nicht ladbar — schlichter Kopf', e instanceof Error ? e.message : e)
+    }
+  }
+
   let pdf: { bytes: Uint8Array; seiten: number }
   try {
-    pdf = await erstellePdf({ titel, inhalt, art, fuer: SAMMELAKTEN.includes(akte.id) ? undefined : akteName, datum: heute })
+    pdf = await erstellePdf({ titel, inhalt, art, fuer: SAMMELAKTEN.includes(akte.id) ? undefined : akteName, datum: heute, eigener })
   } catch (e) {
     return `Fehler beim Erstellen der PDF: ${e instanceof Error ? e.message : String(e)}`
   }
@@ -377,29 +394,49 @@ function zerlege(inhalt: string): Block[] {
   return bloecke
 }
 
+/** Eigener Briefbogen (Bereich Privat): Seite 1/2 als Hintergrund, Ränder in Punkt. */
+export type BriefbogenHintergrund = { erste: PDFEmbeddedPage; folge: PDFEmbeddedPage; ersteOben: number; folgeOben: number }
+
 class Setzer {
   seite!: PDFPage
   y = 0
+  /** Oberkante des Textes auf der aktuellen Seite (für „am Seitenanfang“). */
+  startY = 0
   seiten: PDFPage[] = []
-  constructor(private doc: PDFDocument, private f: Schriften) {}
+  rand = { ...RAND }
+  constructor(
+    private doc: PDFDocument,
+    private f: Schriften,
+    private kopf: { name: string; zeile: string } = { name: FIRMA, zeile: FIRMA_ZEILE },
+    private hintergrund?: BriefbogenHintergrund,
+  ) {}
 
   get breite() {
-    return A4.breite - RAND.links - RAND.rechts
+    return A4.breite - this.rand.links - this.rand.rechts
   }
 
   neueSeite() {
     this.seite = this.doc.addPage([A4.breite, A4.hoehe])
     this.seiten.push(this.seite)
-    const top = A4.hoehe - RAND.oben
-    this.seite.drawText(FIRMA, { x: RAND.links, y: top - 11, size: 11.5, font: this.f.fett, color: AKZENT })
-    this.seite.drawText(FIRMA_ZEILE, { x: RAND.links, y: top - 24, size: 7.8, font: this.f.normal, color: GRAU })
-    this.seite.drawLine({ start: { x: RAND.links, y: top - 32 }, end: { x: A4.breite - RAND.rechts, y: top - 32 }, thickness: 0.6, color: LINIE })
+    if (this.hintergrund) {
+      // Eigener Briefbogen: Kopf und Fuß stehen im Hintergrund, der Text beginnt unter dem Kopf.
+      const bg = this.seiten.length === 1 ? this.hintergrund.erste : this.hintergrund.folge
+      this.seite.drawPage(bg, { x: 0, y: 0, width: A4.breite, height: A4.hoehe })
+      this.y = A4.hoehe - (this.seiten.length === 1 ? this.hintergrund.ersteOben : this.hintergrund.folgeOben)
+      this.startY = this.y
+      return
+    }
+    const top = A4.hoehe - this.rand.oben
+    this.seite.drawText(this.kopf.name, { x: this.rand.links, y: top - 11, size: 11.5, font: this.f.fett, color: AKZENT })
+    if (this.kopf.zeile) this.seite.drawText(this.kopf.zeile, { x: this.rand.links, y: top - 24, size: 7.8, font: this.f.normal, color: GRAU })
+    this.seite.drawLine({ start: { x: this.rand.links, y: top - 32 }, end: { x: A4.breite - this.rand.rechts, y: top - 32 }, thickness: 0.6, color: LINIE })
     this.y = top - 32 - 26
+    this.startY = this.y
   }
 
   /** Sorgt für Platz; sonst neue Seite. */
   platz(hoehe: number) {
-    if (this.y - hoehe < RAND.unten + 14) this.neueSeite()
+    if (this.y - hoehe < this.rand.unten + 14) this.neueSeite()
   }
 
   zeile(z: Zeile, x: number, groesse: number, farbe = TEXT_FARBE) {
@@ -429,7 +466,14 @@ class Setzer {
   }
 }
 
-export async function erstellePdf(a: { titel: string; inhalt: string; art?: Art; fuer?: string; datum: string }): Promise<{ bytes: Uint8Array; seiten: number }> {
+export type EigenerKopf = {
+  /** Briefbogen-PDF (leere Seite; Seite 2 = Folgeseite, falls vorhanden) und Ränder in mm aus den Briefbogen-Einstellungen. */
+  briefbogen?: { pdf: Uint8Array; raender?: { links?: number; rechts?: number; unten?: number; anschriftOben?: number; folgeseiteOben?: number } }
+  /** Name im Kopf, wenn kein Briefbogen da ist (nie die Mayer Holding für Private). */
+  name: string
+}
+
+export async function erstellePdf(a: { titel: string; inhalt: string; art?: Art; fuer?: string; datum: string; eigener?: EigenerKopf }): Promise<{ bytes: Uint8Array; seiten: number }> {
   const doc = await PDFDocument.create()
   const f: Schriften = {
     normal: await doc.embedFont(StandardFonts.Helvetica),
@@ -441,23 +485,35 @@ export async function erstellePdf(a: { titel: string; inhalt: string; art?: Art;
   const sauber = zeichenFilter(f.normal)
   const titel = sauber(a.titel)
   const art = a.art ?? 'handout'
+  const urheber = a.eigener ? sauber(a.eigener.name) : FIRMA
   doc.setTitle(titel)
-  doc.setAuthor(FIRMA)
-  doc.setCreator(`${FIRMA} – CRM`)
-  doc.setProducer(`${FIRMA} – CRM`)
+  doc.setAuthor(urheber)
+  doc.setCreator(`${urheber} – CRM`)
+  doc.setProducer(`${urheber} – CRM`)
   doc.setLanguage('de-DE')
 
-  const s = new Setzer(doc, f)
+  // Eigener Briefbogen (privater Bereich): Seiten des Briefbogens als Hintergrund, Ränder aus seinen Einstellungen.
+  let hintergrund: BriefbogenHintergrund | undefined
+  const MM = 72 / 25.4
+  const r = a.eigener?.briefbogen?.raender ?? {}
+  if (a.eigener?.briefbogen) {
+    const quelle = await PDFDocument.load(a.eigener.briefbogen.pdf)
+    const anzahl = quelle.getPageCount()
+    const [erste, folge] = await doc.embedPdf(a.eigener.briefbogen.pdf, anzahl > 1 ? [0, 1] : [0, 0])
+    hintergrund = { erste, folge, ersteOben: (r.anschriftOben ?? 50.7) * MM, folgeOben: (r.folgeseiteOben ?? 30) * MM }
+  }
+  const s = new Setzer(doc, f, a.eigener ? { name: urheber, zeile: '' } : undefined, hintergrund)
+  if (hintergrund) s.rand = { links: (r.links ?? 25) * MM, rechts: (r.rechts ?? 20) * MM, oben: RAND.oben, unten: (r.unten ?? 25) * MM }
   s.neueSeite()
 
   // Kopf der ersten Seite: Art, Titel, für wen und Stand.
   s.y -= 2
-  s.seite.drawText(ART_NAME[art].toUpperCase().split('').join(' '), { x: RAND.links, y: s.y - 8, size: 8, font: f.fett, color: GRAU })
+  s.seite.drawText(ART_NAME[art].toUpperCase().split('').join(' '), { x: s.rand.links, y: s.y - 8, size: 8, font: f.fett, color: GRAU })
   s.y -= 16
-  s.text([{ text: titel, fett: true, kursiv: false }], RAND.links, s.breite, 19, 24, AKZENT)
+  s.text([{ text: titel, fett: true, kursiv: false }], s.rand.links, s.breite, 19, 24, AKZENT)
   s.y -= 4
   const meta = [a.fuer ? `Für: ${sauber(a.fuer)}` : '', `Stand: ${langesDatum(a.datum)}`].filter(Boolean).join('   ·   ')
-  s.text([{ text: meta, fett: false, kursiv: false }], RAND.links, s.breite, 9.5, 13, GRAU)
+  s.text([{ text: meta, fett: false, kursiv: false }], s.rand.links, s.breite, 9.5, 13, GRAU)
   s.y -= 18
 
   let bloecke = zerlege(sauber(a.inhalt))
@@ -476,42 +532,42 @@ export async function erstellePdf(a: { titel: string; inhalt: string; art?: Art;
       const vorher = b.ebene === 1 ? 16 : b.ebene === 2 ? 12 : 9
       // Überschrift nie allein am Seitenende.
       s.platz(vorher + groesse + 6 + 2 * ZEILE)
-      if (s.y < A4.hoehe - RAND.oben - 80) s.y -= vorher
-      s.text(laeufe(b.text, { fett: true, kursiv: false }), RAND.links, s.breite, groesse, groesse + 5, b.ebene === 3 ? TEXT_FARBE : AKZENT)
+      if (s.y < s.startY - 22) s.y -= vorher
+      s.text(laeufe(b.text, { fett: true, kursiv: false }), s.rand.links, s.breite, groesse, groesse + 5, b.ebene === 3 ? TEXT_FARBE : AKZENT)
       s.y -= b.ebene === 1 ? 6 : 4
       continue
     }
     if (b.art === 'linie') {
       s.platz(16)
       // Am Seitenanfang trennt eine Linie nichts mehr.
-      if (s.y >= A4.hoehe - RAND.oben - 32 - 26 - 0.5) continue
+      if (s.y >= s.startY - 0.5) continue
       s.y -= 8
-      s.seite.drawLine({ start: { x: RAND.links, y: s.y }, end: { x: A4.breite - RAND.rechts, y: s.y }, thickness: 0.6, color: LINIE })
+      s.seite.drawLine({ start: { x: s.rand.links, y: s.y }, end: { x: A4.breite - s.rand.rechts, y: s.y }, thickness: 0.6, color: LINIE })
       s.y -= 10
       continue
     }
     if (b.art === 'absatz') {
-      for (const z of b.zeilen) s.text(laeufe(z), RAND.links, s.breite)
+      for (const z of b.zeilen) s.text(laeufe(z), s.rand.links, s.breite)
       s.y -= ABSATZ
       continue
     }
     if (b.art === 'zitat') {
       const start = s.y
       const seiteVorher = s.seite
-      for (const z of b.zeilen) s.text(laeufe(z, { fett: false, kursiv: true }), RAND.links + 14, s.breite - 14, GROESSE, ZEILE, GRAU)
-      if (s.seite === seiteVorher) s.seite.drawLine({ start: { x: RAND.links + 3, y: start - 2 }, end: { x: RAND.links + 3, y: s.y + 2 }, thickness: 2, color: LINIE })
+      for (const z of b.zeilen) s.text(laeufe(z, { fett: false, kursiv: true }), s.rand.links + 14, s.breite - 14, GROESSE, ZEILE, GRAU)
+      if (s.seite === seiteVorher) s.seite.drawLine({ start: { x: s.rand.links + 3, y: start - 2 }, end: { x: s.rand.links + 3, y: s.y + 2 }, thickness: 2, color: LINIE })
       s.y -= ABSATZ
       continue
     }
     if (b.art === 'punkt') {
-      const einzug = RAND.links + 4 + b.ebene * 16
+      const einzug = s.rand.links + 4 + b.ebene * 16
       const markeText = b.marke ?? (b.ebene === 0 ? '•' : b.ebene === 1 ? '–' : '·')
       const markeFont = b.marke ? f.normal : f.fett
       const textX = einzug + (b.marke ? Math.max(16, markeFont.widthOfTextAtSize(markeText, GROESSE) + 6) : 12)
       s.platz(ZEILE)
       const markeY = s.y - (ZEILE - (ZEILE - GROESSE) / 2)
       const seiteVorher = s.seite
-      for (const z of b.zeilen) s.text(laeufe(z), textX, A4.breite - RAND.rechts - textX)
+      for (const z of b.zeilen) s.text(laeufe(z), textX, A4.breite - s.rand.rechts - textX)
       // Die Marke steht neben der ersten Zeile; platz() oben stellt sicher, dass die auf dieser Seite liegt.
       seiteVorher.drawText(markeText, { x: einzug, y: markeText === '•' ? markeY - 1.2 : markeY, size: markeText === '•' ? GROESSE * 1.3 : GROESSE, font: markeFont, color: b.marke ? TEXT_FARBE : AKZENT })
       s.y -= naechster && naechster.art === 'punkt' ? 3 : ABSATZ
@@ -528,11 +584,19 @@ export async function erstellePdf(a: { titel: string; inhalt: string; art?: Art;
   const ohneSymbole = [...titel].filter((z) => !SYMBOLE.has(z)).join('').trim()
   const fussTitel = ohneSymbole.length > 70 ? `${ohneSymbole.slice(0, 68)}…` : ohneSymbole
   s.seiten.forEach((p, i) => {
-    const y = RAND.unten - 28
-    p.drawLine({ start: { x: RAND.links, y: y + 14 }, end: { x: A4.breite - RAND.rechts, y: y + 14 }, thickness: 0.5, color: LINIE })
-    p.drawText(fussTitel, { x: RAND.links, y, size: 8, font: f.normal, color: GRAU })
+    if (hintergrund) {
+      // Auf dem eigenen Briefbogen nur die Seitenzahl — Fußzeile und Linie hat der Briefbogen selbst.
+      if (gesamt > 1) {
+        const nr = `Seite ${i + 1} von ${gesamt}`
+        p.drawText(nr, { x: A4.breite - s.rand.rechts - f.normal.widthOfTextAtSize(nr, 8), y: s.rand.unten + 2, size: 8, font: f.normal, color: GRAU })
+      }
+      return
+    }
+    const y = s.rand.unten - 28
+    p.drawLine({ start: { x: s.rand.links, y: y + 14 }, end: { x: A4.breite - s.rand.rechts, y: y + 14 }, thickness: 0.5, color: LINIE })
+    p.drawText(fussTitel, { x: s.rand.links, y, size: 8, font: f.normal, color: GRAU })
     const nr = `Seite ${i + 1} von ${gesamt}`
-    p.drawText(nr, { x: A4.breite - RAND.rechts - f.normal.widthOfTextAtSize(nr, 8), y, size: 8, font: f.normal, color: GRAU })
+    p.drawText(nr, { x: A4.breite - s.rand.rechts - f.normal.widthOfTextAtSize(nr, 8), y, size: 8, font: f.normal, color: GRAU })
   })
 
   return { bytes: await doc.save(), seiten: gesamt }
@@ -558,8 +622,8 @@ function tabelle(s: Setzer, f: Schriften, zeilen: string[][]) {
     const hoehe = Math.max(1, ...zellen.map((x) => x.length)) * abstand + 2 * pad - 2
     s.platz(hoehe)
     const oben = s.y
-    if (kopf) s.seite.drawRectangle({ x: RAND.links, y: oben - hoehe, width: s.breite, height: hoehe, color: TABELLEN_KOPF })
-    let x = RAND.links
+    if (kopf) s.seite.drawRectangle({ x: s.rand.links, y: oben - hoehe, width: s.breite, height: hoehe, color: TABELLEN_KOPF })
+    let x = s.rand.links
     zellen.forEach((zellZeilen, c) => {
       s.y = oben - pad + 1
       for (const zz of zellZeilen) {
@@ -569,8 +633,8 @@ function tabelle(s: Setzer, f: Schriften, zeilen: string[][]) {
       }
       x += breiten[c]
     })
-    s.seite.drawRectangle({ x: RAND.links, y: oben - hoehe, width: s.breite, height: hoehe, borderColor: LINIE, borderWidth: 0.5 })
-    let lx = RAND.links
+    s.seite.drawRectangle({ x: s.rand.links, y: oben - hoehe, width: s.breite, height: hoehe, borderColor: LINIE, borderWidth: 0.5 })
+    let lx = s.rand.links
     for (let c = 0; c < spalten - 1; c++) {
       lx += breiten[c]
       s.seite.drawLine({ start: { x: lx, y: oben }, end: { x: lx, y: oben - hoehe }, thickness: 0.5, color: LINIE })

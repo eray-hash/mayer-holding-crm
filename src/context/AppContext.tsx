@@ -121,6 +121,7 @@ export type AppData = {
   abrechnungen: ObjektAbrechnung[]
   /** Vom Server gemeldete neue Treffer Gesuch ↔ Objekt. Nur gelesen, nie von hier geschrieben. */
   trefferMeldungen: TrefferMeldung[]
+  privatTrefferMeldungen: TrefferMeldung[]
   todos: ToDoEintrag[]
   todoFreigaben: ToDoFreigabe[]
   verbindlichkeiten: Verbindlichkeit[]
@@ -192,6 +193,7 @@ function leereGeteilteEntities(data: AppData): AppData {
     weitergaben: [],
     abrechnungen: [],
     trefferMeldungen: [],
+    privatTrefferMeldungen: [],
     todos: [],
     todoFreigaben: [],
     verbindlichkeiten: [],
@@ -240,6 +242,7 @@ function buildSeed(): AppData {
     weitergaben: [],
     abrechnungen: [],
     trefferMeldungen: [],
+    privatTrefferMeldungen: [],
     todos: [],
     todoFreigaben: [],
     verbindlichkeiten: [],
@@ -298,6 +301,7 @@ function loadInitial(): AppData {
         if (!Array.isArray(parsed.weitergaben)) parsed.weitergaben = []
         if (!Array.isArray(parsed.abrechnungen)) parsed.abrechnungen = []
         if (!Array.isArray(parsed.trefferMeldungen)) parsed.trefferMeldungen = []
+        if (!Array.isArray(parsed.privatTrefferMeldungen)) parsed.privatTrefferMeldungen = []
         if (!Array.isArray(parsed.todos)) parsed.todos = []
         if (!Array.isArray(parsed.todoFreigaben)) parsed.todoFreigaben = []
         if (!Array.isArray(parsed.verbindlichkeiten)) parsed.verbindlichkeiten = []
@@ -1156,6 +1160,7 @@ function reducer(state: AppData, action: Action): AppData {
         weitergaben: action.data.weitergaben,
         abrechnungen: action.data.abrechnungen,
         trefferMeldungen: action.data.trefferMeldungen,
+        privatTrefferMeldungen: action.data.privatTrefferMeldungen ?? [],
         todos: action.data.todos,
         todoFreigaben: action.data.todoFreigaben,
         verbindlichkeiten: action.data.verbindlichkeiten,

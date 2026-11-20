@@ -1027,6 +1027,8 @@ export type HydratedData = {
   weitergaben: Weitergabe[]
   abrechnungen: ObjektAbrechnung[]
   trefferMeldungen: TrefferMeldung[]
+  // Treffer der eigenen privaten Gesuche (art 'privat_treffer', Datenbank-Regel: nur der Besitzer). Nur lesen.
+  privatTrefferMeldungen: TrefferMeldung[]
   todos: ToDoEintrag[]
   todoFreigaben: ToDoFreigabe[]
   verbindlichkeiten: Verbindlichkeit[]
@@ -1174,6 +1176,7 @@ export async function hydrateFromSupabase(): Promise<HydratedData | null> {
     weitergaben: abteilung('weitergabe') as Weitergabe[],
     abrechnungen: abteilung('abrechnung') as ObjektAbrechnung[],
     trefferMeldungen: abteilung('treffer') as TrefferMeldung[],
+    privatTrefferMeldungen: abteilung('privat_treffer') as TrefferMeldung[],
     todos: (todosRes.data ?? []).map(rowToTodo),
     todoFreigaben: (todoFreigabenRes.data ?? []).map(rowToTodoFreigabe),
     verbindlichkeiten: (verbindlichkeitenRes.data ?? []).map(rowToVerbindlichkeit),

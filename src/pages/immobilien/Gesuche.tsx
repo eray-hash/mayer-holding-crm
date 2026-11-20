@@ -46,21 +46,21 @@ export function Gesuche({ privat }: { privat?: boolean } = {}) {
   // nur, was nach dem Abgleich dieser Seite auch jetzt noch passt — überholte Meldungen räumt der Server
   // erst bei seinem nächsten Lauf ab. Auch ob es ein Treffer oder „zu prüfen" ist, kommt aus dem Abgleich
   // der Seite, damit Karte und Liste nie Verschiedenes sagen.
-  // Privat: keine Meldungen — die Mayer-Treffer-Meldungen betreffen nur Mayer-Objekte und -Gesuche. Private
-  // Treffer kommen später als abteilung_eintraege (art 'privat_treffer'); bis dahin zeigt die Karte nichts.
+  // Privat: die Treffer der eigenen privaten Gesuche (art 'privat_treffer', nur für den Besitzer lesbar) gegen
+  // die eigenen privaten Objekte — die Mayer-Meldungen betreffen nur Mayer-Objekte und -Gesuche.
+  const meldungen = privat ? state.privatTrefferMeldungen : state.trefferMeldungen
   const neueTreffer = useMemo(() => {
-    if (privat) return []
     const liste = []
-    for (const meldung of neueTrefferMeldungen(state.trefferMeldungen ?? [])) {
+    for (const meldung of neueTrefferMeldungen(meldungen ?? [])) {
       const z = alle.find((x) => x.gesuch.id === meldung.gesuchId && x.kunde.id === meldung.kundeId)
-      const objekt = state.objekte.find((o) => o.id === meldung.objektId)
+      const objekt = objekte.find((o) => o.id === meldung.objektId)
       if (!z || !objekt || z.gesuch.erledigt) continue
       const t = pruefe(z.gesuch, objekt)
       if (!t) continue
       liste.push({ meldung, gesuch: z.gesuch, kunde: z.kunde, bereich: z.bereich, objekt, sicher: t.offen.length === 0 })
     }
     return liste
-  }, [alle, state.objekte, state.trefferMeldungen, privat])
+  }, [alle, objekte, meldungen])
   const neuePaare = useMemo(() => new Set(neueTreffer.map((n) => paarSchluessel(n.gesuch.id, n.objekt.id))), [neueTreffer])
 
   const zeilen = useMemo(() => {
