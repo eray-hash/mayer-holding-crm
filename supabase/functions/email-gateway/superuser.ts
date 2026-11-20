@@ -450,7 +450,7 @@ async function zahlen(admin: Db, g: Grunddaten, jetzt: Date) {
 async function technik(admin: Db, g: Grunddaten, jetzt: Date) {
   const vonIso = new Date(Date.parse(`${g.von}T00:00:00Z`) - 2 * 3600000).toISOString()
   const [ki, wuensche, postfaecher] = await Promise.all([
-    ladeAlle(admin, 'ki_verbrauch', 'am, anlass, person, funktion, modell, kosten_usd', (q) => q.gte('am', vonIso)),
+    ladeAlle(admin, 'ki_verbrauch', 'am, anlass, person, funktion, modell, kosten_usd, privat', (q) => q.gte('am', vonIso)),
     ladeAlle(admin, 'wuensche', 'titel, quelle, status, anzahl, zuletzt_am', (q) => q.gte('zuletzt_am', vonIso)),
     ladeAlle(admin, 'postfaecher', 'id, adresse, besitzer_email, aktiv, letzter_abruf, letzter_fehler'),
   ])
@@ -470,6 +470,8 @@ async function technik(admin: Db, g: Grunddaten, jetzt: Date) {
   const jeAnlass: Record<string, number> = {}
   const jeModell: Record<string, number> = {}
   const jePerson: Record<string, number> = {}
+  // Privater Teil (Bereich Privat, Microsoft, eigene Briefbögen) — wird dem Mitarbeiter privat berechnet (20.11.2026).
+  const privatJePerson: Record<string, number> = {}
   const emailZuName = new Map(g.team.map((m) => [m.email.toLowerCase(), m.name]))
   let summe = 0
   for (const k of ki) {
@@ -483,6 +485,7 @@ async function technik(admin: Db, g: Grunddaten, jetzt: Date) {
     jeModell[k.modell || 'unbekannt'] = (jeModell[k.modell || 'unbekannt'] ?? 0) + usd
     const person = k.person ? (emailZuName.get(String(k.person).toLowerCase()) ?? String(k.person)) : 'Automatisch (ohne Person)'
     jePerson[person] = (jePerson[person] ?? 0) + usd
+    if (k.privat === true) privatJePerson[person] = (privatJePerson[person] ?? 0) + usd
   }
   const runde = (o: Record<string, number>) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, euro(v)]))
 
@@ -499,6 +502,7 @@ async function technik(admin: Db, g: Grunddaten, jetzt: Date) {
       jeAnlass: runde(jeAnlass),
       jeModell: runde(jeModell),
       jePerson: runde(jePerson),
+      privatJePerson: runde(privatJePerson),
       umrechnung: `1 $ ≈ ${String(USD_ZU_EUR).replace('.', ',')} €`,
     },
     fehler: {

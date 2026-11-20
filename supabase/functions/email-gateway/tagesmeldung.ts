@@ -6,7 +6,8 @@
 //   Termine, fällige Wiedervorlagen (Kontakte und Objekte, bei denen er verantwortlich ist), eigene
 //   fällige Aufgaben, neue Treffer der letzten 24 Stunden; Geschäftsführung und Admins zusätzlich die
 //   offenen Fragen an die Geschäftsführung. Dazu die Zahl der Dateien in „Ungeklärte Eingänge“.
-//   Steht nichts an, geht keine Nachricht raus.
+//   Steht nichts an, geht keine Nachricht raus. Freigeschaltete mit Microsoft-Konto bekommen zusätzlich einen
+//   Hotmail-Teil (hotmailBriefing.ts: Dringendes, neue Rechnungen, wichtige Mails, markierte — ohne Beträge).
 // - Wochenbericht: freitags ab 16 Uhr (bis 19 Uhr), nur Geschäftsführung und Admins. Nur Zahlen.
 // - Abschalten kann jeder für sich (`kalender_einstellungen.morgen_uebersicht` / `.wochenbericht`;
 //   keine Zeile oder kein Wert = an).
@@ -18,6 +19,8 @@
 //   Datenbank): Wiedervorlagen, Aufgaben und Treffer aus Bereichen, die jemand nicht sehen darf, fehlen.
 // - Nie Mailtexte oder Inhalte von Dokumenten — nur Titel und Namen.
 // - Wirft nie: Fehler stehen im Protokoll, der nächste Takt versucht es erneut.
+
+import { hotmailAbschnitte } from './hotmailBriefing.ts'
 
 // Der Dienst-Zugang zur Datenbank — wie in gesuchTreffer.ts.
 // deno-lint-ignore no-explicit-any
@@ -513,8 +516,8 @@ function vorname(name: string): string {
 }
 
 /** Die fertige Nachricht — null, wenn nichts ansteht. Höchstens 25 Zeilen: Lange Listen werden gekürzt. */
-export function morgenText(p: Person, d: Daten, jetzt: Date): string | null {
-  const abschnitte = morgenAbschnitte(p, d, jetzt)
+export function morgenText(p: Person, d: Daten, jetzt: Date, zusatz: Abschnitt[] = []): string | null {
+  const abschnitte = [...morgenAbschnitte(p, d, jetzt), ...zusatz]
   if (abschnitte.length === 0) return null
   const b = berlinZeit(jetzt)
   const gruss = vorname(p.name) ? `Guten Morgen ${vorname(p.name)}, das steht heute an (${WOCHENTAG_LANG[b.wochentag]}, ${tagMonat(b.datum)}):` : `Guten Morgen, das steht heute an (${WOCHENTAG_LANG[b.wochentag]}, ${tagMonat(b.datum)}):`
@@ -718,7 +721,8 @@ async function lauf(admin: Db, sende: SendeFunktion, jetzt: Date, art: 'morgen' 
   const daten = art === 'morgen' ? await ladeDaten(admin, heute) : null
   const wochenDaten = art === 'woche' ? await ladeWochenDaten(admin) : null
   const nachrichten = new Map<string, string | null>()
-  for (const p of offen) nachrichten.set(p.email, daten ? morgenText(p, daten, jetzt) : wochenText(wochenDaten!, jetzt, stand.bezahlt))
+  // Bereich Privat: Hotmail-Teil für Freigeschaltete mit verbundenem Microsoft-Konto (hotmailBriefing.ts, wirft nie).
+  for (const p of offen) nachrichten.set(p.email, daten ? morgenText(p, daten, jetzt, await hotmailAbschnitte(admin, p.email, jetzt)) : wochenText(wochenDaten!, jetzt, stand.bezahlt))
 
   // Vergleichsstand für „bezahlt seit“: beim Wochenbericht neu festhalten (für die nächste Woche),
   // am Morgen nur, wenn es noch gar keinen gibt.
@@ -779,7 +783,7 @@ export async function tagesmeldungTest(admin: Db, sende: SendeFunktion, eingabe:
     let nachricht: string | null
     let hinweis: string | undefined
     if (art === 'morgen') {
-      nachricht = morgenText(p, await ladeDaten(admin, berlinZeit(jetzt).datum), jetzt)
+      nachricht = morgenText(p, await ladeDaten(admin, berlinZeit(jetzt).datum), jetzt, await hotmailAbschnitte(admin, p.email, jetzt))
       if (!nachricht) hinweis = 'Heute steht nichts an — im echten Lauf ginge keine Nachricht raus.'
     } else {
       const { data } = await admin.from(TABELLE).select('daten').eq('id', STAND_ID).maybeSingle()

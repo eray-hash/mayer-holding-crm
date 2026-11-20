@@ -1,5 +1,5 @@
 import { Link, useLocation } from 'react-router-dom'
-import { Users, ChevronLeft, ChevronRight, Lock, Sun, UserCog, ListTodo, Mail, CalendarDays, Settings, PenLine, AtSign, ListChecks, PauseCircle } from 'lucide-react'
+import { Users, ChevronLeft, ChevronRight, Lock, Sun, UserCog, ListTodo, Mail, CalendarDays, Settings, PenLine, AtSign, ListChecks, PauseCircle, Stethoscope } from 'lucide-react'
 import { UngeklaertSideLink } from './UngeklaertSideLink'
 import { useAuth } from '../context/AuthContext'
 import { useMsStatus } from '../lib/microsoftKonto'
@@ -20,7 +20,7 @@ export function SidebarPrivat({ collapsed, onToggle }: { collapsed: boolean; onT
           icon={<Users size={17} />}
           label="Meine Kontakte"
           collapsed={collapsed}
-          active={isActive('/privat') && !isActive('/privat/todo') && !isActive('/privat/postfach') && !isActive('/privat/kalender') && !isActive('/privat/einstellungen') && !isActive('/privat/brief') && !isActive('/privat/hotmail') && !isActive('/privat/offen') && !isActive('/privat/bestaetigen')}
+          active={isActive('/privat') && !isActive('/privat/todo') && !isActive('/privat/postfach') && !isActive('/privat/kalender') && !isActive('/privat/einstellungen') && !isActive('/privat/brief') && !isActive('/privat/hotmail') && !isActive('/privat/offen') && !isActive('/privat/bestaetigen') && !isActive('/privat/systemcheck')}
         />
         <SideLink to="/privat/postfach" icon={<Mail size={17} />} label="Mein Postfach" collapsed={collapsed} active={isActive('/privat/postfach')} />
         {ms?.erlaubt && ms.verbunden && (
@@ -34,6 +34,7 @@ export function SidebarPrivat({ collapsed, onToggle }: { collapsed: boolean; onT
         <UngeklaertSideLink collapsed={collapsed} />
         <SideLink to="/privat/todo" icon={<ListTodo size={17} />} label="To-Do-Liste" collapsed={collapsed} active={isActive('/privat/todo')} />
         {ms?.erlaubt && <SideLink to="/privat/brief" icon={<PenLine size={17} />} label="Brief schreiben" collapsed={collapsed} active={isActive('/privat/brief')} />}
+        {ms?.erlaubt && <SideLink to="/privat/systemcheck" icon={<Stethoscope size={17} />} label="Systemcheck" collapsed={collapsed} active={isActive('/privat/systemcheck')} />}
         {ms?.erlaubt && (
           <SideLink to="/privat/einstellungen" icon={<Settings size={17} />} label="Einstellungen" collapsed={collapsed} active={isActive('/privat/einstellungen')} />
         )}

@@ -233,6 +233,7 @@ import { loescheTermin, sendeErinnerungen, sendeTelegram, speichereTermin } from
 import { aboLink, kalenderAboAntwort } from './kalenderAbo.ts'
 import { MS_AKTIONEN, msAbgleichAlle, msAktion, msRueckrufAntwort } from './privatMicrosoft.ts'
 import { BRIEF_AKTIONEN, briefAktion } from './briefe.ts'
+import { kontaktMailsUebernehmen } from './kontaktUebernahme.ts'
 import { AUSFUEHRER } from './vormerkungen.ts'
 
 // Bereich Privat: einen CRM-Termin absagen, nachdem der Mitarbeiter die Vormerkung des Assistenten bestätigt hat
@@ -3345,6 +3346,10 @@ Deno.serve((req: Request) => mitAnlass(async () => {
     if (MS_AKTIONEN.has(String(body.action))) {
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
       return await msAktion(req, admin, body, headers)
+    }
+    if (body.action === 'kontakt_mails_uebernehmen') {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      return await kontaktMailsUebernehmen(req, admin, body, headers)
     }
     if (BRIEF_AKTIONEN.has(String(body.action))) {
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)

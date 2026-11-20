@@ -6,12 +6,12 @@ import { AUSFUEHRER, bestaetige, merkeVor, offeneVormerkungen, verwerfe } from '
 import { istDienstSchluessel } from './tagesmeldung.ts'
 import { gleicheTodosAb } from './todoAbgleich.ts'
 import { gleicheKalenderAb } from './kalenderAbgleich.ts'
-import { anmeldungAbschliessen, anmeldungStarten, MsFehler, msErlaubt, MsNichtVerbunden, msStatus, msTrennen } from '../_shared/microsoft.ts'
+import { anmeldungAbschliessen, anmeldungStarten, graph, msEingerichtet, MsFehler, msErlaubt, MsNichtVerbunden, msStatus, msTrennen } from '../_shared/microsoft.ts'
 
 // deno-lint-ignore no-explicit-any
 type Db = any
 
-export const ABGLEICH_AKTIONEN = new Set(['ms_abgleich_jetzt'])
+export const ABGLEICH_AKTIONEN = new Set(['ms_abgleich_jetzt', 'privat_systemcheck'])
 export const VORMERK_AKTIONEN = new Set(['vormerkungen_liste', 'vormerkung_anlegen', 'vormerkung_bestaetigen', 'vormerkung_verwerfen', 'outlook_senden'])
 export const MS_AKTIONEN = new Set(['ms_status', 'ms_anmelden_start', 'ms_trennen', ...OUTLOOK_AKTIONEN, ...VORMERK_AKTIONEN, ...ABGLEICH_AKTIONEN])
 
@@ -33,6 +33,7 @@ export async function msAktion(req: Request, admin: Db, body: Record<string, unk
     }
     if (OUTLOOK_AKTIONEN.has(String(body.action))) return antwort(await outlookAktion(admin, ich, body), headers)
     if (body.action === 'ms_abgleich_jetzt') return antwort(await gleicheAb(admin, ich), headers)
+    if (body.action === 'privat_systemcheck') return antwort(await systemcheck(admin, ich), headers)
     if (VORMERK_AKTIONEN.has(String(body.action))) {
       // Mit dem Dienst-Schlüssel ruft nur die eigene Telegram-Funktion auf (Assistent oder Knopf). Bestätigen geht
       // dann nur mit dem Code aus der Telegram-Nachricht des Besitzers; Sofort-Senden gar nicht.
@@ -104,4 +105,40 @@ export async function msAbgleichAlle(admin: Db): Promise<{ konten: number; fehle
     }
   }
   return { konten: konten.length, fehler: fehler.slice(0, 20) }
+}
+
+type Pruefung = { name: string; ok: boolean | null; text: string }
+
+/** Systemcheck des privaten Bereichs (Ersatz für systemcheck.py des Desktop-Assistenten). Nur Zustände, keine Inhalte. */
+async function systemcheck(admin: Db, ich: string): Promise<{ pruefungen: Pruefung[] }> {
+  const p: Pruefung[] = []
+  const status = await msStatus(admin, ich)
+  p.push({ name: 'Microsoft-App eingerichtet', ok: msEingerichtet(), text: msEingerichtet() ? 'Anwendungs-ID und Geheimnis sind hinterlegt.' : 'MS_CLIENT_ID/MS_CLIENT_SECRET fehlen.' })
+  if (!status.verbunden) p.push({ name: 'Microsoft-Konto', ok: false, text: 'Nicht verbunden — unter Einstellungen verbinden.' })
+  else {
+    try {
+      const ichMs = await graph<{ mail?: string; userPrincipalName?: string }>(admin, ich, '/me?$select=mail,userPrincipalName')
+      p.push({ name: 'Microsoft-Konto', ok: true, text: `Verbunden und erreichbar (${ichMs.mail || ichMs.userPrincipalName || status.adresse}).` })
+    } catch (e) {
+      p.push({ name: 'Microsoft-Konto', ok: false, text: e instanceof Error ? e.message : String(e) })
+    }
+    for (const [name, lauf] of [['Abgleich To Do', status.abgleich?.todo], ['Abgleich Kalender', status.abgleich?.kalender]] as const) {
+      const l = lauf as { am?: string; fehler?: string[] } | undefined
+      const alt = l?.am ? (Date.now() - Date.parse(l.am)) / 60000 : Infinity
+      p.push({ name, ok: !l ? null : !l.fehler?.length && alt < 15, text: !l ? 'Noch kein Lauf.' : l.fehler?.length ? `Probleme: ${l.fehler.join(' | ')}` : alt < 15 ? `Zuletzt vor ${Math.round(alt)} Min.` : `Letzter Lauf vor ${Math.round(alt)} Min. — der Zeitplan sollte alle 3 Min. laufen.` })
+    }
+  }
+  const muster = ich.replace(/[\\%_]/g, (z) => `\\${z}`)
+  const { data: m } = await admin.from('mitarbeiter').select('telegram_chat_id').ilike('email', muster).maybeSingle()
+  p.push({ name: 'Telegram', ok: !!m?.telegram_chat_id, text: m?.telegram_chat_id ? 'Verbunden — Briefing, Erinnerungen und Bestätigungs-Knöpfe kommen dort an.' : 'Nicht verbunden — unter „Mein Profil“ mit Telegram verbinden.' })
+  const { data: e } = await admin.from('kalender_einstellungen').select('morgen_uebersicht').eq('email', ich).maybeSingle()
+  p.push({ name: 'Morgen-Übersicht', ok: e?.morgen_uebersicht !== false, text: e?.morgen_uebersicht === false ? 'Ausgeschaltet (Kalender → Einstellungen).' : 'An (Mo–Fr ab 8 Uhr per Telegram).' })
+  const { data: b } = await admin.from('briefboegen').select('name, pdf_pfad').eq('besitzer_email', ich)
+  const boegen = (b ?? []) as { name: string; pdf_pfad: string | null }[]
+  p.push({ name: 'Briefbogen', ok: boegen.length > 0 && boegen.every((x) => x.pdf_pfad), text: boegen.length ? boegen.map((x) => `${x.name}${x.pdf_pfad ? '' : ' (ohne PDF-Hintergrund)'}`).join(', ') : 'Noch keiner hinterlegt.' })
+  p.push({ name: 'Spracherkennung', ok: !!Deno.env.get('GROQ_API_KEY'), text: Deno.env.get('GROQ_API_KEY') ? 'Eingerichtet (Groq).' : 'Nicht eingerichtet — Diktat nutzt die Browser-Erkennung.' })
+  p.push({ name: 'KI', ok: !!Deno.env.get('ANTHROPIC_API_KEY'), text: Deno.env.get('ANTHROPIC_API_KEY') ? 'Eingerichtet.' : 'Kein Schlüssel hinterlegt.' })
+  const { count } = await admin.from('vormerkungen').select('id', { count: 'exact', head: true }).eq('besitzer_email', ich).eq('status', 'offen')
+  p.push({ name: 'Zu bestätigen', ok: null, text: count ? `${count} Aktion(en) warten auf deine Bestätigung.` : 'Nichts offen.' })
+  return { pruefungen: p }
 }

@@ -50,6 +50,7 @@ import { PrivatEinstellungen } from './pages/privat/PrivatEinstellungen'
 import { PrivatBrief } from './pages/privat/PrivatBrief'
 import { PrivatHotmail } from './pages/privat/PrivatHotmail'
 import { PrivatBestaetigen } from './pages/privat/PrivatBestaetigen'
+import { PrivatSystemcheck } from './pages/privat/PrivatSystemcheck'
 import { Kalender } from './pages/kalender/Kalender'
 import { Auswertungen } from './pages/auswertungen/Auswertungen'
 import { PostfachEinrichtenHinweis } from './components/PostfachEinstellungen'
@@ -115,6 +116,7 @@ function AdminRoutesContent() {
         <Route path="/privat/brief" element={<PrivatBrief />} />
         <Route path="/privat/hotmail" element={<PrivatHotmail />} />
         <Route path="/privat/bestaetigen" element={<PrivatBestaetigen />} />
+        <Route path="/privat/systemcheck" element={<PrivatSystemcheck />} />
         <Route path="/privat/offen" element={<PrivatHotmail key="offen" start="offen" />} />
         <Route path="/privat/kalender" element={<Kalender privat />} />
         <Route path="/privat/todo" element={<ToDoListe />} />

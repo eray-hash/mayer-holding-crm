@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, ArrowRightLeft } from 'lucide-react'
+import { uebernimmKontaktMails } from '../../lib/emailGateway'
 import { useApp } from '../../context/AppContext'
 import { StatusWidget } from '../../components/StatusWidget'
 import { Card, Modal, EmptyState } from '../../components/ui'
@@ -178,6 +179,12 @@ export function PrivatDetail() {
                   activities: [{ id: uid('act'), date: today(), text: 'Aus dem privaten Bereich in den öffentlichen Bereich übernommen', user: kontakt.verantwortlich }, ...kontakt.activities],
                 },
               })
+              // Abgelegte private Mails (eigenes Postfach, Hotmail) wandern mit — sonst blieben sie privat hängen.
+              uebernimmKontaktMails(kontakt.id, zielBereich, kontakt.firma || kontakt.ansprechpartner)
+                .then((r) => {
+                  if (!r.ok) window.alert(`Der Kontakt ist übernommen, aber nicht alle Mails: ${r.fehler.join('; ')}`)
+                })
+                .catch((e) => window.alert(`Der Kontakt ist übernommen, die Mails noch nicht: ${e instanceof Error ? e.message : e}`))
               navigate(kundeDetailPfad(zielBereich, kontakt.id))
             }}
             className="rounded-lg bg-accent-600 px-3 py-2 text-sm font-medium text-white hover:bg-accent-700 disabled:opacity-50"

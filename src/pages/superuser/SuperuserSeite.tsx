@@ -382,7 +382,7 @@ function ZahlenAnsicht({ daten }: { daten: ZahlenDaten }) {
 // ---------------------------------------------------------------------------------------------
 
 type TechnikDaten = {
-  kosten: { summeEuro: number; aufrufe: number; jeTag: Record<string, number>; jeAnlass: Record<string, number>; jeModell: Record<string, number>; jePerson?: Record<string, number>; umrechnung: string }
+  kosten: { summeEuro: number; aufrufe: number; jeTag: Record<string, number>; jeAnlass: Record<string, number>; jeModell: Record<string, number>; jePerson?: Record<string, number>; privatJePerson?: Record<string, number>; umrechnung: string }
   fehler: { browser: number; browserBeispiele: string[]; server: { titel: string; anzahl: number; status: string; zuletzt: string }[]; offeneWuensche: number }
   postfaecher: { adresse: string; art: string; aktiv: boolean; letzterAbruf: string | null; letzterFehler: string | null }[]
   sprachnachrichten: { heute: number; tagesgrenze: number }
@@ -408,6 +408,7 @@ function TechnikAnsicht({ daten }: { daten: TechnikDaten }) {
   const anlaesse = Object.entries(daten.kosten.jeAnlass).sort(([a], [b]) => (ANLASS_TEXT[a] ?? a).localeCompare(ANLASS_TEXT[b] ?? b, 'de'))
   const maxAnlass = Math.max(0.01, ...anlaesse.map(([, n]) => n))
   const personen = Object.entries(daten.kosten.jePerson ?? {}).sort(([, a], [, b]) => b - a)
+  const privatKosten = Object.entries(daten.kosten.privatJePerson ?? {}).filter(([, n]) => n > 0).sort(([, a], [, b]) => b - a)
   const maxPerson = Math.max(0.01, ...personen.map(([, n]) => n))
   return (
     <div className="space-y-4">
@@ -481,6 +482,17 @@ function TechnikAnsicht({ daten }: { daten: TechnikDaten }) {
           </div>
         )}
         <p className="mt-2 text-xs text-slate-500">Je Person gemessen seit 19.11.2026. Zeitplan-Aufträge und der Mail-Eingang laufen ohne Person und stehen unter „Automatisch“.</p>
+              {privatKosten.length > 0 && (
+          <div className="mt-3 border-t border-slate-100 pt-2 text-xs text-slate-600">
+            <div className="mb-1 font-medium text-slate-700">Davon privat (Bereich Privat — wird privat berechnet)</div>
+            {privatKosten.map(([p, n]) => (
+              <div key={p} className="flex justify-between">
+                <span>{p}</span>
+                <span>{euro(n)}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </Abschnitt>
 
       <Abschnitt titel="Postfächer">

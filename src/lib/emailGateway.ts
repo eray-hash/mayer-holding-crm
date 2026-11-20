@@ -168,6 +168,11 @@ export async function rufePostfachAb(postfachId: string): Promise<number> {
   return neu
 }
 
+/** Beim Übernehmen eines privaten Kontakts: seine abgelegten privaten Mails mitnehmen (freigeben und zuordnen). */
+export async function uebernimmKontaktMails(kundeId: string, bereich: string, name: string): Promise<{ ok: boolean; uebernommen: number; fehler: string[] }> {
+  return callAuthenticated({ action: 'kontakt_mails_uebernehmen', kundeId, bereich, name })
+}
+
 export async function holeMailInOeffentlich(
   art: 'eingang' | 'gesendet',
   id: string,
