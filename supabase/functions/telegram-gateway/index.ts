@@ -37,6 +37,7 @@ import { fuehreGesendetWerkzeugAus, GESENDET_WERKZEUGE, istGesendetWerkzeug } fr
 import { BRIEF_WERKZEUGE, fuehrePrivatWerkzeugAus, istPrivatWerkzeug, msErlaubt, OBJEKT_WERKZEUGE, OUTLOOK_WERKZEUGE, PRIVAT_HINWEIS, privatFaehigkeiten } from './outlookWerkzeuge.ts'
 import { botToken, imPrivatBot, imPrivatBotErlaubt, mitBot, PRIVAT_BOT_HINWEIS, privatBotToken, privatWebhookGeheimnis, werkzeugeFuerPrivatBot } from './privatBot.ts'
 import { gleichesGeheimnis, merkePrivatBotAktiv } from '../_shared/telegramPrivat.ts'
+import { vonBase64 } from '../_shared/geheim.ts'
 import { datumDeutsch, empfaengerVon, findeEmpfaenger, ladeAnhaengeFuerVersand, MAIL_SPALTEN, type MailZeile, volltextVon, VOLLTEXT_HOECHSTENS, type WeiterleitungEntwurf, weiterleitungsBetreff, weiterleitungsText } from './mailWerkzeuge.ts'
 
 const BOT_TOKEN = Deno.env.get('TELEGRAM_BOT_TOKEN')
@@ -4269,6 +4270,44 @@ export const bearbeiteAnfrage = (req: Request): Promise<Response> => mitAnlass(a
   if (body?.intern === 'privat_bot_einrichten') {
     if (!internDienst) return new Response('Unauthorized', { status: 401 })
     return await richtePrivatBotEin()
+  }
+  // Nachricht (und Dateien) über den privaten Bot an eine freigeschaltete Person — nur mit dem Dienst-Schlüssel
+  // (z. B. ein Vorschlag von Fundament IT). `vermerk` kommt ins Aktionsprotokoll des privaten Gesprächs, damit der
+  // Assistent eine Antwort darauf einordnen kann.
+  if (body?.intern === 'privat_bot_senden') {
+    if (!internDienst) return new Response('Unauthorized', { status: 401 })
+    const json = (daten: unknown, status = 200) => new Response(JSON.stringify(daten), { status, headers: { 'content-type': 'application/json' } })
+    const token = privatBotToken()
+    if (!token) return json({ ok: false, grund: 'kein Schlüssel' }, 404)
+    const email = String(body.email ?? '').trim().toLowerCase()
+    if (!msErlaubt(email)) return json({ ok: false, grund: 'nicht freigeschaltet' }, 403)
+    const supabase = supa()
+    const { data: m } = await supabase.from('mitarbeiter').select('id, telegram_chat_id').ilike('email', email).maybeSingle()
+    if (!m?.telegram_chat_id) return json({ ok: false, grund: 'kein Telegram' }, 409)
+    const ergebnis: { art: string; ok: boolean; beschreibung?: string }[] = []
+    const text = String(body.text ?? '').trim()
+    if (text) {
+      const r = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ chat_id: m.telegram_chat_id, text }) })
+      const j = await r.json().catch(() => null)
+      ergebnis.push({ art: 'text', ok: j?.ok === true, beschreibung: j?.description })
+    }
+    for (const d of Array.isArray(body.dateien) ? body.dateien : []) {
+      const form = new FormData()
+      form.append('chat_id', String(m.telegram_chat_id))
+      form.append('document', new Blob([vonBase64(String(d.base64 ?? '')) as Uint8Array<ArrayBuffer>]), String(d.name ?? 'Datei'))
+      if (d.beschriftung) form.append('caption', String(d.beschriftung).slice(0, 1000))
+      const r = await fetch(`https://api.telegram.org/bot${token}/sendDocument`, { method: 'POST', body: form })
+      const j = await r.json().catch(() => null)
+      ergebnis.push({ art: String(d.name ?? 'Datei'), ok: j?.ok === true, beschreibung: j?.description })
+    }
+    if (body.vermerk) {
+      await mitBot(true, async () => {
+        const state = ladeState(await ladeZustandRoh(supabase, m.id))
+        state.aktionen.push({ z: new Date().toISOString(), text: String(body.vermerk).slice(0, 1500) })
+        await schreibeZustand(supabase, m.id, state)
+      })
+    }
+    return json({ ok: ergebnis.every((e) => e.ok), ergebnis })
   }
   // Prüfung des privaten Bots ohne Nachricht: erreicht er den Chat dieser Person? (getChat sendet nichts.)
   if (body?.intern === 'privat_bot_pruefen') {
