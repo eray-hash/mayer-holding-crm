@@ -557,12 +557,12 @@ Deno.test('9) Abgelaufener Stand (410) → Stand gelöscht, nächster Lauf begin
 
 // ---------- Zusätzliche Randfälle ----------
 
-// FEHLER in todoAbgleich.ts (deshalb ignore): Bei Konflikt mit jüngerer CRM-Seite springt Zeile 162 mit `continue`
+// BEHOBEN (20.11.2026), vorher FEHLER in todoAbgleich.ts: Bei Konflikt mit jüngerer CRM-Seite springt Zeile 162 mit `continue`
 // heraus, ohne die neue Liste (ms_liste_id) zu merken. Die @removed-Meldung der alten Liste gilt dann als „in To Do
 // gelöscht“ (Z. 190–193: Verknüpfung gelöst), der PATCH in Schritt 3 (Z. 240) geht an die alte Liste → 404 →
 // Verknüpfung gelöst (Z. 247), der nächste Lauf legt per POST (Z. 236) eine neue Aufgabe an. Ergebnis: in To Do
 // steht die alte Aufgabe („Milch“) verwaist neben der neuen („Milch, 2 Liter“).
-Deno.test({ name: '8b) In To Do verschoben und im CRM danach geändert → CRM gewinnt, keine Doppel in To Do', ignore: true, fn: async () => {
+Deno.test({ name: '8b) In To Do verschoben und im CRM danach geändert → CRM gewinnt, keine Doppel in To Do', fn: async () => {
   const w = await abgeglicheneWelt()
   const milch = nachTitel(w, 'Milch')!
   const msId = String(milch.ms_id)

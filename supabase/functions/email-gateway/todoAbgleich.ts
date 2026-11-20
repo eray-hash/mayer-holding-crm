@@ -159,7 +159,15 @@ export async function gleicheTodosAb(admin: Db, ich: string, budgetMs = 60_000):
           if (crmGeaendert) {
             b.konflikte++
             const crmZeit = Date.parse(vorhanden.ms_crm_geaendert ?? '') || 0
-            if (crmZeit > (Date.parse(t.lastModifiedDateTime ?? '') || 0)) continue // CRM ist jünger → wird unten nach To Do geschrieben
+            if (crmZeit > (Date.parse(t.lastModifiedDateTime ?? '') || 0)) {
+              // CRM ist jünger → wird unten nach To Do geschrieben. Wurde die Aufgabe in To Do in eine andere Liste
+              // verschoben, die neue Liste trotzdem merken (sonst gälte sie als gelöscht und entstünde doppelt).
+              if (vorhanden.ms_liste_id !== liste.id) {
+                await admin.from('todos').update({ ms_liste_id: liste.id, ms_liste_name: listenName.get(liste.id) ?? '' }).eq('id', vorhanden.id)
+                vorhanden.ms_liste_id = liste.id
+              }
+              continue
+            }
           }
           const felder = ausMicrosoft(t, vorhanden)
           const { error } = await admin
@@ -170,7 +178,7 @@ export async function gleicheTodosAb(admin: Db, ich: string, budgetMs = 60_000):
           else {
             b.vonMicrosoft++
             behandelt.add(t.id)
-            Object.assign(vorhanden, felder, { ms_hash: await abgleichHash(felder) })
+            Object.assign(vorhanden, felder, { ms_hash: await abgleichHash(felder), ms_liste_id: liste.id })
           }
         }
         if (d['@odata.deltaLink']) deltas[liste.id] = d['@odata.deltaLink']
