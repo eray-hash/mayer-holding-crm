@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { AlertTriangle, ArrowLeft, Check, ExternalLink, Flag, FolderInput, Inbox, ListChecks, Mail, MailOpen, Paperclip, RefreshCw, Search, X } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, Check, ExternalLink, Flag, Forward, FolderInput, Inbox, ListChecks, Mail, MailOpen, Paperclip, PenSquare, RefreshCw, Reply, ReplyAll, Search, X } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { useAuth } from '../../context/AuthContext'
 import { useMsStatus } from '../../lib/microsoftKonto'
@@ -24,6 +24,7 @@ import {
 } from '../../lib/outlook'
 import { fmtDateTime } from '../../lib/dates'
 import { SecondaryButton, inputClass } from '../../components/ui'
+import { OutlookSchreiben } from '../../components/OutlookSchreiben'
 
 type Ansicht = { art: 'ordner'; ordner: string } | { art: 'offen' } | { art: 'suche'; begriff: string }
 
@@ -57,6 +58,8 @@ function Inhalt({ start }: { start: 'ordner' | 'offen' }) {
   const [fehler, setFehler] = useState('')
   const [suchText, setSuchText] = useState('')
   const [gewaehlt, setGewaehlt] = useState<string | null>(null)
+  const [neueMail, setNeueMail] = useState(false)
+  const [gesendet, setGesendet] = useState('')
 
   useEffect(() => {
     outlookOrdner()
@@ -139,11 +142,24 @@ function Inhalt({ start }: { start: 'ordner' | 'offen' }) {
           <Search size={15} className="absolute left-2.5 top-2.5 text-slate-400" />
           <input className={`${inputClass} pl-8`} value={suchText} onChange={(e) => setSuchText(e.target.value)} placeholder="Kunde, Firma, Adresse oder Stichwort — ganzer Verlauf" />
         </form>
+        <SecondaryButton onClick={() => setNeueMail(true)}>
+          <PenSquare size={15} /> Neue Mail
+        </SecondaryButton>
         <button className="rounded-lg p-2 text-slate-500 hover:bg-slate-100" title="Neu laden" onClick={() => lade(ansicht)}>
           <RefreshCw size={16} className={laedt ? 'animate-spin' : ''} />
         </button>
       </div>
 
+      {neueMail && (
+        <OutlookSchreiben
+          modus="neu"
+          onFertig={(m) => {
+            setNeueMail(false)
+            if (m) setGesendet(m)
+          }}
+        />
+      )}
+      {gesendet && <p className="text-sm text-emerald-700">{gesendet}</p>}
       {fehler && (
         <p className="flex items-start gap-1.5 rounded-lg bg-rose-50 p-3 text-sm text-rose-700">
           <AlertTriangle size={15} className="mt-0.5 shrink-0" /> {fehler}
@@ -226,6 +242,7 @@ function MailAnsicht({
   const [hinweis, setHinweis] = useState('')
   const [arbeitet, setArbeitet] = useState(false)
   const [ablegenSuche, setAblegenSuche] = useState<string | null>(null)
+  const [schreiben, setSchreiben] = useState<'antworten' | 'allen' | 'weiterleiten' | null>(null)
 
   useEffect(() => {
     outlookMail(id)
@@ -284,6 +301,17 @@ function MailAnsicht({
       </div>
 
       <div className="flex flex-wrap gap-2">
+        <SecondaryButton onClick={() => setSchreiben('antworten')} disabled={arbeitet}>
+          <Reply size={15} /> Antworten
+        </SecondaryButton>
+        {mail.an.length + mail.cc.length > 1 && (
+          <SecondaryButton onClick={() => setSchreiben('allen')} disabled={arbeitet}>
+            <ReplyAll size={15} /> Allen
+          </SecondaryButton>
+        )}
+        <SecondaryButton onClick={() => setSchreiben('weiterleiten')} disabled={arbeitet}>
+          <Forward size={15} /> Weiterleiten
+        </SecondaryButton>
         {mail.fahne !== 'complete' ? (
           <SecondaryButton onClick={() => fahne('complete', 'Als erledigt markiert (auch in Outlook).')} disabled={arbeitet}>
             <Check size={15} /> Erledigt
@@ -372,6 +400,16 @@ function MailAnsicht({
         </div>
       )}
 
+      {schreiben && (
+        <OutlookSchreiben
+          modus={schreiben}
+          mail={mail}
+          onFertig={(m) => {
+            setSchreiben(null)
+            if (m) setHinweis(m)
+          }}
+        />
+      )}
       {hinweis && <p className="text-sm text-emerald-700">{hinweis}</p>}
       {fehler && <p className="text-sm text-rose-600">{fehler}</p>}
 

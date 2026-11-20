@@ -2,12 +2,15 @@
 // Alles gilt nur für den eigenen Login (ermittleAufrufer) und nur, wenn er in MS_ERLAUBT steht.
 import { ermittleAufrufer } from './postfach.ts'
 import { OUTLOOK_AKTIONEN, outlookAktion } from './outlook.ts'
+import { AUSFUEHRER, bestaetige, merkeVor, offeneVormerkungen, verwerfe } from './vormerkungen.ts'
+import { istDienstSchluessel } from './tagesmeldung.ts'
 import { anmeldungAbschliessen, anmeldungStarten, MsFehler, msErlaubt, MsNichtVerbunden, msStatus, msTrennen } from '../_shared/microsoft.ts'
 
 // deno-lint-ignore no-explicit-any
 type Db = any
 
-export const MS_AKTIONEN = new Set(['ms_status', 'ms_anmelden_start', 'ms_trennen', ...OUTLOOK_AKTIONEN])
+export const VORMERK_AKTIONEN = new Set(['vormerkungen_liste', 'vormerkung_anlegen', 'vormerkung_bestaetigen', 'vormerkung_verwerfen', 'outlook_senden'])
+export const MS_AKTIONEN = new Set(['ms_status', 'ms_anmelden_start', 'ms_trennen', ...OUTLOOK_AKTIONEN, ...VORMERK_AKTIONEN])
 
 const antwort = (daten: unknown, headers: Record<string, string>, status = 200) => new Response(JSON.stringify(daten), { status, headers })
 
@@ -26,6 +29,31 @@ export async function msAktion(req: Request, admin: Db, body: Record<string, unk
       return antwort({ ok: true }, headers)
     }
     if (OUTLOOK_AKTIONEN.has(String(body.action))) return antwort(await outlookAktion(admin, ich, body), headers)
+    if (VORMERK_AKTIONEN.has(String(body.action))) {
+      // Mit dem Dienst-Schlüssel ruft nur die eigene Telegram-Funktion auf (Assistent oder Knopf). Bestätigen geht
+      // dann nur mit dem Code aus der Telegram-Nachricht des Besitzers; Sofort-Senden gar nicht.
+      const dienst = istDienstSchluessel((req.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '').trim())
+      const ids = Array.isArray(body.ids) ? body.ids.map(String) : typeof body.id === 'string' ? [body.id] : []
+      if (body.action === 'vormerkungen_liste') return antwort({ vormerkungen: await offeneVormerkungen(admin, ich) }, headers)
+      if (body.action === 'vormerkung_anlegen') {
+        const p = (body.parameter && typeof body.parameter === 'object' ? body.parameter : {}) as Record<string, unknown>
+        return antwort(await merkeVor(admin, ich, { art: String(body.art ?? ''), beschreibung: String(body.beschreibung ?? ''), parameter: p, quelle: dienst ? 'assistent' : 'crm' }), headers)
+      }
+      if (body.action === 'vormerkung_bestaetigen' || body.action === 'vormerkung_verwerfen') {
+        const code = dienst ? String(body.code ?? '') : undefined
+        if (dienst && !code) return antwort({ error: 'Bestätigen geht nur per Knopf oder im CRM.' }, headers, 403)
+        if (body.action === 'vormerkung_verwerfen') return antwort({ verworfen: await verwerfe(admin, ich, ids, code) }, headers)
+        return antwort({ ergebnisse: await bestaetige(admin, ich, ids, code) }, headers)
+      }
+      if (body.action === 'outlook_senden') {
+        // Direkt aus dem CRM-Fenster: der Klick auf „Senden“ mit Rückfrage IST die Bestätigung — nur mit eigenem Login.
+        if (dienst) return antwort({ error: 'Senden ohne Bestätigung nur aus dem CRM.' }, headers, 403)
+        const art = String(body.art ?? '')
+        if (!['mail_senden', 'mail_antworten', 'mail_weiterleiten'].includes(art)) return antwort({ error: 'Unbekannte Art.' }, headers, 400)
+        const p = (body.parameter && typeof body.parameter === 'object' ? body.parameter : {}) as Record<string, unknown>
+        return antwort({ ok: true, meldung: await AUSFUEHRER[art](admin, ich, p) }, headers)
+      }
+    }
     return antwort({ error: 'Unbekannte Aktion' }, headers, 400)
   } catch (e) {
     if (e instanceof MsNichtVerbunden) return antwort({ error: e.message, nichtVerbunden: true }, headers, 409)

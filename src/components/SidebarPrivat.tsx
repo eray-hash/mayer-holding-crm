@@ -1,5 +1,5 @@
 import { Link, useLocation } from 'react-router-dom'
-import { Users, ChevronLeft, ChevronRight, Lock, Sun, UserCog, ListTodo, Mail, CalendarDays, Settings, PenLine, AtSign, ListChecks } from 'lucide-react'
+import { Users, ChevronLeft, ChevronRight, Lock, Sun, UserCog, ListTodo, Mail, CalendarDays, Settings, PenLine, AtSign, ListChecks, PauseCircle } from 'lucide-react'
 import { UngeklaertSideLink } from './UngeklaertSideLink'
 import { useAuth } from '../context/AuthContext'
 import { useMsStatus } from '../lib/microsoftKonto'
@@ -20,13 +20,14 @@ export function SidebarPrivat({ collapsed, onToggle }: { collapsed: boolean; onT
           icon={<Users size={17} />}
           label="Meine Kontakte"
           collapsed={collapsed}
-          active={isActive('/privat') && !isActive('/privat/todo') && !isActive('/privat/postfach') && !isActive('/privat/kalender') && !isActive('/privat/einstellungen') && !isActive('/privat/brief') && !isActive('/privat/hotmail') && !isActive('/privat/offen')}
+          active={isActive('/privat') && !isActive('/privat/todo') && !isActive('/privat/postfach') && !isActive('/privat/kalender') && !isActive('/privat/einstellungen') && !isActive('/privat/brief') && !isActive('/privat/hotmail') && !isActive('/privat/offen') && !isActive('/privat/bestaetigen')}
         />
         <SideLink to="/privat/postfach" icon={<Mail size={17} />} label="Mein Postfach" collapsed={collapsed} active={isActive('/privat/postfach')} />
         {ms?.erlaubt && ms.verbunden && (
           <>
             <SideLink to="/privat/hotmail" icon={<AtSign size={17} />} label="Hotmail" collapsed={collapsed} active={isActive('/privat/hotmail')} />
             <SideLink to="/privat/offen" icon={<ListChecks size={17} />} label="Offene Punkte" collapsed={collapsed} active={isActive('/privat/offen')} />
+            <SideLink to="/privat/bestaetigen" icon={<PauseCircle size={17} />} label="Zu bestätigen" collapsed={collapsed} active={isActive('/privat/bestaetigen')} />
           </>
         )}
         <SideLink to="/privat/kalender" icon={<CalendarDays size={17} />} label="Mein Kalender" collapsed={collapsed} active={isActive('/privat/kalender')} />

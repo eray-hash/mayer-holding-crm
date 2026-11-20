@@ -3611,7 +3611,35 @@ async function stosseWartendeAn(): Promise<number> {
 }
 
 // deno-lint-ignore no-explicit-any
+// Knopf unter einer Bestätigungs-Nachricht (siehe email-gateway/vormerkungen.ts): „vb:<id>:<code>“ führt aus,
+// „vv:<id>:<code>“ verwirft. Gilt nur im Chat des Besitzers; der Code stammt aus genau dieser Nachricht.
+// deno-lint-ignore no-explicit-any
+async function verarbeiteKnopf(knopf: any): Promise<void> {
+  const antworte = (text: string) =>
+    BOT_TOKEN
+      ? fetch(`https://api.telegram.org/bot${BOT_TOKEN}/answerCallbackQuery`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ callback_query_id: knopf.id, text: text.slice(0, 190) }) }).catch(() => undefined)
+      : Promise.resolve(console.log(`[Knopf] ${text}`))
+  const m = /^(vb|vv):(vm_[A-Za-z0-9]+):([A-Za-z0-9]+)$/.exec(String(knopf?.data ?? ''))
+  const chatId = knopf?.message?.chat?.id
+  if (!m || !chatId) return void (await antworte('Unbekannter Knopf.'))
+  const { data: mitarbeiter } = await supa().from('mitarbeiter').select('email, aktiv').eq('telegram_chat_id', chatId).maybeSingle()
+  if (!mitarbeiter?.aktiv) return void (await antworte('Dieser Chat ist mit keinem CRM-Zugang verbunden.'))
+  setzePerson(mitarbeiter.email)
+  const r = await fetch(`${SUPABASE_URL}/functions/v1/email-gateway`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`, 'x-ki-person': mitarbeiter.email, ...(CRM_SHARED_SECRET ? { 'x-crm-secret': CRM_SHARED_SECRET } : {}) },
+    body: JSON.stringify({ action: m[1] === 'vb' ? 'vormerkung_bestaetigen' : 'vormerkung_verwerfen', ids: [m[2]], code: m[3], imAuftragVon: mitarbeiter.email }),
+  })
+  const daten = await r.json().catch(() => ({}))
+  if (!r.ok) return void (await antworte(String(daten?.error ?? 'Das hat nicht geklappt.')))
+  if (m[1] === 'vv') return void (await antworte(daten.verworfen ? 'Verworfen.' : 'War schon erledigt.'))
+  const e = daten.ergebnisse?.[0]
+  await antworte(e?.ok ? e.meldung : `Nicht ausgeführt: ${e?.meldung ?? 'unbekannt'}`)
+  if (e && !e.ok && e.beschreibung) await sendTelegramMessage(chatId, `Nicht ausgeführt: ${e.beschreibung}\n${e.meldung}\nDie Aktion bleibt vorgemerkt — du kannst es später noch einmal versuchen.`)
+}
+
 async function verarbeiteUpdate(update: any): Promise<void> {
+  if (update?.callback_query) return await verarbeiteKnopf(update.callback_query)
   const message = update?.message
   if (!message?.chat?.id) return
   const chatId: number = message.chat.id
@@ -3859,6 +3887,15 @@ Deno.serve((req: Request) => mitAnlass(async () => {
     const r = await schickeMitteilung(supa(), MITTEILUNGS_WEGE, body.mitarbeiterId, text, von, body.art === 'mitteilung' ? 'mitteilung' : 'rueckfrage')
     if (!r.ok) return new Response(JSON.stringify({ ok: false, grund: r.grund }), { status: r.status })
     return new Response(JSON.stringify({ ok: true, an: r.an }), { headers: { 'content-type': 'application/json' } })
+  }
+
+  // Prüfung, ob Telegram Knopfdrücke zustellt (allowed_updates) — nur mit dem Dienst-Schlüssel, liefert keine Inhalte.
+  if (body?.intern === 'webhook_info') {
+    if (!istDienstSchluessel((req.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '').trim())) return new Response('Unauthorized', { status: 401 })
+    if (!BOT_TOKEN) return new Response(JSON.stringify({ ok: false, grund: 'kein Bot-Schlüssel' }), { status: 500 })
+    const info = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/getWebhookInfo`).then((r) => r.json()).catch(() => null)
+    const w = info?.result ?? {}
+    return new Response(JSON.stringify({ ok: !!info?.ok, erlaubteUpdates: w.allowed_updates ?? 'alle (Vorgabe)', offen: w.pending_update_count, letzterFehler: w.last_error_message ?? null, adresseGesetzt: !!w.url }), { headers: { 'content-type': 'application/json' } })
   }
 
   // 3) Telegram.
