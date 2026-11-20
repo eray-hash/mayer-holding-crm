@@ -266,19 +266,19 @@ export function Postfach() {
   const dbConfigured = ordner === 'posteingang' ? isEmailInboxDbConfigured : ordner === 'gesendet' ? isSentEmailsDbConfigured : isLeadsDbConfigured
 
   return (
-    <div className="flex flex-col gap-4 md:h-[calc(100vh-7.5rem)] md:flex-row">
+    <div className="flex flex-col gap-4 xl:h-[calc(100vh-7.5rem)] xl:flex-row">
       {/* Ordner-Navigation */}
-      <div className="md:w-48 md:flex-shrink-0">
+      <div className="xl:w-48 xl:flex-shrink-0">
         <div className="mb-3 flex items-center justify-between">
           <h1 className="text-lg font-semibold text-slate-800">Postfach</h1>
         </div>
         <PrimaryButton onClick={() => { setAntwortAn(null); setComposeOpen(true) }} className="mb-4 w-full justify-center">
           <Plus size={14} /> Neue E-Mail
         </PrimaryButton>
-        <nav className="flex gap-1 overflow-x-auto md:block md:space-y-1">
+        <nav className="flex gap-1 overflow-x-auto xl:block xl:space-y-1">
           <button
             onClick={() => { setOrdner('posteingang'); setSelectedId(null) }}
-            className={`flex flex-shrink-0 items-center gap-2 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium md:w-full ${
+            className={`flex flex-shrink-0 items-center gap-2 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium xl:w-full ${
               ordner === 'posteingang' ? 'bg-accent-50 text-accent-700' : 'text-slate-600 hover:bg-slate-50'
             }`}
           >
@@ -287,7 +287,7 @@ export function Postfach() {
           </button>
           <button
             onClick={() => { setOrdner('gesendet'); setSelectedId(null) }}
-            className={`flex flex-shrink-0 items-center gap-2 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium md:w-full ${
+            className={`flex flex-shrink-0 items-center gap-2 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium xl:w-full ${
               ordner === 'gesendet' ? 'bg-accent-50 text-accent-700' : 'text-slate-600 hover:bg-slate-50'
             }`}
           >
@@ -296,7 +296,7 @@ export function Postfach() {
           </button>
           <button
             onClick={() => { setOrdner('leads'); setSelectedId(null) }}
-            className={`flex flex-shrink-0 items-center gap-2 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium md:w-full ${
+            className={`flex flex-shrink-0 items-center gap-2 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium xl:w-full ${
               ordner === 'leads' ? 'bg-accent-50 text-accent-700' : 'text-slate-600 hover:bg-slate-50'
             }`}
           >
@@ -335,7 +335,7 @@ export function Postfach() {
       ) : (
         <>
           {/* Mail-Liste */}
-          <div className={`${selectedId ? 'hidden md:flex' : 'flex'} flex-shrink-0 flex-col rounded-xl border border-slate-200 bg-white md:w-80`}>
+          <div className={`${selectedId ? 'hidden xl:flex' : 'flex'} flex-shrink-0 flex-col rounded-xl border border-slate-200 bg-white xl:w-80`}>
             <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2">
               <span className="text-xs font-medium text-slate-500">{ordner === 'posteingang' ? 'Posteingang' : ordner === 'gesendet' ? 'Gesendet' : 'Neue Leads'}</span>
               <button
@@ -451,8 +451,8 @@ export function Postfach() {
           </div>
 
           {/* Lesefenster */}
-          <div className={`${selectedId ? '' : 'hidden md:block'} min-w-0 flex-1 overflow-y-auto rounded-xl border border-slate-200 bg-white p-4 md:p-5`}>
-            <button type="button" onClick={() => setSelectedId(null)} className="mb-3 flex items-center gap-1 text-sm font-medium text-accent-700 md:hidden">
+          <div className={`${selectedId ? '' : 'hidden xl:block'} min-w-0 flex-1 overflow-y-auto rounded-xl border border-slate-200 bg-white p-4 md:p-5`}>
+            <button type="button" onClick={() => setSelectedId(null)} className="mb-3 flex items-center gap-1 text-sm font-medium text-accent-700 xl:hidden">
               <ArrowLeft size={15} /> Zurück zur Liste
             </button>
             {selectedMail && (

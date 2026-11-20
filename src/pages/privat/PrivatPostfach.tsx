@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Inbox, Send, RefreshCw, Plus, Reply, Search, AlertTriangle, Lock, Check, X, UserPlus, ArrowRightLeft } from 'lucide-react'
+import { Inbox, Send, RefreshCw, Plus, Reply, Search, AlertTriangle, Lock, Check, X, UserPlus, ArrowRightLeft, ArrowLeft } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { useAuth } from '../../context/AuthContext'
 import { fetchPrivateEmails, ignoreMail } from '../../lib/emailInboxDb'
@@ -147,8 +147,8 @@ function PrivatPostfachInhalt() {
   }
 
   return (
-    <div className="flex flex-col gap-4 md:h-[calc(100vh-7.5rem)] lg:flex-row">
-      <div className="flex-shrink-0 lg:w-48">
+    <div className="flex flex-col gap-4 xl:h-[calc(100vh-7.5rem)] xl:flex-row">
+      <div className="flex-shrink-0 xl:w-48">
         <h1 className="mb-1 text-lg font-semibold text-slate-800">Mein Postfach</h1>
         <p className="mb-3 flex items-center gap-1.5 text-xs text-slate-400">
           <Lock size={12} /> nur für dich sichtbar
@@ -156,7 +156,7 @@ function PrivatPostfachInhalt() {
         <PrimaryButton onClick={() => setCompose({})} disabled={!eigenes || eigenes.kannSenden === false} className="mb-4 w-full justify-center">
           <Plus size={14} /> Neue E-Mail
         </PrimaryButton>
-        <nav className="flex gap-1 lg:block lg:space-y-1">
+        <nav className="flex gap-1 xl:block xl:space-y-1">
           {(
             [
               ['posteingang', 'Posteingang', <Inbox size={15} key="i" />, mails.length],
@@ -214,8 +214,8 @@ function PrivatPostfachInhalt() {
           </div>
         )}
 
-        <div className="flex min-h-0 flex-1 flex-col gap-4 md:flex-row">
-          <div className="flex max-h-72 flex-shrink-0 flex-col rounded-xl border border-slate-200 bg-white md:max-h-none md:w-80">
+        <div className="flex min-h-0 flex-1 flex-col gap-4 xl:flex-row">
+          <div className={`${selectedId ? 'hidden xl:flex' : 'flex'} flex-shrink-0 flex-col rounded-xl border border-slate-200 bg-white xl:w-80`}>
             <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2">
               <span className="text-xs font-medium text-slate-500">{ordner === 'posteingang' ? 'Posteingang' : 'Gesendet'}</span>
               <button onClick={aktualisieren} disabled={laedt} className="rounded-md p-1 text-slate-400 hover:bg-slate-50 hover:text-slate-600" title="Jetzt abholen">
@@ -296,7 +296,10 @@ function PrivatPostfachInhalt() {
             )}
           </div>
 
-          <div className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white p-5 md:min-h-0 md:overflow-y-auto">
+          <div className={`${selectedId ? '' : 'hidden xl:block'} min-w-0 flex-1 rounded-xl border border-slate-200 bg-white p-4 md:p-5 xl:min-h-0 xl:overflow-y-auto`}>
+            <button type="button" onClick={() => setSelectedId(null)} className="mb-3 flex items-center gap-1 text-sm font-medium text-accent-700 xl:hidden">
+              <ArrowLeft size={15} /> Zurück zur Liste
+            </button>
             {selectedMail && (
               <div>
                 <div className="mb-4 flex flex-wrap items-start justify-between gap-3">

@@ -93,6 +93,7 @@ export function Layout({ children }: { children: ReactNode }) {
     if (ziel && ziel.id !== state.bereich) dispatch({ type: 'SET_BEREICH', bereich: ziel.id })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.pathname])
+  const imPrivatBereich = state.bereich === 'privat'
 
   // Rollenbasierte Bereichs-Einschränkung (Beschluss 2026-11-02): Geschäftsführung und Admins sehen
   // immer alles, ein eingeschränkter Mitarbeiter nur die ihm zugewiesenen Bereiche.
@@ -222,9 +223,10 @@ export function Layout({ children }: { children: ReactNode }) {
             <BarChart3 size={16} />
           </button>
           <button
-            onClick={() => navigate('/postfach')}
+            // Im privaten Bereich führt das Symbol ins eigene Postfach, sonst ins gemeinsame (Wunsch von Markus, 20.11.2026).
+            onClick={() => navigate(imPrivatBereich ? '/privat/postfach' : '/postfach')}
             className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
-            title="Postfach (info@amayer-holding.com)"
+            title={imPrivatBereich ? 'Mein Postfach' : 'Postfach (info@amayer-holding.com)'}
           >
             <Inbox size={16} />
           </button>
