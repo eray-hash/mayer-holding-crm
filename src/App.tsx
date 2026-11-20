@@ -46,6 +46,7 @@ import { VorlagenPageFinanzierungen } from './pages/finanzierungen/VorlagenPageF
 import { PrivatListe } from './pages/privat/PrivatListe'
 import { PrivatDetail } from './pages/privat/PrivatDetail'
 import { PrivatPostfach } from './pages/privat/PrivatPostfach'
+import { PrivatEinstellungen } from './pages/privat/PrivatEinstellungen'
 import { Kalender } from './pages/kalender/Kalender'
 import { Auswertungen } from './pages/auswertungen/Auswertungen'
 import { PostfachEinrichtenHinweis } from './components/PostfachEinstellungen'
@@ -107,6 +108,7 @@ function AdminRoutesContent() {
         <Route path="/privat" element={<PrivatListe />} />
         <Route path="/privat/kontakte/:id" element={<PrivatDetail />} />
         <Route path="/privat/postfach" element={<PrivatPostfach />} />
+        <Route path="/privat/einstellungen" element={<PrivatEinstellungen />} />
         <Route path="/privat/kalender" element={<Kalender privat />} />
         <Route path="/privat/todo" element={<ToDoListe />} />
 

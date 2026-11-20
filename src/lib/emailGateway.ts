@@ -52,7 +52,7 @@ export async function call(body: Record<string, unknown>): Promise<any> {
 // Für Aktionen, die Account-Zugriff gewähren (Login-Link erzeugen, Mitarbeiter einladen, Login-E-Mail
 // ändern) — das x-crm-secret allein reicht da nicht als Schutz, weil es im öffentlichen Bundle steckt.
 // Schickt zusätzlich das eigene Supabase-Login mit, das die Edge Function serverseitig prüft.
-async function callAuthenticated(body: Record<string, unknown>): Promise<any> {
+export async function callAuthenticated(body: Record<string, unknown>): Promise<any> {
   if (!FUNCTION_URL) throw new Error('E-Mail-Postfach ist noch nicht konfiguriert (VITE_EMAIL_GATEWAY_URL fehlt).')
   const { data: sessionData } = (await supabase?.auth.getSession()) ?? { data: { session: null } }
   const token = sessionData.session?.access_token

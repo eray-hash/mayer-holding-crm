@@ -1,10 +1,15 @@
 import { Link, useLocation } from 'react-router-dom'
-import { Users, ChevronLeft, ChevronRight, Lock, Sun, UserCog, ListTodo, Mail, CalendarDays } from 'lucide-react'
+import { Users, ChevronLeft, ChevronRight, Lock, Sun, UserCog, ListTodo, Mail, CalendarDays, Settings } from 'lucide-react'
 import { UngeklaertSideLink } from './UngeklaertSideLink'
+import { useAuth } from '../context/AuthContext'
+import { useMsStatus } from '../lib/microsoftKonto'
 
 export function SidebarPrivat({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
   const location = useLocation()
   const isActive = (path: string) => location.pathname === path || location.pathname.startsWith(path + '/')
+  const { session, ansichtAls } = useAuth()
+  // Microsoft-Anbindung nur für freigeschaltete Logins (Server entscheidet, siehe ms_status).
+  const { status: ms } = useMsStatus(ansichtAls ? undefined : session?.user.email?.toLowerCase())
 
   return (
     <nav className="flex h-full flex-col justify-between py-4">
@@ -15,12 +20,15 @@ export function SidebarPrivat({ collapsed, onToggle }: { collapsed: boolean; onT
           icon={<Users size={17} />}
           label="Meine Kontakte"
           collapsed={collapsed}
-          active={isActive('/privat') && !isActive('/privat/todo') && !isActive('/privat/postfach') && !isActive('/privat/kalender')}
+          active={isActive('/privat') && !isActive('/privat/todo') && !isActive('/privat/postfach') && !isActive('/privat/kalender') && !isActive('/privat/einstellungen')}
         />
         <SideLink to="/privat/postfach" icon={<Mail size={17} />} label="Mein Postfach" collapsed={collapsed} active={isActive('/privat/postfach')} />
         <SideLink to="/privat/kalender" icon={<CalendarDays size={17} />} label="Mein Kalender" collapsed={collapsed} active={isActive('/privat/kalender')} />
         <UngeklaertSideLink collapsed={collapsed} />
         <SideLink to="/privat/todo" icon={<ListTodo size={17} />} label="To-Do-Liste" collapsed={collapsed} active={isActive('/privat/todo')} />
+        {ms?.erlaubt && (
+          <SideLink to="/privat/einstellungen" icon={<Settings size={17} />} label="Einstellungen" collapsed={collapsed} active={isActive('/privat/einstellungen')} />
+        )}
       </div>
 
       <div className="px-2">

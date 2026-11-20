@@ -231,6 +231,7 @@ import {
 } from './postfach.ts'
 import { loescheTermin, sendeErinnerungen, sendeTelegram, speichereTermin } from './kalender.ts'
 import { aboLink, kalenderAboAntwort } from './kalenderAbo.ts'
+import { MS_AKTIONEN, msAktion, msRueckrufAntwort } from './privatMicrosoft.ts'
 import { BUCHUNGS_AKTIONEN, buchungAktion } from './buchung.ts'
 import { sendeTodoErinnerungen } from './todoErinnerung.ts'
 import { holeGesendeteMails } from './gesendetAbruf.ts'
@@ -3066,7 +3067,10 @@ Deno.serve((req: Request) => mitAnlass(async () => {
   // ist der einzige Schutz. Jeder andere GET-Aufruf bekommt ein 404; per GET wird nie etwas anderes ausgeliefert.
   if (req.method === 'GET' || req.method === 'HEAD') {
     const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
-    return await kalenderAboAntwort(admin, new URL(req.url).searchParams.get('kalender'), req.method)
+    const adresse = new URL(req.url)
+    // Rückruf nach der Microsoft-Anmeldung (siehe _shared/microsoft.ts): geschützt durch die einmalige Kennung.
+    if (req.method === 'GET' && adresse.pathname.endsWith('/ms-rueckruf')) return await msRueckrufAntwort(admin, adresse)
+    return await kalenderAboAntwort(admin, adresse.searchParams.get('kalender'), req.method)
   }
 
   const sharedSecret = Deno.env.get('CRM_SHARED_SECRET')
@@ -3312,6 +3316,12 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       const tage = Number(body.tage) > 0 ? Math.min(365, Number(body.tage)) : undefined
       const g = await holeGesendeteMails(admin, { postfachId, tage, budgetMs: 100000 })
       return new Response(JSON.stringify({ ok: true, ...g }), { headers })
+    }
+
+    // ---------- Microsoft-Konto im Bereich Privat (siehe privatMicrosoft.ts) ----------
+    if (MS_AKTIONEN.has(String(body.action))) {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      return await msAktion(req, admin, body, headers)
     }
 
     if (body.action === 'kalender_abo_link') {

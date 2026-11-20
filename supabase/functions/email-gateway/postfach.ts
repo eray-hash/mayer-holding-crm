@@ -14,6 +14,7 @@ import { ImapFlow } from 'npm:imapflow@1'
 import nodemailer from 'npm:nodemailer@6'
 import { pruefeNeueMail } from '../_shared/mailEingang.ts'
 import { uebernehmeEinladung } from '../_shared/einladung.ts'
+import { entschluessele, verschluessele } from '../_shared/geheim.ts'
 
 // deno-lint-ignore no-explicit-any
 type Db = any
@@ -64,42 +65,7 @@ function zeitlimit<T>(versprechen: Promise<T>, ms: number, meldung: string): Pro
   return Promise.race([versprechen, grenze]).finally(() => clearTimeout(uhr))
 }
 
-// ---------- Verschlüsselung des Mail-Passworts ----------
-
-async function schluessel(): Promise<CryptoKey> {
-  const dienst = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
-  if (!dienst) throw new Error('Fehlende Konfiguration: SUPABASE_SERVICE_ROLE_KEY')
-  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`mh-postfach-v1:${dienst}`))
-  return crypto.subtle.importKey('raw', hash, 'AES-GCM', false, ['encrypt', 'decrypt'])
-}
-
-function zuBase64(bytes: Uint8Array): string {
-  let roh = ''
-  for (const b of bytes) roh += String.fromCharCode(b)
-  return btoa(roh)
-}
-
-function vonBase64(text: string): Uint8Array {
-  const roh = atob(text)
-  const bytes = new Uint8Array(roh.length)
-  for (let i = 0; i < roh.length; i++) bytes[i] = roh.charCodeAt(i)
-  return bytes
-}
-
-async function verschluessele(klartext: string): Promise<string> {
-  const iv = crypto.getRandomValues(new Uint8Array(12))
-  const geheim = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await schluessel(), new TextEncoder().encode(klartext)))
-  const alles = new Uint8Array(iv.length + geheim.length)
-  alles.set(iv)
-  alles.set(geheim, iv.length)
-  return zuBase64(alles)
-}
-
-async function entschluessele(text: string): Promise<string> {
-  const alles = vonBase64(text)
-  const klar = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: alles.slice(0, 12) }, await schluessel(), alles.slice(12))
-  return new TextDecoder().decode(klar)
-}
+// ---------- Verschlüsselung des Mail-Passworts: siehe _shared/geheim.ts ----------
 
 // ---------- Wer fragt? ----------
 
