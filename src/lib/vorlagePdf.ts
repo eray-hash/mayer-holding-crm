@@ -341,7 +341,10 @@ export function erzeugeVorlagePdf(params: {
       // Endet die Zeile mit einem leeren Feld hinter einer Bezeichnung (z. B. "Anschrift: ____"), reicht
       // die Linie bis zum Rand und die Zeile bekommt etwas Luft darüber — Platz zum Ausfüllen von Hand.
       const letztes = z[z.length - 1]
-      const vonHand = !inTabelle && !!letztes?.feld && z.length > 1 && /:$/.test(z[z.length - 2].text)
+      // In den Formular-Stilen (mit handZeile) gilt das auch für eine Zeile, die nur aus einer Schreiblinie
+      // besteht — wie im Scan der Allgemeinen Vollmacht („wohnhaft“ und darunter eine Linie über die ganze Breite).
+      const nurLinie = !!st.handZeile && z.length === 1 && !!letztes?.linie
+      const vonHand = !inTabelle && ((!!letztes?.feld && z.length > 1 && /:$/.test(z[z.length - 2].text)) || nurLinie)
       if (vonHand) {
         const x = z.slice(0, -1).reduce((summe, w) => summe + w.breite + (w.nachLeer ? leer : 0), 0)
         z = [...z.slice(0, -1), { ...letztes, breite: Math.max(letztes.breite, breite - x) }]
