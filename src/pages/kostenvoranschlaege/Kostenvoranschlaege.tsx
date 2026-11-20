@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Calculator, Download, Lock, Plus, Search } from 'lucide-react'
+import { Calculator, Download, FilePlus2, Lock, Plus, Search } from 'lucide-react'
 import { utils } from 'xlsx'
 import type { CellObject } from 'xlsx'
 import { useApp } from '../../context/AppContext'
 import { Card, EmptyState, PrimaryButton, SecondaryButton, inputClass } from '../../components/ui'
-import { KvBearbeitenModal, KvListe, akteName, findeAkte, kvStatusLabel, useKvAktionen, useKvNutzer } from '../../components/KostenvoranschlaegeSection'
-import { KV_STATUS, kvSumme, ladeKostenvoranschlaege, type KvStatus, type Kostenvoranschlag } from '../../lib/kostenvoranschlaege'
+import { KvAngebotModal, KvBearbeitenModal, KvListe, akteName, findeAkte, kvStatusLabel, useKvAktionen, useKvNutzer } from '../../components/KostenvoranschlaegeSection'
+import { useBereichsRechte } from '../../lib/bereichsRechte'
+import { KV_STATUS, kvGesamt, kvSumme, ladeKostenvoranschlaege, type KvStatus, type Kostenvoranschlag } from '../../lib/kostenvoranschlaege'
 import { ladeMappeHerunter } from '../../lib/pivotExport'
-import { fmtDate, fmtEURCent, today } from '../../lib/dates'
+import { fmtEURCent, today } from '../../lib/dates'
 
 // Übersicht aller Kostenvoranschläge (/kostenvoranschlaege) bzw. nur der eigenen privaten (/privat/kostenvoranschlaege).
 // Was jemand sieht, begrenzt die Datenbank (Bereichsrechte, private Einträge nur für den Besitzer).
@@ -20,6 +21,8 @@ export function Kostenvoranschlaege({ privat }: { privat?: boolean } = {}) {
   const [statusFilter, setStatusFilter] = useState<KvStatus | ''>('')
   const [suche, setSuche] = useState('')
   const [fenster, setFenster] = useState<{ eintrag?: Kostenvoranschlag } | null>(null)
+  const [angebot, setAngebot] = useState(false)
+  const { darf } = useBereichsRechte()
   const { statusAendern, loeschen, uebernehmen } = useKvAktionen(setAlle, setFehler)
 
   useEffect(() => {
@@ -34,7 +37,18 @@ export function Kostenvoranschlaege({ privat }: { privat?: boolean } = {}) {
     }
   }, [])
 
-  const imUmfang = useMemo(() => (privat ? alle.filter((k) => k.bereich === 'privat') : alle), [alle, privat])
+  // Im Modus „Ansehen als …“ lädt die Datenbank mit dem eigenen Login; hier wird auf das gefiltert,
+  // was die angesehene Person sehen würde (eigene private Einträge, freigegebene Bereiche).
+  const sichtbar = useMemo(() => {
+    if (!nutzer.nurLesen) return alle
+    return alle.filter((k) => {
+      if (k.bereich === 'privat' || k.privatBesitzer) return !!k.privatBesitzer && k.privatBesitzer === nutzer.email
+      if (!k.bereich) return true
+      return darf(k.bereich as never)
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [alle, nutzer.nurLesen, nutzer.email])
+  const imUmfang = useMemo(() => (privat ? sichtbar.filter((k) => k.bereich === 'privat') : sichtbar), [sichtbar, privat])
 
   const gefiltert = useMemo(() => {
     const such = suche.trim().toLowerCase()
@@ -50,14 +64,16 @@ export function Kostenvoranschlaege({ privat }: { privat?: boolean } = {}) {
 
   function herunterladen() {
     const kopf = ['Name', 'Beschreibung', 'Betrag (€)', 'Status', 'Datum', 'Akte', 'Bereich', 'Notiz', 'Datei', 'Erfasst von']
-    const zeilen: (string | number | null)[][] = gefiltert.map((k) => {
+    // Auf der allgemeinen Seite keine privaten Einträge in die Datei — die wird oft weitergegeben.
+    const fuerDatei = privat ? gefiltert : gefiltert.filter((k) => k.bereich !== 'privat' && !k.privatBesitzer)
+    const zeilen: (string | number | Date | null)[][] = fuerDatei.map((k) => {
       const akte = findeAkte(state, k.kundeId)
       return [
         k.name,
         k.beschreibung,
         k.betrag ?? null,
         kvStatusLabel(k.status),
-        k.datum ? fmtDate(k.datum) : '',
+        k.datum ? new Date(`${k.datum.slice(0, 10)}T12:00:00`) : null,
         akte ? akteName(akte.kunde) : k.kundeId ? 'Akte nicht geladen' : 'Keiner Akte zugeordnet',
         akte ? (akte.bereich === 'privat' ? 'Privat' : akte.bereichLabel) : k.bereich === 'privat' ? 'Privat' : '',
         k.notiz,
@@ -65,16 +81,21 @@ export function Kostenvoranschlaege({ privat }: { privat?: boolean } = {}) {
         k.erstelltVon,
       ]
     })
+    const n = zeilen.length
     zeilen.push([])
-    zeilen.push(['Summe', '', kvSumme(gefiltert), '', '', '', '', '', '', ''])
-    const blatt = utils.aoa_to_sheet([kopf, ...zeilen])
-    // Beträge als Zahl mit deutschem Euro-Format, damit Excel damit rechnen kann.
-    for (let r = 1; r <= zeilen.length; r++) {
+    zeilen.push(['Summe der angezeigten Zeilen', '', null, '', null, '', '', '', '', ''])
+    const blatt = utils.aoa_to_sheet([kopf, ...zeilen], { cellDates: true })
+    // Summe als Formel, die beim Filtern in Excel mitrechnet (TEILERGEBNIS bzw. SUBTOTAL).
+    blatt[utils.encode_cell({ r: n + 2, c: 2 })] = { t: 'n', f: `SUBTOTAL(109,C2:C${n + 1})`, z: '#,##0.00 "€"' } as CellObject
+    // Beträge als Zahl mit deutschem Euro-Format, Datum als echtes Datum (sortiert richtig).
+    for (let r = 1; r <= n; r++) {
       const zelle = blatt[utils.encode_cell({ r, c: 2 })] as CellObject | undefined
       if (zelle && zelle.t === 'n') zelle.z = '#,##0.00 "€"'
+      const d = blatt[utils.encode_cell({ r, c: 4 })] as CellObject | undefined
+      if (d && (d.t === 'd' || d.t === 'n')) d.z = 'dd.mm.yyyy'
     }
     blatt['!cols'] = [{ wch: 28 }, { wch: 34 }, { wch: 14 }, { wch: 12 }, { wch: 11 }, { wch: 30 }, { wch: 20 }, { wch: 40 }, { wch: 28 }, { wch: 18 }]
-    blatt['!autofilter'] = { ref: utils.encode_range({ s: { r: 0, c: 0 }, e: { r: Math.max(gefiltert.length, 1), c: kopf.length - 1 } }) }
+    blatt['!autofilter'] = { ref: utils.encode_range({ s: { r: 0, c: 0 }, e: { r: Math.max(n, 1), c: kopf.length - 1 } }) }
     const mappe = utils.book_new()
     utils.book_append_sheet(mappe, blatt, 'Kostenvoranschläge')
     ladeMappeHerunter(mappe, `Kostenvoranschlaege${privat ? '_privat' : ''}_${today()}.xlsx`)
@@ -102,6 +123,11 @@ export function Kostenvoranschlaege({ privat }: { privat?: boolean } = {}) {
           <SecondaryButton onClick={herunterladen} disabled={gefiltert.length === 0}>
             <Download size={15} /> Als Excel-Datei herunterladen
           </SecondaryButton>
+          {!nutzer.nurLesen && (
+            <SecondaryButton onClick={() => setAngebot(true)} disabled={!imUmfang.some((k) => k.status !== 'abgelehnt')}>
+              <FilePlus2 size={15} /> Angebot erstellen
+            </SecondaryButton>
+          )}
           {!nutzer.nurLesen && (
             <PrimaryButton onClick={() => setFenster({})}>
               <Plus size={15} /> Neuer Kostenvoranschlag
@@ -139,11 +165,14 @@ export function Kostenvoranschlaege({ privat }: { privat?: boolean } = {}) {
       ) : (
         <>
           <p className="mb-2 text-xs text-slate-500">
-            {gefiltert.length} {gefiltert.length === 1 ? 'Eintrag' : 'Einträge'} angezeigt · Summe <span className="font-medium text-slate-700">{fmtEURCent(kvSumme(gefiltert))}</span>
+            {gefiltert.length} {gefiltert.length === 1 ? 'Eintrag' : 'Einträge'} angezeigt · Summe <span className="font-medium text-slate-700">{fmtEURCent(kvGesamt(gefiltert).summe)}</span>
+            {' '}(ohne Abgelehnte{kvGesamt(gefiltert).ohneBetrag ? `; ${kvGesamt(gefiltert).ohneBetrag} ohne Betrag` : ''})
           </p>
           <KvListe eintraege={gefiltert} nurLesen={nutzer.nurLesen} onBearbeiten={(kv) => setFenster({ eintrag: kv })} onStatus={statusAendern} onLoeschen={loeschen} />
         </>
       )}
+
+      <KvAngebotModal open={angebot} onClose={() => setAngebot(false)} eintraege={gefiltert} />
 
       <KvBearbeitenModal
         open={!!fenster}

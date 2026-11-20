@@ -200,6 +200,7 @@
 // Alle Zugangsdaten kommen ausschließlich aus Supabase Function Secrets (nie im Code, nie im
 // Frontend). Siehe README-Abschnitt "E-Mail-Postfach-Anbindung" für die Einrichtung.
 
+import { eigenerSpeicher, pruefeSpeicherPfad } from '../_shared/speicherPfad.ts'
 import { ImapFlow } from 'npm:imapflow@1'
 import { simpleParser } from 'npm:mailparser@3'
 import nodemailer from 'npm:nodemailer@6'
@@ -1369,16 +1370,20 @@ async function ladeDokumentBytes(admin: any, url: string): Promise<Uint8Array> {
   const gemeinsam = gemeinsamerAblagePfad(url)
   if (gemeinsam) return await ladeGemeinsameDatei(admin, gemeinsam)
   if (url.startsWith(OBJEKT_DOKUMENT_PRAEFIX)) {
-    const { data, error } = await admin.storage.from('objekt-dokumente').download(url.slice(OBJEKT_DOKUMENT_PRAEFIX.length))
+    const { data, error } = await admin.storage.from('objekt-dokumente').download(pruefeSpeicherPfad('objekt-dokumente', url.slice(OBJEKT_DOKUMENT_PRAEFIX.length)))
     if (error || !data) throw new Error(`Datei nicht abrufbar (${error?.message ?? 'unbekannt'})`)
     return new Uint8Array(await data.arrayBuffer())
   }
   if (/^https?:\/\//i.test(url)) {
-    const res = await fetch(url, { signal: AbortSignal.timeout(25_000) })
-    if (!res.ok) throw new Error(`Datei nicht abrufbar (${res.status})`)
-    return new Uint8Array(await res.arrayBuffer())
+    // Nur der eigene Speicher, gelesen mit den Rechten der Funktion — fremde Adressen werden nie
+    // abgerufen (Prüfung vom 20.11.2026, siehe _shared/speicherPfad.ts).
+    const ort = eigenerSpeicher(url)
+    if (!ort) throw new Error('Datei nicht abrufbar (Verweis zeigt nicht auf den eigenen Speicher)')
+    const { data, error } = await admin.storage.from(ort.eimer).download(ort.pfad)
+    if (error || !data) throw new Error(`Datei nicht abrufbar (${error?.message ?? 'unbekannt'})`)
+    return new Uint8Array(await data.arrayBuffer())
   }
-  const { data, error } = await admin.storage.from('kunden-dokumente').download(url)
+  const { data, error } = await admin.storage.from('kunden-dokumente').download(pruefeSpeicherPfad('kunden-dokumente', url))
   if (error || !data) throw new Error(`Datei nicht abrufbar (${error?.message ?? 'unbekannt'})`)
   return new Uint8Array(await data.arrayBuffer())
 }
@@ -2129,7 +2134,7 @@ async function ladeObjektUnterlagen(admin: any, dokumente: Record<string, any[]>
       const gemeinsam = gemeinsamerAblagePfad(String(d.url))
       if (gemeinsam) bytes = await ladeGemeinsameDatei(admin, gemeinsam)
       else {
-        const { data: datei, error } = await admin.storage.from('objekt-dokumente').download(d.url)
+        const { data: datei, error } = await admin.storage.from('objekt-dokumente').download(pruefeSpeicherPfad('objekt-dokumente', String(d.url)))
         if (error || !datei) throw new Error('nicht abrufbar')
         bytes = new Uint8Array(await datei.arrayBuffer())
       }

@@ -425,7 +425,7 @@ function umbrechen(text: Lauf[], f: Schriften, groesse: number, maxBreite: numbe
   }
   const zeilen: Zeile[] = []
   let akt: Zeile = { teile: [], breite: 0 }
-  const breiteVon = (t: Teil) => t.font.widthOfTextAtSize(t.text, groesse)
+  const breiteVon = (t: Teil) => textBreite(t.font, t.text, groesse)
   for (const w of woerter) {
     const wb = w.teile.reduce((s, t) => s + breiteVon(t), 0)
     const leerTeil: Teil = { text: ' ', font: w.teile[0].font === f.symbol ? f.normal : w.teile[0].font }
@@ -446,7 +446,7 @@ function umbrechen(text: Lauf[], f: Schriften, groesse: number, maxBreite: numbe
     // Überlanges Wort (z. B. lange Adresse): zeichenweise trennen.
     for (const t of w.teile) {
       for (const z of t.text) {
-        const zb = t.font.widthOfTextAtSize(z, groesse)
+        const zb = textBreite(t.font, z, groesse)
         if (akt.breite + zb > maxBreite && akt.teile.length > 0) {
           zeilen.push(akt)
           akt = { teile: [], breite: 0 }
@@ -464,6 +464,31 @@ function umbrechen(text: Lauf[], f: Schriften, groesse: number, maxBreite: numbe
 
 /** Eigener Briefbogen (Bereich Privat): Seite 1/2 als Hintergrund, Ränder in Punkt. */
 export type BriefbogenHintergrund = { erste: PDFEmbeddedPage; folge: PDFEmbeddedPage; ersteOben: number; folgeOben: number }
+
+// Das €-Zeichen: Helvetica ist nicht eingebettet. pdf-lib (und Acrobat/Chrome) rechnen mit 556/1000
+// Geviert, die macOS-/iOS-Vorschau zeichnet aber die System-Helvetica, deren € 744/1000 breit ist — das €
+// ragte dort in das nächste Zeichen („€Anzahlung“, ein Doppelpunkt nach € verschwand; Prüfung vom
+// 20.11.2026). Deshalb wird jedes € als eigenes Stück gesetzt und mit der größeren Breite weitergerückt;
+// in Acrobat/Chrome steht danach nur eine kleine Lücke von gut 2 pt.
+const EURO_BREITE = 0.744
+
+/** Breite eines Texts mit der größeren €-Breite (für Umbruch und Positionen). */
+export function textBreite(font: PDFFont, text: string, groesse: number): number {
+  const anzahl = text.split('€').length - 1
+  if (!anzahl) return font.widthOfTextAtSize(text, groesse)
+  return font.widthOfTextAtSize(text.replaceAll('€', ''), groesse) + anzahl * EURO_BREITE * groesse
+}
+
+/** Zeichnet Text ab x, jedes € als eigenes Stück (siehe oben); liefert das x danach. */
+export function zeichneText(seite: PDFPage, text: string, x: number, y: number, groesse: number, font: PDFFont, farbe: ReturnType<typeof rgb>): number {
+  let cx = x
+  for (const stueck of text.split(/(€)/)) {
+    if (!stueck) continue
+    seite.drawText(stueck, { x: cx, y, size: groesse, font, color: farbe })
+    cx += stueck === '€' ? EURO_BREITE * groesse : font.widthOfTextAtSize(stueck, groesse)
+  }
+  return cx
+}
 
 class Setzer {
   seite!: PDFPage
@@ -518,8 +543,7 @@ class Setzer {
     }
     let cx = x
     for (const t of stuecke) {
-      this.seite.drawText(t.text, { x: cx, y: this.y, size: groesse, font: t.font, color: farbe })
-      cx += t.font.widthOfTextAtSize(t.text, groesse)
+      cx = zeichneText(this.seite, t.text, cx, this.y, groesse, t.font, farbe)
     }
   }
 
@@ -659,7 +683,7 @@ export async function erstellePdf(a: { titel: string; inhalt: string; art?: Art;
     }
     const y = s.rand.unten - 28
     p.drawLine({ start: { x: s.rand.links, y: y + 14 }, end: { x: A4.breite - s.rand.rechts, y: y + 14 }, thickness: 0.5, color: LINIE })
-    p.drawText(fussTitel, { x: s.rand.links, y, size: 8, font: f.normal, color: GRAU })
+    zeichneText(p, fussTitel, s.rand.links, y, 8, f.normal, GRAU)
     const nr = `Seite ${i + 1} von ${gesamt}`
     p.drawText(nr, { x: A4.breite - s.rand.rechts - f.normal.widthOfTextAtSize(nr, 8), y, size: 8, font: f.normal, color: GRAU })
   })

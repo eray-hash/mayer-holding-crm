@@ -10,6 +10,7 @@
 //   und sind nur für den Besitzer sichtbar, bis er sie in den öffentlichen Bereich holt.
 // - Anhänge persönlicher Mails liegen in einem nicht öffentlichen Ablageort; einen Link gibt es nur
 //   über `anhangUrl`, das vorher prüft, ob der Fragende die Mail sehen darf.
+import { istSichererPfad } from '../_shared/speicherPfad.ts'
 import { ImapFlow } from 'npm:imapflow@1'
 import nodemailer from 'npm:nodemailer@6'
 import { pruefeNeueMail } from '../_shared/mailEingang.ts'
@@ -1220,9 +1221,10 @@ export function gemeinsamerAblagePfad(url: string): string | null {
   const treffer = url.slice(basis.length).split(/[?#]/)[0].match(/^(?:public|sign|authenticated)\/([^/]+)\/(.+)$/)
   if (!treffer || treffer[1] !== OEFFENTLICHE_ABLAGE) return null
   try {
-    return decodeURIComponent(treffer[2])
+    const pfad = decodeURIComponent(treffer[2])
+    return istSichererPfad(pfad) ? pfad : null
   } catch {
-    return treffer[2]
+    return null
   }
 }
 

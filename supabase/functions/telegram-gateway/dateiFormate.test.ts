@@ -205,6 +205,8 @@ Deno.test('Beispiel-Dateien schreiben', async () => {
 
 const ANNA = { id: 'm_a', name: 'Anna Alt', email: 'anna@firma.de', rolle: 'mitarbeiter', ist_admin: false, bereiche: ['beratung'] }
 const CARL = { id: 'm_c', name: 'Carl Kollege', email: 'carl@firma.de', rolle: 'geschaeftsfuehrung', ist_admin: false, bereiche: [] as string[] }
+// Die Funktion liest nur Adressen des eigenen Speichers (gleicher Ursprung wie SUPABASE_URL).
+Deno.env.set('SUPABASE_URL', 'https://test.local')
 const URL_OEFFENTLICH = 'https://test.local/storage/v1/object/public/email-anhaenge/telegram/17000_liste.jpg'
 
 function db(): FalscheDatenbank {
@@ -340,7 +342,7 @@ Deno.test('datei_senden: Mehrdeutig, sensibel, ohne Chat, fremde private Akte, f
   assertEquals(tg.anfragen.length, 0)
 })
 
-Deno.test('datei_senden: ohne Bot-Schlüssel nur protokollieren; fremde Adresse über 50 MB abgelehnt', async () => {
+Deno.test('datei_senden: ohne Bot-Schlüssel nur protokollieren; fremde Adresse wird nie abgerufen', async () => {
   const d = db()
   await legeAb(d, 'kunden-dokumente', 'k_b/dok_y.docx', 'WORD')
   const ohne = kontext(d, ANNA, { botToken: null })
@@ -352,20 +354,38 @@ Deno.test('datei_senden: ohne Bot-Schlüssel nur protokollieren; fremde Adresse 
     console.log = log
   }
   d.tabelle('kunden').find((z) => z.id === 'k_b')!.dokumente = [{ id: 'g', name: 'Gross.pdf', typ: 'application/pdf', url: 'https://anderswo.example/gross.pdf' }]
-  const gross = (() => Promise.resolve(new Response('x', { headers: { 'content-length': String(60 * 1024 * 1024) } }))) as typeof fetch
-  const { k } = kontext(d, ANNA, { botToken: 'TOKEN', abruf: gross })
-  assertStringIncludes(await fuehreDokumentWerkzeugAus('datei_senden', { kunde_id: 'k_b', dokument_id: 'g' }, k), 'höchstens 50 MB')
+  let abgerufen = 0
+  const zaehler = ((u: string | URL | Request) => {
+    if (!String(u).includes('api.telegram.org')) abgerufen++
+    return Promise.resolve(new Response('{"ok":true}'))
+  }) as typeof fetch
+  const { k } = kontext(d, ANNA, { botToken: 'TOKEN', abruf: zaehler })
+  assertStringIncludes(await fuehreDokumentWerkzeugAus('datei_senden', { kunde_id: 'k_b', dokument_id: 'g' }, k), 'ungültig')
+  assertEquals(abgerufen, 0, 'keine Anfrage an fremde Adressen')
+  // Pfad mit ../ (Versuch, mit dem Dienstschlüssel andere Eimer oder Tabellen zu lesen)
+  d.tabelle('kunden').find((z) => z.id === 'k_b')!.dokumente = [{ id: 'h', name: 'x.pdf', typ: 'application/pdf', url: '../../../../rest/v1/mitarbeiter' }]
+  assertStringIncludes(await fuehreDokumentWerkzeugAus('datei_senden', { kunde_id: 'k_b', dokument_id: 'h' }, k), 'ungültig')
 })
 
 Deno.test('datei_senden: Speicherort und Suche', () => {
   assertEquals(speicherOrt('k_b/dok_1.pdf', ''), { eimer: 'kunden-dokumente', pfad: 'k_b/dok_1.pdf' })
   assertEquals(speicherOrt('privat:fach/x.pdf', ''), { eimer: 'postfach-anhaenge', pfad: 'fach/x.pdf' })
-  assertEquals(speicherOrt('https://p.supabase.co/storage/v1/object/public/email-anhaenge/a%20b.pdf', 'https://p.supabase.co'), {
-    eimer: 'email-anhaenge',
-    pfad: 'a b.pdf',
-    oeffentlich: 'https://p.supabase.co/storage/v1/object/public/email-anhaenge/a%20b.pdf',
-  })
-  assertEquals(speicherOrt('https://fremd.de/storage/v1/object/public/x/y.pdf', 'https://p.supabase.co'), { adresse: 'https://fremd.de/storage/v1/object/public/x/y.pdf' })
+  assertEquals(speicherOrt('https://p.supabase.co/storage/v1/object/public/email-anhaenge/a%20b.pdf', 'https://p.supabase.co'), { eimer: 'email-anhaenge', pfad: 'a b.pdf' })
+  // Fremde Adressen, Doppelgänger-Adressen, fremde Eimer und ../ in jeder Schreibweise: abgelehnt.
+  for (const boese of [
+    'https://fremd.de/storage/v1/object/public/email-anhaenge/y.pdf',
+    'https://p.supabase.co.boese.tld/storage/v1/object/public/email-anhaenge/y.pdf',
+    'https://p.supabase.co/storage/v1/object/public/geheim/y.pdf',
+    'https://p.supabase.co/storage/v1/object/public/email-anhaenge/../../../../rest/v1/mitarbeiter',
+    'https://p.supabase.co/storage/v1/object/public/email-anhaenge/%2e%2e/%2e%2e/auth/v1/admin/users',
+    '../../../../rest/v1/mitarbeiter?select=*',
+    'k_b/../../postfach-anhaenge/x.pdf',
+    'k_b/%2e%2e/x.pdf',
+    '/k_b/x.pdf',
+    'k_b\\..\\x.pdf',
+    'privat:../x.pdf',
+    'objekt-dokumente:o1/../../x',
+  ]) assertEquals(speicherOrt(boese, 'https://p.supabase.co'), null, boese)
   const doks = [{ id: '1', name: 'Mieterliste.xlsx' }, { id: '2', name: 'Mieterliste alt.xlsx' }]
   assertEquals(findeDokument(doks, '', 'Mieterliste'), { dok: doks[0] }, 'genauer Name gewinnt')
   assert('meldung' in findeDokument(doks, '', 'xyz'))

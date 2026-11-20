@@ -428,7 +428,7 @@ export function Layout({ children }: { children: ReactNode }) {
                 Auswertungen
               </button>
               <button
-                onClick={() => { setDrawerOpen(false); navigate('/kostenvoranschlaege') }}
+                onClick={() => { setDrawerOpen(false); navigate(imPrivatBereich ? '/privat/kostenvoranschlaege' : '/kostenvoranschlaege') }}
                 className="mb-6 flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm font-medium text-slate-700 hover:bg-slate-50 sm:hidden"
               >
                 <Calculator size={17} className="text-slate-400" />

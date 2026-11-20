@@ -8,6 +8,7 @@
 //
 // Hier liegen nur Helfer ohne Rechteprüfung. Welche Mail ein Mitarbeiter sehen darf, entscheidet der
 // Aufrufer in index.ts (eigenes privates Postfach oder gemeinsames Postfach mit Bereichsrechten).
+import { istSichererPfad } from '../_shared/speicherPfad.ts'
 
 // deno-lint-ignore no-explicit-any
 type Supa = any
@@ -126,13 +127,17 @@ function bytesZuBase64(bytes: Uint8Array): string {
 
 /** Ort eines Anhangs im Speicher: gemeinsame Ablage (öffentliche Adresse) oder private Ablage („privat:…"). */
 export function anhangOrt(url: string, supabaseUrl: string): { ablage: string; pfad: string } | null {
-  if (url.startsWith(PRIVAT_VORSATZ)) return { ablage: PRIVATE_ABLAGE, pfad: url.slice(PRIVAT_VORSATZ.length) }
+  if (url.startsWith(PRIVAT_VORSATZ)) {
+    const pfad = url.slice(PRIVAT_VORSATZ.length)
+    return istSichererPfad(pfad) ? { ablage: PRIVATE_ABLAGE, pfad } : null
+  }
   const basis = `${supabaseUrl}/storage/v1/object/`
   if (!url.startsWith(basis)) return null
   const treffer = url.slice(basis.length).split(/[?#]/)[0].match(/^(?:public|sign|authenticated)\/([^/]+)\/(.+)$/)
   if (!treffer || treffer[1] !== OEFFENTLICHE_ABLAGE) return null
   try {
-    return { ablage: OEFFENTLICHE_ABLAGE, pfad: decodeURIComponent(treffer[2]) }
+    const pfad = decodeURIComponent(treffer[2])
+    return istSichererPfad(pfad) ? { ablage: OEFFENTLICHE_ABLAGE, pfad } : null
   } catch {
     return null
   }

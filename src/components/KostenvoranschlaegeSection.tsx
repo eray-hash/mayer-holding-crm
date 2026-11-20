@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Calculator, FileText, Pencil, Plus, Trash2 } from 'lucide-react'
+import { Calculator, FilePlus2, FileText, Pencil, Plus, Trash2 } from 'lucide-react'
 import { useApp, type AppData } from '../context/AppContext'
 import { useAuth } from '../context/AuthContext'
 import { CURRENT_USER } from '../data/constants'
@@ -10,10 +10,17 @@ import { useBereichsRechte } from '../lib/bereichsRechte'
 import { supabase } from '../lib/supabaseClient'
 import { brauchtDateiLink, holeAnhangUrl } from '../lib/emailGateway'
 import { erzeugeKundenDownloadUrl } from '../lib/kundenDokumenteStorage'
-import { fmtDate, fmtEURCent, today } from '../lib/dates'
+import { addDays, fmtDate, fmtEURCent, today, uid } from '../lib/dates'
+import { briefkopfAus } from '../data/briefkopf'
+import { herunterladen } from '../lib/briefe'
+import { ladeKundenDokumentHoch } from '../lib/kundenDokumenteStorage'
+import { erzeugeKvPdf, kvPdfDateiname, type AngebotAngaben, type KvArt } from '../lib/kostenvoranschlagPdf'
+import { KvPositionenEditor, euroText, type KvPositionenWert } from './KvPositionenEditor'
 import {
   KV_STATUS,
   aendereKostenvoranschlag,
+  berechneKv,
+  kvGesamt,
   kvSumme,
   ladeKostenvoranschlaegeFuerKunde,
   legeKostenvoranschlagAn,
@@ -23,7 +30,7 @@ import {
   type KvStatus,
   type Kostenvoranschlag,
 } from '../lib/kostenvoranschlaege'
-import { Card, EmptyState, Field, Modal, PrimaryButton, inputClass } from './ui'
+import { Card, EmptyState, Field, Modal, PrimaryButton, SecondaryButton, inputClass } from './ui'
 import type { Dokument, Kunde, KundeBereich } from '../types'
 
 // Kostenvoranschläge (20.11.2026): Reiter in jeder Kundenakte. Die gemeinsamen Bausteine (Liste,
@@ -72,11 +79,21 @@ export async function oeffneKvDokument(state: AppData, dok: KvDokument): Promise
   const fenster = window.open('', '_blank')
   try {
     let datei: Dokument | undefined = findeAkte(state, dok.kundeId)?.kunde.dokumente?.find((d) => d.id === dok.dokumentId)
+    // Die Datei kann inzwischen in einer anderen Akte liegen (z. B. aus den Ungeklärten Eingängen
+    // abgelegt; sie behält dabei ihre Kennung) — erst in allen geladenen Akten, dann in der Datenbank suchen.
+    if (!datei) {
+      for (const b of KUNDEN_BEREICHE) {
+        for (const k of b.get(state)) {
+          datei = k.dokumente?.find((d) => d.id === dok.dokumentId)
+          if (datei) break
+        }
+        if (datei) break
+      }
+    }
     if (!datei && supabase) {
-      // Die Akte ist (noch) nicht im App-Zustand geladen — direkt nachsehen.
-      const { data, error } = await supabase.from('kunden').select('dokumente').eq('id', dok.kundeId).maybeSingle()
-      if (error) throw new Error(error.message)
-      const liste = Array.isArray(data?.dokumente) ? (data!.dokumente as Dokument[]) : []
+      const { data, error } = await supabase.from('kunden').select('dokumente').contains('dokumente', [{ id: dok.dokumentId }]).limit(1)
+      if (error) throw new Error('Die Datei ließ sich nicht suchen. Bitte noch einmal versuchen.')
+      const liste = Array.isArray(data?.[0]?.dokumente) ? (data![0].dokumente as Dokument[]) : []
       datei = liste.find((d) => d.id === dok.dokumentId)
     }
     if (!datei?.url) throw new Error(`Die Datei „${dok.name}“ wurde in der Akte nicht gefunden.`)
@@ -113,14 +130,14 @@ function auswahlFuer(e?: Kostenvoranschlag): string {
 }
 
 function betragAusText(text: string): number | null {
-  const t = text.trim().replace(/€/g, '').replace(/\s/g, '')
+  const t = text.trim().replace(/€/g, '').replace(/\s/g, '').replace(/,[-–]$/, ',00')
   if (!t) return null
   // Deutsches Format: Punkt = Tausender, Komma = Dezimal. Nur ein Punkt ohne Komma gilt als Dezimalpunkt, wenn danach nicht genau drei Ziffern stehen.
   let norm = t
   if (t.includes(',')) norm = t.replace(/\./g, '').replace(',', '.')
-  else if (/^\d{1,3}(\.\d{3})+$/.test(t)) norm = t.replace(/\./g, '')
+  else if (/^-?\d{1,3}(\.\d{3})+$/.test(t)) norm = t.replace(/\./g, '')
   const n = Number(norm)
-  return Number.isFinite(n) ? n : NaN
+  return Number.isFinite(n) && n >= 0 ? n : NaN
 }
 
 function betragAlsText(b?: number): string {
@@ -145,7 +162,7 @@ export function KvBearbeitenModal({
   nurPrivat?: boolean
   onGespeichert: (kv: Kostenvoranschlag) => void
 }) {
-  const { state } = useApp()
+  const { state, dispatch } = useApp()
   const { kundenBereiche } = useBereichsRechte()
   const nutzer = useKvNutzer()
   const [name, setName] = useState('')
@@ -156,6 +173,9 @@ export function KvBearbeitenModal({
   const [notiz, setNotiz] = useState('')
   const [akte, setAkte] = useState(OHNE_AKTE)
   const [akteSuche, setAkteSuche] = useState('')
+  // Berechnet aus Positionen der Preisliste (mit Auf-/Abschlag) oder Betrag von Hand.
+  const [mitPositionen, setMitPositionen] = useState(false)
+  const [pos, setPos] = useState<KvPositionenWert>({ positionen: [], aufschlagProzent: 0, ustSatz: 19 })
   const [fehler, setFehler] = useState('')
   const [speichert, setSpeichert] = useState(false)
 
@@ -169,9 +189,14 @@ export function KvBearbeitenModal({
     setNotiz(eintrag?.notiz ?? '')
     setAkte(eintrag ? auswahlFuer(eintrag) : festeAkte ? festeAkte.kunde.id : nurPrivat ? OHNE_AKTE_PRIVAT : OHNE_AKTE)
     setAkteSuche('')
+    setMitPositionen(!!eintrag?.positionen?.length)
+    setPos({ positionen: eintrag?.positionen ?? [], aufschlagProzent: eintrag?.aufschlagProzent ?? 0, ustSatz: eintrag?.ustSatz ?? 19 })
     setFehler('')
     setSpeichert(false)
-  }, [open, eintrag, festeAkte, nurPrivat])
+    // Nur beim Öffnen bzw. Wechsel des Eintrags zurücksetzen — lädt die App im Hintergrund neu,
+    // entstehen neue Objekte für Akte/Eintrag, und die Eingaben dürfen dann nicht verloren gehen.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, eintrag?.id])
 
   const gruppen = useMemo(() => {
     const such = akteSuche.trim().toLowerCase()
@@ -209,22 +234,59 @@ export function KvBearbeitenModal({
     return z
   }
 
-  async function speichern() {
+  async function speichern(alsPdf = false) {
     setFehler('')
     if (!name.trim()) return setFehler('Bitte einen Namen angeben.')
-    const zahl = betragAusText(betrag)
-    if (Number.isNaN(zahl)) return setFehler('Der Betrag ist keine Zahl. Beispiel: 1.250,50')
+    let zahl = betragAusText(betrag)
+    if (mitPositionen) {
+      if (!pos.positionen.length) return setFehler('Bitte mindestens eine Position anlegen oder „Betrag von Hand“ wählen.')
+      if (pos.positionen.some((p) => !p.bezeichnung.trim())) return setFehler('Jede Position braucht eine Bezeichnung.')
+      zahl = berechneKv(pos.positionen, pos.aufschlagProzent, pos.ustSatz).brutto
+    } else if (Number.isNaN(zahl)) return setFehler('Der Betrag ist keine Zahl. Beispiel: 1.250,50')
     if (akte === OHNE_AKTE_PRIVAT && !nutzer.email) return setFehler('Privat ohne Akte geht nur angemeldet.')
+    // Wechsel zwischen privat und für alle sichtbar nur bewusst (Prüfung vom 20.11.2026).
+    let neueZuordnung: ReturnType<typeof zuordnungFuer> | undefined
+    let dokumentLoesen = false
+    if (eintrag && akte !== auswahlFuer(eintrag)) {
+      try {
+        neueZuordnung = zuordnungAusAuswahl(akte)
+      } catch (err) {
+        return setFehler(err instanceof Error ? err.message : 'Die gewählte Akte wurde nicht gefunden.')
+      }
+      const warPrivat = eintrag.bereich === 'privat' || !!eintrag.privatBesitzer
+      const wirdPrivat = neueZuordnung.bereich === 'privat'
+      if (!warPrivat && wirdPrivat) {
+        if (eintrag.erstelltVon && eintrag.erstelltVon !== nutzer.name) return setFehler(`Nur ${eintrag.erstelltVon}, der den Eintrag angelegt hat, kann ihn privat machen.`)
+        if (!window.confirm('Der Eintrag wird privat: Danach sieht ihn niemand außer dir. Fortfahren?')) return
+      }
+      if (warPrivat && !wirdPrivat) {
+        if (!window.confirm('Der Eintrag ist bisher privat. Danach sehen ihn alle Mitarbeiter mit Zugriff auf diesen Bereich. Fortfahren?')) return
+        // Die verknüpfte Datei liegt in einer privaten Akte — der Verweis darauf soll nicht mitwandern.
+        dokumentLoesen = !!eintrag.dokument && findeAkte(state, eintrag.dokument.kundeId)?.bereich === 'privat'
+      }
+    }
     setSpeichert(true)
     try {
-      const felder = { name, beschreibung, betrag: zahl, status, datum: datum || null, notiz }
+      const betragGeaendert = !eintrag || mitPositionen || betrag !== betragAlsText(eintrag.betrag)
+      const felder = {
+        name,
+        beschreibung,
+        ...(betragGeaendert ? { betrag: zahl } : {}),
+        ...(dokumentLoesen ? { dokument: null } : {}),
+        status,
+        datum: datum || null,
+        notiz,
+        positionen: mitPositionen ? pos.positionen.map((p) => ({ ...p, bezeichnung: p.bezeichnung.trim() })) : null,
+        aufschlagProzent: mitPositionen ? pos.aufschlagProzent : null,
+        ustSatz: mitPositionen ? pos.ustSatz : null,
+      }
       let kv: Kostenvoranschlag
       if (eintrag) {
-        const geaendert = akte !== auswahlFuer(eintrag)
-        kv = await aendereKostenvoranschlag(eintrag.id, felder, geaendert ? zuordnungAusAuswahl(akte) : undefined)
+        kv = await aendereKostenvoranschlag(eintrag.id, felder, neueZuordnung)
       } else {
         kv = await legeKostenvoranschlagAn(felder, festeAkte ? zuordnungZuAkte(festeAkte) : zuordnungAusAuswahl(akte), nutzer.name)
       }
+      if (alsPdf) kv = (await kvPdfAblegen(kv, { state, dispatch, nutzerName: nutzer.name })).kv
       onGespeichert(kv)
       onClose()
     } catch (err) {
@@ -241,9 +303,16 @@ export function KvBearbeitenModal({
       onClose={onClose}
       title={eintrag ? 'Kostenvoranschlag bearbeiten' : 'Neuer Kostenvoranschlag'}
       aktionen={
-        <PrimaryButton onClick={speichern} disabled={speichert || nutzer.nurLesen}>
-          {speichert ? 'Speichert …' : 'Speichern'}
-        </PrimaryButton>
+        <>
+          {mitPositionen && (
+            <SecondaryButton onClick={() => speichern(true)} disabled={speichert || nutzer.nurLesen}>
+              Speichern und PDF erstellen
+            </SecondaryButton>
+          )}
+          <PrimaryButton onClick={() => speichern()} disabled={speichert || nutzer.nurLesen}>
+            {speichert ? 'Speichert …' : 'Speichern'}
+          </PrimaryButton>
+        </>
       }
     >
       <Field label="Name (für wen bzw. von wem)">
@@ -252,10 +321,25 @@ export function KvBearbeitenModal({
       <Field label="Beschreibung (worum es geht)">
         <input className={inputClass} value={beschreibung} onChange={(e) => setBeschreibung(e.target.value)} placeholder="z. B. Küche, Bad" />
       </Field>
+      <div className="mb-3 inline-flex rounded-lg border border-slate-200 p-0.5 text-sm">
+        <button type="button" onClick={() => setMitPositionen(false)} className={`rounded-md px-3 py-1.5 ${!mitPositionen ? 'bg-slate-800 text-white' : 'text-slate-600 hover:bg-slate-50'}`}>
+          Betrag von Hand
+        </button>
+        <button type="button" onClick={() => setMitPositionen(true)} className={`rounded-md px-3 py-1.5 ${mitPositionen ? 'bg-slate-800 text-white' : 'text-slate-600 hover:bg-slate-50'}`}>
+          Aus Preisliste berechnen
+        </button>
+      </div>
+      {mitPositionen && <KvPositionenEditor wert={pos} onChange={setPos} nurLesen={nutzer.nurLesen} />}
       <div className="grid grid-cols-1 gap-x-3 sm:grid-cols-3">
-        <Field label="Betrag in Euro">
-          <input className={inputClass} value={betrag} onChange={(e) => setBetrag(e.target.value)} inputMode="decimal" placeholder="leer = noch offen" />
-        </Field>
+        {mitPositionen ? (
+          <Field label="Gesamtbetrag (berechnet)">
+            <input className={`${inputClass} bg-slate-50`} value={euroText(berechneKv(pos.positionen, pos.aufschlagProzent, pos.ustSatz).brutto)} readOnly />
+          </Field>
+        ) : (
+          <Field label="Betrag in Euro">
+            <input className={inputClass} value={betrag} onChange={(e) => setBetrag(e.target.value)} inputMode="decimal" placeholder="leer = noch offen" />
+          </Field>
+        )}
         <Field label="Status">
           <select className={inputClass} value={status} onChange={(e) => setStatus(e.target.value as KvStatus)}>
             {KV_STATUS.map((s) => (
@@ -506,6 +590,207 @@ export function useKvAktionen(setListe: React.Dispatch<React.SetStateAction<Kost
 }
 
 // ---------------------------------------------------------------------------------------------
+// PDF erstellen (Kostenvoranschlag oder Angebot) und in die Akte legen
+
+type Dispatch = ReturnType<typeof useApp>['dispatch']
+
+/**
+ * Erzeugt das PDF mit dem Briefkopf der Holding (bei privaten Einträgen schlicht mit dem eigenen Namen),
+ * lädt es herunter und legt es — wenn der Eintrag einer geladenen Akte zugeordnet ist — dort unter
+ * Dokumente ab. Ein Kostenvoranschlag wird mit seinem PDF verknüpft.
+ */
+export async function kvPdfAblegen(
+  kv: Kostenvoranschlag,
+  p: { state: AppData; dispatch: Dispatch; nutzerName: string; art?: KvArt; angebot?: AngebotAngaben },
+): Promise<{ kv: Kostenvoranschlag; akte?: KvAkte; name: string }> {
+  const art = p.art ?? 'kostenvoranschlag'
+  const akte = findeAkte(p.state, kv.kundeId)
+  const privat = kv.bereich === 'privat' || akte?.bereich === 'privat'
+  const briefkopf = privat ? { name: p.nutzerName, unterzeilen: [], seitenleiste: [], fusszeilen: [p.nutzerName] } : briefkopfAus(p.state.vorlagenBeratung)
+  const blob = erzeugeKvPdf(kv, { briefkopf, art, angebot: p.angebot })
+  const name = kvPdfDateiname(kv, art, p.angebot?.datum)
+  herunterladen(blob, name)
+  if (!akte) return { kv, name }
+  const { pfad, groesse } = await ladeKundenDokumentHoch(akte.kunde.id, new File([blob], name, { type: 'application/pdf' }))
+  const dok: Dokument = { id: uid('dok'), name, typ: 'application/pdf', datum: today(), groesse, url: pfad }
+  const aktuell = findeAkte(p.state, akte.kunde.id)?.kunde ?? akte.kunde
+  p.dispatch({ type: 'UPDATE_KUNDE_IN_BEREICH', bereich: akte.bereich, id: akte.kunde.id, patch: { dokumente: [...(aktuell.dokumente ?? []), dok] } })
+  let neu = kv
+  if (art === 'kostenvoranschlag') neu = await aendereKostenvoranschlag(kv.id, { dokument: { kundeId: akte.kunde.id, dokumentId: dok.id, name } })
+  return { kv: neu, akte, name }
+}
+
+const ANGEBOT_EINLEITUNG = 'vielen Dank für Ihre Anfrage. Gerne bieten wir Ihnen die folgenden Leistungen an:'
+const ANGEBOT_SCHLUSS = 'Für Rückfragen stehen wir Ihnen gerne zur Verfügung. Wir freuen uns auf Ihren Auftrag.'
+
+/** Positionen für das Angebot: die des Kostenvoranschlags oder — ohne Positionen — eine Pauschale über den Betrag. */
+function startPositionen(kv: Kostenvoranschlag): KvPositionenWert {
+  if (kv.positionen?.length) return { positionen: kv.positionen.map((x) => ({ ...x })), aufschlagProzent: kv.aufschlagProzent ?? 0, ustSatz: kv.ustSatz ?? 19 }
+  return {
+    positionen: [{ id: uid('p'), bezeichnung: kv.beschreibung || kv.name, menge: 1, einheit: 'Pauschal', einzelpreis: kv.betrag ?? 0 }],
+    aufschlagProzent: 0,
+    ustSatz: 19,
+  }
+}
+
+/** Fenster „Angebot erstellen“: Kostenvoranschlag wählen, Anschreiben und Positionen anpassen, PDF auf dem Briefkopf. */
+export function KvAngebotModal({
+  open,
+  onClose,
+  eintraege,
+  vorauswahl,
+}: {
+  open: boolean
+  onClose: () => void
+  eintraege: Kostenvoranschlag[]
+  vorauswahl?: string
+}) {
+  const { state, dispatch } = useApp()
+  const nutzer = useKvNutzer()
+  const [kvId, setKvId] = useState('')
+  const [empfaenger, setEmpfaenger] = useState('')
+  const [betreff, setBetreff] = useState('')
+  const [anrede, setAnrede] = useState('Sehr geehrte Damen und Herren,')
+  const [einleitung, setEinleitung] = useState(ANGEBOT_EINLEITUNG)
+  const [schluss, setSchluss] = useState(ANGEBOT_SCHLUSS)
+  const [gueltigBis, setGueltigBis] = useState(addDays(today(), 30))
+  const [absender, setAbsender] = useState('')
+  const [pos, setPos] = useState<KvPositionenWert>({ positionen: [], aufschlagProzent: 0, ustSatz: 19 })
+  const [arbeitet, setArbeitet] = useState(false)
+  const [meldung, setMeldung] = useState('')
+  const [fehler, setFehler] = useState('')
+
+  const waehlbar = useMemo(() => eintraege.filter((k) => k.status !== 'abgelehnt'), [eintraege])
+  const kv = waehlbar.find((k) => k.id === kvId)
+
+  function vorbelegen(id: string) {
+    setKvId(id)
+    setMeldung('')
+    setFehler('')
+    const k = waehlbar.find((x) => x.id === id)
+    if (!k) return
+    const akte = findeAkte(state, k.kundeId)?.kunde
+    const zeilen = akte
+      ? [akte.firma, akte.ansprechpartner && akte.ansprechpartner !== akte.firma ? akte.ansprechpartner : '', ...(akte.immoStammdaten?.adresse ?? '').split(/\n|,\s*/)]
+      : [k.name]
+    setEmpfaenger(zeilen.map((z) => (z ?? '').trim()).filter(Boolean).join('\n'))
+    setBetreff(`Angebot${k.beschreibung ? `: ${k.beschreibung}` : ''}`)
+    setPos(startPositionen(k))
+  }
+
+  useEffect(() => {
+    if (!open) return
+    setAnrede('Sehr geehrte Damen und Herren,')
+    setEinleitung(ANGEBOT_EINLEITUNG)
+    setSchluss(ANGEBOT_SCHLUSS)
+    setGueltigBis(addDays(today(), 30))
+    setAbsender(nutzer.name)
+    setArbeitet(false)
+    const start = vorauswahl && waehlbar.some((k) => k.id === vorauswahl) ? vorauswahl : waehlbar.length === 1 ? waehlbar[0].id : ''
+    if (start) vorbelegen(start)
+    else {
+      setKvId('')
+      setEmpfaenger('')
+      setBetreff('Angebot')
+      setPos({ positionen: [], aufschlagProzent: 0, ustSatz: 19 })
+      setMeldung('')
+      setFehler('')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, vorauswahl])
+
+  async function erstellen() {
+    setFehler('')
+    setMeldung('')
+    if (!kv) return setFehler('Bitte einen Kostenvoranschlag wählen.')
+    if (!pos.positionen.length) return setFehler('Das Angebot braucht mindestens eine Position.')
+    if (pos.positionen.some((x) => !x.bezeichnung.trim())) return setFehler('Jede Position braucht eine Bezeichnung.')
+    if (!empfaenger.trim()) return setFehler('Bitte einen Empfänger angeben.')
+    setArbeitet(true)
+    try {
+      const basis: Kostenvoranschlag = { ...kv, positionen: pos.positionen, aufschlagProzent: pos.aufschlagProzent, ustSatz: pos.ustSatz }
+      const angebot: AngebotAngaben = { empfaenger: empfaenger.split('\n'), betreff: betreff.trim() || 'Angebot', anrede, einleitung, schluss, gueltigBis, absender: absender.trim() || nutzer.name, datum: today() }
+      const r = await kvPdfAblegen(basis, { state, dispatch, nutzerName: nutzer.name, art: 'angebot', angebot })
+      setMeldung(r.akte ? `„${r.name}“ wurde heruntergeladen und liegt in der Akte ${akteName(r.akte.kunde)} unter Dokumente.` : `„${r.name}“ wurde heruntergeladen. Der Kostenvoranschlag hat keine Akte, deshalb wurde nichts abgelegt.`)
+    } catch (err) {
+      setFehler(err instanceof Error ? err.message : 'Das Angebot ließ sich nicht erstellen.')
+    } finally {
+      setArbeitet(false)
+    }
+  }
+
+  const summe = berechneKv(pos.positionen, pos.aufschlagProzent, pos.ustSatz)
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Angebot aus Kostenvoranschlag erstellen"
+      width="max-w-3xl"
+      aktionen={
+        <PrimaryButton onClick={erstellen} disabled={arbeitet || nutzer.nurLesen || !kv}>
+          {arbeitet ? 'Wird erstellt …' : 'Angebot als PDF erstellen'}
+        </PrimaryButton>
+      }
+    >
+      <Field label="Kostenvoranschlag">
+        <select className={inputClass} value={kvId} onChange={(e) => vorbelegen(e.target.value)}>
+          <option value="">Bitte wählen …</option>
+          {waehlbar.map((k) => (
+            <option key={k.id} value={k.id}>
+              {k.name}
+              {k.beschreibung ? ` – ${k.beschreibung}` : ''}
+              {k.betrag !== undefined ? ` · ${euroText(k.betrag)}` : ''}
+            </option>
+          ))}
+        </select>
+      </Field>
+      {kv && (
+        <>
+          {!kv.positionen?.length && (
+            <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              Dieser Kostenvoranschlag hat keine Positionen. Der Betrag wurde als eine Pauschale (netto) übernommen — bitte prüfen oder Positionen aus der Preisliste wählen.
+            </p>
+          )}
+          <div className="grid grid-cols-1 gap-x-3 sm:grid-cols-2">
+            <Field label="Empfänger (eine Zeile je Angabe)">
+              <textarea className={inputClass} rows={4} value={empfaenger} onChange={(e) => setEmpfaenger(e.target.value)} />
+            </Field>
+            <div>
+              <Field label="Betreff">
+                <input className={inputClass} value={betreff} onChange={(e) => setBetreff(e.target.value)} />
+              </Field>
+              <Field label="Gültig bis">
+                <input type="date" className={inputClass} value={gueltigBis} onChange={(e) => setGueltigBis(e.target.value)} />
+              </Field>
+            </div>
+          </div>
+          <Field label="Anrede">
+            <input className={inputClass} value={anrede} onChange={(e) => setAnrede(e.target.value)} />
+          </Field>
+          <Field label="Text vor der Aufstellung">
+            <textarea className={inputClass} rows={2} value={einleitung} onChange={(e) => setEinleitung(e.target.value)} />
+          </Field>
+          <KvPositionenEditor wert={pos} onChange={setPos} nurLesen={nutzer.nurLesen} />
+          <Field label="Text nach der Aufstellung">
+            <textarea className={inputClass} rows={2} value={schluss} onChange={(e) => setSchluss(e.target.value)} />
+          </Field>
+          <Field label="Unterschrift (Name unter dem Gruß)">
+            <input className={inputClass} value={absender} onChange={(e) => setAbsender(e.target.value)} />
+          </Field>
+          <p className="mb-2 text-xs text-slate-500">
+            Gesamtbetrag im Angebot: <span className="font-semibold text-slate-800">{euroText(summe.brutto)}</span>. Der Kostenvoranschlag selbst bleibt unverändert. Briefkopf:{' '}
+            {kv.bereich === 'privat' ? 'dein Name (privat)' : 'Andreas Mayer Holding'}.
+          </p>
+        </>
+      )}
+      {meldung && <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{meldung}</p>}
+      {fehler && <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{fehler}</p>}
+    </Modal>
+  )
+}
+
+// ---------------------------------------------------------------------------------------------
 // Reiter „Kostenvoranschläge“ in der Akte
 
 export function KostenvoranschlaegeSection({ kunde, bereich }: { kunde: Kunde; bereich: KundeBereich }) {
@@ -514,6 +799,7 @@ export function KostenvoranschlaegeSection({ kunde, bereich }: { kunde: Kunde; b
   const [laedt, setLaedt] = useState(true)
   const [fehler, setFehler] = useState('')
   const [fenster, setFenster] = useState<{ eintrag?: Kostenvoranschlag } | null>(null)
+  const [angebot, setAngebot] = useState(false)
   const { statusAendern, loeschen, uebernehmen } = useKvAktionen(setListe, setFehler)
   const festeAkte = useMemo<KvAkte>(() => ({ kunde, bereich, bereichLabel: KUNDEN_BEREICHE.find((b) => b.id === bereich)?.label ?? bereich }), [kunde, bereich])
 
@@ -541,16 +827,24 @@ export function KostenvoranschlaegeSection({ kunde, bereich }: { kunde: Kunde; b
         <div className="flex items-center gap-2 text-sm text-slate-600">
           <Calculator size={16} className="text-accent-600" />
           <span>
-            {liste.length} {liste.length === 1 ? 'Eintrag' : 'Einträge'} · Summe <span className="font-semibold text-slate-800">{fmtEURCent(kvSumme(liste))}</span>
+            {liste.length} {liste.length === 1 ? 'Eintrag' : 'Einträge'} · Summe <span className="font-semibold text-slate-800">{fmtEURCent(kvGesamt(liste).summe)}</span>
+            <span className="text-xs text-slate-400">
+              {' '}(ohne Abgelehnte{kvGesamt(liste).ohneBetrag ? `; ${kvGesamt(liste).ohneBetrag} ohne Betrag` : ''})
+            </span>
           </span>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Link to={uebersichtPfad} className="text-sm text-accent-700 hover:underline">
             Alle Kostenvoranschläge
           </Link>
+          {!nutzer.nurLesen && liste.some((k) => k.status !== 'abgelehnt') && (
+            <SecondaryButton onClick={() => setAngebot(true)}>
+              <FilePlus2 size={15} /> Angebot erstellen
+            </SecondaryButton>
+          )}
           {!nutzer.nurLesen && (
             <PrimaryButton onClick={() => setFenster({})}>
-              <Plus size={15} /> Neu
+              <Plus size={15} /> Neuer Kostenvoranschlag
             </PrimaryButton>
           )}
         </div>
@@ -573,6 +867,8 @@ export function KostenvoranschlaegeSection({ kunde, bereich }: { kunde: Kunde; b
       ) : (
         <KvListe eintraege={liste} zeigeAkte={false} nurLesen={nutzer.nurLesen} onBearbeiten={(kv) => setFenster({ eintrag: kv })} onStatus={statusAendern} onLoeschen={loeschen} />
       )}
+
+      <KvAngebotModal open={angebot} onClose={() => setAngebot(false)} eintraege={liste} />
 
       <KvBearbeitenModal
         open={!!fenster}

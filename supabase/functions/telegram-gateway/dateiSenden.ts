@@ -14,6 +14,7 @@
 // weil mit Telegram kein Auftragsverarbeitungsvertrag besteht; ausgenommen sind Dateien, die der
 // Assistent selbst erstellt hat (quelle "assistent").
 
+import { eigenerSpeicher, ERLAUBTE_EIMER, istSichererPfad } from '../_shared/speicherPfad.ts'
 import { type AkteFuerRechte, darfAkte as darfAkteStandard, istPrivat, nichtFreigegeben, type RechteMitarbeiter } from './rechte.ts'
 import { sensibleArt } from './sensibel.ts'
 
@@ -100,59 +101,33 @@ export function findeDokument(doks: Dok[], id: string, suche: string): { dok: Do
   return { meldung: `Mehrere Dateien passen zu „${suche}" — welche soll es sein?\n${liste(treffer)}` }
 }
 
-/** Wo liegt die Datei? Eimer + Pfad (mit dem Dienst-Client lesbar) oder eine fremde Adresse. */
-export function speicherOrt(url: string, basisUrl = Deno.env.get('SUPABASE_URL') ?? ''): { eimer: string; pfad: string; oeffentlich?: string } | { adresse: string } | null {
+/**
+ * Wo liegt die Datei? Eimer + Pfad im eigenen Speicher (mit dem Dienst-Client lesbar). null, wenn der
+ * Verweis leer, fremd oder bedenklich ist — fremde Adressen werden nie abgerufen (_shared/speicherPfad.ts).
+ */
+export function speicherOrt(url: string, basisUrl = Deno.env.get('SUPABASE_URL') ?? ''): { eimer: string; pfad: string } | null {
   const u = String(url ?? '').trim()
   if (!u) return null
-  if (u.startsWith('objekt-dokumente:')) return { eimer: 'objekt-dokumente', pfad: u.slice('objekt-dokumente:'.length) }
-  if (u.startsWith('privat:')) return { eimer: 'postfach-anhaenge', pfad: u.slice('privat:'.length) }
-  if (/^https?:\/\//i.test(u)) {
-    const m = u.match(/\/storage\/v1\/object\/(?:public|sign|authenticated)\/([^/]+)\/([^?#]+)/)
-    const eigenerSpeicher = !basisUrl || u.startsWith(basisUrl.replace(/\/+$/, ''))
-    if (m && eigenerSpeicher) {
-      let pfad = m[2]
-      try {
-        pfad = decodeURIComponent(pfad)
-      } catch {
-        // Pfad bleibt wie er ist
-      }
-      return { eimer: m[1], pfad, oeffentlich: u }
-    }
-    return { adresse: u }
-  }
-  return { eimer: 'kunden-dokumente', pfad: u.replace(/^\/+/, '') }
+  let ort: { eimer: string; pfad: string } | null
+  if (u.startsWith('objekt-dokumente:')) ort = { eimer: 'objekt-dokumente', pfad: u.slice('objekt-dokumente:'.length) }
+  else if (u.startsWith('privat:')) ort = { eimer: 'postfach-anhaenge', pfad: u.slice('privat:'.length) }
+  else if (/^https?:\/\//i.test(u)) ort = eigenerSpeicher(u, basisUrl)
+  else ort = { eimer: 'kunden-dokumente', pfad: u }
+  return ort && istSichererPfad(ort.pfad) && (ERLAUBTE_EIMER as readonly string[]).includes(ort.eimer) ? ort : null
 }
 
 class DateiFehler extends Error {}
 
 async function ladeBytes(supabase: Supa, url: string, abruf: typeof fetch): Promise<Uint8Array<ArrayBuffer>> {
   const ort = speicherOrt(url)
-  if (!ort) throw new DateiFehler('Zu diesem Dokument ist keine Datei hinterlegt.')
+  if (!ort) throw new DateiFehler(String(url ?? '').trim() ? 'Der Verweis auf diese Datei ist ungültig oder zeigt nicht auf den eigenen Speicher. Sie lässt sich nur im CRM öffnen.' : 'Zu diesem Dokument ist keine Datei hinterlegt.')
   const zuGross = (n: number) => new DateiFehler(`Die Datei ist ${formatGroesse(n)} groß — Telegram nimmt höchstens 50 MB. Sie lässt sich im CRM in der Akte unter Dokumente öffnen.`)
-  const perAdresse = async (adresse: string) => {
-    const res = await abruf(adresse, { signal: AbortSignal.timeout(30_000) })
-    if (!res.ok) throw new DateiFehler(`Die Datei ließ sich nicht laden (${res.status}).`)
-    const laenge = Number(res.headers.get('content-length') ?? 0)
-    if (laenge > TELEGRAM_GRENZE) {
-      await res.body?.cancel().catch(() => {})
-      throw zuGross(laenge)
-    }
-    return new Uint8Array(await res.arrayBuffer())
-  }
+  void abruf
   let bytes: Uint8Array<ArrayBuffer>
-  if ('adresse' in ort) {
-    bytes = await perAdresse(ort.adresse)
-  } else {
-    const { data, error } = await supabase.storage.from(ort.eimer).download(ort.pfad)
-    if (error || !data) {
-      // Öffentliche Adresse: zur Not direkt abrufen.
-      if (ort.oeffentlich && /\/object\/public\//.test(ort.oeffentlich)) bytes = await perAdresse(ort.oeffentlich)
-      else throw new DateiFehler(`Die Datei ist im Speicher nicht (mehr) vorhanden (${error?.message ?? 'unbekannt'}).`)
-    } else {
-      if (data.size > TELEGRAM_GRENZE) throw zuGross(data.size)
-      bytes = new Uint8Array(await data.arrayBuffer())
-    }
-  }
+  const { data, error } = await supabase.storage.from(ort.eimer).download(ort.pfad)
+  if (error || !data) throw new DateiFehler(`Die Datei ist im Speicher nicht (mehr) vorhanden (${error?.message ?? 'unbekannt'}).`)
+  if (data.size > TELEGRAM_GRENZE) throw zuGross(data.size)
+  bytes = new Uint8Array(await data.arrayBuffer())
   if (bytes.length > TELEGRAM_GRENZE) throw zuGross(bytes.length)
   if (bytes.length === 0) throw new DateiFehler('Die Datei ist leer.')
   return bytes

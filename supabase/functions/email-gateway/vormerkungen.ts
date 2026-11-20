@@ -7,6 +7,7 @@
 //   Telegram-Nachricht des Besitzers, nie in einer Antwort an die KI — die KI kann deshalb nichts bestätigen.
 // - Bestätigen per Dienst-Schlüssel (Telegram-Funktion) geht nur mit diesem Code.
 // - Ausführen setzt den Status vorher bedingt auf „laeuft“: zwei gleichzeitige Klicks führen nichts doppelt aus.
+import { istSichererPfad } from '../_shared/speicherPfad.ts'
 import { graph, MsFehler } from '../_shared/microsoft.ts'
 import { istMayerMail } from '../_shared/mailRegeln.ts'
 import { zufallsKennung } from '../_shared/geheim.ts'
@@ -46,7 +47,7 @@ async function ladeAnhaenge(admin: Db, ich: string, x: unknown): Promise<DateiAn
     const a = (roh ?? {}) as Record<string, unknown>
     const pfad = String(a.pfad ?? '')
     const kundeId = pfad.split('/')[0]
-    if (!pfad || pfad.includes('..') || !kundeId) throw new MsFehler(400, 'Ungültiger Anhang.')
+    if (!pfad || !istSichererPfad(pfad) || !kundeId) throw new MsFehler(400, 'Ungültiger Anhang.')
     const { data: kunde } = await admin.from('kunden').select('bereich, verantwortlich_email').eq('id', kundeId).maybeSingle()
     if (!kunde || kunde.bereich !== 'privat' || String(kunde.verantwortlich_email ?? '').toLowerCase() !== ich) throw new MsFehler(403, 'Anhänge nur aus deinen eigenen privaten Kontakten.')
     const { data, error } = await admin.storage.from('kunden-dokumente').download(pfad)

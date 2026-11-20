@@ -44,6 +44,10 @@ export const KV_WERKZEUGE = [
       properties: {
         eintraege: { type: 'array', minItems: 1, maxItems: 100, items: { type: 'object', properties: EINTRAG_FELDER, required: ['name'] } },
         kunde_id: { type: 'string', description: 'Optional: Akte, zu der alle Einträge gehören.' },
+        privat: {
+          type: 'boolean',
+          description: 'Nur ohne kunde_id: true = private Einträge, die nur der Mitarbeiter selbst sieht (z. B. wenn er im Bereich Privat arbeitet oder es um seine privaten Geschäfte geht). Ohne Angabe sehen alle Mitarbeiter die Einträge.',
+        },
         quelle: { type: 'string', description: 'Optional: Herkunft, z. B. "Notizzettel vom 17.11.2026 (Foto per Telegram)".' },
       },
       required: ['eintraege'],
@@ -181,6 +185,11 @@ export async function fuehreKvWerkzeugAus(name: string, input: any, k: KvKontext
       akte = r.akte!
     }
     const zuordnung = zuordnungVon(akte)
+    if (!akte && input?.privat === true) {
+      if (!mitarbeiter.email) return 'Fehler: Private Einträge gehen nur mit hinterlegter E-Mail-Adresse des Mitarbeiters.'
+      zuordnung.bereich = 'privat'
+      zuordnung.privat_besitzer = String(mitarbeiter.email).trim().toLowerCase()
+    }
     const quelle = String(input?.quelle ?? '').trim() || 'Über den Assistenten erfasst'
     const zeilen = []
     for (const e of liste) {
@@ -204,7 +213,7 @@ export async function fuehreKvWerkzeugAus(name: string, input: any, k: KvKontext
     if (error) return `Fehler beim Speichern: ${error.message}. Nichts wurde angelegt.`
     const summe = zeilen.reduce((s, z) => s + (z.betrag ?? 0), 0)
     const ohne = zeilen.filter((z) => z.betrag === null).length
-    const wo = akte ? `in der Akte von ${akteName(akte)}` : 'ohne Akte'
+    const wo = akte ? `in der Akte von ${akteName(akte)}` : zuordnung.privat_besitzer ? 'ohne Akte, privat (nur für dich sichtbar)' : 'ohne Akte (für alle Mitarbeiter sichtbar)'
     protokolliere(`${zeilen.length} Kostenvoranschl${zeilen.length === 1 ? 'ag' : 'äge'} ${wo} angelegt`)
     return `Angelegt: ${zeilen.length} Kostenvoranschl${zeilen.length === 1 ? 'ag' : 'äge'} ${wo}, Summe ${euro(summe)}${ohne ? ` (${ohne} ohne Betrag)` : ''}. Im CRM unter „Kostenvoranschläge“${akte ? ' und im Reiter der Akte' : ''}. IDs: ${zeilen.map((z) => z.id).join(', ')}`
   }
@@ -267,6 +276,10 @@ export async function fuehreKvWerkzeugAus(name: string, input: any, k: KvKontext
         if (r.fehler) return r.fehler
         Object.assign(neu, zuordnungVon(r.akte!))
         akteText = ` und der Akte von ${akteName(r.akte!)} zugeordnet`
+      } else if (alt.privat_besitzer || alt.bereich === 'privat') {
+        // Ein privater Eintrag bleibt beim Lösen von der Akte privat.
+        Object.assign(neu, { kunde_id: null, bereich: 'privat', privat_besitzer: alt.privat_besitzer })
+        akteText = ' und von der Akte gelöst (bleibt privat)'
       } else {
         Object.assign(neu, zuordnungVon(null))
         akteText = ' und von der Akte gelöst'
