@@ -11,6 +11,10 @@
 // Er bearbeitet sie über den Assistenten wie jede andere Akte, für alle anderen — auch Geschäftsführung
 // und Admins — gibt es sie nicht. Dasselbe gilt für private Objekte (objekte.privat_besitzer).
 // Wie die Zeilenregeln der Datenbank (kunden/objekte, Vergleich ohne Groß-/Kleinschreibung).
+//
+// Privater Assistent (eigener Telegram-Bot, privatBot.ts): Dort trägt der Mitarbeiter `nurPrivat: true`.
+// Dann gibt es für ihn ausschließlich seine eigenen privaten Kontakte und Objekte — keine Bereiche der
+// Holding, keine Sammelakten, keine Akten oder Objekte von Kollegen. Alles andere ist „nicht gefunden“.
 
 export const SAMMELAKTEN: readonly string[] = ['k_intern_holding', 'k_eingang_ungeklaert']
 
@@ -27,7 +31,7 @@ const BEREICH_NAME: Record<string, string> = {
   privat: 'Privat',
 }
 
-export type RechteMitarbeiter = { name?: string | null; email?: string | null; rolle?: string | null; ist_admin?: boolean | null; bereiche?: string[] | null }
+export type RechteMitarbeiter = { name?: string | null; email?: string | null; rolle?: string | null; ist_admin?: boolean | null; bereiche?: string[] | null; nurPrivat?: boolean | null }
 
 /** Was für die Rechteprüfung einer Kundenakte gebraucht wird. Ohne verantwortlich_email ist eine private Akte für niemanden sichtbar. */
 export type AkteFuerRechte = { id?: string | null; bereich?: string | null; verantwortlich_email?: string | null }
@@ -55,19 +59,22 @@ export function bereichName(bereich: string | null | undefined): string {
 }
 
 export function siehtAlleBereiche(m: RechteMitarbeiter): boolean {
+  if (m.nurPrivat === true) return false
   return m.rolle === 'geschaeftsfuehrung' || m.ist_admin === true
 }
 
 /** Darf der Mitarbeiter Akten dieses Bereichs sehen und ändern? Privat nie als ganzer Bereich (dafür gilt darfAkte mit dem Besitzer). */
 export function darfBereich(m: RechteMitarbeiter, bereich: string | null | undefined): boolean {
   const id = bereichIdVon(bereich)
-  if (id === 'privat') return false
+  if (id === 'privat' || m.nurPrivat === true) return false
   if (siehtAlleBereiche(m)) return true
   return BEREICH_IDS.includes(id) && (m.bereiche ?? []).includes(id)
 }
 
-/** Darf der Mitarbeiter diese Kundenakte sehen und ändern? Die Sammelakten immer, private Akten nur ihr Besitzer. */
+/** Darf der Mitarbeiter diese Kundenakte sehen und ändern? Die Sammelakten immer, private Akten nur ihr Besitzer.
+ *  Im privaten Assistenten (nurPrivat) nur die eigenen privaten Akten — auch keine Sammelakten. */
 export function darfAkte(m: RechteMitarbeiter, akte: AkteFuerRechte): boolean {
+  if (m.nurPrivat === true) return istPrivat(akte) && istEigene(m, akte.verantwortlich_email)
   if (akte.id && SAMMELAKTEN.includes(akte.id)) return true
   if (istPrivat(akte)) return istEigene(m, akte.verantwortlich_email)
   return darfBereich(m, akte.bereich)
@@ -78,9 +85,20 @@ export function istPrivat(akte: { bereich?: string | null } | null | undefined):
   return bereichIdVon(akte?.bereich) === 'privat'
 }
 
-/** Private Akte eines anderen: Für den Mitarbeiter gibt es sie nicht — Werkzeuge melden „nicht gefunden", nie „nicht freigegeben". */
+/** Private Akte eines anderen: Für den Mitarbeiter gibt es sie nicht — Werkzeuge melden „nicht gefunden", nie „nicht freigegeben".
+ *  Im privaten Assistenten (nurPrivat) gilt das für jede Akte außer den eigenen privaten, auch für Akten der Holding. */
 export function istFremdePrivatakte(m: RechteMitarbeiter, akte: AkteFuerRechte): boolean {
-  return istPrivat(akte) && !darfAkte(m, akte)
+  return (istPrivat(akte) || m.nurPrivat === true) && !darfAkte(m, akte)
+}
+
+/** Objekt, das es für den Mitarbeiter nicht gibt („nicht gefunden"): privates Objekt eines anderen, im privaten Assistenten jedes fremde Objekt. */
+export function istUnsichtbaresObjekt(m: RechteMitarbeiter, objekt: { privat_besitzer?: string | null }): boolean {
+  return (!!adresse(objekt.privat_besitzer) || m.nurPrivat === true) && !darfObjekt(m, objekt)
+}
+
+/** Die Rechte des Mitarbeiters ohne die Einschränkung des privaten Assistenten — nur für das Ziel einer Übernahme ins Mayer-CRM. */
+export function ohneNurPrivat<T extends RechteMitarbeiter>(m: T): T {
+  return { ...m, nurPrivat: false }
 }
 
 /** Immobilien-Objekte (der Holding) gehören zum Bereich Immobilien. */
@@ -90,6 +108,7 @@ export function darfObjekte(m: RechteMitarbeiter): boolean {
 
 /** Darf der Mitarbeiter dieses Objekt sehen? Objekte der Holding mit Immobilien-Rechten, private Objekte nur ihr Besitzer. */
 export function darfObjekt(m: RechteMitarbeiter, objekt: { privat_besitzer?: string | null }): boolean {
+  if (m.nurPrivat === true) return !!adresse(objekt.privat_besitzer) && istEigene(m, objekt.privat_besitzer)
   if (adresse(objekt.privat_besitzer)) return istEigene(m, objekt.privat_besitzer)
   return darfObjekte(m)
 }

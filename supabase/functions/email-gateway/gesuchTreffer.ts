@@ -17,9 +17,11 @@
 // - Mayer und Privat streng getrennt (seit 20.11.2026): Gesuche von Mayer-Kontakten nur gegen Mayer-Objekte
 //   (`privat_besitzer` leer). Gesuche privater Kontakte (Bereich „privat“, `privat_art` „immobilienkunden“)
 //   nur gegen private Objekte DESSELBEN Besitzers. Private Treffer liegen als art „privat_treffer“ mit
-//   `daten.besitzer` (nur der Besitzer kann sie lesen) und werden nur ihm gemeldet.
+//   `daten.besitzer` (nur der Besitzer kann sie lesen) und werden nur ihm gemeldet — über seinen privaten
+//   Assistenten (eigener Bot, _shared/telegramPrivat.ts), wenn er ihn benutzt, sonst wie bisher.
 
 import { istPrivatesObjekt, normalisiereAdresse } from '../_shared/privatZugriff.ts'
+import { privatBotAktiv, sendePrivat } from '../_shared/telegramPrivat.ts'
 
 // Der Dienst-Zugang zur Datenbank — wie in objektMail.ts.
 // deno-lint-ignore no-explicit-any
@@ -93,7 +95,12 @@ export type BerechneterTreffer = {
 }
 
 export type TrefferErgebnis = { gelaufen: boolean; neu: number; benachrichtigt: number }
-export type TrefferOptionen = { jetzt?: Date; ohneTakt?: boolean }
+export type TrefferOptionen = {
+  jetzt?: Date
+  ohneTakt?: boolean
+  /** Senden über den privaten Bot (Standard: _shared/telegramPrivat.ts); nur für private Treffer von Nutzern des privaten Assistenten. */
+  sendePrivatBot?: (chatId: number | string, text: string) => Promise<boolean>
+}
 export type SendeFunktion = (chatId: number | string, text: string) => Promise<boolean>
 
 const TABELLE = 'abteilung_eintraege'
@@ -631,7 +638,7 @@ async function lauf(admin: Db, sende: SendeFunktion, optionen: TrefferOptionen, 
 
   // ---- Je Person eine Nachricht: Mayer-Treffer an die, die Objekt oder Kontakt betreuen; private
   //      Treffer nur an ihren Besitzer, in einer eigenen Nachricht ----
-  const jePerson = new Map<string, { person: Person; privat: boolean; eintraege: MeldeEintrag[] }>()
+  const jePerson = new Map<string, { person: Person; privat: boolean; besitzer: string; eintraege: MeldeEintrag[] }>()
   for (const eintrag of zuMelden) {
     const privat = !!eintrag.treffer.besitzer
     const empfaenger = privat
@@ -643,17 +650,21 @@ async function lauf(admin: Db, sende: SendeFunktion, optionen: TrefferOptionen, 
       const schluessel = `${privat ? 'privat' : 'mayer'}|${person.chat}`
       if (schon.has(schluessel)) continue
       schon.add(schluessel)
-      const sammlung = jePerson.get(schluessel) ?? { person, privat, eintraege: [] }
+      const sammlung = jePerson.get(schluessel) ?? { person, privat, besitzer: privat ? eintrag.treffer.besitzer! : '', eintraege: [] }
       sammlung.eintraege.push(eintrag)
       jePerson.set(schluessel, sammlung)
     }
   }
 
   const gemeldet = new Map<string, string[]>()
-  for (const { person, privat, eintraege } of jePerson.values()) {
+  const sendePrivatBot = optionen.sendePrivatBot ?? (async (chat: number | string, text: string) => !!(await sendePrivat(chat, text)))
+  for (const { person, privat, besitzer, eintraege } of jePerson.values()) {
     let zugestellt = false
     try {
-      zugestellt = (await sende(person.chat, trefferNachricht(eintraege, privat))) === true
+      const text = trefferNachricht(eintraege, privat)
+      // Private Treffer über den privaten Bot, wenn er ihn benutzt; klappt das nicht, wie bisher.
+      if (privat && (await privatBotAktiv(admin, besitzer))) zugestellt = (await sendePrivatBot(person.chat, text)) === true
+      if (!zugestellt) zugestellt = (await sende(person.chat, text)) === true
     } catch (err) {
       console.error('Treffer-Nachricht nicht zustellbar:', err instanceof Error ? err.message : err)
     }

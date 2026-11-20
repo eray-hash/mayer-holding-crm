@@ -8,6 +8,9 @@
 //   offenen Fragen an die Geschäftsführung. Dazu die Zahl der Dateien in „Ungeklärte Eingänge“.
 //   Steht nichts an, geht keine Nachricht raus. Freigeschaltete mit Microsoft-Konto bekommen zusätzlich einen
 //   Hotmail-Teil (hotmailBriefing.ts: Dringendes, neue Rechnungen, wichtige Mails, markierte — ohne Beträge).
+//   Benutzt jemand den privaten Assistenten (eigener Bot, _shared/telegramPrivat.ts), kommt der Hotmail-Teil
+//   stattdessen als eigene kurze „Privat-Übersicht“ über diesen Bot; die Mayer-Nachricht bleibt sonst gleich.
+//   Klappt das Senden dort nicht, geht die Privat-Übersicht als eigene Nachricht über den Mayer-Bot.
 // - Wochenbericht: freitags ab 16 Uhr (bis 19 Uhr), nur Geschäftsführung und Admins. Nur Zahlen.
 // - Abschalten kann jeder für sich (`kalender_einstellungen.morgen_uebersicht` / `.wochenbericht`;
 //   keine Zeile oder kein Wert = an).
@@ -23,6 +26,7 @@
 // - Wirft nie: Fehler stehen im Protokoll, der nächste Takt versucht es erneut.
 
 import { hotmailAbschnitte } from './hotmailBriefing.ts'
+import { privatBotAktiv, sendePrivat } from '../_shared/telegramPrivat.ts'
 import { darfObjekt, istPrivatesObjekt, nurMayerObjekte, normalisiereAdresse } from '../_shared/privatZugriff.ts'
 
 // Der Dienst-Zugang zur Datenbank — wie in gesuchTreffer.ts.
@@ -30,6 +34,9 @@ import { darfObjekt, istPrivatesObjekt, nurMayerObjekte, normalisiereAdresse } f
 type Db = any
 
 export type SendeFunktion = (chatId: number | string, text: string) => Promise<boolean>
+
+/** Senden über den privaten Bot (Standard: _shared/telegramPrivat.ts). */
+const sendeUeberPrivatBot: SendeFunktion = async (chatId, text) => !!(await sendePrivat(chatId, text))
 export type TagesErgebnis = { morgen: number; woche: number }
 
 const TABELLE = 'abteilung_eintraege'
@@ -560,6 +567,28 @@ export function morgenText(p: Person, d: Daten, jetzt: Date, zusatz: Abschnitt[]
   return zeilen.join('\n')
 }
 
+/** Der Hotmail-Teil als eigene Nachricht für den privaten Assistenten — null, wenn nichts ansteht. */
+export function privatUebersichtText(p: Person, abschnitte: Abschnitt[], jetzt: Date): string | null {
+  if (abschnitte.length === 0) return null
+  const b = berlinZeit(jetzt)
+  const zeilen = [`${vorname(p.name) ? `Guten Morgen ${vorname(p.name)}, d` : 'D'}eine Privat-Übersicht (${WOCHENTAG_LANG[b.wochentag]}, ${tagMonat(b.datum)}):`]
+  for (const a of abschnitte) {
+    zeilen.push('', a.titel, ...a.zeilen.slice(0, 6))
+    const rest = a.zeilen.length - 6
+    if (rest > 0) zeilen.push(rest === 1 ? '… und 1 weiterer Eintrag' : `… und ${rest} weitere`)
+  }
+  return zeilen.join('\n')
+}
+
+/** Morgen-Nachrichten einer Person: Mayer-Teil und, wenn sie den privaten Assistenten benutzt, getrennt der Hotmail-Teil. */
+async function morgenNachrichten(admin: Db, p: Person, daten: Daten, jetzt: Date): Promise<{ mayer: string | null; privat: string | null }> {
+  const hotmail = await hotmailAbschnitte(admin, p.email, jetzt)
+  if (hotmail.length > 0 && p.chat != null && (await privatBotAktiv(admin, p.email))) {
+    return { mayer: morgenText(p, daten, jetzt), privat: privatUebersichtText(p, hotmail, jetzt) }
+  }
+  return { mayer: morgenText(p, daten, jetzt, hotmail), privat: null }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Wochenbericht
 // ---------------------------------------------------------------------------------------------
@@ -703,11 +732,11 @@ async function bezahlteIds(admin: Db): Promise<string[]> {
 
 /** Vom Minutentakt (Aktion `termin_erinnerungen`) gerufen. Außerhalb der Zeitfenster kehrt sie ohne
  *  Datenbankzugriff zurück. Gibt zurück, wie viele Nachrichten zugestellt wurden. Wirft nie. */
-export async function sendeTagesmeldungen(admin: Db, sende: SendeFunktion, jetzt: Date = new Date()): Promise<TagesErgebnis> {
+export async function sendeTagesmeldungen(admin: Db, sende: SendeFunktion, jetzt: Date = new Date(), sendePrivatBot: SendeFunktion = sendeUeberPrivatBot): Promise<TagesErgebnis> {
   const ergebnis: TagesErgebnis = { morgen: 0, woche: 0 }
   if (imMorgenfenster(jetzt)) {
     try {
-      ergebnis.morgen = await lauf(admin, sende, jetzt, 'morgen')
+      ergebnis.morgen = await lauf(admin, sende, jetzt, 'morgen', sendePrivatBot)
     } catch (err) {
       console.error('Morgen-Übersicht fehlgeschlagen:', err instanceof Error ? err.message : err)
     }
@@ -722,7 +751,7 @@ export async function sendeTagesmeldungen(admin: Db, sende: SendeFunktion, jetzt
   return ergebnis
 }
 
-async function lauf(admin: Db, sende: SendeFunktion, jetzt: Date, art: 'morgen' | 'woche'): Promise<number> {
+async function lauf(admin: Db, sende: SendeFunktion, jetzt: Date, art: 'morgen' | 'woche', sendePrivatBot: SendeFunktion = sendeUeberPrivatBot): Promise<number> {
   const jetztIso = jetzt.toISOString()
   const heute = berlinZeit(jetzt).datum
   const stand = await ladeStand(admin, jetztIso)
@@ -743,8 +772,18 @@ async function lauf(admin: Db, sende: SendeFunktion, jetzt: Date, art: 'morgen' 
   const daten = art === 'morgen' ? await ladeDaten(admin, heute) : null
   const wochenDaten = art === 'woche' ? await ladeWochenDaten(admin) : null
   const nachrichten = new Map<string, string | null>()
-  // Bereich Privat: Hotmail-Teil für Freigeschaltete mit verbundenem Microsoft-Konto (hotmailBriefing.ts, wirft nie).
-  for (const p of offen) nachrichten.set(p.email, daten ? morgenText(p, daten, jetzt, await hotmailAbschnitte(admin, p.email, jetzt)) : wochenText(wochenDaten!, jetzt, stand.bezahlt))
+  const privatNachrichten = new Map<string, string>()
+  // Bereich Privat: Hotmail-Teil für Freigeschaltete mit verbundenem Microsoft-Konto (hotmailBriefing.ts, wirft nie) —
+  // bei Nutzern des privaten Assistenten als eigene Nachricht über diesen.
+  for (const p of offen) {
+    if (!daten) {
+      nachrichten.set(p.email, wochenText(wochenDaten!, jetzt, stand.bezahlt))
+      continue
+    }
+    const n = await morgenNachrichten(admin, p, daten, jetzt)
+    nachrichten.set(p.email, n.mayer)
+    if (n.privat) privatNachrichten.set(p.email, n.privat)
+  }
 
   // Vergleichsstand für „bezahlt seit“: beim Wochenbericht neu festhalten (für die nächste Woche),
   // am Morgen nur, wenn es noch gar keinen gibt.
@@ -766,12 +805,24 @@ async function lauf(admin: Db, sende: SendeFunktion, jetzt: Date, art: 'morgen' 
   let zugestellt = 0
   for (const p of offen) {
     const nachricht = nachrichten.get(p.email)
-    if (!nachricht || p.chat == null) continue
-    try {
-      if ((await sende(p.chat, nachricht)) === true) zugestellt++
-      else console.error(`${art === 'morgen' ? 'Morgen-Übersicht' : 'Wochenbericht'} nicht zugestellt an`, p.email)
-    } catch (err) {
-      console.error(`${art === 'morgen' ? 'Morgen-Übersicht' : 'Wochenbericht'} nicht zustellbar:`, err instanceof Error ? err.message : err)
+    const privat = privatNachrichten.get(p.email)
+    if (p.chat == null) continue
+    if (nachricht) {
+      try {
+        if ((await sende(p.chat, nachricht)) === true) zugestellt++
+        else console.error(`${art === 'morgen' ? 'Morgen-Übersicht' : 'Wochenbericht'} nicht zugestellt an`, p.email)
+      } catch (err) {
+        console.error(`${art === 'morgen' ? 'Morgen-Übersicht' : 'Wochenbericht'} nicht zustellbar:`, err instanceof Error ? err.message : err)
+      }
+    }
+    if (privat) {
+      try {
+        // Privater Bot; klappt das nicht, als eigene Nachricht über den Mayer-Bot (nichts geht verloren).
+        if ((await sendePrivatBot(p.chat, privat)) === true || (await sende(p.chat, privat)) === true) zugestellt++
+        else console.error('Privat-Übersicht nicht zugestellt an', p.email)
+      } catch (err) {
+        console.error('Privat-Übersicht nicht zustellbar:', err instanceof Error ? err.message : err)
+      }
     }
   }
   return zugestellt
@@ -783,13 +834,13 @@ async function lauf(admin: Db, sende: SendeFunktion, jetzt: Date, art: 'morgen' 
 
 export type TestEingabe = { email?: unknown; art?: unknown; senden?: unknown; jetzt?: unknown }
 export type TestErgebnis =
-  | { ok: true; email: string; art: 'morgen' | 'woche'; text: string | null; gesendet: boolean; hinweis?: string }
+  | { ok: true; email: string; art: 'morgen' | 'woche'; text: string | null; gesendet: boolean; hinweis?: string; privatText?: string | null; privatGesendet?: boolean }
   | { ok: false; status: number; fehler: string }
 
 /** Baut die Nachricht für eine Person sofort — ohne Zeitfenster, Wochentag, Einstellungen und ohne
  *  die Buchhaltungszeile zu lesen oder zu schreiben (außer dem Vergleichsstand „bezahlt seit“, der nur
  *  gelesen wird). Sendet nur mit `senden: true`. */
-export async function tagesmeldungTest(admin: Db, sende: SendeFunktion, eingabe: TestEingabe): Promise<TestErgebnis> {
+export async function tagesmeldungTest(admin: Db, sende: SendeFunktion, eingabe: TestEingabe, sendePrivatBot: SendeFunktion = sendeUeberPrivatBot): Promise<TestErgebnis> {
   const email = text(eingabe.email).trim().toLowerCase()
   const art = eingabe.art === 'woche' ? 'woche' : eingabe.art === 'morgen' || eingabe.art == null ? 'morgen' : null
   if (!email) return { ok: false, status: 400, fehler: 'email fehlt.' }
@@ -803,21 +854,28 @@ export async function tagesmeldungTest(admin: Db, sende: SendeFunktion, eingabe:
     const p = (await ladeTeam(admin)).find((m) => m.email === email)
     if (!p) return { ok: false, status: 404, fehler: 'Kein aktiver Mitarbeiter mit dieser E-Mail.' }
     let nachricht: string | null
+    let privatText: string | null = null
     let hinweis: string | undefined
     if (art === 'morgen') {
-      nachricht = morgenText(p, await ladeDaten(admin, berlinZeit(jetzt).datum), jetzt, await hotmailAbschnitte(admin, p.email, jetzt))
-      if (!nachricht) hinweis = 'Heute steht nichts an — im echten Lauf ginge keine Nachricht raus.'
+      const n = await morgenNachrichten(admin, p, await ladeDaten(admin, berlinZeit(jetzt).datum), jetzt)
+      nachricht = n.mayer
+      privatText = n.privat
+      if (!nachricht && !privatText) hinweis = 'Heute steht nichts an — im echten Lauf ginge keine Nachricht raus.'
     } else {
       const { data } = await admin.from(TABELLE).select('daten').eq('id', STAND_ID).maybeSingle()
       nachricht = wochenText(await ladeWochenDaten(admin), jetzt, (alsObjekt(data?.daten) as Stand | null)?.bezahlt)
       if (!p.gf) hinweis = 'Diese Person ist weder Geschäftsführung noch Admin — im echten Lauf bekäme sie keinen Wochenbericht.'
     }
     let gesendet = false
-    if (eingabe.senden === true && nachricht) {
+    let privatGesendet = false
+    if (eingabe.senden === true && (nachricht || privatText)) {
       if (p.chat == null) hinweis = 'Nicht gesendet: Diese Person hat Telegram nicht verbunden.'
-      else gesendet = (await sende(p.chat, nachricht)) === true
+      else {
+        if (nachricht) gesendet = (await sende(p.chat, nachricht)) === true
+        if (privatText) privatGesendet = (await sendePrivatBot(p.chat, privatText)) === true
+      }
     }
-    return { ok: true, email, art, text: nachricht, gesendet, ...(hinweis ? { hinweis } : {}) }
+    return { ok: true, email, art, text: nachricht, gesendet, ...(privatText ? { privatText, privatGesendet } : {}), ...(hinweis ? { hinweis } : {}) }
   } catch (err) {
     return { ok: false, status: 500, fehler: err instanceof Error ? err.message : String(err) }
   }

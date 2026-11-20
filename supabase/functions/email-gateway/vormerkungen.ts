@@ -7,11 +7,15 @@
 //   Telegram-Nachricht des Besitzers, nie in einer Antwort an die KI — die KI kann deshalb nichts bestätigen.
 // - Bestätigen per Dienst-Schlüssel (Telegram-Funktion) geht nur mit diesem Code.
 // - Ausführen setzt den Status vorher bedingt auf „laeuft“: zwei gleichzeitige Klicks führen nichts doppelt aus.
+// - Benutzt der Besitzer den privaten Assistenten (eigener Bot, _shared/telegramPrivat.ts), kommt die Bestätigung
+//   dorthin; `telegram_nachricht.bot = 'privat'` merkt sich das, damit Abschluss/Verwerfen dieselbe Nachricht ändern.
+//   Klappt das Senden dort nicht, geht sie wie bisher über den Mayer-Bot.
 import { istSichererPfad } from '../_shared/speicherPfad.ts'
 import { graph, MsFehler } from '../_shared/microsoft.ts'
 import { istMayerMail } from '../_shared/mailRegeln.ts'
 import { zufallsKennung } from '../_shared/geheim.ts'
 import { ladeMayerRegel } from './outlook.ts'
+import { privatBotAktiv, telegramPrivat } from '../_shared/telegramPrivat.ts'
 
 // deno-lint-ignore no-explicit-any
 type Db = any
@@ -148,7 +152,8 @@ async function telegramChat(admin: Db, ich: string): Promise<number | null> {
   return data?.telegram_chat_id ?? null
 }
 
-async function telegram(methode: string, daten: Record<string, unknown>): Promise<Record<string, unknown> | null> {
+async function telegram(methode: string, daten: Record<string, unknown>, bot?: 'privat'): Promise<Record<string, unknown> | null> {
+  if (bot === 'privat') return await telegramPrivat(methode, daten)
   const token = Deno.env.get('TELEGRAM_BOT_TOKEN')
   if (!token) return null
   try {
@@ -171,19 +176,23 @@ export async function merkeVor(admin: Db, ich: string, eingabe: { art: string; b
   if (error) throw new Error(`Vormerken fehlgeschlagen: ${error.message}`)
   const chat = await telegramChat(admin, ich)
   if (!chat) return { id, telegram: false }
-  const nachricht = await telegram('sendMessage', {
+  const daten = {
     chat_id: chat,
     text: `⏸ Bitte bestätigen: ${beschreibung}\n\n${vorschau(eingabe.art, eingabe.parameter)}`.slice(0, 4000),
     reply_markup: { inline_keyboard: [[{ text: '✅ Ausführen', callback_data: `vb:${id}:${code}` }, { text: '✖ Verwerfen', callback_data: `vv:${id}:${code}` }]] },
-  })
-  if (nachricht?.message_id) await admin.from('vormerkungen').update({ telegram_nachricht: { chat, id: nachricht.message_id } }).eq('id', id)
+  }
+  const privat = await privatBotAktiv(admin, ich)
+  const ueberPrivat = privat ? await telegram('sendMessage', daten, 'privat') : null
+  const nachricht = ueberPrivat ?? (await telegram('sendMessage', daten))
+  if (nachricht?.message_id) await admin.from('vormerkungen').update({ telegram_nachricht: { chat, id: nachricht.message_id, ...(ueberPrivat ? { bot: 'privat' } : {}) } }).eq('id', id)
   return { id, telegram: !!nachricht }
 }
 
-async function telegramAbschliessen(zeile: { telegram_nachricht?: { chat: number; id: number } | null; beschreibung: string }, text: string) {
+async function telegramAbschliessen(zeile: { telegram_nachricht?: { chat: number; id: number; bot?: string } | null; beschreibung: string }, text: string) {
   const t = zeile.telegram_nachricht
   if (!t?.chat || !t.id) return
-  await telegram('editMessageText', { chat_id: t.chat, message_id: t.id, text: `${text}: ${zeile.beschreibung}`.slice(0, 4000) })
+  // Mit dem Bot, der die Nachricht geschickt hat — ein anderer darf sie nicht ändern.
+  await telegram('editMessageText', { chat_id: t.chat, message_id: t.id, text: `${text}: ${zeile.beschreibung}`.slice(0, 4000) }, t.bot === 'privat' ? 'privat' : undefined)
 }
 
 export type Ergebnis = { id: string; beschreibung: string; ok: boolean; meldung: string }

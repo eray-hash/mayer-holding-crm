@@ -15,12 +15,16 @@
 //   1. Secrets TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET und ANTHROPIC_API_KEY sind gesetzt.
 //   2. Nach dem Deploy: setWebhook bei Telegram mit secret_token = TELEGRAM_WEBHOOK_SECRET.
 //   3. Mitarbeiter verknüpfen sich über "Mein Profil" (Code per /start <code> an den Bot).
+//
+// Privater Assistent (privatBot.ts): ein zweiter Bot (Secret PRIVAT_TELEGRAM_BOT_TOKEN) ruft diese
+// Funktion mit ?bot=privat auf. Gleicher Code, aber nur der Bereich Privat, eigene Werkzeugliste und
+// eigener Gesprächszustand (privat_einstellungen.telegram_zustand). Einrichten: intern „privat_bot_einrichten“.
 
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2.119.1'
 import { PDFDocument, degrees } from 'npm:pdf-lib@1.17.1'
-import { aktuellePerson, kiAufruf, mitAnlass, setzeAnlass, setzePerson } from '../_shared/kiVerbrauch.ts'
+import { aktuellePerson, kiAufruf, mitAnlass, setzeAnlass, setzePerson, setzePrivat } from '../_shared/kiVerbrauch.ts'
 import { entschaerfe, kuerze as kuerzeWunsch, merkeWunsch } from '../_shared/wuensche.ts'
-import { type AkteFuerRechte, bereichName, darfAkte, darfBereich, darfObjekt, darfObjekte, freigegebeneBereiche, istEingeschraenkt, istFremdePrivatakte, istPrivat, nichtFreigegeben, siehtAlleBereiche } from './rechte.ts'
+import { type AkteFuerRechte, bereichName, darfAkte, darfBereich, darfObjekt, darfObjekte, freigegebeneBereiche, istEingeschraenkt, istFremdePrivatakte, istPrivat, istUnsichtbaresObjekt, nichtFreigegeben, ohneNurPrivat, siehtAlleBereiche } from './rechte.ts'
 import { aufgabenUebersicht } from './aufgaben.ts'
 import { type AbteilungZeile, alleObjektDokumente, lesenVonSelbst, leseRef, OBJEKT_SPALTEN, objektakteText, objektStatus, type ObjektRow, sucheObjekte } from './objektakte.ts'
 import { richteFotoAus } from './bildDrehung.ts'
@@ -30,7 +34,9 @@ import { fuehrePflegeWerkzeugAus, istPflegeWerkzeug, type PflegeAnfrage, PFLEGE_
 import { DOKUMENT_WERKZEUGE, fuehreDokumentWerkzeugAus, istDokumentWerkzeug } from './dokumentErstellen.ts'
 import { fuehreKvWerkzeugAus, istKvWerkzeug, KV_WERKZEUGE } from './kostenvoranschlagWerkzeuge.ts'
 import { fuehreGesendetWerkzeugAus, GESENDET_WERKZEUGE, istGesendetWerkzeug } from './gesendetWerkzeug.ts'
-import { BRIEF_WERKZEUGE, fuehrePrivatWerkzeugAus, istPrivatWerkzeug, msErlaubt, OUTLOOK_WERKZEUGE, PRIVAT_HINWEIS, privatFaehigkeiten } from './outlookWerkzeuge.ts'
+import { BRIEF_WERKZEUGE, fuehrePrivatWerkzeugAus, istPrivatWerkzeug, msErlaubt, OBJEKT_WERKZEUGE, OUTLOOK_WERKZEUGE, PRIVAT_HINWEIS, privatFaehigkeiten } from './outlookWerkzeuge.ts'
+import { botToken, imPrivatBot, imPrivatBotErlaubt, mitBot, PRIVAT_BOT_HINWEIS, privatBotToken, privatWebhookGeheimnis, werkzeugeFuerPrivatBot } from './privatBot.ts'
+import { gleichesGeheimnis, merkePrivatBotAktiv } from '../_shared/telegramPrivat.ts'
 import { datumDeutsch, empfaengerVon, findeEmpfaenger, ladeAnhaengeFuerVersand, MAIL_SPALTEN, type MailZeile, volltextVon, VOLLTEXT_HOECHSTENS, type WeiterleitungEntwurf, weiterleitungsBetreff, weiterleitungsText } from './mailWerkzeuge.ts'
 
 const BOT_TOKEN = Deno.env.get('TELEGRAM_BOT_TOKEN')
@@ -92,14 +98,16 @@ function istDienstSchluessel(token: string): boolean {
 }
 
 // Ohne Bot-Token (lokaler Testlauf) wird die Antwort nur protokolliert.
+// Im privaten Assistenten (privatBot.ts) antwortet der private Bot.
 async function sendTelegramMessage(chatId: number, text: string): Promise<void> {
-  if (!BOT_TOKEN) {
+  const token = botToken(BOT_TOKEN)
+  if (!token) {
     console.log(`[Telegram -> ${chatId}] ${text}`)
     return
   }
   // Telegram erlaubt höchstens 4096 Zeichen pro Nachricht.
   for (let i = 0; i < text.length; i += 4000) {
-    const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ chat_id: chatId, text: text.slice(i, i + 4000) }),
@@ -109,8 +117,9 @@ async function sendTelegramMessage(chatId: number, text: string): Promise<void> 
 }
 
 async function sendeTippen(chatId: number): Promise<void> {
-  if (!BOT_TOKEN) return
-  await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendChatAction`, {
+  const token = botToken(BOT_TOKEN)
+  if (!token) return
+  await fetch(`https://api.telegram.org/bot${token}/sendChatAction`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ chat_id: chatId, action: 'typing' }),
@@ -461,7 +470,7 @@ async function ladeErlaubteAkte(supabase: Supa, mitarbeiter: RechteTraeger, inpu
   return k
 }
 
-type RechteTraeger = { name: string; email?: string | null; rolle?: string | null; ist_admin?: boolean | null; bereiche?: string[] | null }
+type RechteTraeger = { name: string; email?: string | null; rolle?: string | null; ist_admin?: boolean | null; bereiche?: string[] | null; nurPrivat?: boolean | null }
 
 // Bereich und Besitzer der Akten zu einer Liste von kunde_id (für Mails und Termine, die nur die Kennung tragen).
 type AkteRecht = { bereich: string | null; verantwortlich_email: string | null }
@@ -508,17 +517,19 @@ async function pruefeZuordnung(supabase: Supa, m: RechteTraeger, kundeId: string
   const nachgeschlagen = await bereicheDerAkten(supabase, [String(kundeId)])
   if (darfZuordnung(m, kundeId, bereich, nachgeschlagen)) return null
   const akte = zugeordneteAkte(String(kundeId), bereich, nachgeschlagen)
-  return istPrivat(akte) ? keinTreffer : nichtFreigegeben(akte.bereich, m.name)
+  return istFremdePrivatakte(m, akte) ? keinTreffer : nichtFreigegeben(akte.bereich, m.name)
 }
 
 // ---------- Dateien ----------
 
+// Datei-Kennungen gelten nur für den Bot, der die Datei bekommen hat — deshalb botToken.
 async function telegramDateiHerunterladen(fileId: string): Promise<Uint8Array | null> {
-  if (!BOT_TOKEN) return null
-  const metaRes = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/getFile?file_id=${fileId}`)
+  const token = botToken(BOT_TOKEN)
+  if (!token) return null
+  const metaRes = await fetch(`https://api.telegram.org/bot${token}/getFile?file_id=${fileId}`)
   const meta = await metaRes.json()
   if (!meta.ok) return null
-  const fileRes = await fetch(`https://api.telegram.org/file/bot${BOT_TOKEN}/${meta.result.file_path}`)
+  const fileRes = await fetch(`https://api.telegram.org/file/bot${token}/${meta.result.file_path}`)
   if (!fileRes.ok) return null
   return new Uint8Array(await fileRes.arrayBuffer())
 }
@@ -743,7 +754,7 @@ export async function werteDateiAus(supabase: Supa, bytes: Uint8Array, dateiname
             ? 'noch keiner Akte zugeordnet'
             : sichtbar
               ? `liegt in der Akte von ${kundeName(kunde)}`
-              : istPrivat(kunde)
+              : (mitarbeiter ? istFremdePrivatakte(mitarbeiter, kunde) : istPrivat(kunde))
                 ? 'ist bereits abgelegt (nicht noch einmal ablegen)'
                 : 'liegt bereits in einer Akte aus einem Bereich, der für den Mitarbeiter nicht freigegeben ist (nicht noch einmal ablegen)'
           return `${i + 1}. pfad=${ORDNER}/${d.name} | Name: ${anzeigeName(d.name)} | ${lage}`
@@ -1009,7 +1020,7 @@ function fuerVerlauf(msgs: Nachricht[]): Nachricht[] {
 
 // ---------- Werkzeuge des Assistenten ----------
 
-type Mitarbeiter = { id: string; name: string; email?: string | null; rolle?: string | null; ist_admin?: boolean | null; bereiche?: string[] | null }
+type Mitarbeiter = { id: string; name: string; email?: string | null; rolle?: string | null; ist_admin?: boolean | null; bereiche?: string[] | null; nurPrivat?: boolean | null }
 type ToolKontext = {
   supabase: Supa
   mitarbeiter: Mitarbeiter
@@ -1597,6 +1608,20 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
       })
       return { ok: antwort.ok, status: antwort.status, daten: await antwort.json().catch(() => ({})) }
     }
+    // Privater Assistent: nur eigene Termine ohne Kollegen, deren Akte (falls verknüpft) ein eigener
+    // privater Kontakt ist. Alles andere gibt es dort nicht; Kalender von Kollegen und Einladungen nur im Mayer-Assistenten.
+    const nurPrivat = mitarbeiter.nurPrivat === true
+    // deno-lint-ignore no-explicit-any
+    const privaterTermin = (t: any, nachgeschlagen: Map<string, AkteRecht>) =>
+      String(t.besitzer_email ?? '').toLowerCase() === ich && (t.teilnehmer ?? []).length === 0 && darfZuordnung(mitarbeiter, t.kunde_id, t.kunde_bereich, nachgeschlagen)
+    if (nurPrivat && (name === 'termin_absagen' || name === 'termin_aendern')) {
+      const { data: t } = await supabase.from('termine').select('id, besitzer_email, teilnehmer, kunde_id, kunde_bereich').eq('id', String(input.termin_id ?? '').trim()).maybeSingle()
+      if (!t || !privaterTermin(t, await bereicheDerAkten(supabase, t.kunde_id ? [String(t.kunde_id)] : []))) return 'Fehler: Diesen Termin gibt es nicht (mehr). Ermittle die termin_id mit termine_zeigen.'
+      if (name === 'termin_aendern' && Array.isArray(input.teilnehmer) && input.teilnehmer.length > 0) return 'Nicht geändert: Termine mit Kollegen gibt es nur im Mayer-Assistenten.'
+    }
+    if (nurPrivat && name === 'termin_anlegen' && Array.isArray(input.teilnehmer) && input.teilnehmer.length > 0) {
+      return 'Nicht angelegt: Termine mit Kollegen legt er über den Mayer-Assistenten an. Hier trägst du Termine nur in seinen eigenen Kalender ein (ohne teilnehmer).'
+    }
 
     if (name === 'termine_zeigen') {
       const von = berlinZuZeitpunkt(String(input.von || heute))
@@ -1627,6 +1652,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
         dabei: [String(t.besitzer_email).toLowerCase(), ...(t.teilnehmer ?? [])].map(nameVon),
         angelegt_von: nameVon(String(t.besitzer_email).toLowerCase()),
       })
+      if (input.person && nurPrivat) return 'Kalender von Kollegen zeigt der private Assistent nicht — dafür den Mayer-Assistenten nutzen.'
       if (input.person) {
         const person = findePerson(String(input.person))
         if (!person) return `Fehler: „${input.person}" ist kein eindeutiger Kollege. Aktive Kollegen: ${team.filter((m) => m.email !== ich).map((m) => m.name).join(', ')}.`
@@ -1638,7 +1664,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
         if (liste.length === 0) return `${person.name} hat in diesem Zeitraum keine Termine im Kalender${einst?.sichtbar === false ? ' (er/sie zeigt Kollegen den Kalender allerdings nicht)' : ''}.`
         return JSON.stringify({ kollege: person.name, eintraege: liste })
       }
-      const meine = alle.filter((t) => beteiligt(t, ich)).map(voll)
+      const meine = alle.filter((t) => beteiligt(t, ich) && (!nurPrivat || privaterTermin(t, nachgeschlagen))).map(voll)
       return meine.length === 0 ? 'In diesem Zeitraum stehen keine Termine im Kalender.' : JSON.stringify(meine)
     }
 
@@ -1817,7 +1843,8 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
       // Ohne Angabe: der Bereich, dessen Ablauf der private Kontakt schon folgt.
       const bereich = String(input.bereich || kontakt.privat_art || '')
       if (!NEUANLAGE_BEREICHE.includes(bereich)) return `Fehler: Für einen Kontakt muss der Ziel-Bereich angegeben werden. Erlaubt: ${NEUANLAGE_BEREICHE.join(', ')}.`
-      if (!darfBereich(mitarbeiter, bereich)) return nichtFreigegeben(bereich, mitarbeiter.name)
+      // Das Ziel ist ein Bereich der Holding: dafür zählen seine Bereichsrechte, auch im privaten Assistenten.
+      if (!darfBereich(ohneNurPrivat(mitarbeiter), bereich)) return nichtFreigegeben(bereich, mitarbeiter.name)
       // Folgte er schon dem Ablauf dieses Bereichs, bleibt sein Status; sonst Anfangsstatus des Bereichs.
       const statusBleibt = !!kontakt.status && !!STATUS_JE_BEREICH[bereich]?.[kontakt.status] && statusNetzVon(kontakt) === bereich
       const { error } = await supabase
@@ -1835,7 +1862,18 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
         .eq('bereich', 'privat')
       if (error) return `Fehler beim Übernehmen: ${error.message}`
       protokolliere(`Privaten Kontakt ${kundeName(kontakt)} in den Bereich ${BEREICH_LABEL[bereich]} übernommen (kunde_id=${kontakt.id})`)
-      return `Übernommen: ${kundeName(kontakt)} ist jetzt Kunde im Bereich ${BEREICH_LABEL[bereich]} und für alle Kollegen dieses Bereichs sichtbar. kunde_id=${kontakt.id}`
+      // Bei ihm abgelegte private Mails (eigenes Postfach, Hotmail) gehen mit — wie „Ins Mayer-CRM übernehmen“ im CRM
+      // (email-gateway kontaktUebernahme.ts, nur Mails dieses Mitarbeiters).
+      let mailHinweis = ''
+      try {
+        const r = await callEmailGateway('kontakt_mails_uebernehmen', { kundeId: kontakt.id, bereich, name: kundeName(kontakt), imAuftragVon: ich })
+        if (Number(r?.uebernommen) > 0) mailHinweis = ` ${r.uebernommen} bei ihm abgelegte Mail(s) sind mitgekommen.`
+        if (r?.ok === false) mailHinweis += ` Nicht alle Mails konnten mitgenommen werden${Array.isArray(r.fehler) && r.fehler.length ? ` (${r.fehler.join('; ')})` : ''}.`
+      } catch (err) {
+        console.error('Mails zum Kontakt nicht übernommen:', err)
+        mailHinweis = ' Die bei ihm abgelegten Mails konnten gerade nicht mitgenommen werden — im CRM beim Kunden prüfen.'
+      }
+      return `Übernommen: ${kundeName(kontakt)} ist jetzt Kunde im Bereich ${BEREICH_LABEL[bereich]} und für alle Kollegen dieses Bereichs sichtbar. kunde_id=${kontakt.id}${mailHinweis}`
     }
 
     const zielOderFehler = input.kunde_id ? await ladeErlaubteAkte(supabase, mitarbeiter, { kunde_id: input.kunde_id }) : null
@@ -2088,6 +2126,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     const sichtbar = ((data ?? []) as KundeRow[]).filter((k) => darfAkte(mitarbeiter, k))
     const treffer = sucheKunden(sichtbar, String(input.suchbegriff ?? ''))
     if (treffer.length === 0) {
+      if (mitarbeiter.nurPrivat === true) return 'Keine Treffer unter seinen privaten Kontakten. (Kunden der Mayer Holding gibt es nur im Mayer-Assistenten.)'
       return istEingeschraenkt(mitarbeiter)
         ? `Keine Treffer in den Bereichen, die für ${mitarbeiter.name} freigegeben sind (${freigegebeneBereiche(mitarbeiter).map(bereichName).join(', ')}).`
         : 'Keine Treffer. Es gibt im CRM keinen Kunden, der dazu passt.'
@@ -2165,7 +2204,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     if (input.objekt_id && !input.kunde_id) {
       const { data: obj } = await supabase.from('objekte').select('id, dokumente, privat_besitzer').eq('id', String(input.objekt_id)).maybeSingle()
       // Private Objekte von Kollegen gibt es für den Mitarbeiter nicht; Objekte der Holding nur mit Immobilien-Rechten.
-      if (!obj || (obj.privat_besitzer && !darfObjekt(mitarbeiter, obj))) return KEIN_OBJEKT
+      if (!obj || istUnsichtbaresObjekt(mitarbeiter, obj)) return KEIN_OBJEKT
       if (!darfObjekt(mitarbeiter, obj)) return nichtFreigegeben('immobilien', mitarbeiter.name)
       const treffer = alleObjektDokumente(obj as unknown as ObjektRow).find((x) => x.dok.id === input.dokument_id)
       if (!treffer) return 'Fehler: Dieses Dokument gibt es in der Objektakte nicht. Lies die Akte neu (objektakte_lesen).'
@@ -2261,7 +2300,8 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
   }
 
   if (name === 'kunde_anlegen') {
-    const bereich = String(input.bereich ?? '')
+    // Im privaten Assistenten entstehen nur private Kontakte.
+    const bereich = mitarbeiter.nurPrivat === true ? 'privat' : String(input.bereich ?? '')
     const firma = String(input.name ?? '').trim()
     // Privater Kontakt: gehört dem, der ihn anlegt (verantwortlich_email), und folgt wahlweise dem Ablauf eines Bereichs.
     const privat = bereich === 'privat'
@@ -2618,8 +2658,10 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     // Objekte der Holding mit Immobilien-Rechten, dazu die eigenen privaten Objekte; private Objekte von Kollegen nie.
     const { data } = await supabase.from('objekte').select('id, bezeichnung, adresse, typ, status, kaufpreis, verantwortlich, eigentuemer, verkaufsdaten, privat_besitzer')
     const sichtbar = ((data ?? []) as unknown as ObjektRow[]).filter((o) => darfObjekt(mitarbeiter, { privat_besitzer: o.privat_besitzer }))
+    if (mitarbeiter.nurPrivat === true && sichtbar.length === 0) return 'Er hat keine privaten Objekte. (Objekte der Mayer Holding gibt es nur im Mayer-Assistenten.)'
     if (!darfObjekte(mitarbeiter) && sichtbar.length === 0) return nichtFreigegeben('immobilien', mitarbeiter.name)
     const treffer = sucheObjekte(sichtbar, String(input.suchbegriff ?? ''))
+    if (treffer.length === 0 && mitarbeiter.nurPrivat === true) return 'Keine Treffer unter seinen privaten Objekten.'
     if (treffer.length === 0) return darfObjekte(mitarbeiter) ? 'Keine Treffer. Es gibt im CRM kein Immobilien-Objekt, das dazu passt.' : 'Keine Treffer unter seinen privaten Objekten. Objekte der Holding (Bereich Immobilien) sind für ihn nicht freigegeben.'
     return JSON.stringify(
       treffer.map((o) => ({
@@ -2639,7 +2681,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
   if (name === 'objektakte_lesen') {
     const { data: obj } = await supabase.from('objekte').select(`${OBJEKT_SPALTEN}, privat_besitzer`).eq('id', String(input.objekt_id ?? '')).maybeSingle()
     // Private Objekte von Kollegen gibt es für den Mitarbeiter nicht; Objekte der Holding nur mit Immobilien-Rechten.
-    if (!obj || (obj.privat_besitzer && !darfObjekt(mitarbeiter, obj))) return KEIN_OBJEKT
+    if (!obj || istUnsichtbaresObjekt(mitarbeiter, obj)) return KEIN_OBJEKT
     if (!darfObjekt(mitarbeiter, obj)) return nichtFreigegeben('immobilien', mitarbeiter.name)
     const o = obj as unknown as ObjektRow
     const [{ data: eintraege }, inhalte] = await Promise.all([
@@ -3155,11 +3197,24 @@ async function claude(system: unknown[], messages: unknown[], maxTokens = ANTWOR
 
 export type WebBild = { base64: string; mediaType: 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif' }
 
+/**
+ * Die Werkzeuge eines Gesprächszugs. Bereich Privat (Briefe, Objekt ins Mayer-CRM, mit verbundenem Konto
+ * Hotmail) nur für Freigeschaltete; im privaten Assistenten nur dessen Liste (privatBot.ts).
+ */
+export function werkzeugListe(privat: { briefe: boolean; outlook: boolean }, privatBot: boolean): { name: string }[] {
+  const alle = privat.briefe ? [...TOOLS, ...BRIEF_WERKZEUGE, ...OBJEKT_WERKZEUGE, ...(privat.outlook ? OUTLOOK_WERKZEUGE : [])] : TOOLS
+  // deno-lint-ignore no-explicit-any
+  return privatBot ? werkzeugeFuerPrivatBot(alle as any[], istPrivatWerkzeug) : alle
+}
+
 // Ein Gesprächszug: bekommt die neue Nachricht (oder einen Datei-Eingang), arbeitet mit Werkzeugen,
 // bis eine Antwort feststeht, und schreibt Verlauf und Aktionsprotokoll in den übergebenen Zustand.
 // `bild`: ein im CRM-Fenster eingefügtes Bild. Das Modell sieht es nur in diesem Zug; gespeichert
 // wird es nirgends (fuerVerlauf ersetzt es im Verlauf durch einen Vermerk).
-export async function agentAntwort(supabase: Supa, mitarbeiter: Mitarbeiter, state: AgentState, eingang: string, kanal: 'telegram' | 'web' = 'telegram', bild?: WebBild): Promise<string> {
+export async function agentAntwort(supabase: Supa, mitarbeiterRoh: Mitarbeiter, state: AgentState, eingang: string, kanal: 'telegram' | 'web' = 'telegram', bild?: WebBild): Promise<string> {
+  // Privater Assistent: Rechte nur für die eigenen privaten Sachen (rechte.ts), unabhängig davon, was der Aufrufer übergibt.
+  const privatBot = imPrivatBot()
+  const mitarbeiter: Mitarbeiter = privatBot ? { ...mitarbeiterRoh, nurPrivat: true } : mitarbeiterRoh
   const ctx: ToolKontext = { supabase, mitarbeiter, state, vorherigeLoeschAnfrage: state.loesch_anfrage, vorherigePflegeAnfrage: state.pflege_anfrage, vorherigeMailAnfrage: state.mail_anfrage, vorherigeWeiterleitung: state.weiterleitung_anfrage, eingang, recherchen: 0 }
   state.loesch_anfrage = undefined // gilt nur für die direkt folgende Nachricht
   state.pflege_anfrage = undefined // ebenso für Bereich wechseln und Zusammenführen
@@ -3183,7 +3238,7 @@ export async function agentAntwort(supabase: Supa, mitarbeiter: Mitarbeiter, sta
   const wochentag = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', weekday: 'long' }).format(new Date())
   // Bereich Privat (Hotmail, Briefe): nur für freigeschaltete Mitarbeiter (MS_ERLAUBT), Hotmail nur mit verbundenem Konto.
   const privat = await privatFaehigkeiten(supabase, mitarbeiter.email ?? '').catch(() => ({ briefe: false, outlook: false }))
-  const werkzeuge = privat.briefe ? [...TOOLS, ...BRIEF_WERKZEUGE, ...(privat.outlook ? OUTLOOK_WERKZEUGE : [])] : TOOLS
+  const werkzeuge = werkzeugListe(privat, privatBot)
   const system = [
     { type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } },
     {
@@ -3192,7 +3247,8 @@ export async function agentAntwort(supabase: Supa, mitarbeiter: Mitarbeiter, sta
         `Heute ist ${wochentag}, der ${deDatum(heuteBerlin())} (${heuteBerlin()}), es ist ${new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit' }).format(new Date())} Uhr.`,
         `Du schreibst mit ${mitarbeiter.name}${mitarbeiter.rolle === 'geschaeftsfuehrung' ? ' (Geschäftsführung)' : ''}.`,
         // Nur wer nicht alle Bereiche hat, bekommt diesen Hinweis — für alle anderen ändert sich nichts.
-        istEingeschraenkt(mitarbeiter)
+        // Im privaten Assistenten ersetzt ihn PRIVAT_BOT_HINWEIS.
+        !privatBot && istEingeschraenkt(mitarbeiter)
           ? `Für ${mitarbeiter.name} sind nur diese Bereiche freigegeben: ${freigegebeneBereiche(mitarbeiter).map(bereichName).join(', ') || 'keiner'}. Kunden, Objekte, Unterlagen und Mails anderer Bereiche kannst du für ihn weder sehen noch ändern, und du sprichst nicht darüber. Meldet ein Werkzeug „Nicht freigegeben", sag ihm das so. Gehört eine geschickte Datei in einen anderen Bereich, legst du sie unter ziel=ungeklaert ab.`
           : '',
         kanal === 'web'
@@ -3202,6 +3258,7 @@ export async function agentAntwort(supabase: Supa, mitarbeiter: Mitarbeiter, sta
           ? 'Aktenpflege (nur Geschäftsführung und Admins, also auch für diesen Mitarbeiter): Sagt er z. B. „verschiebe X nach Erben", verschiebst du die Akte mit kunde_bereich_wechseln. Sagt er „X und Y sind dieselbe Firma" oder „führe X und Y zusammen", nimmst du kunden_zusammenfuehren; welche Akte bleibt, entscheidet er; sagt er nichts dazu, schlägst du die vollständigere vor. Beides wie beim Löschen: erst beschreiben und fragen, ausführen erst nach seiner klaren Bestätigung in der nächsten Nachricht.'
           : '',
         privat.briefe ? PRIVAT_HINWEIS + (privat.outlook ? '' : '\n(Hotmail ist noch nicht verbunden — dafür im CRM unter Privat → Einstellungen.)') : '',
+        privatBot ? PRIVAT_BOT_HINWEIS : '',
         state.aktionen.length > 0
           ? `Was du in diesem Chat zuletzt im CRM getan hast (älteste zuerst):\n${state.aktionen.slice(-10).map((a) => `- ${a.text}`).join('\n')}`
           : 'Du hast in diesem Chat bisher noch nichts im CRM verändert.',
@@ -3235,9 +3292,12 @@ export async function agentAntwort(supabase: Supa, mitarbeiter: Mitarbeiter, sta
       let ergebnis: string | unknown[]
       try {
         ergebnis =
-          privat.briefe && istPrivatWerkzeug(b.name)
-            ? await fuehrePrivatWerkzeugAus(b.name, b.input ?? {}, { supabase, email: mitarbeiter.email ?? '', protokolliere: (text) => state.aktionen.push({ z: new Date().toISOString(), text }) })
-            : await fuehreWerkzeugAus(b.name, b.input ?? {}, ctx)
+          // Nur angebotene Werkzeuge ausführen — im privaten Assistenten nie eines der Holding.
+          !werkzeuge.some((w) => w.name === b.name)
+            ? `Fehler: Das Werkzeug ${b.name} gibt es hier nicht.`
+            : privat.briefe && istPrivatWerkzeug(b.name)
+              ? await fuehrePrivatWerkzeugAus(b.name, b.input ?? {}, { supabase, email: mitarbeiter.email ?? '', name: mitarbeiter.name, protokolliere: (text) => state.aktionen.push({ z: new Date().toISOString(), text }) })
+              : await fuehreWerkzeugAus(b.name, b.input ?? {}, ctx)
       } catch (err) {
         console.error(`Werkzeug ${b.name} fehlgeschlagen:`, err)
         ergebnis = `Fehler im Werkzeug: ${err instanceof Error ? err.message : String(err)}`
@@ -3304,12 +3364,12 @@ export async function stelleAblageSicher(supabase: Supa, mitarbeiterName: string
 // E-Mail-Versand inzwischen fertig geworden sein kann: Sein Auftrag darf dann nicht aus dem beim
 // Zugbeginn geladenen Stand wieder auferstehen, und seine Abschlussmeldung darf nicht verloren gehen.
 // Liefert die Kennung eines in diesem Zug freigegebenen Versands, der jetzt zu starten ist.
-async function speichereZustand(supabase: Supa, mitarbeiterId: string, state: AgentState): Promise<string | undefined> {
+// Im privaten Assistenten liegt der Zustand getrennt (ladeZustandRoh / schreibeZustand).
+export async function speichereZustand(supabase: Supa, mitarbeiterId: string, state: AgentState): Promise<string | undefined> {
   const mailStart = state.mail_start
   state.mail_start = undefined
-  const { data: frisch } = await supabase.from('mitarbeiter').select('telegram_pending').eq('id', mitarbeiterId).maybeSingle()
   // deno-lint-ignore no-explicit-any
-  const f = (frisch?.telegram_pending as any) ?? null
+  const f = ((await ladeZustandRoh(supabase, mitarbeiterId)) as any) ?? null
   if (f) {
     if (state.mail_auftrag && state.mail_auftrag.id !== mailStart && f.mail_auftrag?.id !== state.mail_auftrag.id) state.mail_auftrag = undefined
     if (f.mail_ergebnis && (!state.mail_ergebnis || String(f.mail_ergebnis.z) > state.mail_ergebnis.z)) state.mail_ergebnis = f.mail_ergebnis
@@ -3331,12 +3391,51 @@ async function speichereZustand(supabase: Supa, mitarbeiterId: string, state: Ag
     if (fehlendeAktionen.length > 0) state.aktionen = [...state.aktionen, ...fehlendeAktionen].sort((a, b) => a.z.localeCompare(b.z)).slice(-12)
     while (state.zuege.length > 1 && JSON.stringify(state.zuege).length > 60000) state.zuege.shift()
   }
-  await supabase.from('mitarbeiter').update({ telegram_pending: state }).eq('id', mitarbeiterId)
+  await schreibeZustand(supabase, mitarbeiterId, state)
   return mailStart
 }
 
+// Gesprächszustand: Mayer-Bot und CRM-Fenster in mitarbeiter.telegram_pending; der private Assistent
+// getrennt davon in privat_einstellungen.telegram_zustand (je Login-Adresse), damit sich die beiden
+// Gespräche nicht vermischen. Fehlt diese Spalte noch, arbeitet der private Assistent ohne Gedächtnis.
+async function loginAdresseVon(supabase: Supa, mitarbeiterId: string): Promise<string> {
+  const { data } = await supabase.from('mitarbeiter').select('email').eq('id', mitarbeiterId).maybeSingle()
+  return String(data?.email ?? '').trim().toLowerCase()
+}
+
+export async function ladeZustandRoh(supabase: Supa, mitarbeiterId: string): Promise<unknown> {
+  if (!imPrivatBot()) {
+    const { data } = await supabase.from('mitarbeiter').select('telegram_pending').eq('id', mitarbeiterId).maybeSingle()
+    return data?.telegram_pending ?? null
+  }
+  const ich = await loginAdresseVon(supabase, mitarbeiterId)
+  if (!ich) return null
+  const { data, error } = await supabase.from('privat_einstellungen').select('telegram_zustand').eq('login_email', ich).maybeSingle()
+  if (error) {
+    console.error('Zustand des privaten Assistenten nicht lesbar:', error.message)
+    return null
+  }
+  return data?.telegram_zustand ?? null
+}
+
+async function schreibeZustand(supabase: Supa, mitarbeiterId: string, state: AgentState): Promise<void> {
+  if (!imPrivatBot()) {
+    await supabase.from('mitarbeiter').update({ telegram_pending: state }).eq('id', mitarbeiterId)
+    return
+  }
+  const ich = await loginAdresseVon(supabase, mitarbeiterId)
+  if (!ich) return
+  const { error } = await supabase.from('privat_einstellungen').upsert({ login_email: ich, telegram_zustand: state })
+  if (error) console.error('Zustand des privaten Assistenten nicht speicherbar:', error.message)
+}
+
 // Für Mitteilungen an Mitarbeiter (Werkzeug kollegen_benachrichtigen und interne Rückfrage von außen).
-const MITTEILUNGS_WEGE: MitteilungsWege = { botToken: BOT_TOKEN, ladeState, speichereZustand }
+// Immer über den Mayer-Bot und in den Mayer-Zustand des Empfängers — auch wenn der Aufruf aus dem privaten Rahmen käme.
+const MITTEILUNGS_WEGE: MitteilungsWege = {
+  botToken: BOT_TOKEN,
+  ladeState,
+  speichereZustand: (supabase, mitarbeiterId, state) => mitBot(false, () => speichereZustand(supabase, mitarbeiterId, state)),
+}
 
 const WEB_ORIGINS = ['https://eray-hash.github.io', 'http://localhost:5173', 'http://localhost:5174']
 function webHeaders(origin: string | null): Record<string, string> {
@@ -3746,9 +3845,11 @@ async function stosseWartendeAn(): Promise<number> {
 // „vv:<id>:<code>“ verwirft. Gilt nur im Chat des Besitzers; der Code stammt aus genau dieser Nachricht.
 // deno-lint-ignore no-explicit-any
 async function verarbeiteKnopf(knopf: any): Promise<void> {
+  // Knöpfe unter Nachrichten des privaten Bots kommen über dessen Webhook: dann mit dessen Schlüssel antworten.
+  const token = botToken(BOT_TOKEN)
   const antworte = (text: string) =>
-    BOT_TOKEN
-      ? fetch(`https://api.telegram.org/bot${BOT_TOKEN}/answerCallbackQuery`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ callback_query_id: knopf.id, text: text.slice(0, 190) }) }).catch(() => undefined)
+    token
+      ? fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ callback_query_id: knopf.id, text: text.slice(0, 190) }) }).catch(() => undefined)
       : Promise.resolve(console.log(`[Knopf] ${text}`))
   const m = /^(vb|vv):(vm_[A-Za-z0-9]+):([A-Za-z0-9]+)$/.exec(String(knopf?.data ?? ''))
   const chatId = knopf?.message?.chat?.id
@@ -3769,6 +3870,36 @@ async function verarbeiteKnopf(knopf: any): Promise<void> {
   if (e && !e.ok && e.beschreibung) await sendTelegramMessage(chatId, `Nicht ausgeführt: ${e.beschreibung}\n${e.meldung}\nDie Aktion bleibt vorgemerkt — du kannst es später noch einmal versuchen.`)
 }
 
+// Privater Assistent: Wer ist das? Die Kennung eines Telegram-Chats mit einer Person ist in jedem Bot
+// dieselbe — wer den Mayer-Assistenten verbunden hat, ist damit auch hier erkannt. Nur für den Bereich
+// Privat Freigeschaltete (MS_ERLAUBT); alle anderen bekommen einen Hinweis und sonst nichts.
+const PRIVAT_NICHT_VERBUNDEN =
+  'Das ist ein privater Assistent für den Bereich Privat des CRM der Mayer Holding. Dieser Chat ist dafür nicht freigeschaltet. Verbinde zuerst den Mayer-Assistenten: im CRM auf „Mein Profil“ gehen, bei „Telegram-Assistent“ auf „Mit Telegram verbinden“ tippen und den Code an den Mayer-Assistenten schicken. Danach funktioniert auch dieser Chat — sofern der Bereich Privat für dich freigeschaltet ist.'
+
+// deno-lint-ignore no-explicit-any
+async function privatBotMitarbeiter(supabase: Supa, chatId: number, text: string | undefined): Promise<any | null> {
+  const { data: mitarbeiter } = await supabase
+    .from('mitarbeiter')
+    .select('id, name, email, aktiv, rolle, ist_admin, bereiche')
+    .eq('telegram_chat_id', chatId)
+    .maybeSingle()
+  if (!mitarbeiter?.aktiv || !msErlaubt(String(mitarbeiter.email ?? ''))) {
+    await sendTelegramMessage(chatId, PRIVAT_NICHT_VERBUNDEN)
+    return null
+  }
+  // Ab jetzt gehen seine privaten Meldungen (Bestätigungen, Hotmail-Übersicht, private Treffer) über diesen Bot.
+  await merkePrivatBotAktiv(supabase, String(mitarbeiter.email)).catch((err) => console.error('Privater Bot nicht vermerkt:', err))
+  if (text?.startsWith('/start')) {
+    await sendTelegramMessage(
+      chatId,
+      `Dein privater Assistent ist bereit, ${String(mitarbeiter.name).split(' ')[0]}. Hier geht es nur um deinen Bereich Privat: private Kontakte und Objekte, deine eigenen Aufgaben und Termine, Hotmail und Briefe auf deinem Briefbogen. Die Mayer Holding siehst du hier nicht — dafür bleibt der Mayer-Assistent. Soll etwas ins Mayer-CRM, sag es mir einfach. Bestätigungen und deine private Morgen-Übersicht kommen ab jetzt hierher.`,
+    )
+    return null
+  }
+  setzePerson(mitarbeiter.email)
+  return { ...mitarbeiter, nurPrivat: true }
+}
+
 async function verarbeiteUpdate(update: any): Promise<void> {
   if (update?.callback_query) return await verarbeiteKnopf(update.callback_query)
   const message = update?.message
@@ -3776,6 +3907,11 @@ async function verarbeiteUpdate(update: any): Promise<void> {
   const chatId: number = message.chat.id
   const text: string | undefined = message.text?.trim()
   const supabase = supa()
+  if (imPrivatBot()) {
+    const mitarbeiter = await privatBotMitarbeiter(supabase, chatId, text)
+    if (!mitarbeiter) return
+    return await verarbeiteNachricht(supabase, message, chatId, text, mitarbeiter)
+  }
 
   // --- Verknüpfung über /start <code> (aus "Mein Profil" generiert) ---
   // Der Link aus dem CRM schickt "/start <code>" — aber nur, wenn in Telegram noch auf "Starten" getippt
@@ -3825,7 +3961,13 @@ async function verarbeiteUpdate(update: any): Promise<void> {
     return
   }
   setzePerson(mitarbeiter.email)
+  return await verarbeiteNachricht(supabase, message, chatId, text, mitarbeiter)
+}
 
+// Eine Nachricht eines erkannten Mitarbeiters — Mayer-Bot wie privater Bot (dann trägt `mitarbeiter` nurPrivat).
+// deno-lint-ignore no-explicit-any
+async function verarbeiteNachricht(supabase: Supa, message: any, chatId: number, text: string | undefined, mitarbeiter: any): Promise<void> {
+  const privatBot = imPrivatBot()
   await sendeTippen(chatId)
   let istDatei = !!(message.photo || message.document || message.audio || message.voice || message.video || message.video_note || message.animation)
   // Aus einem anderen Chat (z. B. WhatsApp über die Teilen-Funktion, oder Telegram) weitergeleitet?
@@ -3855,6 +3997,23 @@ async function verarbeiteUpdate(update: any): Promise<void> {
   if (gesprochen) {
     istDatei = false
     eingang = `[Sprachnachricht des Mitarbeiters, automatisch abgehört — behandle sie wie eine getippte Nachricht. Hörfehler sind möglich, vor allem bei Namen und Zahlen.]\n${gesprochen}`
+  } else if (istDatei && privatBot) {
+    // Privater Assistent: keine Warteschlange — deren Schritte laufen später außerhalb dieses Rahmens mit
+    // Mayer-Rechten und dem Mayer-Bot. Eine Datei nach der anderen; läuft gerade eine, bitte später noch einmal.
+    dateiLauf = await belegeDateiLauf(supabase, mitarbeiter.id)
+    if (!dateiLauf) {
+      await sendTelegramMessage(chatId, `Ich bearbeite gerade noch eine andere Datei. Hier geht immer nur eine Datei auf einmal — schick mir „${message.document?.file_name ?? 'diese Datei'}“ bitte noch einmal, sobald ich geantwortet habe.`)
+      return
+    }
+    try {
+      const datei = await ladeTelegramEingang(message)
+      eingang = await verarbeiteDateiEingang(supabase, datei, mitarbeiter)
+      sensibel = sensiblerEingang(eingang, datei)
+    } catch (err) {
+      await gebeDateiLaufFrei(supabase, mitarbeiter.id, dateiLauf)
+      throw err
+    }
+    if (weitergeleitet) eingang += `\nDie Datei wurde aus einem anderen Chat weitergeleitet${vonWem ? ` (ursprünglich von ${vonWem})` : ''}.`
   } else if (istDatei) {
     // Läuft für diesen Mitarbeiter schon ein Datei-Lauf (oder wartet schon etwas), kommt die Datei in
     // die Warteschlange: speichern, eintragen, fertig — kein eigener Assistenten-Lauf.
@@ -3867,7 +4026,7 @@ async function verarbeiteUpdate(update: any): Promise<void> {
       // Sammelsendung: Die Datei ist gespeichert, aber noch nicht ausgewertet — hier zählen nur
       // Dateiname und Bildunterschrift. Gelöscht wird erst, wenn die Datei sicher in der Ablage liegt.
       const artSammel = zeile.startsWith('pfad=') && !/^(audio|video)\//.test(datei.contentType) ? sensibleArt([datei.dateiname, datei.caption]) : null
-      if (artSammel && (await loescheTelegramNachricht(BOT_TOKEN, chatId, message.message_id))) {
+      if (artSammel && (await loescheTelegramNachricht(botToken(BOT_TOKEN), chatId, message.message_id))) {
         zeile += ` | sensibel: ${artSammel}, aus dem Telegram-Chat gelöscht`
       }
       await supabase.from('telegram_warteschlange').insert({ mitarbeiter_id: String(mitarbeiter.id), chat_id: String(chatId), zeile })
@@ -3899,21 +4058,25 @@ async function verarbeiteUpdate(update: any): Promise<void> {
   }
 
   try {
-  const state = ladeState(mitarbeiter.telegram_pending)
+  const state = ladeState(privatBot ? await ladeZustandRoh(supabase, mitarbeiter.id) : mitarbeiter.telegram_pending)
   let antwort: string
   try {
     antwort = await agentAntwort(supabase, mitarbeiter, state, eingang)
   } catch (err) {
     console.error('Assistent fehlgeschlagen:', err)
     // Auch wenn der Assistent ausfällt, bleibt nichts liegen: Die Datei kommt in die Sammelakte.
-    const notAblage = istDatei ? await stelleAblageSicher(supabase, mitarbeiter.name, eingang).catch(() => []) : []
+    // Nicht im privaten Assistenten — private Unterlagen gehören nie in eine Sammelakte der Holding.
+    const notAblage = istDatei && !privatBot ? await stelleAblageSicher(supabase, mitarbeiter.name, eingang).catch(() => []) : []
     const dateiHinweis = notAblage.length > 0 ? ` Deine Datei liegt unter „Ungeklärte Eingänge": ${notAblage.join(', ')}.` : istDatei ? ' Deine Datei ist gespeichert.' : ''
     // Auch hier ist die Datei gespeichert und notfalls in der Sammelakte — eine sensible Unterlage kann raus.
-    const geloescht = sensibel ? await loescheTelegramNachricht(BOT_TOKEN, chatId, message.message_id) : false
+    const geloescht = sensibel ? await loescheTelegramNachricht(botToken(BOT_TOKEN), chatId, message.message_id) : false
     await sendTelegramMessage(chatId, `Da ist gerade etwas schiefgelaufen (${err instanceof Error ? err.message : 'unbekannter Fehler'}).${dateiHinweis}${istDatei ? '' : ' Versuch es bitte gleich noch einmal.'}${geloescht && sensibel ? `\n\n${sensibelHinweis(sensibel)}` : ''}`)
     return
   }
-  if (istDatei) {
+  if (istDatei && privatBot) {
+    // Kein Sicherheitsnetz über die Sammelakte: Hat der Assistent die Datei nicht abgelegt, bleibt sie
+    // gespeichert, und er fragt nach (PRIVAT_BOT_HINWEIS).
+  } else if (istDatei) {
     const nachgelegt = await stelleAblageSicher(supabase, mitarbeiter.name, eingang).catch((err) => {
       console.error('Sicherheitsnetz fehlgeschlagen:', err)
       return [] as string[]
@@ -3928,7 +4091,7 @@ async function verarbeiteUpdate(update: any): Promise<void> {
   // Versandschritt liest ihn von dort.
   // Sensible Unterlage: Sie ist gespeichert und abgelegt (Assistent bzw. Sicherheitsnetz oben) —
   // jetzt aus dem Telegram-Chat löschen. Klappt das Löschen nicht, bleibt alles wie bisher.
-  if (istDatei && sensibel && (await loescheTelegramNachricht(BOT_TOKEN, chatId, message.message_id))) {
+  if (istDatei && sensibel && (await loescheTelegramNachricht(botToken(BOT_TOKEN), chatId, message.message_id))) {
     antwort = `${antwort}\n\n${sensibelHinweis(sensibel)}`
   }
   const mailStart = await speichereZustand(supabase, mitarbeiter.id, state)
@@ -3943,10 +4106,48 @@ async function verarbeiteUpdate(update: any): Promise<void> {
   }
 }
 
-Deno.serve((req: Request) => mitAnlass(async () => {
+// Einrichtung des privaten Bots (intern „privat_bot_einrichten“): Webhook mit abgeleitetem Geheimnis,
+// Befehlsliste, Name. Gibt nie den Schlüssel zurück.
+async function richtePrivatBotEin(): Promise<Response> {
+  const json = (daten: unknown, status = 200) => new Response(JSON.stringify(daten), { status, headers: { 'content-type': 'application/json' } })
+  const token = privatBotToken()
+  if (!token) return json({ ok: false, grund: 'PRIVAT_TELEGRAM_BOT_TOKEN ist nicht gesetzt.' }, 404)
+  const geheimnis = await privatWebhookGeheimnis()
+  if (!geheimnis) return json({ ok: false, grund: 'Dienst-Schlüssel fehlt.' }, 500)
+  const rufe = async (methode: string, daten: Record<string, unknown>) => {
+    const r = await fetch(`https://api.telegram.org/bot${token}/${methode}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(daten) })
+    // deno-lint-ignore no-explicit-any
+    const j: any = await r.json().catch(() => null)
+    return { ok: r.ok && j?.ok === true, result: j?.result, beschreibung: j?.description as string | undefined }
+  }
+  const webhook = `${SUPABASE_URL}/functions/v1/telegram-gateway?bot=privat`
+  const gesetzt = await rufe('setWebhook', { url: webhook, secret_token: geheimnis, drop_pending_updates: true, allowed_updates: ['message', 'callback_query'] })
+  if (!gesetzt.ok) return json({ ok: false, grund: `setWebhook: ${gesetzt.beschreibung ?? 'fehlgeschlagen'}` }, 502)
+  const befehle = await rufe('setMyCommands', { commands: [{ command: 'start', description: 'Privaten Assistenten starten' }] })
+  const ich = await rufe('getMe', {})
+  return json({ ok: true, botName: ich.result?.username ?? null, webhook, befehle: befehle.ok })
+}
+
+// Der ganze Aufruf — exportiert für die Tests (privatBot.test.ts), sonst nur über Deno.serve.
+export const bearbeiteAnfrage = (req: Request): Promise<Response> => mitAnlass(async () => {
   const origin = req.headers.get('origin')
   if (req.method === 'OPTIONS') return new Response('ok', { headers: webHeaders(origin) })
   if (req.method !== 'POST') return new Response('Method not allowed', { status: 405 })
+  // Privater Assistent (zweiter Bot): eigener Webhook mit abgeleitetem Geheimnis, sonst nichts.
+  if (new URL(req.url).searchParams.get('bot') === 'privat') {
+    if (!privatBotToken()) return new Response('Not found', { status: 404 })
+    if (!gleichesGeheimnis(req.headers.get('x-telegram-bot-api-secret-token'), await privatWebhookGeheimnis())) return new Response('Unauthorized', { status: 401 })
+    const update = await req.json().catch(() => null)
+    setzeAnlass(update?.message || update?.edited_message ? 'telegram' : '')
+    // Alles im privaten Assistenten ist Bereich Privat — auch seine KI-Kosten.
+    setzePrivat()
+    const arbeit = mitBot(true, () => verarbeiteUpdate(update)).catch((err) => console.error('Update-Verarbeitung (privater Bot) fehlgeschlagen:', err))
+    // deno-lint-ignore no-explicit-any
+    const laufzeit = (globalThis as any).EdgeRuntime
+    if (laufzeit?.waitUntil) laufzeit.waitUntil(arbeit)
+    else await arbeit
+    return new Response('ok')
+  }
   const body = await req.json().catch(() => null)
   setzeAnlass(body?.web ? `web:${body.web}` : body?.intern ? `intern:${body.intern}` : body?.message || body?.edited_message ? 'telegram' : '')
   // deno-lint-ignore no-explicit-any
@@ -4038,12 +4239,20 @@ Deno.serve((req: Request) => mitAnlass(async () => {
   }
 
   // Prüfung, ob Telegram Knopfdrücke zustellt (allowed_updates) — nur mit dem Dienst-Schlüssel, liefert keine Inhalte.
+  // Mit bot: 'privat' für den privaten Assistenten.
   if (body?.intern === 'webhook_info') {
     if (!istDienstSchluessel((req.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '').trim())) return new Response('Unauthorized', { status: 401 })
-    if (!BOT_TOKEN) return new Response(JSON.stringify({ ok: false, grund: 'kein Bot-Schlüssel' }), { status: 500 })
-    const info = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/getWebhookInfo`).then((r) => r.json()).catch(() => null)
+    const token = mitBot(body.bot === 'privat', () => botToken(BOT_TOKEN))
+    if (!token) return new Response(JSON.stringify({ ok: false, grund: 'kein Bot-Schlüssel' }), { status: 500 })
+    const info = await fetch(`https://api.telegram.org/bot${token}/getWebhookInfo`).then((r) => r.json()).catch(() => null)
     const w = info?.result ?? {}
     return new Response(JSON.stringify({ ok: !!info?.ok, erlaubteUpdates: w.allowed_updates ?? 'alle (Vorgabe)', offen: w.pending_update_count, letzterFehler: w.last_error_message ?? null, adresseGesetzt: !!w.url }), { headers: { 'content-type': 'application/json' } })
+  }
+
+  // Privaten Bot einrichten (nach dem Setzen von PRIVAT_TELEGRAM_BOT_TOKEN, und nach jedem Wechsel des Dienst-Schlüssels).
+  if (body?.intern === 'privat_bot_einrichten') {
+    if (!internDienst) return new Response('Unauthorized', { status: 401 })
+    return await richtePrivatBotEin()
   }
 
   // 3) Telegram.
@@ -4056,4 +4265,6 @@ Deno.serve((req: Request) => mitAnlass(async () => {
   if (runtime?.waitUntil) runtime.waitUntil(arbeit)
   else await arbeit
   return new Response('ok')
-}))
+})
+
+Deno.serve(bearbeiteAnfrage)

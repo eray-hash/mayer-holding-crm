@@ -3,7 +3,9 @@
 // mit vollen Datenbankrechten, deshalb filtert diese Datei selbst nach den Rechten des Fragenden:
 // Bereichs-To-dos, Kundenakten, Objekte und Projekte nur aus freigegebenen Bereichen; eigene
 // To-do-Listen nur die eigene und die ausdrücklich für ihn freigegebenen; private Kontakte und private
-// Objekte nur die eigenen (darfAkte / darfObjekt), die von Kollegen nie.
+// Objekte nur die eigenen (darfAkte / darfObjekt), die von Kollegen nie. Private Projekte
+// (projekte.besitzer_email) nur ihr Besitzer. Im privaten Assistenten (nurPrivat) nur seine eigene
+// To-do-Liste, seine privaten Kontakte, Objekte und Projekte — keine Bereichslisten, keine Listen von Kollegen.
 
 import { alsIso, LAGE_TEXT, OBJEKT_ABGESCHLOSSEN, nachPerson, ordneAufgabenZu, ordneZu, personenNamen, type RohAufgabe } from '../_shared/aufgabenKern.ts'
 import { darfAkte, darfBereich, darfObjekt, type RechteMitarbeiter } from './rechte.ts'
@@ -42,13 +44,14 @@ export async function aufgabenUebersicht(
     supabase.from('todo_freigaben').select('besitzer_email, empfaenger_email'),
     supabase.from('kunden').select('id, bereich, firma, ansprechpartner, verantwortlich, follow_up, verantwortlich_email'),
     supabase.from('objekte').select('id, bezeichnung, verantwortlich, follow_up, status, privat_besitzer'),
-    supabase.from('projekte').select('id, bereich, name, verantwortlich, meilensteine'),
+    supabase.from('projekte').select('id, bereich, name, verantwortlich, meilensteine, besitzer_email'),
   ])
   const teamListe = ((team ?? []) as { name: string; email: string | null }[]).filter((m) => m.name)
   const nameZuEmail = new Map(teamListe.filter((m) => m.email).map((m) => [String(m.email).toLowerCase(), m.name]))
   const eigeneEmail = String(fragender.email ?? '').toLowerCase()
+  const nurPrivat = fragender.nurPrivat === true
   const freigegeben = new Set(
-    ((freigaben ?? []) as { besitzer_email: string; empfaenger_email: string }[])
+    ((nurPrivat ? [] : freigaben ?? []) as { besitzer_email: string; empfaenger_email: string }[])
       .filter((f) => String(f.empfaenger_email).toLowerCase() === eigeneEmail)
       .map((f) => String(f.besitzer_email).toLowerCase()),
   )
@@ -98,7 +101,8 @@ export async function aufgabenUebersicht(
   }
   // deno-lint-ignore no-explicit-any
   for (const p of (projekte ?? []) as any[]) {
-    if (!darfBereich(fragender, p.bereich)) continue
+    const projektBesitzer = String(p.besitzer_email ?? '').trim().toLowerCase()
+    if (projektBesitzer ? projektBesitzer !== eigeneEmail || !eigeneEmail : !darfBereich(fragender, p.bereich)) continue
     // deno-lint-ignore no-explicit-any
     for (const m of (p.meilensteine ?? []) as any[]) {
       // deno-lint-ignore no-explicit-any
@@ -109,7 +113,7 @@ export async function aufgabenUebersicht(
           art: 'projekt',
           titel: a.titel || '(ohne Titel)',
           bezug: `Projekt ${p.name}`,
-          bereich: BEREICH_NAME[p.bereich] ?? 'intern',
+          bereich: projektBesitzer ? 'Privat (nur für dich)' : BEREICH_NAME[p.bereich] ?? 'intern',
           zustaendig: a.zustaendig,
           ersatzPerson: p.verantwortlich,
           datum: a.wiedervorlage,

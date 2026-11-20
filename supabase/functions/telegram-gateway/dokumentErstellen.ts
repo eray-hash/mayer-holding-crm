@@ -23,7 +23,7 @@ import { PDFDocument, type PDFEmbeddedPage, type PDFFont, type PDFPage, rgb, Sta
 import { type Lauf, laeufe, ohneTitelUeberschrift, zerlege } from './auszeichnung.ts'
 import { type BlattEingabe, DOCX_TYP, erstelleDocx, erstelleXlsx, XLSX_TYP } from './dateiFormate.ts'
 import { DATEI_SENDEN_WERKZEUG, fuehreDateiSendenAus } from './dateiSenden.ts'
-import { type AkteFuerRechte, darfAkte as darfAkteStandard, istPrivat, nichtFreigegeben, type RechteMitarbeiter, SAMMELAKTEN } from './rechte.ts'
+import { type AkteFuerRechte, darfAkte as darfAkteStandard, istFremdePrivatakte, istPrivat, nichtFreigegeben, type RechteMitarbeiter, SAMMELAKTEN } from './rechte.ts'
 
 // Die Zerlegung der Auszeichnung liegt in auszeichnung.ts (gemeinsam mit Word); hier weiter erreichbar.
 export { type Block, type Lauf, laeufe, zerlege } from './auszeichnung.ts'
@@ -128,7 +128,7 @@ async function ladeAkte(k: DokumentKontext, kundeId: string): Promise<AkteZeile 
   if (ladeFehler) return `Fehler beim Laden der Akte: ${ladeFehler.message}`
   const keinKunde = 'Fehler: Es gibt keinen Kunden mit dieser kunde_id. Ermittle die richtige ID mit kunden_suchen.'
   if (!akte) return keinKunde
-  if (!darf(k.mitarbeiter, akte)) return istPrivat(akte) ? keinKunde : nichtFreigegeben(akte.bereich, k.mitarbeiter.name)
+  if (!darf(k.mitarbeiter, akte)) return istFremdePrivatakte(k.mitarbeiter, akte) ? keinKunde : nichtFreigegeben(akte.bereich, k.mitarbeiter.name)
   return akte
 }
 
