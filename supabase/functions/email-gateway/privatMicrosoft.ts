@@ -4,13 +4,15 @@ import { ermittleAufrufer } from './postfach.ts'
 import { OUTLOOK_AKTIONEN, outlookAktion } from './outlook.ts'
 import { AUSFUEHRER, bestaetige, merkeVor, offeneVormerkungen, verwerfe } from './vormerkungen.ts'
 import { istDienstSchluessel } from './tagesmeldung.ts'
+import { gleicheTodosAb } from './todoAbgleich.ts'
 import { anmeldungAbschliessen, anmeldungStarten, MsFehler, msErlaubt, MsNichtVerbunden, msStatus, msTrennen } from '../_shared/microsoft.ts'
 
 // deno-lint-ignore no-explicit-any
 type Db = any
 
+export const ABGLEICH_AKTIONEN = new Set(['ms_abgleich_jetzt'])
 export const VORMERK_AKTIONEN = new Set(['vormerkungen_liste', 'vormerkung_anlegen', 'vormerkung_bestaetigen', 'vormerkung_verwerfen', 'outlook_senden'])
-export const MS_AKTIONEN = new Set(['ms_status', 'ms_anmelden_start', 'ms_trennen', ...OUTLOOK_AKTIONEN, ...VORMERK_AKTIONEN])
+export const MS_AKTIONEN = new Set(['ms_status', 'ms_anmelden_start', 'ms_trennen', ...OUTLOOK_AKTIONEN, ...VORMERK_AKTIONEN, ...ABGLEICH_AKTIONEN])
 
 const antwort = (daten: unknown, headers: Record<string, string>, status = 200) => new Response(JSON.stringify(daten), { status, headers })
 
@@ -29,6 +31,7 @@ export async function msAktion(req: Request, admin: Db, body: Record<string, unk
       return antwort({ ok: true }, headers)
     }
     if (OUTLOOK_AKTIONEN.has(String(body.action))) return antwort(await outlookAktion(admin, ich, body), headers)
+    if (body.action === 'ms_abgleich_jetzt') return antwort(await gleicheAb(admin, ich), headers)
     if (VORMERK_AKTIONEN.has(String(body.action))) {
       // Mit dem Dienst-Schlüssel ruft nur die eigene Telegram-Funktion auf (Assistent oder Knopf). Bestätigen geht
       // dann nur mit dem Code aus der Telegram-Nachricht des Besitzers; Sofort-Senden gar nicht.
@@ -77,4 +80,26 @@ export async function msRueckrufAntwort(admin: Db, url: URL): Promise<Response> 
   if (!ergebnis) return seite('Diese Anmeldung ist ungültig oder schon verwendet. Bitte im CRM unter Privat → Einstellungen neu verbinden.', 400)
   const ziel = `${ergebnis.ruecksprung.replace(/\/?$/, '/')}#/privat/einstellungen?ms=${ergebnis.ok ? 'ok' : 'fehler'}&meldung=${encodeURIComponent(ergebnis.meldung)}`
   return new Response(null, { status: 302, headers: { location: ziel, 'cache-control': 'no-store' } })
+}
+
+/** Ein Abgleich (To Do; später Kalender) für einen Login. */
+async function gleicheAb(admin: Db, ich: string, budgetMs = 60_000) {
+  const todo = await gleicheTodosAb(admin, ich, budgetMs)
+  return { todo }
+}
+
+/** Zeitplan (alle 3 Minuten): alle verbundenen, freigegebenen Konten abgleichen. Fehler je Konto werden vermerkt, nicht geworfen. */
+export async function msAbgleichAlle(admin: Db): Promise<{ konten: number; fehler: string[] }> {
+  const { data } = await admin.from('ms_konten').select('login_email')
+  const konten = ((data ?? []) as { login_email: string }[]).map((k) => k.login_email).filter(msErlaubt)
+  const fehler: string[] = []
+  for (const ich of konten) {
+    try {
+      const r = await gleicheAb(admin, ich, 45_000)
+      fehler.push(...r.todo.fehler.map((f) => `${ich}: ${f}`))
+    } catch (e) {
+      fehler.push(`${ich}: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+  return { konten: konten.length, fehler: fehler.slice(0, 20) }
 }

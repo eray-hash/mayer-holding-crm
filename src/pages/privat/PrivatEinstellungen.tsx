@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { AlertTriangle, Check, Link2, Unlink, RefreshCw } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
-import { starteMsAnmeldung, trenneMsKonto, useMsStatus } from '../../lib/microsoftKonto'
+import { gleicheJetztAb, starteMsAnmeldung, trenneMsKonto, useMsStatus, type AbgleichLauf } from '../../lib/microsoftKonto'
 import { PrimaryButton, SecondaryButton } from '../../components/ui'
 import { fmtDateTime } from '../../lib/dates'
 import { BriefboegenVerwalten } from '../../components/BriefboegenVerwalten'
@@ -115,7 +115,25 @@ function Inhalt() {
                 </div>
               )}
             </div>
+            <AbgleichZeile titel="To Do" lauf={status.abgleich?.todo} />
+            <AbgleichZeile titel="Kalender" lauf={status.abgleich?.kalender} />
             <div className="flex flex-wrap gap-2">
+              <SecondaryButton
+                onClick={async () => {
+                  setFehler('')
+                  setArbeitet(true)
+                  try {
+                    await gleicheJetztAb(ich)
+                  } catch (e) {
+                    setFehler(e instanceof Error ? e.message : String(e))
+                  } finally {
+                    setArbeitet(false)
+                  }
+                }}
+                disabled={arbeitet}
+              >
+                <RefreshCw size={16} /> Jetzt abgleichen
+              </SecondaryButton>
               {status.letzterFehler && (
                 <PrimaryButton onClick={verbinden} disabled={arbeitet}>
                   <RefreshCw size={16} /> Neu verbinden
@@ -132,6 +150,17 @@ function Inhalt() {
 
       {status?.erlaubt && <BriefboegenVerwalten />}
       {status?.erlaubt && status.verbunden && <MayerFilterEinstellungen />}
+    </div>
+  )
+}
+
+function AbgleichZeile({ titel, lauf }: { titel: string; lauf?: AbgleichLauf }) {
+  if (!lauf) return <div className="text-xs text-slate-400">{titel}: noch kein Abgleich (läuft alle 3 Minuten).</div>
+  return (
+    <div className="text-xs text-slate-500">
+      {titel}: zuletzt {fmtDateTime(lauf.am)} · {lauf.vonMicrosoft} von Microsoft, {lauf.nachMicrosoft} nach Microsoft, {lauf.geloescht} gelöscht
+      {lauf.konflikte ? `, ${lauf.konflikte} gleichzeitig geändert (jüngere Fassung gewann)` : ''}
+      {lauf.fehler?.length ? <span className="text-amber-700"> · Probleme: {lauf.fehler.join(' | ')}</span> : null}
     </div>
   )
 }

@@ -13,6 +13,14 @@ export type MsStatus = {
   verbundenAm?: string
   letzterFehler?: string | null
   letzterErfolg?: string | null
+  abgleich?: { todo?: AbgleichLauf; kalender?: AbgleichLauf }
+}
+
+export type AbgleichLauf = { am: string; vonMicrosoft: number; nachMicrosoft: number; geloescht: number; konflikte: number; fehler: string[] }
+
+export async function gleicheJetztAb(email: string): Promise<void> {
+  await callAuthenticated({ action: 'ms_abgleich_jetzt' })
+  await ladeMsStatus(email)
 }
 
 let zwischenspeicher: { email: string; status: MsStatus } | null = null

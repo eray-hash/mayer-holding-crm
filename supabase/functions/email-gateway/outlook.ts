@@ -61,12 +61,17 @@ async function vorgaben(admin: Db, ich: string): Promise<{ domains: string[]; ad
     admin.from('mitarbeiter').select('email'),
     admin.from('ms_konten').select('ms_adresse').eq('login_email', ich).maybeSingle(),
   ])
-  const eigene = new Set([ich, String(konto?.ms_adresse ?? '').toLowerCase()].filter(Boolean))
+  const msAdresse = String(konto?.ms_adresse ?? '').toLowerCase()
+  const eigene = new Set([ich, msAdresse].filter(Boolean))
   const pf = ((postfaecher ?? []) as { adresse: string }[]).map((p) => String(p.adresse).toLowerCase())
   const ma = ((leute ?? []) as { email: string }[]).map((m) => String(m.email ?? '').toLowerCase()).filter((e) => e.includes('@'))
   const adressen = [...new Set([...pf, ...ma])].filter((a) => !eigene.has(a)).sort()
-  const eigeneDomains = [...eigene].map((a) => a.split('@')[1] ?? '').filter(Boolean)
-  return { domains: standardMayerDomains(pf, ma, eigeneDomains), adressen }
+  // Nur die Domain des verbundenen Microsoft-Kontos selbst ausnehmen (falls privat und keine Freemail-Domain) —
+  // nie eine Firmen-Domain, unter der ein CRM-Postfach läuft. Die Domain des CRM-Logins bleibt Mayer-Domain.
+  const pfDomains = new Set(pf.map((a) => a.split('@')[1] ?? ''))
+  const msDomain = msAdresse.split('@')[1] ?? ''
+  const ausnahmen = msDomain && !pfDomains.has(msDomain) ? [msDomain] : []
+  return { domains: standardMayerDomains(pf, ma, ausnahmen), adressen }
 }
 
 async function ladeKontoStand(admin: Db, ich: string): Promise<Record<string, unknown>> {
@@ -275,9 +280,19 @@ export async function outlookAktion(admin: Db, ich: string, body: Record<string,
   }
 
   if (a === 'outlook_verschieben') {
+    // Löschen ist kein Verschieben: der Papierkorb (und alles darunter) geht nur über eine bestätigte Vormerkung.
+    const ziel = String(body.ordner ?? '')
+    if (['deleteditems', 'recoverableitemsdeletions'].includes(ziel.toLowerCase())) throw new MsFehler(400, 'Löschen nur nach Bestätigung.')
+    if (!ORDNER_NAMEN.has(ziel.toLowerCase())) {
+      const papierkorb = await graph<{ id: string }>(admin, ich, '/me/mailFolders/deleteditems?$select=id')
+      let pruef: string | undefined = ziel
+      for (let tiefe = 0; pruef && tiefe < 6; tiefe++) {
+        if (pruef === papierkorb.id) throw new MsFehler(400, 'Löschen nur nach Bestätigung.')
+        const o: { parentFolderId?: string } = await graph<{ parentFolderId?: string }>(admin, ich, `/me/mailFolders/${kennung(pruef, 'Ordner')}?$select=parentFolderId`).catch(() => ({}))
+        pruef = o.parentFolderId && o.parentFolderId !== pruef ? o.parentFolderId : undefined
+      }
+    }
     const m = await ladeMail(admin, ich, body.id, regel)
-    // Löschen ist kein Verschieben: der Papierkorb geht nur über eine bestätigte Vormerkung.
-    if (String(body.ordner).toLowerCase() === 'deleteditems') throw new MsFehler(400, 'Löschen nur nach Bestätigung.')
     const neu = await graph<Mail>(admin, ich, `/me/messages/${kennung(m.id)}/move`, { methode: 'POST', daten: { destinationId: decodeURIComponent(ordner(body.ordner)) } })
     return { ok: true, id: neu.id }
   }

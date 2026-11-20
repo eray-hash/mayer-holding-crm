@@ -39,6 +39,7 @@ export type MsStatus = {
   verbundenAm?: string
   letzterFehler?: string | null
   letzterErfolg?: string | null
+  abgleich?: { todo?: unknown; kalender?: unknown }
 }
 
 type Zugang = { erneuerung: string; zugang?: string; ablauf?: number }
@@ -67,7 +68,7 @@ export async function msStatus(admin: Db, email: string): Promise<MsStatus> {
   const erlaubt = msErlaubt(email)
   const eingerichtet = msEingerichtet()
   if (!erlaubt) return { erlaubt, eingerichtet, verbunden: false }
-  const { data } = await admin.from('ms_konten').select('ms_adresse, ms_name, verbunden_am, letzter_fehler, letzter_erfolg').eq('login_email', email.toLowerCase()).maybeSingle()
+  const { data } = await admin.from('ms_konten').select('ms_adresse, ms_name, verbunden_am, letzter_fehler, letzter_erfolg, stand').eq('login_email', email.toLowerCase()).maybeSingle()
   if (!data) return { erlaubt, eingerichtet, verbunden: false }
   return {
     erlaubt,
@@ -78,6 +79,7 @@ export async function msStatus(admin: Db, email: string): Promise<MsStatus> {
     verbundenAm: data.verbunden_am,
     letzterFehler: data.letzter_fehler,
     letzterErfolg: data.letzter_erfolg,
+    abgleich: { todo: data.stand?.todoLauf, kalender: data.stand?.kalenderLauf },
   }
 }
 
@@ -224,8 +226,13 @@ export async function msZugang(admin: Db, email: string, erzwingen = false): Pro
       continue
     }
     try {
-      const daten = await schluesselAnfrage({ grant_type: 'refresh_token', refresh_token: z.erneuerung })
-      const neu = zugangAus(daten, z.erneuerung)
+      // Nach dem Sperren neu lesen: ein anderer Aufruf kann gerade erneuert haben (sein alter Erneuerungsschlüssel
+      // wäre dann schon verbraucht). Hat sich der Zugang inzwischen geändert und ist gültig, diesen nehmen.
+      const aktuell = await ladeZugang(admin, email)
+      const gueltig = !!aktuell.zugang && (aktuell.ablauf ?? 0) > Date.now()
+      if (gueltig && (!erzwingen || aktuell.zugang !== z.zugang)) return aktuell.zugang!
+      const daten = await schluesselAnfrage({ grant_type: 'refresh_token', refresh_token: aktuell.erneuerung })
+      const neu = zugangAus(daten, aktuell.erneuerung)
       await speichereZugang(admin, email, neu)
       return neu.zugang!
     } catch (e) {
@@ -259,7 +266,8 @@ export async function graph<T = Record<string, unknown>>(admin: Db, email: strin
     if (o.daten !== undefined) kopf['content-type'] = 'application/json'
     const antwort = await fetch(url, { method: o.methode ?? 'GET', headers: kopf, body: o.daten === undefined ? undefined : JSON.stringify(o.daten) })
     if ((antwort.status === 429 || antwort.status === 503 || antwort.status === 504) && gewartet < 20_000) {
-      const sek = Math.min(Number(antwort.headers.get('retry-after')) || 2 ** versuch, 10)
+      const angabe = Number.parseFloat(antwort.headers.get('retry-after') ?? '')
+      const sek = Math.min(Number.isFinite(angabe) && angabe >= 0 ? angabe : 2 ** versuch, 10)
       gewartet += sek * 1000
       await warte(sek * 1000)
       continue

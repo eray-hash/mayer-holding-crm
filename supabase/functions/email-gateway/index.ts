@@ -231,7 +231,7 @@ import {
 } from './postfach.ts'
 import { loescheTermin, sendeErinnerungen, sendeTelegram, speichereTermin } from './kalender.ts'
 import { aboLink, kalenderAboAntwort } from './kalenderAbo.ts'
-import { MS_AKTIONEN, msAktion, msRueckrufAntwort } from './privatMicrosoft.ts'
+import { MS_AKTIONEN, msAbgleichAlle, msAktion, msRueckrufAntwort } from './privatMicrosoft.ts'
 import { BRIEF_AKTIONEN, briefAktion } from './briefe.ts'
 import { BUCHUNGS_AKTIONEN, buchungAktion } from './buchung.ts'
 import { sendeTodoErinnerungen } from './todoErinnerung.ts'
@@ -3013,7 +3013,7 @@ async function grenzeErreicht(admin: any, grenzen: { schluessel: string; hoechst
 // sind ohnehin ausgenommen.
 const OHNE_LOGIN = new Set(['request_password_reset', 'self_register'])
 // Zeitplan-Aufträge (pg_cron) weisen sich mit dem Zeitplan-Zeichen aus dem Vault aus.
-const ZEITPLAN_AKTIONEN = new Set(['termin_erinnerungen', 'postfach_abruf', 'classify_new_leads'])
+const ZEITPLAN_AKTIONEN = new Set(['termin_erinnerungen', 'postfach_abruf', 'classify_new_leads', 'ms_abgleich'])
 const ZUGANG_MERKER = new Map<string, number>()
 const TOKEN_PERSON = new Map<string, string>()
 
@@ -3317,6 +3317,17 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       const tage = Number(body.tage) > 0 ? Math.min(365, Number(body.tage)) : undefined
       const g = await holeGesendeteMails(admin, { postfachId, tage, budgetMs: 100000 })
       return new Response(JSON.stringify({ ok: true, ...g }), { headers })
+    }
+
+    // Zeitplan: Abgleich To Do/Kalender aller verbundenen Microsoft-Konten (Zugang: Zeitplan-Zeichen, siehe pruefeZugang).
+    if (body.action === 'ms_abgleich') {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      // Nur Zeitplan oder eigene Funktionen — ein angemeldeter Mitarbeiter gleicht über ms_abgleich_jetzt nur sein eigenes Konto ab.
+      const dienst = istDienstSchluessel((req.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '').trim())
+      const cron = (req.headers.get('x-cron-token') ?? '').trim()
+      const zeitplan = !dienst && cron ? (await admin.rpc('pruefe_cron_token', { t: cron })).data === true : false
+      if (!dienst && !zeitplan) return new Response(JSON.stringify({ error: 'Nur für den Zeitplan.' }), { status: 403, headers })
+      return new Response(JSON.stringify(await msAbgleichAlle(admin)), { headers })
     }
 
     // ---------- Microsoft-Konto im Bereich Privat (siehe privatMicrosoft.ts) ----------
