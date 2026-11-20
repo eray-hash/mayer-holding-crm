@@ -49,6 +49,8 @@ type Stil = {
   untertitelSchwarz?: boolean // erste Überschrift direkt nach dem Titel: schwarz, 12,5 pt (Erben-Fragebogen)
   handZeile?: number // Luft über Zeilen zum Ausfüllen von Hand
   kopfFelderNachVorn?: boolean // „Bereich: … / Kunde: …“ vor den Titel ziehen und auf jeder Seite neben dem Logo wiederholen
+  /** Zeilenabstand des Fließtexts in mm (Standard ZEILE) — enger, wo die Vorlage auf wenige Seiten passen muss. */
+  zeile?: number
   mitteBisParagraf?: boolean // Parteienblock (vor „§ 1“) mittig, wie die Vereinbarung im Scan
 }
 
@@ -57,7 +59,8 @@ const BLAU: [number, number, number] = [46, 116, 181]
 const STILE: Record<Kopfstil, Stil> = {
   brief: { schrift: 'times', logo: { ...LOGO_STANDARD, seiten: 'alle' }, rueck: { y: 41.2, seiten: 'erste' }, leiste: 'frei', fuss: 'mayerBalken', start1: 49, startN: 45, links: 21, rechts: 61, unten: 40 },
   fragebogen: { schrift: 'helvetica', logo: { ...LOGO_STANDARD, seiten: 'alle' }, rueck: { y: 38.5, seiten: 'alle' }, leiste: 'rahmen', fuss: 'mayer', start1: 47, startN: 47, links: 21, rechts: 18, unten: 30, titel: { groesse: 10.5, fett: false }, handZeile: 4.2 },
-  vertrag: { schrift: 'times', logo: { x: 17, y: 22, breite: 22, seiten: 'alle' }, fuss: 'seitenzahlLinks', start1: 62, startN: 56, links: 21, rechts: 20, unten: 22, titel: { groesse: 16, fett: true } },
+  // Etwas enger als der Scan (Logo höher, Zeilen 4,5 mm), damit die Vereinbarung auf zwei Seiten passt (Erays Wunsch, 20.11.2026).
+  vertrag: { schrift: 'times', logo: { x: 17, y: 18, breite: 22, seiten: 'alle' }, fuss: 'seitenzahlLinks', start1: 58, startN: 50, links: 21, rechts: 20, unten: 20, titel: { groesse: 16, fett: true }, zeile: 4.5 },
   kopffelder: { schrift: 'helvetica', logo: { x: 15, y: 9, breite: 15, seiten: 'alle' }, fuss: 'keiner', start1: 13, startN: 13, links: 21, rechts: 18, unten: 18, nebenLogo: 34, kopfFelderNachVorn: true, titel: { groesse: 12.5, fett: true } },
   protokoll: { schrift: 'helvetica', logo: { x: 12, y: 8, breite: 15, seiten: 'erste' }, fuss: 'keiner', start1: 13, startN: 18, links: 14, rechts: 14, unten: 18, nebenLogo: 33, titel: { groesse: 12.5, fett: false } },
   kooperation: { schrift: 'helvetica', logo: { x: 18, y: 25, breite: 20, seiten: 'alle' }, kooperation: true, fuss: 'mayer', start1: 72, startN: 58, links: 25, rechts: 22, unten: 30, titelMitte: true, titel: { groesse: 13, fett: true }, handZeile: 3.5 },
@@ -456,7 +459,7 @@ export function erzeugeVorlagePdf(params: {
   function setze(block: VorlagenBlock) {
     if (block.art !== 'ueberschrift' && block.art !== 'leer' && block.art !== 'titel') ersteUeberschrift = false
     if (block.art === 'leer') {
-      if (leerFolge++ < 1) y += ZEILE * 0.7
+      if (leerFolge++ < 1) y += (st.zeile ?? ZEILE) * 0.7
       return
     }
     leerFolge = 0
@@ -488,7 +491,7 @@ export function erzeugeVorlagePdf(params: {
       titelMitte = !!st.mitteBisParagraf && !paragrafErreicht && !/^wird\b/i.test(roh)
       // Brief: Datumszeile „Ulm, den …“ rechtsbündig wie im Original (10100-1, 10110-6)
       rechtsBuendig = st.fuss === 'mayerBalken' && /^[A-ZÄÖÜ][\wäöüß.-]*,\s+den\b/.test(roh)
-      absatz(block.teile, 'normal', st.schrift === 'times' ? 10.5 : 9.5, ZEILE, block.einzug)
+      absatz(block.teile, 'normal', st.schrift === 'times' ? 10.5 : 9.5, st.zeile ?? ZEILE, block.einzug)
       titelMitte = false
       rechtsBuendig = false
     } else if (block.rahmenlos) {
