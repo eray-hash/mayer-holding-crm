@@ -6,6 +6,7 @@ import { starteMsAnmeldung, trenneMsKonto, useMsStatus } from '../../lib/microso
 import { PrimaryButton, SecondaryButton } from '../../components/ui'
 import { fmtDateTime } from '../../lib/dates'
 import { BriefboegenVerwalten } from '../../components/BriefboegenVerwalten'
+import { MayerFilterEinstellungen } from '../../components/MayerFilterEinstellungen'
 
 /** Bereich Privat → Einstellungen: Microsoft-Konto (Outlook/Hotmail, To Do, Kalender) verbinden. */
 export function PrivatEinstellungen() {
@@ -130,6 +131,7 @@ function Inhalt() {
       </section>
 
       {status?.erlaubt && <BriefboegenVerwalten />}
+      {status?.erlaubt && status.verbunden && <MayerFilterEinstellungen />}
     </div>
   )
 }

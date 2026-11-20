@@ -15,7 +15,10 @@ import { entschluessele, verschluessele, zuBase64, zufallsKennung } from './gehe
 // deno-lint-ignore no-explicit-any
 type Db = any
 
-const ANMELDUNG = 'https://login.microsoftonline.com/common/oauth2/v2.0'
+// Mandant der App-Registrierung: Hasans App „Persönlicher Assistent“ ist auf „nur persönliche Microsoft-Konten“
+// eingestellt → `consumers`. Eine App für Geschäfts- und Privatkonten bräuchte `common` (Secret MS_MANDANT).
+const MANDANT = /^(consumers|common|organizations|[0-9a-f-]{36})$/.test(Deno.env.get('MS_MANDANT') ?? '') ? Deno.env.get('MS_MANDANT')! : 'consumers'
+const ANMELDUNG = `https://login.microsoftonline.com/${MANDANT}/oauth2/v2.0`
 export const GRAPH = 'https://graph.microsoft.com/v1.0'
 export const MS_RECHTE = ['offline_access', 'User.Read', 'Mail.ReadWrite', 'Mail.Send', 'Calendars.ReadWrite', 'Tasks.ReadWrite']
 const ANMELDUNG_GUELTIG_MS = 10 * 60 * 1000

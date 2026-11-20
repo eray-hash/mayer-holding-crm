@@ -1,12 +1,13 @@
 // Aktionen für das Microsoft-Konto im Bereich „Privat“ (Anmeldung, Status, Trennen; später Outlook, To Do, Kalender).
 // Alles gilt nur für den eigenen Login (ermittleAufrufer) und nur, wenn er in MS_ERLAUBT steht.
 import { ermittleAufrufer } from './postfach.ts'
+import { OUTLOOK_AKTIONEN, outlookAktion } from './outlook.ts'
 import { anmeldungAbschliessen, anmeldungStarten, MsFehler, msErlaubt, MsNichtVerbunden, msStatus, msTrennen } from '../_shared/microsoft.ts'
 
 // deno-lint-ignore no-explicit-any
 type Db = any
 
-export const MS_AKTIONEN = new Set(['ms_status', 'ms_anmelden_start', 'ms_trennen'])
+export const MS_AKTIONEN = new Set(['ms_status', 'ms_anmelden_start', 'ms_trennen', ...OUTLOOK_AKTIONEN])
 
 const antwort = (daten: unknown, headers: Record<string, string>, status = 200) => new Response(JSON.stringify(daten), { status, headers })
 
@@ -24,6 +25,7 @@ export async function msAktion(req: Request, admin: Db, body: Record<string, unk
       await msTrennen(admin, ich)
       return antwort({ ok: true }, headers)
     }
+    if (OUTLOOK_AKTIONEN.has(String(body.action))) return antwort(await outlookAktion(admin, ich, body), headers)
     return antwort({ error: 'Unbekannte Aktion' }, headers, 400)
   } catch (e) {
     if (e instanceof MsNichtVerbunden) return antwort({ error: e.message, nichtVerbunden: true }, headers, 409)
