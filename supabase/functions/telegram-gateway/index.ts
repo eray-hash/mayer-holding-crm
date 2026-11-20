@@ -107,12 +107,28 @@ async function sendTelegramMessage(chatId: number, text: string): Promise<void> 
   }
   // Telegram erlaubt höchstens 4096 Zeichen pro Nachricht.
   for (let i = 0; i < text.length; i += 4000) {
-    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ chat_id: chatId, text: text.slice(i, i + 4000) }),
-    })
-    if (!res.ok) console.error('sendMessage fehlgeschlagen:', res.status, await res.text().catch(() => ''))
+    const teil = text.slice(i, i + 4000)
+    // Einmal nachfassen; bleibt es erfolglos, landet der Grund in app_fehler (Abendbericht), damit eine
+    // verlorene Antwort auffällt (20.11.2026: zwei Antworten des privaten Bots kamen nie an).
+    let grund = ''
+    for (let versuch = 0; versuch < 2; versuch++) {
+      try {
+        const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ chat_id: chatId, text: teil }),
+        })
+        if (res.ok) { grund = ''; break }
+        grund = `${res.status} ${(await res.text().catch(() => '')).slice(0, 300)}`
+      } catch (err) {
+        grund = err instanceof Error ? err.message : String(err)
+      }
+      if (versuch === 0) await new Promise((r) => setTimeout(r, 1500))
+    }
+    if (grund) {
+      console.error('sendMessage fehlgeschlagen:', grund)
+      await supa().from('app_fehler').insert({ seite: imPrivatBot() ? 'telegram:privat' : 'telegram', meldung: 'Telegram-Antwort nicht zugestellt', details: JSON.stringify({ grund, chatId, laenge: teil.length }) }).then(() => {}, () => {})
+    }
   }
 }
 
