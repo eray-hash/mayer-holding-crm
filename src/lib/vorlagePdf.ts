@@ -374,10 +374,11 @@ export function erzeugeVorlagePdf(params: {
       else if (rechtsBuendig) zeichneZeile(z, xStart() + breite - zeilenBreite(), y)
       else zeichneZeile(z, x0, y)
       y += zeilenhoehe
-      // Freitext-Feld: zwei weitere Schreiblinien über die ganze Breite.
+      // Freitext-Feld: zwei weitere Schreiblinien über die ganze Breite — nur so viele, wie noch auf die Seite
+      // passen. Sie lösen nie einen Seitenwechsel aus (z. B. bleibt die Checkliste so bei einer Seite).
       if (vonHand && letztes?.feld && FREITEXT.test(letztes.name ?? '')) {
         for (let n = 0; n < 2; n++) {
-          platz(vorlauf + zeilenhoehe)
+          if (!messen && y + vorlauf + zeilenhoehe > seitenHoehe - UNTEN) break
           y += vorlauf
           if (!messen) {
             doc.setDrawColor(120)
