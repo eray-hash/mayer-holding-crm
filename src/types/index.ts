@@ -10,13 +10,15 @@ export type Bereich =
   | 'akademie'
   | 'finanzierungen'
   | 'privat'
+  // Bücher & Verlag (21.11.2026): führt Bücher statt Kunden (eigene Tabellen buecher/buch_kontakte).
+  | 'buecher'
 
 // Bereiche, die eine Kunden-/Mandanten-Liste vom Typ Kunde[] führen. "immobilien" selbst führt
 // stattdessen Objekte — die zugehörige Kunden-/Interessentenliste läuft separat unter
 // "immobilienkunden" (eigener Status-Pfad, da "immobilien" als Bereichs-Key bereits für den
 // Objekt-Status (Akquise/Vermarktung/...) vergeben ist, siehe statusNetworks.ts) — Basis für die
 // bereichsübergreifende Objekt-Kunde-Zuweisung.
-export type KundeBereich = Exclude<Bereich, 'immobilien'>
+export type KundeBereich = Exclude<Bereich, 'immobilien' | 'buecher'>
 
 /** Bereiche, nach denen ein privater Kontakt geführt werden kann (kunden.privat_art). */
 export type PrivatArt = Exclude<KundeBereich, 'privat'>
@@ -836,6 +838,11 @@ export type ToDoEintrag = {
   erinnernUm?: string
   erinnertAm?: string
   stundensatz?: number
+  /** Herkunft der Prio: 'hand' = von Hand (bleibt), 'auto' = automatische Priorisierung (Server), leer = noch offen. */
+  prioQuelle?: 'hand' | 'auto'
+  /** Nur vom Server gesetzt (todoPriorisierung.ts): Kurzbegründung und Zeitpunkt der automatischen Priorisierung. */
+  prioGrund?: string
+  prioAm?: string
 }
 
 // ---------- Arbeitsorganisation der Abteilung (Tabelle abteilung_eintraege: je Eintrag eine Zeile) ----------

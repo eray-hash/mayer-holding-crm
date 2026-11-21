@@ -70,6 +70,9 @@ import { Kostenvoranschlaege } from './pages/kostenvoranschlaege/Kostenvoranschl
 import { Checkliste } from './pages/checkliste/Checkliste'
 import { Wochenbesprechung } from './pages/besprechung/Wochenbesprechung'
 import { Seminare } from './pages/akademie/Seminare'
+import { BuecherListe } from './pages/buecher/BuecherListe'
+import { BuchDetail } from './pages/buecher/BuchDetail'
+import { BuchKontakte } from './pages/buecher/BuchKontakte'
 import { SuperuserSeite } from './pages/superuser/SuperuserSeite'
 import { ProjekteListe } from './pages/projekte/ProjekteListe'
 import { PortalLogin } from './pages/portal/PortalLogin'
@@ -81,6 +84,7 @@ import { PortalDokumente } from './pages/portal/PortalDokumente'
 import { PublicFeedbackbogen } from './pages/formulare/PublicFeedbackbogen'
 import { PublicVollmachtErben } from './pages/formulare/PublicVollmachtErben'
 import { PublicExpose } from './pages/formulare/PublicExpose'
+import { PublicObjektPortal } from './pages/formulare/PublicObjektPortal'
 import { PublicMandantenfragebogenErben } from './pages/formulare/PublicMandantenfragebogenErben'
 import { PublicVollmachtBeratung } from './pages/formulare/PublicVollmachtBeratung'
 import { PublicSelbstauskunft } from './pages/formulare/PublicSelbstauskunft'
@@ -197,6 +201,12 @@ function AdminRoutesContent() {
         <Route path="/finanzierungen/vorlagen/:kind" element={<RequireBereich bereich="finanzierungen"><VorlagenPageFinanzierungen /></RequireBereich>} />
         <Route path="/finanzierungen/projekte" element={<RequireBereich bereich="finanzierungen"><ProjekteListe /></RequireBereich>} />
         <Route path="/finanzierungen/todo" element={<RequireBereich bereich="finanzierungen"><BereichToDoListe bereich="finanzierungen" label="Finanzierungen" /></RequireBereich>} />
+
+        {/* Bücher & Verlag (21.11.2026) */}
+        <Route path="/buecher" element={<RequireBereich bereich="buecher"><BuecherListe /></RequireBereich>} />
+        <Route path="/buecher/kontakte" element={<RequireBereich bereich="buecher"><BuchKontakte /></RequireBereich>} />
+        <Route path="/buecher/todo" element={<RequireBereich bereich="buecher"><BereichToDoListe bereich="buecher" label="Bücher & Verlag" /></RequireBereich>} />
+        <Route path="/buecher/:id" element={<RequireBereich bereich="buecher"><BuchDetail /></RequireBereich>} />
 
         <Route path="*" element={<RootRedirect />} />
       </Routes>
@@ -359,6 +369,7 @@ function AppRoutes() {
         <Route path="/formular/feedbackbogen" element={<PublicFeedbackbogen />} />
         <Route path="/formular/vollmacht/erben/:mandantId" element={<PublicVollmachtErben />} />
         <Route path="/formular/expose/:vorschlagId" element={<PublicExpose />} />
+        <Route path="/formular/objekt/:token" element={<PublicObjektPortal />} />
         <Route path="/formular/mandantenfragebogen/erben/:mandantId" element={<PublicMandantenfragebogenErben />} />
         <Route path="/formular/vollmacht/beratung/:typ/:kundeId" element={<PublicVollmachtBeratung />} />
         <Route path="/formular/vollmacht/privat/:mandantId" element={<PublicVollmachtErben bereich="privat" />} />

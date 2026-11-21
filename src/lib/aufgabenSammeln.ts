@@ -17,6 +17,7 @@ const BEREICH_NAME: Record<string, string> = {
   betriebsformen: 'Betriebsformen',
   akademie: 'Akademie',
   finanzierungen: 'Finanzierungen',
+  buecher: 'Bücher & Verlag',
 }
 
 export function sammleAufgaben(state: AppData, nameZuEmail: Map<string, string>, wiedervorlagen: Wiedervorlage[] = []): RohAufgabe[] {

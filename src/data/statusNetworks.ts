@@ -894,6 +894,42 @@ export const IMMOBILIEN_KUNDEN_STATUS: Record<string, StatusNode> = {
 
 export const IMMOBILIEN_KUNDEN_HAUPTPFAD = ['interessent', 'besichtigung', 'angebot', 'verhandlung', 'abgeschlossen']
 
+// Bücher & Verlag (21.11.2026): Stufen eines eigenen Buchs von der Idee bis zum Vertrieb. Jede Stufe
+// darf jede andere als Nächstes haben (Bücher springen in der Praxis oft zurück, z. B. Lektorat nach
+// der Illustration), der Hauptpfad gibt nur die übliche Reihenfolge vor.
+const BUECHER_STUFEN: { id: string; label: string; color: string; hauptpfad: boolean }[] = [
+  { id: 'idee', label: 'Idee', color: 'bg-slate-100 text-slate-700', hauptpfad: true },
+  { id: 'manuskript', label: 'Manuskript', color: 'bg-sky-100 text-sky-700', hauptpfad: true },
+  { id: 'lektorat', label: 'Lektorat', color: 'bg-indigo-100 text-indigo-700', hauptpfad: true },
+  { id: 'illustration', label: 'Illustration', color: 'bg-violet-100 text-violet-700', hauptpfad: true },
+  { id: 'satz', label: 'Satz & Gestaltung', color: 'bg-fuchsia-100 text-fuchsia-700', hauptpfad: true },
+  { id: 'druckfreigabe', label: 'Druckfreigabe', color: 'bg-amber-100 text-amber-700', hauptpfad: true },
+  { id: 'druck', label: 'Im Druck', color: 'bg-orange-100 text-orange-700', hauptpfad: true },
+  { id: 'veroeffentlicht', label: 'Veröffentlicht', color: 'bg-emerald-100 text-emerald-700', hauptpfad: true },
+  { id: 'vertrieb', label: 'Im Vertrieb', color: 'bg-teal-100 text-teal-700', hauptpfad: true },
+  { id: 'ruht', label: 'Ruht', color: 'bg-stone-100 text-stone-600', hauptpfad: false },
+]
+
+export const BUECHER_HAUPTPFAD = BUECHER_STUFEN.filter((s) => s.hauptpfad).map((s) => s.id)
+
+export const BUECHER_STATUS: Record<string, StatusNode> = Object.fromEntries(
+  BUECHER_STUFEN.map((s, i) => [
+    s.id,
+    {
+      id: s.id,
+      label: s.label,
+      color: s.color,
+      isTerminal: false,
+      isMainPath: s.hauptpfad,
+      // Übliche nächste Stufe zuerst (für "Weiter →"), danach alle übrigen.
+      next: [
+        ...(s.hauptpfad && BUECHER_STUFEN[i + 1]?.hauptpfad ? [BUECHER_STUFEN[i + 1].id] : []),
+        ...BUECHER_STUFEN.filter((x) => x.id !== s.id && !(s.hauptpfad && x.id === BUECHER_STUFEN[i + 1]?.id)).map((x) => x.id),
+      ],
+    },
+  ]),
+)
+
 type StatusBereich =
   | 'beratung'
   | 'immobilien'
@@ -904,6 +940,7 @@ type StatusBereich =
   | 'akademie'
   | 'finanzierungen'
   | 'privat'
+  | 'buecher'
 
 export function getStatusMap(bereich: StatusBereich): Record<string, StatusNode> {
   if (bereich === 'beratung') return BERATUNG_STATUS
@@ -914,6 +951,7 @@ export function getStatusMap(bereich: StatusBereich): Record<string, StatusNode>
   if (bereich === 'betriebsformen') return BETRIEBSFORMEN_STATUS
   if (bereich === 'akademie') return AKADEMIE_STATUS
   if (bereich === 'privat') return PRIVAT_STATUS
+  if (bereich === 'buecher') return BUECHER_STATUS
   return FINANZIERUNGEN_STATUS
 }
 
@@ -926,6 +964,7 @@ export function getHauptpfad(bereich: StatusBereich): string[] {
   if (bereich === 'betriebsformen') return BETRIEBSFORMEN_HAUPTPFAD
   if (bereich === 'akademie') return AKADEMIE_HAUPTPFAD
   if (bereich === 'privat') return PRIVAT_HAUPTPFAD
+  if (bereich === 'buecher') return BUECHER_HAUPTPFAD
   return FINANZIERUNGEN_HAUPTPFAD
 }
 

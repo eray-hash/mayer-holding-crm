@@ -23,7 +23,7 @@ import {
   ChevronDown,
   Phone,
   Lock,
-  Search, CalendarDays, BarChart3, Lightbulb, ListChecks, Eye, ShieldCheck, Calculator, ClipboardList, Presentation } from 'lucide-react'
+  Search, CalendarDays, BarChart3, Lightbulb, ListChecks, Eye, ShieldCheck, Calculator, ClipboardList, Presentation, Library } from 'lucide-react'
 import type { Bereich } from '../types'
 import { useApp } from '../context/AppContext'
 import { useAuth } from '../context/AuthContext'
@@ -48,6 +48,7 @@ import { SidebarBetriebsformen } from './SidebarBetriebsformen'
 import { SidebarAkademie } from './SidebarAkademie'
 import { SidebarFinanzierungen } from './SidebarFinanzierungen'
 import { SidebarPrivat } from './SidebarPrivat'
+import { SidebarBuecher } from './SidebarBuecher'
 
 const BEREICHE: {
   id: Bereich
@@ -64,6 +65,7 @@ const BEREICHE: {
   { id: 'betriebsformen', label: 'Betriebsformen', beschreibung: 'Rechtsformberatung & Umwandlungen', icon: Scale, pfad: '/betriebsformen', Sidebar: SidebarBetriebsformen },
   { id: 'akademie', label: 'Akademie', beschreibung: 'Kurse, Seminare & Teilnehmer', icon: GraduationCap, pfad: '/akademie', Sidebar: SidebarAkademie },
   { id: 'finanzierungen', label: 'Finanzierungen', beschreibung: 'Vermögensanlage "Ulmer Cash" & Beteiligungen', icon: PiggyBank, pfad: '/finanzierungen', Sidebar: SidebarFinanzierungen },
+  { id: 'buecher', label: 'Bücher & Verlag', beschreibung: 'Eigene Bücher von der Idee bis zum Verkauf', icon: Library, pfad: '/buecher', Sidebar: SidebarBuecher },
   { id: 'privat', label: 'Privat', beschreibung: 'Eigene Kontakte & Notizen — nur für dich sichtbar', icon: Lock, pfad: '/privat', Sidebar: SidebarPrivat },
 ]
 

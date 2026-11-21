@@ -28,6 +28,7 @@ const BEREICH_INHALT: Partial<Record<Bereich, string>> = {
   betriebsformen: 'Mandanten',
   akademie: 'Teilnehmer',
   finanzierungen: 'Mandanten',
+  buecher: 'Eigene Bücher, Buch-Kontakte',
 }
 
 // In fester Reihenfolge speichern, damit die Anzeige überall gleich aussieht.

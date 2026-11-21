@@ -24,6 +24,9 @@ import { ObjektWeitergabenSection } from '../../components/ObjektWeitergabenSect
 import { ObjektAbrechnungSection } from '../../components/ObjektAbrechnungSection'
 import { ObjektUnterlagenAnfordern } from '../../components/ObjektUnterlagenAnfordern'
 import { ObjektBewertungSection } from '../../components/ObjektBewertungSection'
+import { ObjektFreigaben } from '../../components/ObjektFreigaben'
+import { ObjektBesichtigungenSection } from '../../components/ObjektBesichtigungenSection'
+import { ObjektEigentuemerbericht } from '../../components/ObjektEigentuemerbericht'
 import { ExposePdfKnopf } from '../../components/ExposePdf'
 import { ObjektAnGesucheSenden } from '../../components/ObjektAnGesucheSenden'
 import { immoPfade, immoObjekte, privateGesuche } from './privatModus'
@@ -35,16 +38,19 @@ const TABS = [
   { id: 'bewertung', label: 'Bewertung' },
   { id: 'fragen', label: 'Fragen' },
   { id: 'weitergaben', label: 'Weitergaben' },
+  { id: 'besichtigungen', label: 'Besichtigungen' },
+  { id: 'eigentuemerbericht', label: 'Eigentümerbericht' },
   { id: 'abrechnung', label: 'Abrechnung' },
   { id: 'dokumente', label: 'Dokumente' },
   { id: 'finanzierung', label: 'Finanzierung' },
   { id: 'vorschlaege', label: 'Gesuche & Vorschläge' },
+  { id: 'interessenten', label: 'Interessenten-Portal' },
 ]
 
 // Privater Bereich: ohne die Abläufe des Mayer-Teams — Fragen an die Geschäftsführung, Weitergaben (Nachweis
 // im gemeinsamen Verzeichnis), Abrechnung (Zeiterfassung), Finanzierungen und Vorschläge liegen in Tabellen,
 // die alle Kollegen mit Immobilien-Freigabe sehen. „Gesuche“ gleicht nur mit den eigenen Gesuchen ab.
-const NUR_MAYER_TABS = new Set(['fragen', 'weitergaben', 'abrechnung', 'finanzierung'])
+const NUR_MAYER_TABS = new Set(['fragen', 'weitergaben', 'abrechnung', 'finanzierung', 'interessenten', 'besichtigungen', 'eigentuemerbericht'])
 const TABS_PRIVAT = TABS.filter((t) => !NUR_MAYER_TABS.has(t.id)).map((t) => (t.id === 'vorschlaege' ? { ...t, label: 'Gesuche' } : t))
 
 const VORSCHLAG_STATUS_LABEL: Record<string, string> = { offen: 'Offen', akzeptiert: 'Angenommen', abgelehnt: 'Abgelehnt' }
@@ -424,8 +430,13 @@ export function ObjektDetail({ privat }: { privat?: boolean } = {}) {
 
       {tab === 'weitergaben' && !privat && <ObjektWeitergabenSection key={objekt.id} objekt={objekt} />}
 
+      {/* Besichtigungen und Eigentümerbericht (21.11.2026): Tabelle besichtigungen ist Mayer-Team-Sache (Freigabe Immobilien). */}
+      {tab === 'besichtigungen' && !privat && <ObjektBesichtigungenSection key={objekt.id} objekt={objekt} />}
+      {tab === 'eigentuemerbericht' && !privat && <ObjektEigentuemerbericht key={objekt.id} objekt={objekt} />}
+
       {tab === 'abrechnung' && !privat && <ObjektAbrechnungSection key={objekt.id} objekt={objekt} />}
       {tab === 'bewertung' && <ObjektBewertungSection key={objekt.id} objekt={objekt} />}
+      {tab === 'interessenten' && !privat && <ObjektFreigaben key={objekt.id} objekt={objekt} />}
 
       {tab === 'finanzierung' && !privat && (
         <div>

@@ -11,6 +11,8 @@ export const ALLE_BEREICHE: { id: Bereich; label: string }[] = [
   { id: 'betriebsformen', label: 'Betriebsformen' },
   { id: 'akademie', label: 'Akademie' },
   { id: 'finanzierungen', label: 'Finanzierungen' },
+  // Bücher & Verlag (21.11.2026): eigene Bücher statt Kunden, Tabellen buecher/buch_kontakte.
+  { id: 'buecher', label: 'Bücher & Verlag' },
 ]
 
 export function bereichLabel(bereich: Bereich): string {

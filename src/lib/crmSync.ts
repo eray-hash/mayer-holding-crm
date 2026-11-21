@@ -567,6 +567,8 @@ function todoToRow(t: ToDoEintrag) {
     // Erinnerungszeit nur mitschicken, wenn das Fenster sie kennt — sonst könnte ein älterer Stand im
     // Browser eine vom Assistenten gesetzte Erinnerung überschreiben. '' = bewusst gelöscht.
     ...(t.erinnernUm !== undefined ? { erinnern_um: t.erinnernUm || null } : {}),
+    // prio_grund und prio_am schreibt nur der Server (automatische Priorisierung, todoPriorisierung.ts).
+    prio_quelle: t.prioQuelle ?? null,
   }
 }
 
@@ -604,6 +606,9 @@ function rowToTodo(row: any): ToDoEintrag {
     stundensatz: row.stundensatz ?? undefined,
     erinnernUm: row.erinnern_um ?? undefined,
     erinnertAm: row.erinnert_am ?? undefined,
+    prioQuelle: row.prio_quelle === 'hand' || row.prio_quelle === 'auto' ? row.prio_quelle : undefined,
+    prioGrund: row.prio_grund ?? undefined,
+    prioAm: row.prio_am ?? undefined,
   }
 }
 
@@ -1156,6 +1161,7 @@ export async function hydrateFromSupabase(): Promise<HydratedData | null> {
     akademie: [],
     finanzierungen: [],
     privat: [],
+    buecher: [],
   }
   for (const row of vorlagenRes.data ?? []) {
     vorlagen[row.bereich as Bereich].push(rowToVorlage(row))
