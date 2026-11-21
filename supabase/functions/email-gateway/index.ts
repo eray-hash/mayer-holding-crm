@@ -2862,7 +2862,11 @@ async function classifyNewLeads(): Promise<{ geprueft: number; vorgeschlagen: nu
 
   const gruppenMap = new Map<string, LeadGruppe>()
   for (const e of emails) {
-    const email = (e.von ?? '').trim().toLowerCase()
+    // Manche Absenderfelder enthalten Name und Adresse in einem ('"Name" <a@b.de> (x)'). Ohne Herauslösen
+    // passte die Antwort der KI (nur die Adresse) nie zur Gruppe, und derselbe Absender wurde bei jedem
+    // Lauf alle 10 Minuten erneut geprüft (gefunden 21.11.2026: zwei Spam-Absender seit dem 13.11.).
+    const roh = (e.von ?? '').trim().toLowerCase()
+    const email = (/<([^<>\s]+@[^<>\s]+)>/.exec(roh)?.[1] ?? roh).trim()
     if (!email || !email.includes('@')) continue
     const domain = email.split('@')[1]
     if (INTERNE_DOMAINS.includes(domain)) continue
@@ -2910,6 +2914,16 @@ async function classifyNewLeads(): Promise<{ geprueft: number; vorgeschlagen: nu
   let uebersprungen = 0
   for (const batch of batches) {
     const ergebnisse = await classifyLeadBatch(batch)
+    // Absender, zu denen die KI keine zuordenbare Antwort gibt, trotzdem vermerken (unten) — sonst Schleife.
+    const beantwortet = new Set(ergebnisse.map((r) => (r.email ?? '').trim().toLowerCase()))
+    for (const g of batch) {
+      if (beantwortet.has(g.email)) continue
+      await supabase.from('vorgeschlagene_leads').upsert(
+        { quelle: 'email-analyse', email: g.email, name: g.vonName, status: 'nicht_relevant', notiz: 'Keine eindeutige Einordnung durch die KI — bei Bedarf von Hand prüfen.', erstellt_am: new Date().toISOString() },
+        { onConflict: 'email' },
+      )
+      uebersprungen++
+    }
     for (const r of ergebnisse) {
       const gruppe = byEmail.get((r.email ?? '').trim().toLowerCase())
       if (!gruppe) continue
