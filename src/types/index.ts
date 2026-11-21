@@ -72,6 +72,47 @@ export type Rechnung = {
   leistungBezeichnung?: string
   leistungEinheit?: 'Stunde' | 'Tag'
   leistungMenge?: number
+  // Seit 21.11.2026 (Rechnungen zum Anklicken, PDF, Versand, Zahlungen, Mahnungen):
+  /** Positionen mit Netto-Einzelpreisen; leer bei älteren Rechnungen (dann gelten netto/brutto von Hand). */
+  positionen?: RechnungPosition[]
+  ustSatz?: number
+  /** Leistungsdatum oder -zeitraum als Text; leer = entspricht dem Rechnungsdatum. */
+  leistungszeitraum?: string
+  /** Empfänger-Anschrift so, wie sie auf der Rechnung steht (eine Zeile je Angabe). */
+  anschrift?: string
+  /** Zusatztext auf der Rechnung (z. B. Grund für 0 % Umsatzsteuer). */
+  hinweis?: string
+  /** Interne Notiz, erscheint nicht auf der Rechnung. */
+  notiz?: string
+  zahlungen?: RechnungZahlung[]
+  mahnungen?: RechnungMahnung[]
+  versendetAm?: string
+  versendetAn?: string
+  bezahltAm?: string
+  /** Zuletzt erzeugtes Rechnungs-PDF in den Dokumenten der Akte. */
+  dokument?: { kundeId: string; dokumentId: string; name: string }
+  /** Aus diesem Kostenvoranschlag übernommen. */
+  kvId?: string
+}
+
+export type RechnungPosition = { id: string; bezeichnung: string; menge: number; einheit: string; einzelpreis: number; leistungId?: string }
+
+export type RechnungZahlung = { id: string; datum: string; betrag: number; notiz?: string; erfasstVon?: string }
+
+/** Ein Schritt im Mahnwesen: Zahlungserinnerung, 1./2. Mahnung oder Übergabe ans Inkasso. */
+export type RechnungMahnung = {
+  id: string
+  datum: string
+  stufe: MahnstufeId
+  /** Mahngebühr in Euro (0 bei der Zahlungserinnerung üblich). */
+  gebuehr: number
+  /** Neue Zahlungsfrist aus dem Schreiben. */
+  neueFrist?: string
+  /** 'email' = per Mail an `an` gesendet, 'pdf' = nur als PDF erstellt (z. B. per Post). */
+  weg: 'email' | 'pdf' | 'vermerk'
+  an?: string
+  dokumentName?: string
+  von?: string
 }
 
 export type MahnstufeId = 'erinnerung' | 'mahnung1' | 'mahnung2' | 'inkasso'
@@ -97,6 +138,13 @@ export type Verbindlichkeit = {
   notiz?: string
   quelle: 'email-automatisch' | 'manuell'
   quellEmailId?: string
+  // Seit 21.11.2026:
+  kategorie?: string
+  bezahltAm?: string
+  /** Von Hand hochgeladener Beleg (Pfad im Speicher "kunden-dokumente", Ordner verbindlichkeiten/). */
+  beleg?: { name: string; url: string; typ?: string }
+  /** Automatisch erkannte Einträge gelten als "zu prüfen", bis jemand die Angaben bestätigt. */
+  geprueft?: boolean
 }
 
 export type Protokoll = {

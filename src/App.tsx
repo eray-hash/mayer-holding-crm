@@ -26,6 +26,7 @@ import { FragenAnGF } from './pages/immobilien/FragenAnGF'
 import { Zeiterfassung } from './pages/immobilien/Zeiterfassung'
 import { TagesablaufSeite } from './pages/immobilien/Tagesablauf'
 import { Weitergaben } from './pages/immobilien/Weitergaben'
+import { AutoNachrichten } from './pages/immobilien/AutoNachrichten'
 import { Finanzierungen } from './pages/immobilien/Finanzierungen'
 import { VorlagenPageImmobilien } from './pages/immobilien/VorlagenPageImmobilien'
 import { ErbenListe } from './pages/erben/ErbenListe'
@@ -166,6 +167,7 @@ function AdminRoutesContent() {
         <Route path="/immobilien/zeiterfassung" element={<RequireBereich bereich="immobilien"><Zeiterfassung /></RequireBereich>} />
         <Route path="/immobilien/tagesablauf" element={<RequireBereich bereich="immobilien"><TagesablaufSeite /></RequireBereich>} />
         <Route path="/immobilien/weitergaben" element={<RequireBereich bereich="immobilien"><Weitergaben /></RequireBereich>} />
+        <Route path="/immobilien/automatische-nachrichten" element={<RequireBereich bereich="immobilien"><AutoNachrichten /></RequireBereich>} />
         <Route path="/immobilien/finanzierungen" element={<RequireBereich bereich="immobilien"><Finanzierungen /></RequireBereich>} />
         <Route path="/immobilien/vorlagen/:kind" element={<RequireBereich bereich="immobilien"><VorlagenPageImmobilien /></RequireBereich>} />
         <Route path="/immobilien/projekte" element={<RequireBereich bereich="immobilien"><ProjekteListe /></RequireBereich>} />

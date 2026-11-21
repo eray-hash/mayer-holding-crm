@@ -26,6 +26,7 @@ import { ObjektUnterlagenAnfordern } from '../../components/ObjektUnterlagenAnfo
 import { ObjektBewertungSection } from '../../components/ObjektBewertungSection'
 import { ObjektFreigaben } from '../../components/ObjektFreigaben'
 import { ObjektBesichtigungenSection } from '../../components/ObjektBesichtigungenSection'
+import { ObjektAutoNachrichten } from '../../components/AutoNachrichtenListe'
 import { ObjektEigentuemerbericht } from '../../components/ObjektEigentuemerbericht'
 import { ExposePdfKnopf } from '../../components/ExposePdf'
 import { ObjektAnGesucheSenden } from '../../components/ObjektAnGesucheSenden'
@@ -432,11 +433,13 @@ export function ObjektDetail({ privat }: { privat?: boolean } = {}) {
 
       {/* Besichtigungen und Eigentümerbericht (21.11.2026): Tabelle besichtigungen ist Mayer-Team-Sache (Freigabe Immobilien). */}
       {tab === 'besichtigungen' && !privat && <ObjektBesichtigungenSection key={objekt.id} objekt={objekt} />}
+      {tab === 'besichtigungen' && !privat && <ObjektAutoNachrichten key={`an-${objekt.id}`} objektId={objekt.id} art="besichtigung" />}
       {tab === 'eigentuemerbericht' && !privat && <ObjektEigentuemerbericht key={objekt.id} objekt={objekt} />}
 
       {tab === 'abrechnung' && !privat && <ObjektAbrechnungSection key={objekt.id} objekt={objekt} />}
       {tab === 'bewertung' && <ObjektBewertungSection key={objekt.id} objekt={objekt} />}
       {tab === 'interessenten' && !privat && <ObjektFreigaben key={objekt.id} objekt={objekt} />}
+      {tab === 'interessenten' && !privat && <ObjektAutoNachrichten key={`an-${objekt.id}`} objektId={objekt.id} art="portal" />}
 
       {tab === 'finanzierung' && !privat && (
         <div>

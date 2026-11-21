@@ -234,7 +234,7 @@ export function KundenDetail() {
             </thead>
             <tbody>
               {rechnungen.map((r) => (
-                <tr key={r.id} className="border-b border-slate-50 last:border-0">
+                <tr key={r.id} onClick={() => navigate(`/beratung/rechnungen?rechnung=${encodeURIComponent(r.id)}`)} className="cursor-pointer border-b border-slate-50 last:border-0 hover:bg-slate-50">
                   <td className="px-4 py-3 font-medium text-slate-700">{r.nummer}</td>
                   <td className="px-4 py-3 text-slate-500">{fmtDate(r.datum)}</td>
                   <td className="px-4 py-3 text-slate-700">{fmtEURCent(r.betragBrutto)}</td>
@@ -244,6 +244,11 @@ export function KundenDetail() {
               {rechnungen.length === 0 && <tr><td colSpan={4} className="px-4 py-8 text-center text-slate-400">Keine Rechnungen.</td></tr>}
             </tbody>
           </table>
+          <div className="border-t border-slate-100 px-4 py-2.5">
+            <button type="button" onClick={() => navigate(`/beratung/rechnungen?neu=${encodeURIComponent(kunde.id)}`)} className="text-sm font-medium text-accent-600 hover:text-accent-700">
+              + Neue Rechnung für diesen Kunden
+            </button>
+          </div>
         </Card>
       )}
 

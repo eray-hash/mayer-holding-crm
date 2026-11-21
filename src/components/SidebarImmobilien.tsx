@@ -1,6 +1,6 @@
 import { useId, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { Building2, Landmark, FileText, ChevronDown, ChevronLeft, ChevronRight, ScrollText, Sun, LayoutGrid, UserCog, ListTodo, Users, Search, MessageCircleQuestion, Clock, CalendarClock, Forward } from 'lucide-react'
+import { Building2, Landmark, FileText, ChevronDown, ChevronLeft, ChevronRight, ScrollText, Sun, LayoutGrid, UserCog, ListTodo, Users, Search, MessageCircleQuestion, Clock, CalendarClock, Forward, MailCheck } from 'lucide-react'
 import { UngeklaertSideLink } from './UngeklaertSideLink'
 import { useApp } from '../context/AppContext'
 import { OBJEKT_GRUPPEN } from '../data/constants'
@@ -65,7 +65,8 @@ export function SidebarImmobilien({ collapsed, onToggle }: { collapsed: boolean;
       isActive('/immobilien/objekte') ||
       isActive('/immobilien/kunden') ||
       isActive('/immobilien/gesuche') ||
-      isActive('/immobilien/weitergaben'),
+      isActive('/immobilien/weitergaben') ||
+      isActive('/immobilien/automatische-nachrichten'),
     abstimmung: isActive('/immobilien/fragen') || isActive('/immobilien/projekte'),
     unterlagen: isActive('/immobilien/vorlagen') || isActive('/immobilien/finanzierungen') || location.pathname === PFAD_UNGEKLAERT,
   }
@@ -144,6 +145,7 @@ export function SidebarImmobilien({ collapsed, onToggle }: { collapsed: boolean;
           <SideLink to="/immobilien/kunden" icon={<Users size={17} />} label="Kontakte" collapsed={collapsed} active={isActive('/immobilien/kunden')} />
           <SideLink to="/immobilien/gesuche" icon={<Search size={17} />} label="Gesuche" collapsed={collapsed} active={isActive('/immobilien/gesuche')} />
           <SideLink to="/immobilien/weitergaben" icon={<Forward size={17} />} label="Weitergaben" collapsed={collapsed} active={isActive('/immobilien/weitergaben')} />
+          <SideLink to="/immobilien/automatische-nachrichten" icon={<MailCheck size={17} />} label="Automatische Nachrichten" collapsed={collapsed} active={isActive('/immobilien/automatische-nachrichten')} />
         </Gruppe>
 
         <Gruppe titel="Abstimmung" {...gruppenProps('abstimmung')}>

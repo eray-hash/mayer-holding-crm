@@ -342,6 +342,19 @@ function rechnungToRow(r: Rechnung) {
     leistung_bezeichnung: r.leistungBezeichnung ?? null,
     leistung_einheit: r.leistungEinheit ?? null,
     leistung_menge: r.leistungMenge ?? null,
+    positionen: r.positionen?.length ? r.positionen : null,
+    ust_satz: r.ustSatz ?? null,
+    leistungszeitraum: r.leistungszeitraum ?? null,
+    anschrift: r.anschrift ?? null,
+    hinweis: r.hinweis ?? null,
+    notiz: r.notiz ?? null,
+    zahlungen: r.zahlungen?.length ? r.zahlungen : null,
+    mahnungen: r.mahnungen?.length ? r.mahnungen : null,
+    versendet_am: r.versendetAm ?? null,
+    versendet_an: r.versendetAn ?? null,
+    bezahlt_am: r.bezahltAm ?? null,
+    dokument: r.dokument ?? null,
+    kv_id: r.kvId ?? null,
   }
 }
 
@@ -359,6 +372,19 @@ function rowToRechnung(row: any): Rechnung {
     leistungBezeichnung: row.leistung_bezeichnung ?? undefined,
     leistungEinheit: row.leistung_einheit ?? undefined,
     leistungMenge: row.leistung_menge != null ? Number(row.leistung_menge) : undefined,
+    positionen: Array.isArray(row.positionen) && row.positionen.length ? row.positionen : undefined,
+    ustSatz: row.ust_satz != null ? Number(row.ust_satz) : undefined,
+    leistungszeitraum: row.leistungszeitraum ?? undefined,
+    anschrift: row.anschrift ?? undefined,
+    hinweis: row.hinweis ?? undefined,
+    notiz: row.notiz ?? undefined,
+    zahlungen: Array.isArray(row.zahlungen) && row.zahlungen.length ? row.zahlungen : undefined,
+    mahnungen: Array.isArray(row.mahnungen) && row.mahnungen.length ? row.mahnungen : undefined,
+    versendetAm: row.versendet_am ?? undefined,
+    versendetAn: row.versendet_an ?? undefined,
+    bezahltAm: row.bezahlt_am ?? undefined,
+    dokument: row.dokument ?? undefined,
+    kvId: row.kv_id ?? undefined,
   }
 }
 
@@ -646,6 +672,10 @@ function verbindlichkeitToRow(v: Verbindlichkeit) {
     notiz: v.notiz ?? null,
     quelle: v.quelle,
     quell_email_id: v.quellEmailId ?? null,
+    kategorie: v.kategorie ?? null,
+    bezahlt_am: v.bezahltAm ?? null,
+    beleg: v.beleg ?? null,
+    geprueft: v.geprueft ?? null,
   }
 }
 
@@ -656,13 +686,17 @@ function rowToVerbindlichkeit(row: any): Verbindlichkeit {
     lieferantEmail: row.lieferant_email ?? undefined,
     rechnungsnummer: row.rechnungsnummer ?? undefined,
     datum: row.datum,
-    betragNetto: row.betrag_netto ?? undefined,
-    betragBrutto: row.betrag_brutto ?? undefined,
+    betragNetto: row.betrag_netto != null ? Number(row.betrag_netto) : undefined,
+    betragBrutto: row.betrag_brutto != null ? Number(row.betrag_brutto) : undefined,
     zahlungsziel: row.zahlungsziel ?? undefined,
     status: row.status,
     notiz: row.notiz ?? undefined,
     quelle: row.quelle,
     quellEmailId: row.quell_email_id ?? undefined,
+    kategorie: row.kategorie ?? undefined,
+    bezahltAm: row.bezahlt_am ?? undefined,
+    beleg: row.beleg ?? undefined,
+    geprueft: row.geprueft ?? undefined,
   }
 }
 
