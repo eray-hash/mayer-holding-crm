@@ -60,7 +60,7 @@ const LOGO_STANDARD = { x: 16.5, y: 9.4, breite: 24 }
 const BLAU: [number, number, number] = [46, 116, 181]
 const STILE: Record<Kopfstil, Stil> = {
   brief: { schrift: 'times', logo: { ...LOGO_STANDARD, seiten: 'alle' }, rueck: { y: 41.2, seiten: 'erste' }, leiste: 'frei', fuss: 'mayerBalken', start1: 49, startN: 45, links: 21, rechts: 61, unten: 40 },
-  fragebogen: { schrift: 'helvetica', logo: { ...LOGO_STANDARD, seiten: 'alle' }, rueck: { y: 38.5, seiten: 'alle' }, leiste: 'rahmen', fuss: 'mayer', start1: 47, startN: 47, links: 21, rechts: 18, unten: 30, titel: { groesse: 10.5, fett: false }, handZeile: 4.2 },
+  fragebogen: { schrift: 'helvetica', logo: { ...LOGO_STANDARD, seiten: 'alle' }, rueck: { y: 38.5, seiten: 'alle' }, leiste: 'rahmen', fuss: 'mayer', start1: 47, startN: 47, links: 21, rechts: 18, unten: 30, titel: { groesse: 10.5, fett: false }, handZeile: 4.2, abschnittZusammen: true },
   // Etwas enger als der Scan (Logo höher, Zeilen 4,5 mm), damit die Vereinbarung auf zwei Seiten passt (Erays Wunsch, 20.11.2026).
   vertrag: { schrift: 'times', logo: { x: 17, y: 18, breite: 22, seiten: 'alle' }, fuss: 'seitenzahlLinks', start1: 58, startN: 50, links: 21, rechts: 20, unten: 20, titel: { groesse: 16, fett: true }, zeile: 4.5, abschnittZusammen: true },
   kopffelder: { schrift: 'helvetica', logo: { x: 15, y: 9, breite: 15, seiten: 'alle' }, fuss: 'keiner', start1: 13, startN: 13, links: 21, rechts: 18, unten: 18, nebenLogo: 34, kopfFelderNachVorn: true, titel: { groesse: 12.5, fett: true } },
@@ -68,7 +68,7 @@ const STILE: Record<Kopfstil, Stil> = {
   kooperation: { schrift: 'helvetica', logo: { x: 18, y: 25, breite: 20, seiten: 'alle' }, kooperation: true, fuss: 'mayer', start1: 72, startN: 58, links: 25, rechts: 22, unten: 30, titelMitte: true, titel: { groesse: 13, fett: true }, handZeile: 3.5 },
   schlicht: { schrift: 'helvetica', fuss: 'keiner', start1: 30, startN: 20, links: 25, rechts: 22, unten: 18, titelMitte: true, titel: { groesse: 11, fett: true }, mitteBisParagraf: true },
   schlichtSerif: { schrift: 'times', fuss: 'keiner', start1: 52, startN: 25, links: 25, rechts: 22, unten: 22, titel: { groesse: 11, fett: false }, handZeile: 3.5 },
-  erben: { schrift: 'helvetica', logo: { x: 18, y: 12, breite: 22, seiten: 'alle' }, rueck: { y: 43.5, seiten: 'alle' }, fuss: 'vertraulich', start1: 52, startN: 50, links: 21, rechts: 18, unten: 20, titelMitte: true, titel: { groesse: 17, fett: true }, untertitelSchwarz: true, ueberFarbe: BLAU, kopfFuellung: [200, 200, 200] },
+  erben: { schrift: 'helvetica', logo: { x: 18, y: 12, breite: 22, seiten: 'alle' }, rueck: { y: 43.5, seiten: 'alle' }, fuss: 'vertraulich', start1: 52, startN: 50, links: 21, rechts: 18, unten: 20, titelMitte: true, titel: { groesse: 17, fett: true }, untertitelSchwarz: true, ueberFarbe: BLAU, kopfFuellung: [200, 200, 200], abschnittZusammen: true },
   memo: { schrift: 'times', fuss: 'keiner', start1: 26, startN: 20, links: 23, rechts: 20, unten: 18, titel: { groesse: 15, fett: true }, titelFarbe: [79, 129, 189], ueberFarbe: [79, 129, 189] },
   feedback: { schrift: 'helvetica', logo: { x: 177, y: 9, breite: 15, seiten: 'erste', blass: true }, fuss: 'keiner', start1: 24, startN: 18, links: 22, rechts: 20, unten: 18, kopfFuellung: [244, 204, 204] },
 }
