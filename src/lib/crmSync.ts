@@ -716,7 +716,30 @@ function syncSimpleCollection(client: NonNullable<typeof supabase>, prev: AppDat
     client.from(cfg.table).delete().in('id', geloeschteIds).then(({ error }) => logFehler(`${cfg.table} löschen`, error))
   }
 
+  // To-dos: bei vorhandenen Aufgaben nur die geänderten Felder schreiben — die automatische Priorisierung auf dem
+  // Server (todoPriorisierung.ts) setzt prio/reihenfolge, und ein Fenster mit älterem Stand soll sie nicht zurückdrehen,
+  // nur weil dort ein anderes Feld bearbeitet wird.
+  const vorherNachId = cfg.table === 'todos' ? new Map(prevListe.map((x) => [x.id, x])) : null
   for (const item of diffById(prevListe, nextListe)) {
+    const vorher = vorherNachId?.get(item.id)
+    if (vorher) {
+      const alt = cfg.toRow(vorher)
+      const neu = cfg.toRow(item)
+      const felder = Object.keys(neu).filter((f) => f !== 'id' && !gleich(alt[f], neu[f]))
+      if (felder.length === 0) continue
+      const aenderung = Object.fromEntries(felder.map((f) => [f, neu[f] ?? null]))
+      client
+        .from(cfg.table)
+        .update(aenderung)
+        .eq('id', item.id)
+        .select('id')
+        .then(({ data, error }) => {
+          logFehler(cfg.label(item), error)
+          // Nichts getroffen (Zeile fehlt in der Datenbank): wie bisher vollständig anlegen.
+          if (!error && (data ?? []).length === 0) client.from(cfg.table).upsert(neu).then(({ error: e }) => logFehler(cfg.label(item), e))
+        })
+      continue
+    }
     client.from(cfg.table).upsert(cfg.toRow(item)).then(({ error }) => logFehler(cfg.label(item), error))
   }
 }

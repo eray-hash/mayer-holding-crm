@@ -262,11 +262,13 @@ import { istDienstSchluessel, sendeTagesmeldungen, tagesmeldungTest } from './ta
 import { pruefeBonitaet } from './bonitaet.ts'
 import { lieseKontoauszug } from './kontoauszug.ts'
 import { erstelleChecklisteVorschlag } from './checklisteVorschlag.ts'
+import { priorisiereListe, pruefeTodoPriorisierung, type Liste as TodoListe } from './todoPriorisierung.ts'
 import { versendeWillkommen } from './willkommen.ts'
+import { portalDokument, portalLaden, portalZustimmen } from './objektPortal.ts'
 import { beantworteKundenUnterlagen } from './kundenUnterlagen.ts'
 import { pruefeWunschAnalyse, wunschAnalyseTest } from './wunschAnalyse.ts'
 import { pruefeSuperuserWochenbericht, superuserAuswertung, superuserWochenberichtTest } from './superuser.ts'
-import { aktuellePerson, kiAufruf, mitAnlass, setzeAnlass, setzePerson } from '../_shared/kiVerbrauch.ts'
+import { aktuellePerson, kiAufruf, mitAnlass, setzeAnlass, setzePerson, setzePrivat } from '../_shared/kiVerbrauch.ts'
 import { darfObjekt, darfPrivatKunde, istPrivaterKunde, istPrivatesObjekt } from '../_shared/privatZugriff.ts'
 
 const ALLOWED_ORIGINS = [
@@ -3357,6 +3359,20 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       // siehe wunschAnalyse.ts. Im Hintergrund (der KI-Aufruf dauert); außerhalb der Stunden ohne Datenbankzugriff; wirft nie.
       // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
       EdgeRuntime.waitUntil(pruefeWunschAnalyse(admin, sendeTelegram))
+      // Automatische Priorisierung der To-do-Listen (todoPriorisierung.ts): werktags ab 6:30 alle Listen, sonst alle zehn
+      // Minuten nur Listen mit neuen Aufgaben. Im Hintergrund (KI-Aufruf); außerhalb der Fenster ohne Datenbankzugriff; wirft nie.
+      // Jede Liste in eigenem Rahmen für die Kostenzuordnung (private Liste = Person des Besitzers, privat berechnet).
+      const todoRahmen = <T>(liste: TodoListe, arbeit: () => Promise<T>): Promise<T> =>
+        mitAnlass(() => {
+          setzeAnlass('todo_priorisierung')
+          if (liste.besitzer) {
+            setzePerson(liste.besitzer)
+            setzePrivat()
+          }
+          return arbeit()
+        })
+      // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
+      EdgeRuntime.waitUntil(pruefeTodoPriorisierung(admin, { callClaudeTool, imRahmen: todoRahmen }))
       // Derselbe Minutentakt hält auch die Warteschlange für Sammelsendungen per Telegram in Gang
       // (falls ein Schritt abgebrochen ist oder an der Mengengrenze des KI-Dienstes warten musste).
       try {
@@ -4204,6 +4220,35 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       return new Response(JSON.stringify({ ok: true }), { headers })
     }
 
+    // Interessenten-Portal (objektPortal.ts): ohne Login, nur mit dem geheimen Link. Mengengrenze je Gerät.
+    if (body.action === 'public_objekt_portal' || body.action === 'public_objekt_portal_zustimmen' || body.action === 'public_objekt_portal_dokument') {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const ip = (req.headers.get('x-forwarded-for') ?? '').split(',')[0].trim() || 'unbekannt'
+      const zustimmen = body.action === 'public_objekt_portal_zustimmen'
+      if (await grenzeErreicht(admin, [{ schluessel: `portal:${zustimmen ? 'zust' : 'lesen'}:${ip}`, hoechstens: zustimmen ? 20 : 300 }])) {
+        return new Response(JSON.stringify({ error: 'Zu viele Aufrufe. Bitte versuchen Sie es in einer Stunde erneut.' }), { status: 429, headers })
+      }
+      try {
+        if (body.action === 'public_objekt_portal') return new Response(JSON.stringify(await portalLaden(admin, body.token)), { headers })
+        if (body.action === 'public_objekt_portal_dokument') return new Response(JSON.stringify(await portalDokument(admin, body.token, body.dokumentId)), { headers })
+        const melde = async (verantwortlich: string, text: string) => {
+          const { data: m } = await admin.from('mitarbeiter').select('telegram_chat_id').eq('aktiv', true).eq('name', verantwortlich).maybeSingle()
+          if (m?.telegram_chat_id) await sendeTelegram(m.telegram_chat_id, text)
+        }
+        const ergebnis = await portalZustimmen(
+          admin,
+          body.token,
+          { name: body.name, agb: body.agb, provision: body.provision, sofortBeginn: body.sofortBeginn },
+          { ip, geraet: req.headers.get('user-agent') ?? '' },
+          melde,
+        )
+        return new Response(JSON.stringify(ergebnis), { headers })
+      } catch (err) {
+        console.error('Interessenten-Portal fehlgeschlagen:', err)
+        return new Response(JSON.stringify({ error: 'Das hat nicht geklappt. Bitte versuchen Sie es später erneut.' }), { status: 500, headers })
+      }
+    }
+
     if (body.action === 'public_get_vorschlag') {
       const { vorschlagId } = body
       if (!vorschlagId) {
@@ -4438,6 +4483,37 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       return new Response(JSON.stringify({ ok: true, buchungen: ergebnis.buchungen, datei: ergebnis.datei }), { headers })
     }
 
+    // To-do-Liste jetzt priorisieren (Knopf „Jetzt priorisieren“, siehe todoPriorisierung.ts) — nur mit eigenem Login.
+    // { bereich: string } = Bereichsliste (Bereichsrecht nötig) · { privat: true } = die eigene private Liste des Aufrufers.
+    if (body.action === 'todos_priorisieren') {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const aufrufer = await ermittleAufrufer(req, admin, body)
+      if (!aufrufer) {
+        return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
+      }
+      let liste: TodoListe
+      if (body.privat === true) {
+        liste = { besitzer: aufrufer.email }
+        setzePrivat()
+      } else {
+        const bereich = typeof body.bereich === 'string' ? body.bereich.trim() : ''
+        if (!bereich || bereich === 'privat' || bereich === 'intern') {
+          return new Response(JSON.stringify({ error: 'Welche Liste? bereich oder privat fehlt.' }), { status: 400, headers })
+        }
+        if (!(await darfBereichServer(admin, aufrufer.email, bereich))) return keinRecht(headers)
+        liste = { bereich }
+      }
+      try {
+        const ergebnis = await priorisiereListe(admin, liste, { callClaudeTool }, 'knopf')
+        if (!ergebnis.ok) return new Response(JSON.stringify({ error: ergebnis.fehler }), { status: ergebnis.status, headers })
+        return new Response(JSON.stringify({ ok: true, offen: ergebnis.offen, geaendert: ergebnis.geaendert, gelaufen: ergebnis.gelaufen, grund: ergebnis.grund ?? null }), { headers })
+      } catch (err) {
+        console.error('todos_priorisieren fehlgeschlagen:', err)
+        const grund = err instanceof Error ? err.message : String(err)
+        return new Response(JSON.stringify({ error: `Die Liste konnte nicht priorisiert werden: ${grund}` }), { status: 500, headers })
+      }
+    }
+
     // KI-Vorschlag für die Projekt-Checkliste einer Akte (siehe checklisteVorschlag.ts) — nur mit eigenem
     // Login, schreibt nichts; die Oberfläche zeigt den Vorschlag und speichert, was übernommen wird.
     if (body.action === 'checkliste_vorschlag') {
@@ -4653,7 +4729,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       return new Response(JSON.stringify({ ok: true }), { headers })
     }
 
-    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "bewertung_recherche_start", "bewertung_recherche_schritt", "kunden_umfeld_recherche", "steuer_analyse_start", "steuer_analyse_schritt", "dokument_lesen", "dokument_inhalte", "postfaecher_liste", "postfach_verbinden", "postfach_trennen", "postfach_abruf", "postfach_ordner", "mail_zuordnen", "mail_freigeben", "mail_anhang_url", "termin_speichern", "termin_loeschen", "termin_erinnerungen", "tagesmeldung_test", "kontoauszug_auslesen", "checkliste_vorschlag", "willkommen_jetzt", "gesendet_abruf" oder "firmenwissen_answer"' }), { status: 400, headers })
+    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "public_objekt_portal", "public_objekt_portal_zustimmen", "public_objekt_portal_dokument", "bewertung_recherche_start", "bewertung_recherche_schritt", "kunden_umfeld_recherche", "steuer_analyse_start", "steuer_analyse_schritt", "dokument_lesen", "dokument_inhalte", "postfaecher_liste", "postfach_verbinden", "postfach_trennen", "postfach_abruf", "postfach_ordner", "mail_zuordnen", "mail_freigeben", "mail_anhang_url", "termin_speichern", "termin_loeschen", "termin_erinnerungen", "tagesmeldung_test", "kontoauszug_auslesen", "checkliste_vorschlag", "todos_priorisieren", "willkommen_jetzt", "gesendet_abruf" oder "firmenwissen_answer"' }), { status: 400, headers })
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }

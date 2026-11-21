@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Plus, Check, RotateCcw, Trash2, Share2, Upload, Download, ChevronDown, ArrowRightLeft, Bell, X } from 'lucide-react'
+import { Plus, Check, RotateCcw, Trash2, Share2, Upload, Download, ChevronDown, ArrowRightLeft, Bell, X, ListOrdered, Wand2 } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { useAuth } from '../../context/AuthContext'
 import { supabase, isSupabaseConfigured } from '../../lib/supabaseClient'
+import { call as gatewayCall, isEmailGatewayConfigured } from '../../lib/emailGateway'
 import { Modal, Field, inputClass, PrimaryButton, SecondaryButton, EmptyState } from '../../components/ui'
 import { uid, today, fmtDate, fmtEURCent, isOverdue } from '../../lib/dates'
 import { CURRENT_USER } from '../../data/constants'
@@ -53,6 +54,26 @@ function ErinnerungsHinweis({ t }: { t: ToDoEintrag }) {
   )
 }
 
+// Automatische Priorisierung (Server, email-gateway/todoPriorisierung.ts): werktags morgens und bei neuen Aufgaben,
+// dazu der Knopf „Jetzt priorisieren“. Von Hand gesetzte Prios (prioQuelle 'hand') bleiben.
+function prioTitel(t: ToDoEintrag): string | undefined {
+  if (t.prioQuelle === 'auto') return `Automatisch gesetzt${t.prioGrund ? `: ${t.prioGrund}` : ''}`
+  if (t.prioQuelle === 'hand') return 'Von Hand gesetzt — bleibt bei der automatischen Priorisierung'
+  return undefined
+}
+
+/** Prio mit kleinem grauen Zauberstab, wenn sie automatisch gesetzt wurde (Begründung im Hinweis beim Darüberfahren). */
+function PrioAnzeige({ t, mitUnterPrio }: { t: ToDoEintrag; mitUnterPrio?: boolean }) {
+  if (!t.prio) return null
+  return (
+    <span title={prioTitel(t)} className="inline-flex items-center gap-0.5">
+      {t.prio}
+      {mitUnterPrio && (t.unterPrio ?? '')}
+      {t.prioQuelle === 'auto' && <Wand2 size={10} className="text-slate-400" aria-label="automatisch" />}
+    </span>
+  )
+}
+
 function exportiereCsv(liste: ToDoEintrag[], dateiname: string) {
   const blob = new Blob([toDoCsvText(liste)], { type: 'text/csv;charset=utf-8;' })
   const url = URL.createObjectURL(blob)
@@ -77,7 +98,7 @@ export function BereichToDoListe({ bereich, label }: { bereich: Bereich; label: 
 }
 
 function ToDoListeKern({ scope }: { scope: Scope }) {
-  const { state, dispatch } = useApp()
+  const { state, dispatch, neuLaden } = useApp()
   const { session, mitarbeiter } = useAuth()
   const eigeneEmail = (isSupabaseConfigured && session?.user.email) || 'lokal'
   const eigenerName = mitarbeiter?.name ?? CURRENT_USER
@@ -91,6 +112,7 @@ function ToDoListeKern({ scope }: { scope: Scope }) {
   const [alleMitarbeiter, setAlleMitarbeiter] = useState<Mitarbeiterkurz[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [importVorschau, setImportVorschau] = useState<{ dateiname: string; vorschau?: ToDoImportVorschau; fehler?: string } | null>(null)
+  const [priorisierung, setPriorisierung] = useState<{ laeuft: boolean; meldung?: string; fehler?: boolean }>({ laeuft: false })
 
   useEffect(() => {
     if (!supabase) return
@@ -155,6 +177,25 @@ function ToDoListeKern({ scope }: { scope: Scope }) {
   const summeKosten = sichtbar.reduce((s, t) => s + (zeitaufwandskosten(t) ?? 0), 0)
   const ohneStundensatz = sichtbar.filter((t) => t.istZeit && zeitaufwandskosten(t) === undefined).length
   const ueberfaelligAnzahl = offen.filter((t) => isOverdue(t.erledigenBis ?? '', false)).length
+
+  // Knopf nur für Listen, die die Automatik auch bearbeitet: Bereichslisten und die eigene private Liste.
+  const darfPriorisieren = isSupabaseConfigured && isEmailGatewayConfigured && darfSchreiben && (scope.kind === 'bereich' || aktiveListe === eigeneEmail)
+
+  async function jetztPriorisieren() {
+    setPriorisierung({ laeuft: true })
+    try {
+      const r = await gatewayCall({ action: 'todos_priorisieren', ...(scope.kind === 'bereich' ? { bereich: scope.bereich } : { privat: true }) })
+      await neuLaden().catch(() => undefined)
+      const meldung = r?.gelaufen
+        ? r.geaendert === 0
+          ? 'Priorisiert — die Reihenfolge passt schon.'
+          : `Priorisiert — ${r.geaendert} ${r.geaendert === 1 ? 'Aufgabe' : 'Aufgaben'} neu eingeordnet.`
+        : `Nichts zu tun: ${r?.grund ?? 'keine offenen Aufgaben'}.`
+      setPriorisierung({ laeuft: false, meldung })
+    } catch (err) {
+      setPriorisierung({ laeuft: false, meldung: err instanceof Error ? err.message : 'Priorisieren hat nicht geklappt.', fehler: true })
+    }
+  }
 
   function naechsteReihenfolge() {
     return 1 + Math.max(0, ...listenEintraege.map((t) => t.reihenfolge ?? 0))
@@ -267,6 +308,11 @@ function ToDoListeKern({ scope }: { scope: Scope }) {
               </SecondaryButton>
             </>
           )}
+          {darfPriorisieren && (
+            <SecondaryButton onClick={jetztPriorisieren} disabled={priorisierung.laeuft}>
+              <ListOrdered size={14} /> {priorisierung.laeuft ? 'Priorisiere …' : 'Jetzt priorisieren'}
+            </SecondaryButton>
+          )}
           <SecondaryButton onClick={() => exportiereCsv(sichtbar, dateiname)}>
             <Download size={14} /> Export
           </SecondaryButton>
@@ -277,6 +323,13 @@ function ToDoListeKern({ scope }: { scope: Scope }) {
           )}
         </div>
       </div>
+
+      {darfPriorisieren && (
+        <p className={`-mt-3 mb-4 text-xs ${priorisierung.fehler ? 'text-rose-600' : 'text-slate-400'}`}>
+          {priorisierung.meldung ??
+            'Prio und Reihenfolge stellt das CRM werktags morgens und bei neuen Aufgaben automatisch ein. Von Hand gesetzte Prios bleiben.'}
+        </p>
+      )}
 
       <div className="mb-4 flex rounded-lg border border-slate-200 bg-white p-0.5 w-fit">
         <button
@@ -304,8 +357,7 @@ function ToDoListeKern({ scope }: { scope: Scope }) {
                 <p className="font-medium text-slate-800">{t.aufgabe}</p>
                 {t.prio && (
                   <span className="flex-shrink-0 rounded-full bg-accent-50 px-2 py-0.5 text-xs font-semibold text-accent-700">
-                    {t.prio}
-                    {t.unterPrio ?? ''}
+                    <PrioAnzeige t={t} mitUnterPrio />
                   </span>
                 )}
               </div>
@@ -399,7 +451,7 @@ function ToDoListeKern({ scope }: { scope: Scope }) {
                   {t.startDatum ?? ''}
                 </td>
                 <td onClick={() => setEditEintrag(t)} className="sticky left-[90px] z-10 cursor-pointer bg-white px-3 py-3 font-medium text-slate-700 group-hover:bg-slate-50">
-                  {t.prio ?? ''}
+                  <PrioAnzeige t={t} />
                 </td>
                 <td onClick={() => setEditEintrag(t)} className="sticky left-[146px] z-10 cursor-pointer border-r border-slate-100 bg-white px-3 py-3 text-slate-500 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.08)] group-hover:bg-slate-50">
                   {t.unterPrio ?? ''}
@@ -741,6 +793,8 @@ function ToDoModal({
 }) {
   const [startDatum, setStartDatum] = useState(initial?.startDatum ?? '')
   const [prio, setPrio] = useState(initial?.prio ?? '')
+  // Wer die Prio selbst ändert, setzt sie „von Hand“ — die Automatik lässt sie dann stehen. „Wieder automatisch“ gibt sie frei.
+  const [prioQuelle, setPrioQuelle] = useState<ToDoEintrag['prioQuelle']>(initial?.prioQuelle)
   const [unterPrio, setUnterPrio] = useState(initial?.unterPrio?.toString() ?? '')
   const [kundeProjekt, setKundeProjekt] = useState(initial?.kundeProjekt ?? '')
   const [aufgabe, setAufgabe] = useState(initial?.aufgabe ?? '')
@@ -779,6 +833,7 @@ function ToDoModal({
       ...erinnerungFelder,
       startDatum: startDatum || undefined,
       prio: prio || undefined,
+      prioQuelle,
       unterPrio: unterPrio ? Number(unterPrio) : undefined,
       kundeProjekt: kundeProjekt || undefined,
       aufgabe,
@@ -817,7 +872,28 @@ function ToDoModal({
       <fieldset disabled={readOnly} className="disabled:opacity-60">
         <div className="grid grid-cols-1 gap-x-4 sm:grid-cols-3">
           <Field label="Start (frei, z.B. 18.08)"><input className={inputClass} value={startDatum} onChange={(e) => setStartDatum(e.target.value)} /></Field>
-          <Field label="Prio (A/B/C/...)"><input className={inputClass} value={prio} onChange={(e) => setPrio(e.target.value)} /></Field>
+          <Field label="Prio (A/B/C/...)">
+            <input
+              className={inputClass}
+              value={prio}
+              onChange={(e) => {
+                setPrio(e.target.value)
+                setPrioQuelle(e.target.value.trim() ? 'hand' : undefined)
+              }}
+            />
+            {prioQuelle === 'auto' && (
+              <span className="mt-1 flex items-start gap-1 text-xs text-slate-400">
+                <Wand2 size={11} className="mt-0.5 flex-shrink-0" />
+                Automatisch{initial?.prioGrund && prio === initial.prio ? `: ${initial.prioGrund}` : ''}
+              </span>
+            )}
+            {prioQuelle === 'hand' && !readOnly && (
+              <button type="button" onClick={() => setPrioQuelle(undefined)} className="mt-1 text-xs text-slate-400 underline hover:text-slate-600">
+                Von Hand gesetzt · wieder automatisch
+              </button>
+            )}
+            {!prioQuelle && initial?.prioQuelle === 'hand' && <span className="mt-1 block text-xs text-slate-400">Wird beim nächsten Lauf automatisch gesetzt.</span>}
+          </Field>
           <Field label="Unter-Prio (1-9)"><input type="number" className={inputClass} value={unterPrio} onChange={(e) => setUnterPrio(e.target.value)} /></Field>
         </div>
         <Field label="Kunde/Projekt"><input className={inputClass} value={kundeProjekt} onChange={(e) => setKundeProjekt(e.target.value)} /></Field>
