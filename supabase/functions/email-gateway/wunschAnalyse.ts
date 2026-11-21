@@ -613,7 +613,17 @@ async function schreibe(admin: Db, punkte: GefundenerPunkt[], probleme: Problem[
     const ergebnis = await merkeWunsch(admin, { quelle: 'analyse', mitarbeiter: p.wer_namen, titel: p.titel, beschreibung: beschreibungMitGrund(p), beleg: p.beleg || null, anzahl: p.anzahl }, jetzt, offene)
     if (ergebnis) heute.set(ergebnis.id, (heute.get(ergebnis.id) ?? 0) + p.anzahl)
   }
+  // Ein Problem nur einmal am Tag melden (21.11.2026): Die Zählung umfasst immer 24 Stunden, ein einmal
+  // aufgetretenes Problem bliebe sonst bis zum nächsten Tag in jedem Zwei-Stunden-Bericht. Als erledigt
+  // markierte Probleme der letzten zwei Tage werden nicht neu angelegt.
+  const { data: kuerzlich } = await admin.from('wuensche').select('titel, status, gemeldet_am').eq('quelle', 'fehler').gte('zuletzt_am', new Date(jetzt.getTime() - 2 * TAG_MS).toISOString())
+  const ruhig = new Set(
+    ((kuerzlich ?? []) as { titel: string; status: string; gemeldet_am: string | null }[])
+      .filter((z) => z.status === 'erledigt' || zeit(z.gemeldet_am) > jetzt.getTime() - TAG_MS)
+      .map((z) => normTitel(z.titel)),
+  )
   for (const pr of probleme) {
+    if (ruhig.has(normTitel(pr.titel))) continue
     const ergebnis = await merkeWunsch(admin, { quelle: 'fehler', mitarbeiter: null, titel: pr.titel, beschreibung: pr.beschreibung, anzahl: pr.anzahl }, jetzt, offene)
     if (ergebnis) heute.set(ergebnis.id, (heute.get(ergebnis.id) ?? 0) + pr.anzahl)
   }
