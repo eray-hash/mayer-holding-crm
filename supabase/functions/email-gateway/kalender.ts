@@ -18,6 +18,7 @@
 //   geht bewusst NICHT an den Kunden.
 import type { Aufrufer } from './postfach.ts'
 import { icsAnhang } from '../_shared/ics.ts'
+import { privatBotAktiv, sendePrivat } from '../_shared/telegramPrivat.ts'
 
 // deno-lint-ignore no-explicit-any
 type Db = any
@@ -446,8 +447,16 @@ export async function sendeErinnerungen(admin: Db): Promise<{ gesendet: number }
   const wunsch = new Map<string, number[]>()
   for (const z of (einst ?? []) as { email: string; erinnerungen: number[] }[]) wunsch.set(z.email.toLowerCase(), z.erinnerungen ?? [])
 
+  // Private Termine (eigener Termin ohne Kollegen, ohne Mayer-Akte — z. B. aus Outlook) gehen bei Leuten mit
+  // privatem Assistenten nur über diesen, nie über den Mayer-Bot (Erays Regel vom 21.11.2026: Privates bleibt privat).
+  const privatAktiv = new Map<string, boolean>()
+  const hatPrivatBot = async (email: string) => {
+    if (!privatAktiv.has(email)) privatAktiv.set(email, await privatBotAktiv(admin, email).catch(() => false))
+    return privatAktiv.get(email)!
+  }
   let gesendet = 0
   for (const t of termine) {
+    const privaterTermin = (t.teilnehmer ?? []).length === 0 && (!t.kunde_id || t.kunde_bereich === 'privat')
     const bisBeginn = (new Date(t.beginn).getTime() - jetzt) / 60000
     const erinnert: Record<string, number[]> = { ...(t.erinnert ?? {}) }
     let geaendert = false
@@ -462,8 +471,12 @@ export async function sendeErinnerungen(admin: Db): Promise<{ gesendet: number }
       // Ganztägige Termine: nur die Erinnerung am Vortag ist sinnvoll.
       if (!(t.ganztags && knappste < 1440)) {
         const wann = knappste >= 1440 ? `am ${zeitraumText(t)}` : `${vorlaufText(Math.max(1, Math.round(bisBeginn)))} (${zeitraumText(t)})`
-        const ok = await sendeTelegram(person.chat, `⏰ Erinnerung: ${t.titel} ${wann}${t.ort ? `\nOrt: ${t.ort}` : ''}${t.kunde_name ? `\nKunde: ${t.kunde_name}` : ''}`)
+        const text = `⏰ Erinnerung: ${t.titel} ${wann}${t.ort ? `\nOrt: ${t.ort}` : ''}${t.kunde_name ? `\nKunde: ${t.kunde_name}` : ''}`
+        const privat = privaterTermin && p === t.besitzer_email.toLowerCase() && (await hatPrivatBot(p))
+        const ok = privat ? !!(await sendePrivat(person.chat, text)) : await sendeTelegram(person.chat, text)
         if (ok) gesendet++
+        // Privat und nicht zugestellt: beim nächsten Lauf erneut versuchen, nie ersatzweise über den Mayer-Bot.
+        else if (privat) continue
       }
       erinnert[p] = [...new Set([...schon, ...faellig])]
       geaendert = true

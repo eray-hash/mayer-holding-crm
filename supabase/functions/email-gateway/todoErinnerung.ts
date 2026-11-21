@@ -11,6 +11,7 @@
 //   statt Tage später noch verschickt.
 import { ordneZu, personenNamen } from '../_shared/aufgabenKern.ts'
 import { sendeTelegram } from './kalender.ts'
+import { privatBotAktiv, sendePrivat } from '../_shared/telegramPrivat.ts'
 
 // deno-lint-ignore no-explicit-any
 type Db = any
@@ -75,6 +76,11 @@ function nachricht(t: TodoZeile): string {
   return zeilen.join('\n')
 }
 
+/** Im privaten Assistenten heißt die eigene Liste „deine private To-do-Liste“. */
+function privatText(text: string): string {
+  return text.replace('Deine eigene To-do-Liste', 'Deine private To-do-Liste')
+}
+
 /** Vermerkt die Erinnerung als erledigt — nur, wenn die Zeit inzwischen nicht geändert wurde. */
 async function vermerke(admin: Db, t: TodoZeile): Promise<void> {
   const { error } = await admin.from('todos').update({ erinnert_am: new Date().toISOString() }).eq('id', t.id).eq('erinnern_um', t.erinnern_um).is('erinnert_am', null)
@@ -104,6 +110,15 @@ export async function sendeTodoErinnerungen(admin: Db): Promise<{ gesendet: numb
     .filter((m) => m.name)
     .map((m) => ({ name: String(m.name), email: m.email, chat: m.telegram_chat_id }))
 
+  // Eigene Liste (bereich leer) einer Person mit privatem Assistenten = privat: nur über den privaten Bot,
+  // nie über den Mayer-Bot (Erays Regel vom 21.11.2026). Klappt der Versand nicht, nächster Versuch beim nächsten Lauf.
+  const privatAktiv = new Map<string, boolean>()
+  const hatPrivatBot = async (email: string | null) => {
+    const e = String(email ?? '').toLowerCase()
+    if (!e) return false
+    if (!privatAktiv.has(e)) privatAktiv.set(e, await privatBotAktiv(admin, e).catch(() => false))
+    return privatAktiv.get(e)!
+  }
   let gesendet = 0
   for (const t of faellige) {
     if (jetzt - new Date(t.erinnern_um).getTime() > ZU_ALT_MS) {
@@ -120,7 +135,8 @@ export async function sendeTodoErinnerungen(admin: Db): Promise<{ gesendet: numb
     const text = nachricht(t)
     let einer = false
     for (const p of personen) {
-      if (await sendeTelegram(p.chat, text)) {
+      const privat = !t.bereich && (await hatPrivatBot(p.email))
+      if (privat ? !!(await sendePrivat(p.chat, privatText(text))) : await sendeTelegram(p.chat, text)) {
         einer = true
         gesendet++
       }

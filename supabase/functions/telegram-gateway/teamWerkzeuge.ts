@@ -12,6 +12,7 @@
 
 import { alsIso, ordneZu, personenNamen } from '../_shared/aufgabenKern.ts'
 import { BEREICH_IDS, bereichName, darfBereich, siehtAlleBereiche, type RechteMitarbeiter } from './rechte.ts'
+import { imPrivatBot } from './privatBot.ts'
 
 // deno-lint-ignore no-explicit-any
 type Supa = any
@@ -261,7 +262,11 @@ export async function todoAnlegen(
   // Wer erinnert wird: bei der eigenen Liste ihr Besitzer, bei einer Bereichsliste der Zuständige (todoErinnerung.ts im email-gateway).
   const erinnerungText = erinnernUm ? `, Erinnerung per Telegram am ${deZeitpunkt(erinnernUm)}${bereich ? ` an ${zustaendig ?? 'den Zuständigen'}` : ''}` : ''
   protokolliere(`To-do „${aufgabe.slice(0, 120)}" in ${liste} angelegt${faellig ? `, erledigen bis ${deDatum(faellig)}` : ''}${erinnernUm ? `, Erinnerung ${deZeitpunkt(erinnernUm)}` : ''} (todo_id=${id})`)
-  return `Angelegt in ${liste}: „${aufgabe}"${faellig ? `, erledigen bis ${deDatum(faellig)}` : ', ohne Fälligkeit'}${zustaendig ? `, zuständig ${zustaendig}` : ''}${erinnerungText}. Sie steht jetzt auch im CRM unter „Aufgaben nach Mitarbeiter". todo_id=${id}`
+  // Im privaten Assistenten: private Liste, Erinnerung kommt im privaten Chat (todoErinnerung.ts), nichts im Mayer-Bereich.
+  const wo = imPrivatBot() && !bereich
+    ? ' Sie ist privat (nur für ihn sichtbar), die Erinnerung kommt hier im privaten Chat, und sie erscheint beim nächsten Abgleich in seinem Microsoft To Do.'
+    : ' Sie steht jetzt auch im CRM unter „Aufgaben nach Mitarbeiter".'
+  return `Angelegt in ${imPrivatBot() && !bereich ? 'seiner privaten To-do-Liste' : liste}: „${aufgabe}"${faellig ? `, erledigen bis ${deDatum(faellig)}` : ', ohne Fälligkeit'}${zustaendig ? `, zuständig ${zustaendig}` : ''}${erinnerungText}.${wo} todo_id=${id}`
 }
 
 type TodoZeile = {

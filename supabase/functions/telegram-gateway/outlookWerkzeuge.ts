@@ -337,7 +337,7 @@ async function briefErstellen(input: Record<string, unknown>, k: Kontext, ich: s
     if (!kunde || kunde.bereich !== 'privat' || String(kunde.verantwortlich_email ?? '').toLowerCase() !== ich) return 'Fehler: Ablegen geht nur bei seinen eigenen privaten Kontakten.'
     const neue: { id: string; name: string; typ: string; datum: string; groesse: string; url: string }[] = []
     for (const d of dateien) {
-      const pfad = `${kontaktId}/dok_${crypto.randomUUID().slice(0, 12)}_${name}.${d.endung}`
+      const pfad = `${kontaktId}/dok_${crypto.randomUUID().slice(0, 12)}_${speicherName(name)}.${d.endung}`
       const { error } = await k.supabase.storage.from('kunden-dokumente').upload(pfad, d.inhalt, { contentType: d.typ })
       if (error) return `Fehler beim Ablegen: ${error.message}`
       neue.push({ id: `dok_${crypto.randomUUID().slice(0, 10)}`, name: `${name}.${d.endung}`, typ: d.typ, datum: new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Berlin' }).format(new Date()), groesse: `${Math.max(1, Math.round(d.inhalt.length / 1024))} KB`, url: pfad })
@@ -351,7 +351,7 @@ async function briefErstellen(input: Record<string, unknown>, k: Kontext, ich: s
   }
   const links: string[] = []
   for (const d of dateien) {
-    const pfad = `${ich}/briefe/${name}_${crypto.randomUUID().slice(0, 6)}.${d.endung}`
+    const pfad = `${ich}/briefe/${speicherName(name)}_${crypto.randomUUID().slice(0, 6)}.${d.endung}`
     const { error } = await k.supabase.storage.from('briefboegen').upload(pfad, d.inhalt, { contentType: d.typ })
     if (error) return `Fehler beim Speichern: ${error.message}`
     const { data } = await k.supabase.storage.from('briefboegen').createSignedUrl(pfad, 24 * 3600, { download: `${name}.${d.endung}` })
@@ -359,4 +359,17 @@ async function briefErstellen(input: Record<string, unknown>, k: Kontext, ich: s
   }
   k.protokolliere(`Brief „${brief.betreff}“ auf Briefbogen „${bogen.name}“ erstellt`)
   return `Brief erstellt (Briefbogen „${bogen.name}“). Download-Links (24 Stunden gültig, gib sie ihm unverändert weiter):\n${links.join('\n')}`
+}
+
+/**
+ * Dateiname für den Speicherpfad: Die Ablage lehnt Umlaute und Sonderzeichen im Schlüssel ab („Invalid key“,
+ * 20.11.2026 bei „Herr-Müller“). Der angezeigte Name (name) bleibt unverändert, nur der Pfad wird umschrieben.
+ */
+export function speicherName(name: string): string {
+  return name
+    .replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/Ä/g, 'Ae').replace(/Ö/g, 'Oe').replace(/Ü/g, 'Ue').replace(/ß/g, 'ss')
+    .normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^A-Za-z0-9._-]+/g, '_')
+    .replace(/_+/g, '_')
+    .slice(0, 120) || 'Brief'
 }
