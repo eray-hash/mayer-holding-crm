@@ -51,6 +51,8 @@ type Stil = {
   kopfFelderNachVorn?: boolean // „Bereich: … / Kunde: …“ vor den Titel ziehen und auf jeder Seite neben dem Logo wiederholen
   /** Zeilenabstand des Fließtexts in mm (Standard ZEILE) — enger, wo die Vorlage auf wenige Seiten passen muss. */
   zeile?: number
+  /** Jeden Abschnitt (Überschrift bis zur nächsten) zusammen auf einer Seite halten, wenn er auf eine Seite passt. */
+  abschnittZusammen?: boolean
   mitteBisParagraf?: boolean // Parteienblock (vor „§ 1“) mittig, wie die Vereinbarung im Scan
 }
 
@@ -60,7 +62,7 @@ const STILE: Record<Kopfstil, Stil> = {
   brief: { schrift: 'times', logo: { ...LOGO_STANDARD, seiten: 'alle' }, rueck: { y: 41.2, seiten: 'erste' }, leiste: 'frei', fuss: 'mayerBalken', start1: 49, startN: 45, links: 21, rechts: 61, unten: 40 },
   fragebogen: { schrift: 'helvetica', logo: { ...LOGO_STANDARD, seiten: 'alle' }, rueck: { y: 38.5, seiten: 'alle' }, leiste: 'rahmen', fuss: 'mayer', start1: 47, startN: 47, links: 21, rechts: 18, unten: 30, titel: { groesse: 10.5, fett: false }, handZeile: 4.2 },
   // Etwas enger als der Scan (Logo höher, Zeilen 4,5 mm), damit die Vereinbarung auf zwei Seiten passt (Erays Wunsch, 20.11.2026).
-  vertrag: { schrift: 'times', logo: { x: 17, y: 18, breite: 22, seiten: 'alle' }, fuss: 'seitenzahlLinks', start1: 58, startN: 50, links: 21, rechts: 20, unten: 20, titel: { groesse: 16, fett: true }, zeile: 4.5 },
+  vertrag: { schrift: 'times', logo: { x: 17, y: 18, breite: 22, seiten: 'alle' }, fuss: 'seitenzahlLinks', start1: 58, startN: 50, links: 21, rechts: 20, unten: 20, titel: { groesse: 16, fett: true }, zeile: 4.5, abschnittZusammen: true },
   kopffelder: { schrift: 'helvetica', logo: { x: 15, y: 9, breite: 15, seiten: 'alle' }, fuss: 'keiner', start1: 13, startN: 13, links: 21, rechts: 18, unten: 18, nebenLogo: 34, kopfFelderNachVorn: true, titel: { groesse: 12.5, fett: true } },
   protokoll: { schrift: 'helvetica', logo: { x: 12, y: 8, breite: 15, seiten: 'erste' }, fuss: 'keiner', start1: 13, startN: 18, links: 14, rechts: 14, unten: 18, nebenLogo: 33, titel: { groesse: 12.5, fett: false } },
   kooperation: { schrift: 'helvetica', logo: { x: 18, y: 25, breite: 20, seiten: 'alle' }, kooperation: true, fuss: 'mayer', start1: 72, startN: 58, links: 25, rechts: 22, unten: 30, titelMitte: true, titel: { groesse: 13, fett: true }, handZeile: 3.5 },
@@ -530,7 +532,7 @@ export function erzeugeVorlagePdf(params: {
       const frei = seitenHoehe - UNTEN - y
       // Der Unterschriftenteil (Spalten ohne Rahmen) bleibt mit seiner Überschrift auf einer Seite;
       // sonst steht eine Überschrift nie allein am Seitenende, sondern mit mindestens zwei Zeilen Text.
-      const zusammen = abschnitt.some((b) => b.art === 'tabelle' && b.rahmenlos)
+      const zusammen = !!st.abschnittZusammen || abschnitt.some((b) => b.art === 'tabelle' && b.rahmenlos)
       const noetig = zusammen ? hoeheVon(abschnitt) : hoeheVon([block]) + 2 * ZEILE
       if (noetig > frei && noetig < seitenHoehe - UNTEN - st.startN - 10) neueSeite()
     }
