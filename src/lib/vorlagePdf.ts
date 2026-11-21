@@ -53,6 +53,8 @@ type Stil = {
   zeile?: number
   /** Jeden Abschnitt (Überschrift bis zur nächsten) zusammen auf einer Seite halten, wenn er auf eine Seite passt. */
   abschnittZusammen?: boolean
+  /** Zusätzliche Höhe (mm) für Tabellenzeilen mit leeren Feldern, Platz für Handschrift. Standard 2,4. */
+  tabellenLuft?: number
   mitteBisParagraf?: boolean // Parteienblock (vor „§ 1“) mittig, wie die Vereinbarung im Scan
 }
 
@@ -68,7 +70,7 @@ const STILE: Record<Kopfstil, Stil> = {
   kooperation: { schrift: 'helvetica', logo: { x: 18, y: 25, breite: 20, seiten: 'alle' }, kooperation: true, fuss: 'mayer', start1: 72, startN: 58, links: 25, rechts: 22, unten: 30, titelMitte: true, titel: { groesse: 13, fett: true }, handZeile: 3.5 },
   schlicht: { schrift: 'helvetica', fuss: 'keiner', start1: 30, startN: 20, links: 25, rechts: 22, unten: 18, titelMitte: true, titel: { groesse: 11, fett: true }, mitteBisParagraf: true },
   schlichtSerif: { schrift: 'times', fuss: 'keiner', start1: 52, startN: 25, links: 25, rechts: 22, unten: 22, titel: { groesse: 11, fett: false }, handZeile: 3.5 },
-  erben: { schrift: 'helvetica', logo: { x: 18, y: 12, breite: 22, seiten: 'alle' }, rueck: { y: 43.5, seiten: 'alle' }, fuss: 'vertraulich', start1: 52, startN: 50, links: 21, rechts: 18, unten: 20, titelMitte: true, titel: { groesse: 17, fett: true }, untertitelSchwarz: true, ueberFarbe: BLAU, kopfFuellung: [200, 200, 200], abschnittZusammen: true },
+  erben: { schrift: 'helvetica', logo: { x: 18, y: 12, breite: 22, seiten: 'alle' }, rueck: { y: 43.5, seiten: 'alle' }, fuss: 'vertraulich', start1: 52, startN: 50, links: 21, rechts: 18, unten: 20, titelMitte: true, titel: { groesse: 17, fett: true }, untertitelSchwarz: true, ueberFarbe: BLAU, kopfFuellung: [200, 200, 200], abschnittZusammen: true, tabellenLuft: 0 },
   memo: { schrift: 'times', fuss: 'keiner', start1: 26, startN: 20, links: 23, rechts: 20, unten: 18, titel: { groesse: 15, fett: true }, titelFarbe: [79, 129, 189], ueberFarbe: [79, 129, 189] },
   feedback: { schrift: 'helvetica', logo: { x: 177, y: 9, breite: 15, seiten: 'erste', blass: true }, fuss: 'keiner', start1: 24, startN: 18, links: 22, rechts: 20, unten: 18, kopfFuellung: [244, 204, 204] },
 }
@@ -100,7 +102,12 @@ function sicher(text: string): string {
     .replace(/[^\u0000-ÿ€–—‘’‚“”„•…]/g, '?')
 }
 
-type Wort = { text: string; breite: number; kasten?: 'leer' | 'an'; linie?: boolean; feld?: boolean; nachLeer: boolean; fett?: boolean }
+type Wort = { text: string; breite: number; kasten?: 'leer' | 'an'; linie?: boolean; feld?: boolean; name?: string; nachLeer: boolean; fett?: boolean }
+
+// Leere Felder, in die man von Hand einen längeren Text schreibt (Antworten, Notizen …): gedruckt mit drei
+// Schreiblinien über die ganze Breite statt einer (Hasans Wunsch, 21.11.2026: Formulare leer ausdrucken und
+// von Hand ausfüllen lassen).
+const FREITEXT = /^antwort|ausgangslage|handlungsempfehl|notiz|sonstig|bemerkung|erkenntnis|ziele|interessen|motive|beschreib|anliegen|wünsch|wuensch|kommentar|begründ|vereinbar|ergebnis/i
 
 export function erzeugeVorlagePdf(params: {
   text: string
@@ -256,7 +263,7 @@ export function erzeugeVorlagePdf(params: {
         const wert = params.werte[t.name]?.trim()
         // Ob nach dem Feld ein Abstand folgt, bestimmt der Text dahinter (z. B. kein Abstand vor einem Punkt).
         if (!wert) {
-          liste.push({ text: '', breite: inTabelle ? 14 : 42, linie: true, feld: true, nachLeer: false })
+          liste.push({ text: '', breite: inTabelle ? 14 : 42, linie: true, feld: true, name: t.name, nachLeer: false })
           continue
         }
         const fett = t.fett || grundStil === 'bold'
@@ -348,13 +355,17 @@ export function erzeugeVorlagePdf(params: {
       const letztes = z[z.length - 1]
       // In den Formular-Stilen (mit handZeile) gilt das auch für eine Zeile, die nur aus einer Schreiblinie
       // besteht — wie im Scan der Allgemeinen Vollmacht („wohnhaft“ und darunter eine Linie über die ganze Breite).
-      const nurLinie = !!st.handZeile && z.length === 1 && !!letztes?.linie
-      const vonHand = !inTabelle && ((!!letztes?.feld && z.length > 1 && /:$/.test(z[z.length - 2].text)) || nurLinie)
+      // Ein leeres Feld allein in seiner Zeile (oder nur mit Aufzählungszeichen davor) bekommt in jedem Stil eine
+      // Linie über die ganze Breite — sonst stünde beim leeren Ausdruck nur ein kurzer Strich da.
+      const vorWort = z.length > 1 ? z[z.length - 2].text : ''
+      const feldAllein = !!letztes?.feld && (z.length === 1 || (z.length === 2 && /^(\d+\.|[-–•])$/.test(vorWort)))
+      const nurLinie = (!!st.handZeile && z.length === 1 && !!letztes?.linie) || feldAllein
+      const vonHand = !inTabelle && ((!!letztes?.feld && z.length > 1 && /:$/.test(vorWort)) || nurLinie)
       if (vonHand) {
         const x = z.slice(0, -1).reduce((summe, w) => summe + w.breite + (w.nachLeer ? leer : 0), 0)
         z = [...z.slice(0, -1), { ...letztes, breite: Math.max(letztes.breite, breite - x) }]
       }
-      const vorlauf = vonHand ? (st.handZeile ?? 2.6) : 0
+      const vorlauf = vonHand ? (st.handZeile ?? 3) : 0
       platz(vorlauf + zeilenhoehe)
       y += vorlauf
       schrift(stil, groesse)
@@ -363,6 +374,19 @@ export function erzeugeVorlagePdf(params: {
       else if (rechtsBuendig) zeichneZeile(z, xStart() + breite - zeilenBreite(), y)
       else zeichneZeile(z, x0, y)
       y += zeilenhoehe
+      // Freitext-Feld: zwei weitere Schreiblinien über die ganze Breite.
+      if (vonHand && letztes?.feld && FREITEXT.test(letztes.name ?? '')) {
+        for (let n = 0; n < 2; n++) {
+          platz(vorlauf + zeilenhoehe)
+          y += vorlauf
+          if (!messen) {
+            doc.setDrawColor(120)
+            doc.setLineWidth(0.2)
+            doc.line(x0, y + 0.6, x0 + breite, y + 0.6)
+          }
+          y += zeilenhoehe
+        }
+      }
     }
   }
 
@@ -385,8 +409,20 @@ export function erzeugeVorlagePdf(params: {
       const b = breiten.map((x) => x * faktor)
       grundStil = istKopf ? 'bold' : 'normal'
       schrift(grundStil, 8.5)
-      const zellen = Array.from({ length: spalten }, (_, s) => umbrechen(worte(zeile[s] ?? []), b[s] - 3))
-      const hoehe = Math.max(1, ...zellen.map((z) => z.length)) * 4.2 + 2.6
+      const leerTab = doc.getTextWidth(' ')
+      // Leeres Feld am Ende einer Zelle: Linie bis zum Zellrand, damit man von Hand hineinschreiben kann.
+      const zellen = Array.from({ length: spalten }, (_, s) =>
+        umbrechen(worte(zeile[s] ?? []), b[s] - 3).map((zl, i, alle) => {
+          const letztes = zl[zl.length - 1]
+          if (i < alle.length - 1 || !letztes?.feld) return zl
+          const x = zl.slice(0, -1).reduce((summe, w) => summe + w.breite + (w.nachLeer ? leerTab : 0), 0)
+          return [...zl.slice(0, -1), { ...letztes, breite: Math.max(letztes.breite, b[s] - 3 - x) }]
+        }),
+      )
+      // Zeilen mit leeren Feldern etwas höher und die Linie tiefer gesetzt: Platz für Handschrift.
+      const mitFeld = !istKopf && zellen.some((zelle) => zelle.some((zl) => zl.some((w) => w.feld)))
+      const absenken = mitFeld ? (st.tabellenLuft ?? 2.4) : 0
+      const hoehe = Math.max(1, ...zellen.map((z) => z.length)) * 4.2 + 2.6 + absenken
       platz(hoehe)
       let x = xStart()
       zellen.forEach((zelle, s) => {
@@ -402,7 +438,7 @@ export function erzeugeVorlagePdf(params: {
           doc.rect(x, y - 3.6, b[s], hoehe)
         }
         schrift(istKopf ? 'bold' : 'normal', 8.5)
-        zelle.forEach((zl, i) => zeichneZeile(zl, x + 1.5, y + i * 4.2))
+        zelle.forEach((zl, i) => zeichneZeile(zl, x + 1.5, y + absenken + i * 4.2))
         x += b[s]
       })
       y += hoehe
