@@ -330,7 +330,12 @@ export type Kunde = {
   naechsteSchritte?: string
   /** Vom Berater gesetzte Ampel; leer = berechnet (lib/checkliste.ts). */
   ampelManuell?: AmpelManuell
+  /** Akademie: angefragte, gebuchte oder besuchte Seminare (id = seminare.id). Seit 21.11.2026. */
+  seminare?: SeminarBuchung[]
 }
+
+export type SeminarStand = 'interessiert' | 'angemeldet' | 'teilgenommen'
+export type SeminarBuchung = { id: string; titel: string; stand: SeminarStand }
 
 export type Vermittler = { name: string; kundeId?: string; bereich?: KundeBereich }
 

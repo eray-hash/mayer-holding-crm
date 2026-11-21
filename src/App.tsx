@@ -69,6 +69,7 @@ import { AufgabenUebersicht } from './pages/aufgaben/AufgabenUebersicht'
 import { Kostenvoranschlaege } from './pages/kostenvoranschlaege/Kostenvoranschlaege'
 import { Checkliste } from './pages/checkliste/Checkliste'
 import { Wochenbesprechung } from './pages/besprechung/Wochenbesprechung'
+import { Seminare } from './pages/akademie/Seminare'
 import { SuperuserSeite } from './pages/superuser/SuperuserSeite'
 import { ProjekteListe } from './pages/projekte/ProjekteListe'
 import { PortalLogin } from './pages/portal/PortalLogin'
@@ -188,6 +189,7 @@ function AdminRoutesContent() {
         <Route path="/akademie/teilnehmer/:id" element={<RequireBereich bereich="akademie"><AkademieDetail /></RequireBereich>} />
         <Route path="/akademie/vorlagen/:kind" element={<RequireBereich bereich="akademie"><VorlagenPageAkademie /></RequireBereich>} />
         <Route path="/akademie/projekte" element={<RequireBereich bereich="akademie"><ProjekteListe /></RequireBereich>} />
+        <Route path="/akademie/seminare" element={<RequireBereich bereich="akademie"><Seminare /></RequireBereich>} />
         <Route path="/akademie/todo" element={<RequireBereich bereich="akademie"><BereichToDoListe bereich="akademie" label="Akademie" /></RequireBereich>} />
 
         <Route path="/finanzierungen" element={<RequireBereich bereich="finanzierungen"><FinanzierungenListe /></RequireBereich>} />

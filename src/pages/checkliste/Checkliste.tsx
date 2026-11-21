@@ -9,6 +9,7 @@ import { Card, EmptyState, Modal, PrimaryButton, SecondaryButton, inputClass } f
 import { aktePfad, akteName, useKvNutzer } from '../../components/KostenvoranschlaegeSection'
 import { useBereichsRechte } from '../../lib/bereichsRechte'
 import { holeLeistungen } from '../../lib/leistungen'
+import { ladeSeminare } from '../../lib/seminare'
 import { checklisteVorschlag } from '../../lib/emailGateway'
 import { WiedervorlagenListe } from '../../components/WiedervorlagenListe'
 import { WillkommenSchalter } from '../../components/WillkommenSchalter'
@@ -183,7 +184,7 @@ export function Checkliste() {
                       {k.branche && <span className="block text-slate-400">{k.branche}</span>}
                     </td>
                     <td className="px-3 py-2 text-xs text-slate-700">{k.vermittler?.name || '–'}</td>
-                    <td className="max-w-[200px] px-3 py-2 text-xs text-slate-700">{k.dienstleistungen?.join(', ') || '–'}</td>
+                    <td className="max-w-[200px] px-3 py-2 text-xs text-slate-700">{k.dienstleistungen?.join(', ') || k.seminare?.map((s) => s.titel).join(', ') || '–'}</td>
                     <td className="whitespace-nowrap px-3 py-2 text-right text-xs tabular-nums text-slate-700">
                       {z.umsatz.anzahl ? fmtEURCent(z.umsatz.netto) : '–'}
                       {z.umsatz.ohneBetrag > 0 && <span className="block text-slate-400">{z.umsatz.ohneBetrag} ohne Betrag</span>}
@@ -270,7 +271,9 @@ export function ChecklisteBearbeiten({
   const [fehler, setFehler] = useState('')
 
   useEffect(() => {
-    holeLeistungen().then((l) => setLeistungen(l.map((x) => x.bezeichnung))).catch(() => setLeistungen([]))
+    // Akademie: die Seminare aus dem Katalog statt der Beratungs-Preisliste.
+    if (zeile.bereich === 'akademie') ladeSeminare().then((l) => setLeistungen(l.map((x) => x.titel))).catch(() => setLeistungen([]))
+    else holeLeistungen().then((l) => setLeistungen(l.map((x) => x.bezeichnung))).catch(() => setLeistungen([]))
   }, [])
 
   const akteNamen = useMemo(() => [...new Set(alleAkten.filter((z) => z.kunde.id !== k.id).map((z) => akteName(z.kunde)))].sort(), [alleAkten, k.id])
