@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
-import { ArrowLeft, ArrowRightLeft, Folder, FolderOpen, File, Upload, Plus, Radar, ExternalLink, Users, Sparkles, CheckCircle2, XCircle, Trash2, Send } from 'lucide-react'
+import { ArrowLeft, ArrowRightLeft, Folder, FolderOpen, File, Upload, Plus, Radar, ExternalLink, Users, Sparkles, CheckCircle2, XCircle, Trash2 } from 'lucide-react'
 import { useApp, type AppData } from '../../context/AppContext'
 import { StatusWidget } from '../../components/StatusWidget'
 import { Card, Modal, Field, inputClass, PrimaryButton, SecondaryButton, EmptyState, StatusBadge } from '../../components/ui'
@@ -8,7 +8,7 @@ import { FormularLinkButtons } from '../../components/FormularLink'
 import { useEigentuemerPfad } from '../../lib/eigentuemerLink'
 import { KUNDEN_BEREICHE, kundeBereichLabel } from '../../data/kundenBereiche'
 import { useBereichsRechte } from '../../lib/bereichsRechte'
-import { alleGesuche, budgetText, eckdatenTexte, passendeGesuche } from '../../lib/gesuche'
+import { alleGesuche, passendeGesuche } from '../../lib/gesuche'
 import { fmtDate, isOverdue, today, uid, fmtEUR } from '../../lib/dates'
 import { PRIORITAETEN, gruppeLabel, LUKRATIVITAET_COLOR } from '../../data/constants'
 import { DOKUMENT_ORDNER } from '../../types'
@@ -28,8 +28,9 @@ import { ObjektFreigaben } from '../../components/ObjektFreigaben'
 import { ObjektBesichtigungenSection } from '../../components/ObjektBesichtigungenSection'
 import { ObjektAutoNachrichten } from '../../components/AutoNachrichtenListe'
 import { ObjektEigentuemerbericht } from '../../components/ObjektEigentuemerbericht'
-import { ExposePdfKnopf } from '../../components/ExposePdf'
+import { ObjektExposeErstellen } from '../../components/ObjektExposeErstellen'
 import { ObjektAnGesucheSenden } from '../../components/ObjektAnGesucheSenden'
+import { ObjektPassendeGesuche } from '../../components/ObjektPassendeGesuche'
 import { immoPfade, immoObjekte, privateGesuche } from './privatModus'
 
 const TABS = [
@@ -473,33 +474,7 @@ export function ObjektDetail({ privat }: { privat?: boolean } = {}) {
 
       {tab === 'vorschlaege' && (
         <div>
-          <Card className="mb-4 p-4">
-            <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
-              <h3 className="text-sm font-semibold text-slate-700">Passende Gesuche</h3>
-              {/* Privat kein Versand: er hält eine Weitergabe im gemeinsamen Verzeichnis fest. */}
-              {gesuchTreffer.length > 0 && !privat && (
-                <SecondaryButton onClick={() => setAnGesucheOpen(true)}><Send size={13} /> An passende Gesuche schicken</SecondaryButton>
-              )}
-            </div>
-            {gesuchTreffer.length === 0 ? (
-              <p className="text-sm text-slate-500">Zurzeit sucht niemand ein solches Objekt. Gesuche erfasst du unter „Gesuche" in der Seitenleiste.</p>
-            ) : (
-              <ul className="mt-2 space-y-2">
-                {gesuchTreffer.map((t) => (
-                  <li key={`${t.kunde.id}:${t.gesuch.id}`} className="text-sm">
-                    <a href={`#${pfade.kontakt(t.bereich, t.kunde.id)}`} className="font-medium text-accent-600 hover:underline">
-                      {t.kunde.firma}
-                    </a>
-                    <span className="text-slate-600"> sucht: {t.gesuch.titel}</span>
-                    <div className="text-xs text-slate-500">
-                      {[t.gesuch.objekttypen.join(', '), t.gesuch.lage, budgetText(t.gesuch), ...eckdatenTexte(t.gesuch)].filter((x) => x && x !== '–').join(' · ')} · passt: {t.passt.join(', ')}
-                      {t.offen.length > 0 && <span className="text-amber-600"> · {t.offen.join(', ')}</span>}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Card>
+          <ObjektPassendeGesuche objekt={objekt} treffer={gesuchTreffer} privat={privat} kontaktPfad={pfade.kontakt} onAnGesucheSchicken={() => setAnGesucheOpen(true)} />
           {!privat && (
           <>
           <div className="mb-3 flex justify-end">
@@ -861,7 +836,7 @@ function ExposeSection({ objekt }: { objekt: Objekt }) {
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-sm font-semibold text-slate-700">Exposé (automatisch erstellt, Whitelabel)</h3>
         <div className="flex flex-wrap items-center gap-2">
-          <ExposePdfKnopf objekt={objekt} beschreibung={entwurf} />
+          <ObjektExposeErstellen objekt={objekt} beschreibung={entwurf} />
           {isEmailGatewayConfigured && (
             <SecondaryButton onClick={neuGenerieren} disabled={generiert}>
               <Sparkles size={13} className={generiert ? 'animate-pulse' : ''} /> {generiert ? 'Erstellt …' : 'Neu generieren'}

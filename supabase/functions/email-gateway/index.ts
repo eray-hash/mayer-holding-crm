@@ -238,6 +238,7 @@ import {
 } from './postfach.ts'
 import { loescheTermin, sendeErinnerungen, sendeTelegram, speichereTermin } from './kalender.ts'
 import { aboLink, kalenderAboAntwort } from './kalenderAbo.ts'
+import { FREMD_AKTIONEN, fremdKalenderAbruf, fremdKalenderAktion } from './fremdKalender.ts'
 import { MS_AKTIONEN, msAbgleichAlle, msAktion, msRueckrufAntwort } from './privatMicrosoft.ts'
 import { BRIEF_AKTIONEN, briefAktion } from './briefe.ts'
 import { kontaktMailsUebernehmen } from './kontaktUebernahme.ts'
@@ -264,9 +265,11 @@ import { lieseKontoauszug } from './kontoauszug.ts'
 import { erstelleChecklisteVorschlag } from './checklisteVorschlag.ts'
 import { priorisiereListe, pruefeTodoPriorisierung, type Liste as TodoListe } from './todoPriorisierung.ts'
 import { versendeWillkommen } from './willkommen.ts'
+import { pruefeKundenberichte } from './kundenbericht.ts'
 import { versendeAutoNachrichten } from './autoNachrichten.ts'
 import { kiEntscheidung, pruefeNeueAnfragen } from './anfragenManager.ts'
 import { portalDokument, portalLaden, portalZustimmen } from './objektPortal.ts'
+import { seminarAnmelden, seminarTerminLaden } from './seminarAnmeldung.ts'
 import { beantworteKundenUnterlagen } from './kundenUnterlagen.ts'
 import { pruefeWunschAnalyse, wunschAnalyseTest } from './wunschAnalyse.ts'
 import { pruefeSuperuserWochenbericht, superuserAuswertung, superuserWochenberichtTest } from './superuser.ts'
@@ -3146,7 +3149,7 @@ async function grenzeErreicht(admin: any, grenzen: { schluessel: string; hoechst
 // sind ohnehin ausgenommen.
 const OHNE_LOGIN = new Set(['request_password_reset', 'self_register'])
 // Zeitplan-Aufträge (pg_cron) weisen sich mit dem Zeitplan-Zeichen aus dem Vault aus.
-const ZEITPLAN_AKTIONEN = new Set(['termin_erinnerungen', 'postfach_abruf', 'classify_new_leads', 'ms_abgleich'])
+const ZEITPLAN_AKTIONEN = new Set(['kalender_fremd_abruf', 'termin_erinnerungen', 'postfach_abruf', 'classify_new_leads', 'ms_abgleich'])
 const ZUGANG_MERKER = new Map<string, number>()
 const TOKEN_PERSON = new Map<string, string>()
 
@@ -3346,6 +3349,10 @@ Deno.serve((req: Request) => mitAnlass(async () => {
         return { gesendet: 0, fehler: 0 }
       })
       if (willkommen.gesendet > 0 || willkommen.fehler > 0) console.log(`Willkommensnachrichten: ${willkommen.gesendet} gesendet, ${willkommen.fehler} Fehler.`)
+      // Wöchentliche Erinnerung „Statusbericht ist fertig — prüfen und senden“ (kundenbericht.ts): nur Telegram an den
+      // Verantwortlichen, nie an den Kunden; nur bei eingeschaltetem Schalter, am eingestellten Wochentag ab 8 Uhr; wirft nie.
+      const kundenberichte = await pruefeKundenberichte(admin, sendeTelegram)
+      if (kundenberichte.erinnert > 0 || kundenberichte.meldungen.length > 0) console.log(`Statusbericht-Erinnerungen: ${kundenberichte.erinnert} gesendet.`, kundenberichte.meldungen.join(' | '))
       // Fällige automatische Nachrichten der Immobilien-Abteilung (autoNachrichten.ts) — nur Regeln, die an sind; wirft nie.
       const autoNachrichten = await versendeAutoNachrichten(admin, (to, subject, text, html) => sendMail(to, subject, text, html)).catch((err) => {
         console.error('Automatische Nachrichten fehlgeschlagen:', err)
@@ -3518,6 +3525,25 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       return await briefAktion(req, admin, body, headers)
     }
 
+    // ---------- Eigener Kalender als belegte Zeiten (siehe fremdKalender.ts) ----------
+    if (FREMD_AKTIONEN.has(String(body.action))) {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const aufrufer = await ermittleAufrufer(req, admin, body)
+      if (!aufrufer) {
+        return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
+      }
+      const ergebnis = await fremdKalenderAktion(admin, aufrufer.email, body)
+      return new Response(JSON.stringify(ergebnis.daten), { status: ergebnis.status, headers })
+    }
+    // Zeitplan alle 15 Minuten (Auftrag fremd-kalender): alle hinterlegten Kalender neu holen.
+    if (body.action === 'kalender_fremd_abruf') {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const dienst = istDienstSchluessel((req.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '').trim())
+      const cron = (req.headers.get('x-cron-token') ?? '').trim()
+      const zeitplan = !dienst && cron ? (await admin.rpc('pruefe_cron_token', { t: cron })).data === true : false
+      if (!dienst && !zeitplan) return new Response(JSON.stringify({ error: 'Nur für den Zeitplan.' }), { status: 403, headers })
+      return new Response(JSON.stringify(await fremdKalenderAbruf(admin)), { headers })
+    }
     if (body.action === 'kalender_abo_link') {
       // Persönliche Abo-Adresse für die eigene Kalender-App; `neu: true` macht die alte ungültig.
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
@@ -4271,6 +4297,30 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       }
     }
 
+    if (body.action === 'public_seminar_termin' || body.action === 'public_seminar_anmelden') {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const ip = (req.headers.get('x-forwarded-for') ?? '').split(',')[0].trim() || 'unbekannt'
+      const anmelden = body.action === 'public_seminar_anmelden'
+      const grenzen = anmelden
+        ? [{ schluessel: `seminar:anm:${ip}`, hoechstens: 20 }, { schluessel: `seminar:anm:mail:${String(body.email ?? '').trim().toLowerCase()}`, hoechstens: 5 }, { schluessel: 'seminar:anm:alle', hoechstens: 100 }]
+        : [{ schluessel: `seminar:lesen:${ip}`, hoechstens: 300 }]
+      if (await grenzeErreicht(admin, grenzen)) return new Response(JSON.stringify({ error: 'Zu viele Aufrufe. Bitte versuchen Sie es in einer Stunde erneut.' }), { status: 429, headers })
+      try {
+        if (!anmelden) return new Response(JSON.stringify(await seminarTerminLaden(admin, body.token)), { headers })
+        const melde = async (zustaendig: string, text: string) => {
+          const { data: m } = await admin.from('mitarbeiter').select('telegram_chat_id').eq('aktiv', true).eq('name', zustaendig).maybeSingle()
+          if (m?.telegram_chat_id) await sendeTelegram(m.telegram_chat_id, text)
+        }
+        const ergebnis = await seminarAnmelden(admin, body.token,
+          { name: body.name, firma: body.firma, email: body.email, telefon: body.telefon, teilnahmebedingungen: body.teilnahmebedingungen, datenschutz: body.datenschutz, webseite: body.webseite },
+          { ip, geraet: req.headers.get('user-agent') ?? '' }, melde)
+        return new Response(JSON.stringify(ergebnis), { headers })
+      } catch (err) {
+        console.error('Seminar-Anmeldung fehlgeschlagen:', err)
+        return new Response(JSON.stringify({ error: 'Das hat nicht geklappt. Bitte versuchen Sie es später erneut.' }), { status: 500, headers })
+      }
+    }
+
     if (body.action === 'public_get_vorschlag') {
       const { vorschlagId } = body
       if (!vorschlagId) {
@@ -4477,7 +4527,8 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       if (typeof body.id !== 'string' || !body.id.trim()) {
         return new Response(JSON.stringify({ error: 'id fehlt.' }), { status: 400, headers })
       }
-      if (!(await darfBereichServer(admin, aufrufer.email, 'immobilien'))) return keinRecht(headers)
+      const { data: anZeile } = await admin.from('auto_nachrichten').select('bereich').eq('id', body.id.trim()).maybeSingle()
+      if (!(await darfBereichServer(admin, aufrufer.email, anZeile?.bereich === 'akademie' ? 'akademie' : 'immobilien'))) return keinRecht(headers)
       const ergebnis = await versendeAutoNachrichten(admin, (to, subject, text, html) => sendMail(to, subject, text, html), { id: body.id.trim() })
       return new Response(JSON.stringify(ergebnis), { headers })
     }
@@ -4785,7 +4836,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       return new Response(JSON.stringify({ ok: true }), { headers })
     }
 
-    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "public_objekt_portal", "public_objekt_portal_zustimmen", "public_objekt_portal_dokument", "bewertung_recherche_start", "bewertung_recherche_schritt", "kunden_umfeld_recherche", "steuer_analyse_start", "steuer_analyse_schritt", "dokument_lesen", "dokument_inhalte", "postfaecher_liste", "postfach_verbinden", "postfach_trennen", "postfach_abruf", "postfach_ordner", "mail_zuordnen", "mail_freigeben", "mail_anhang_url", "termin_speichern", "termin_loeschen", "termin_erinnerungen", "tagesmeldung_test", "kontoauszug_auslesen", "checkliste_vorschlag", "todos_priorisieren", "willkommen_jetzt", "auto_nachricht_jetzt", "anfrage_pruefen_jetzt", "gesendet_abruf" oder "firmenwissen_answer"' }), { status: 400, headers })
+    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "public_objekt_portal", "public_objekt_portal_zustimmen", "public_objekt_portal_dokument", "bewertung_recherche_start", "bewertung_recherche_schritt", "kunden_umfeld_recherche", "steuer_analyse_start", "steuer_analyse_schritt", "dokument_lesen", "dokument_inhalte", "postfaecher_liste", "postfach_verbinden", "postfach_trennen", "postfach_abruf", "postfach_ordner", "mail_zuordnen", "mail_freigeben", "mail_anhang_url", "termin_speichern", "termin_loeschen", "termin_erinnerungen", "tagesmeldung_test", "kontoauszug_auslesen", "checkliste_vorschlag", "todos_priorisieren", "willkommen_jetzt", "auto_nachricht_jetzt", "anfrage_pruefen_jetzt", "public_seminar_termin", "public_seminar_anmelden", "gesendet_abruf" oder "firmenwissen_answer"' }), { status: 400, headers })
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }

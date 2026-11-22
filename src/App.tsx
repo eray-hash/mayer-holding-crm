@@ -57,6 +57,7 @@ import { PrivatVorlagen } from './pages/privat/PrivatVorlagen'
 import { PrivatGesuche, PrivatImmoKundeDetail, PrivatImmoKundenListe, PrivatObjektDetail, PrivatObjektListe } from './pages/privat/immobilien'
 import { Kalender } from './pages/kalender/Kalender'
 import { Auswertungen } from './pages/auswertungen/Auswertungen'
+import { Umsatzvorschau } from './pages/auswertungen/Umsatzvorschau'
 import { PostfachEinrichtenHinweis } from './components/PostfachEinstellungen'
 import { ToDoListe, BereichToDoListe } from './pages/todo/ToDoListe'
 import { HeuteScreen } from './pages/heute/HeuteScreen'
@@ -71,6 +72,7 @@ import { Kostenvoranschlaege } from './pages/kostenvoranschlaege/Kostenvoranschl
 import { Checkliste } from './pages/checkliste/Checkliste'
 import { Wochenbesprechung } from './pages/besprechung/Wochenbesprechung'
 import { Seminare } from './pages/akademie/Seminare'
+import { SeminarTermin } from './pages/akademie/SeminarTermin'
 import { BuecherListe } from './pages/buecher/BuecherListe'
 import { BuchDetail } from './pages/buecher/BuchDetail'
 import { BuchKontakte } from './pages/buecher/BuchKontakte'
@@ -86,6 +88,7 @@ import { PublicFeedbackbogen } from './pages/formulare/PublicFeedbackbogen'
 import { PublicVollmachtErben } from './pages/formulare/PublicVollmachtErben'
 import { PublicExpose } from './pages/formulare/PublicExpose'
 import { PublicObjektPortal } from './pages/formulare/PublicObjektPortal'
+import { PublicSeminarAnmeldung } from './pages/formulare/PublicSeminarAnmeldung'
 import { PublicMandantenfragebogenErben } from './pages/formulare/PublicMandantenfragebogenErben'
 import { PublicVollmachtBeratung } from './pages/formulare/PublicVollmachtBeratung'
 import { PublicSelbstauskunft } from './pages/formulare/PublicSelbstauskunft'
@@ -113,6 +116,7 @@ function AdminRoutesContent() {
         <Route path="/superuser" element={<SuperuserSeite />} />
         {/* Für alle: Was jemand sieht, begrenzt die Datenbank (Bereichsrechte) schon im App-Zustand. */}
         <Route path="/auswertungen" element={<Auswertungen />} />
+        <Route path="/auswertungen/umsatz" element={<Umsatzvorschau />} />
         {/* Für alle: Sichtbarkeit regelt die Datenbank (Bereichsrechte, private Einträge nur für den Besitzer). */}
         <Route path="/kostenvoranschlaege" element={<Kostenvoranschlaege />} />
         <Route path="/checkliste" element={<Checkliste />} />
@@ -196,6 +200,7 @@ function AdminRoutesContent() {
         <Route path="/akademie/vorlagen/:kind" element={<RequireBereich bereich="akademie"><VorlagenPageAkademie /></RequireBereich>} />
         <Route path="/akademie/projekte" element={<RequireBereich bereich="akademie"><ProjekteListe /></RequireBereich>} />
         <Route path="/akademie/seminare" element={<RequireBereich bereich="akademie"><Seminare /></RequireBereich>} />
+        <Route path="/akademie/termine/:id" element={<RequireBereich bereich="akademie"><SeminarTermin /></RequireBereich>} />
         <Route path="/akademie/todo" element={<RequireBereich bereich="akademie"><BereichToDoListe bereich="akademie" label="Akademie" /></RequireBereich>} />
 
         <Route path="/finanzierungen" element={<RequireBereich bereich="finanzierungen"><FinanzierungenListe /></RequireBereich>} />
@@ -372,6 +377,7 @@ function AppRoutes() {
         <Route path="/formular/vollmacht/erben/:mandantId" element={<PublicVollmachtErben />} />
         <Route path="/formular/expose/:vorschlagId" element={<PublicExpose />} />
         <Route path="/formular/objekt/:token" element={<PublicObjektPortal />} />
+        <Route path="/formular/seminar/:terminId" element={<PublicSeminarAnmeldung />} />
         <Route path="/formular/mandantenfragebogen/erben/:mandantId" element={<PublicMandantenfragebogenErben />} />
         <Route path="/formular/vollmacht/beratung/:typ/:kundeId" element={<PublicVollmachtBeratung />} />
         <Route path="/formular/vollmacht/privat/:mandantId" element={<PublicVollmachtErben bereich="privat" />} />

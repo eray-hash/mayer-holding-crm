@@ -30,6 +30,8 @@ export type ExposeInhalt = {
   logo?: ExposeBild
   firma: string
   kontakt: { name: string; telefon?: string; email?: string }
+  /** Optional: Vermittler (z. B. von einer Visitenkarte) — eigener Kasten neben „Ihr Ansprechpartner“. */
+  vermittler?: { name: string; firma?: string; telefon?: string; email?: string }
   vertraulich?: boolean
   /** Bereits formatiert, z. B. „18.11.2026“. */
   stand: string
@@ -296,31 +298,55 @@ export function erzeugeExposePdf(inhalt: ExposeInhalt): jsPDF {
     }
   }
 
-  // ── Ansprechpartner und Hinweis ──────────────────────────────────────────────────────────────
-  const kontaktZeilen = [
-    inhalt.kontakt.telefon?.trim() ? `Telefon: ${inhalt.kontakt.telefon.trim()}` : '',
-    inhalt.kontakt.email?.trim() ? `E-Mail: ${inhalt.kontakt.email.trim()}` : '',
-    inhalt.firma,
-  ].filter(Boolean)
+  // ── Ansprechpartner (und Vermittler) und Hinweis ─────────────────────────────────────────────
+  const vermittler = inhalt.vermittler && (inhalt.vermittler.name.trim() || inhalt.vermittler.firma?.trim()) ? inhalt.vermittler : undefined
+  const kaesten = [
+    {
+      titel: 'Ihr Ansprechpartner',
+      name: inhalt.kontakt.name || inhalt.firma,
+      zeilen: [
+        inhalt.kontakt.telefon?.trim() ? `Telefon: ${inhalt.kontakt.telefon.trim()}` : '',
+        inhalt.kontakt.email?.trim() ? `E-Mail: ${inhalt.kontakt.email.trim()}` : '',
+        inhalt.firma,
+      ].filter(Boolean),
+    },
+    ...(vermittler
+      ? [
+          {
+            titel: 'Vermittler',
+            name: vermittler.name.trim() || vermittler.firma?.trim() || '',
+            zeilen: [
+              vermittler.telefon?.trim() ? `Telefon: ${vermittler.telefon.trim()}` : '',
+              vermittler.email?.trim() ? `E-Mail: ${vermittler.email.trim()}` : '',
+              vermittler.name.trim() && vermittler.firma?.trim() ? vermittler.firma.trim() : '',
+            ].filter(Boolean),
+          },
+        ]
+      : []),
+  ]
   const hinweisZeilen = (() => {
     schrift('normal', 8)
     return zeilen(EXPOSE_HINWEIS, breite)
   })()
-  const kastenH = 14 + kontaktZeilen.length * 5
+  const kastenW = kaesten.length === 2 ? (breite - 5) / 2 : breite
+  const kastenH = 14 + Math.max(...kaesten.map((k) => k.zeilen.length)) * 5
   platz(kastenH + 10 + hinweisZeilen.length * 3.6)
   y += 4
-  doc.setFillColor(248, 250, 252)
-  doc.setDrawColor(LINIE[0], LINIE[1], LINIE[2])
-  doc.setLineWidth(0.3)
-  doc.rect(L, y, breite, kastenH, 'FD')
-  doc.setFillColor(AKZENT[0], AKZENT[1], AKZENT[2])
-  doc.rect(L, y, 1.2, kastenH, 'F')
-  schrift('normal', 9, GRAU)
-  doc.text('Ihr Ansprechpartner', L + 6, y + 6)
-  schrift('bold', 11.5)
-  doc.text(sicher(inhalt.kontakt.name || inhalt.firma), L + 6, y + 11.5)
-  schrift('normal', 9.5)
-  kontaktZeilen.forEach((z, i) => doc.text(sicher(z), L + 6, y + 17 + i * 5))
+  kaesten.forEach((k, i) => {
+    const x = L + i * (kastenW + 5)
+    doc.setFillColor(248, 250, 252)
+    doc.setDrawColor(LINIE[0], LINIE[1], LINIE[2])
+    doc.setLineWidth(0.3)
+    doc.rect(x, y, kastenW, kastenH, 'FD')
+    doc.setFillColor(AKZENT[0], AKZENT[1], AKZENT[2])
+    doc.rect(x, y, 1.2, kastenH, 'F')
+    schrift('normal', 9, GRAU)
+    doc.text(k.titel, x + 6, y + 6)
+    schrift('bold', 11.5)
+    doc.text(zeilen(k.name, kastenW - 9)[0] ?? '', x + 6, y + 11.5)
+    schrift('normal', 9.5)
+    k.zeilen.forEach((z, j) => doc.text(zeilen(z, kastenW - 9)[0] ?? '', x + 6, y + 17 + j * 5))
+  })
   y += kastenH + 7
   schrift('normal', 8, GRAU)
   for (const z of hinweisZeilen) {

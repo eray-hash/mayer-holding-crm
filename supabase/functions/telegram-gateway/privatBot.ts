@@ -61,6 +61,12 @@ export const PRIVAT_BOT_WERKZEUGE: readonly string[] = [
   'objekt_anlegen',
   'objekt_aendern',
   'dateien_ins_objekt',
+  'gesuche_suchen',
+  'passende_kaeufer',
+  'passende_objekte',
+  'datei_verschieben',
+  'datei_umbenennen',
+  'datei_loeschen',
 ]
 
 /** Darf der private Assistent dieses Werkzeug benutzen? Hotmail- und Brief-Werkzeuge über `privatWerkzeug`. */

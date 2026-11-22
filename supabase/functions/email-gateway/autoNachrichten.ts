@@ -11,6 +11,8 @@
 // Wie bei der Willkommensnachricht: erst beanspruchen (geplant → gesendet), dann senden; bei einem Fehler
 // „fehler“. So geht keine Nachricht zweimal hinaus.
 
+import { baueSeminarNachricht, istSeminarRegel, pruefeSeminarAnlass } from './seminarNachrichten.ts'
+
 type Absenden = (to: string, subject: string, text: string, html?: string) => Promise<void>
 
 export type AutoVersandErgebnis = { gesendet: number; uebersprungen: number; fehler: number; meldungen: string[] }
@@ -35,6 +37,8 @@ const STATUS_NAME: Record<string, string> = { geplant: 'geplant', durchgefuehrt:
 /** Passt der Anlass noch? Liefert den Grund, warum nicht — oder null. */
 // deno-lint-ignore no-explicit-any
 export async function pruefeAnlass(admin: Admin, zeile: any, jetzt = Date.now()): Promise<string | null> {
+  // Akademie: Seminar-Anmeldungen (seminarNachrichten.ts).
+  if (istSeminarRegel(zeile.regel)) return await pruefeSeminarAnlass(admin, zeile, jetzt)
   if (zeile.objekt_id) {
     const { data: o } = await admin.from('objekte').select('id, privat_besitzer').eq('id', zeile.objekt_id).maybeSingle()
     if (!o) return 'Objekt gibt es nicht mehr'
@@ -93,11 +97,13 @@ async function versendeEine(admin: Admin, zeile: any, regel: any, absenden: Abse
     return 'uebersprungen'
   }
   // Frisch zusammensetzen: Termin, Adresse und Vorlage können sich seit dem Vormerken geändert haben.
-  const { data: m, error: bauFehler } = await admin.rpc('auto_nachricht_bauen', {
-    p_regel: zeile.regel,
-    p_besichtigung: zeile.besichtigung_id ?? null,
-    p_freigabe: zeile.freigabe_id ?? null,
-  })
+  const { data: m, error: bauFehler } = istSeminarRegel(zeile.regel)
+    ? await baueSeminarNachricht(admin, zeile)
+    : await admin.rpc('auto_nachricht_bauen', {
+        p_regel: zeile.regel,
+        p_besichtigung: zeile.besichtigung_id ?? null,
+        p_freigabe: zeile.freigabe_id ?? null,
+      })
   if (bauFehler || !m) {
     await setze({ status: 'fehler', grund: `Nachricht ließ sich nicht zusammensetzen${bauFehler ? `: ${bauFehler.message}` : ''}` })
     return 'fehler'
@@ -112,7 +118,7 @@ async function versendeEine(admin: Admin, zeile: any, regel: any, absenden: Abse
   }
   const an = String(m.an ?? '').trim()
   if (!ADRESSE.test(an)) {
-    await setze({ status: 'ohne_adresse', grund: 'Keine gültige E-Mail-Adresse beim Interessenten' })
+    await setze({ status: 'ohne_adresse', grund: `Keine gültige E-Mail-Adresse beim ${istSeminarRegel(zeile.regel) ? 'Teilnehmer' : 'Interessenten'}` })
     return 'uebersprungen'
   }
   const betreff = String(m.betreff ?? regel.titel ?? '').trim()
@@ -144,7 +150,7 @@ async function versendeEine(admin: Admin, zeile: any, regel: any, absenden: Abse
     an_name: anName || an,
     betreff,
     text,
-    kunde_bereich: kundeId ? 'immobilienkunden' : null,
+    kunde_bereich: kundeId ? (istSeminarRegel(zeile.regel) ? 'akademie' : 'immobilienkunden') : null,
     kunde_id: kundeId,
     kunde_name: anName || null,
     von: Deno.env.get('SMTP_USER') ?? null,

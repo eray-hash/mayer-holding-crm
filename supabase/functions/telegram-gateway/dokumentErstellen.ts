@@ -15,6 +15,10 @@
 // die Datei im CRM über einen kurz gültigen Link; email-gateway liest solche Pfade ebenfalls
 // (dokument_inhalte, auch .docx/.xlsx), d. h. kundenakte_lesen und dokument_inhalt funktionieren auch.
 //
+// Seit 22.11.2026 auch in die Objektakte (objekt_id statt kunde_id, Ordner frei wählbar, Vorgabe „Exposé“
+// bei Exposés, sonst „Sonstiges“) — Ablage über objektAblage.ts. Anlass: Wunsch vom 20.11.2026, ein
+// erstelltes Exposé landete mangels Funktion in einer Sammelakte.
+//
 // Die Datei kennt index.ts nicht (kein Kreis-Import): Datenbank, Mitarbeiter und Protokoll reicht der
 // Aufrufer herein, die Rechte kommen aus rechte.ts. Neue Werkzeuge hier in DOKUMENT_WERKZEUGE und
 // istDokumentWerkzeug eintragen — index.ts übernimmt sie von selbst.
@@ -23,6 +27,7 @@ import { PDFDocument, type PDFEmbeddedPage, type PDFFont, type PDFPage, rgb, Sta
 import { type Lauf, laeufe, ohneTitelUeberschrift, zerlege } from './auszeichnung.ts'
 import { type BlattEingabe, DOCX_TYP, erstelleDocx, erstelleXlsx, XLSX_TYP } from './dateiFormate.ts'
 import { DATEI_SENDEN_WERKZEUG, fuehreDateiSendenAus } from './dateiSenden.ts'
+import { ladeObjektMitRechten, legeInsObjektAb, objektAnzeige, type ObjektZeile, ordnerAusEingabe } from './objektAblage.ts'
 import { type AkteFuerRechte, darfAkte as darfAkteStandard, istFremdePrivatakte, istPrivat, nichtFreigegeben, type RechteMitarbeiter, SAMMELAKTEN } from './rechte.ts'
 
 // Die Zerlegung der Auszeichnung liegt in auszeichnung.ts (gemeinsam mit Word); hier weiter erreichbar.
@@ -54,8 +59,8 @@ type Art = (typeof ARTEN)[number]
 // Angezeigt wird nur Deutsch: "handout" ist bloß der Schlüssel, auf dem Blatt steht "Merkblatt".
 const ART_NAME: Record<Art, string> = { handout: 'Merkblatt', brief: 'Schreiben', zusammenfassung: 'Zusammenfassung' }
 
-const FIRMA = 'Andreas Mayer Holding'
-const FIRMA_ZEILE = 'Andreas Mayer Holding UG (haftungsbeschränkt) · Schwabstraße 3 · 89075 Ulm'
+export const FIRMA = 'Andreas Mayer Holding'
+export const FIRMA_ZEILE = 'Andreas Mayer Holding UG (haftungsbeschränkt) · Schwabstraße 3 · 89075 Ulm'
 
 const SENDEN_HINWEIS = 'Will der Mitarbeiter die Datei hier in Telegram haben, schick sie mit datei_senden'
 
@@ -63,11 +68,13 @@ export const DOKUMENT_WERKZEUGE = [
   {
     name: 'dokument_erstellen',
     description:
-      'Erstellt aus einem von dir geschriebenen Text eine fertige Datei — PDF (Vorgabe) oder Word (.docx, format "word") — als Merkblatt, Schreiben oder Zusammenfassung mit Briefkopf der Andreas Mayer Holding (bei eigenen privaten Kontakten auf dem eigenen Briefbogen bzw. mit dem Namen des Mitarbeiters), Datum und Seitenzahlen und legt sie als Dokument in der Kundenakte ab. Verwenden, wenn jemand ein Merkblatt, ein Schreiben oder eine Zusammenfassung "als Datei", "als PDF", "als Word-Datei", "zum Bearbeiten" oder "zum Ausdrucken/Mitgeben" möchte. Den Inhalt (z. B. aus Gesprächsprotokollen, Vertragsnotizen oder Dokumenten der Akte) schreibst du vorher selbst vollständig aus. Für eigene Unterlagen des Hauses ohne Kundenbezug kunde_id=k_intern_holding. Reine Listen und Tabellen zum Weiterrechnen oder Sortieren besser mit tabelle_erstellen (Excel). Danach kann die Datei mit datei_senden direkt in den Telegram-Chat geschickt werden.',
+      'Erstellt aus einem von dir geschriebenen Text eine fertige Datei — PDF (Vorgabe) oder Word (.docx, format "word") — als Merkblatt, Schreiben oder Zusammenfassung mit Briefkopf der Andreas Mayer Holding (bei eigenen privaten Kontakten auf dem eigenen Briefbogen bzw. mit dem Namen des Mitarbeiters), Datum und Seitenzahlen und legt sie als Dokument in der Kundenakte ab — oder mit objekt_id statt kunde_id in der Objektakte einer Immobilie (Ordner frei wählbar, Vorgabe „Exposé“ bei einem Exposé, sonst „Sonstiges“). Verwenden, wenn jemand ein Merkblatt, ein Schreiben oder eine Zusammenfassung "als Datei", "als PDF", "als Word-Datei", "zum Bearbeiten" oder "zum Ausdrucken/Mitgeben" möchte. Den Inhalt (z. B. aus Gesprächsprotokollen, Vertragsnotizen oder Dokumenten der Akte) schreibst du vorher selbst vollständig aus. Für eigene Unterlagen des Hauses ohne Kundenbezug kunde_id=k_intern_holding. Gehört das Dokument zu einer Immobilie (Exposé, Objektbeschreibung, Notiz zum Objekt), immer objekt_id nehmen, nie eine Sammelakte; ein fertiges Exposé mit Bildern, Eckdaten und Ansprechpartner macht aber expose_erstellen. Reine Listen und Tabellen zum Weiterrechnen oder Sortieren besser mit tabelle_erstellen (Excel). Danach kann die Datei mit datei_senden direkt in den Telegram-Chat geschickt werden.',
     input_schema: {
       type: 'object',
       properties: {
-        kunde_id: { type: 'string', description: 'Die Akte, in der die Datei abgelegt wird.' },
+        kunde_id: { type: 'string', description: 'Die Kundenakte, in der die Datei abgelegt wird (entweder kunde_id oder objekt_id).' },
+        objekt_id: { type: 'string', description: 'Statt kunde_id: das Immobilien-Objekt, in dessen Objektakte die Datei abgelegt wird (ID aus objekte_suchen).' },
+        ordner: { type: 'string', description: 'Nur mit objekt_id: Ordner der Objektakte, z. B. "Exposé", "Aktennotiz", "Protokolle", "Sonstiges". Ohne Angabe "Exposé", wenn der Titel ein Exposé ist, sonst "Sonstiges".' },
         titel: { type: 'string', description: 'Überschrift des Dokuments auf Deutsch, z. B. "Merkblatt Erbvertrag". Wird auch Dateiname.' },
         inhalt: {
           type: 'string',
@@ -77,17 +84,19 @@ export const DOKUMENT_WERKZEUGE = [
         art: { type: 'string', enum: [...ARTEN], description: 'handout = Merkblatt (Vorgabe), brief = Schreiben, zusammenfassung = Zusammenfassung.' },
         format: { type: 'string', enum: ['pdf', 'word'], description: 'pdf (Vorgabe) oder word = bearbeitbare Word-Datei (.docx). Word nur, wenn der Mitarbeiter Word, .docx oder eine Datei zum Weiterbearbeiten möchte.' },
       },
-      required: ['kunde_id', 'titel', 'inhalt'],
+      required: ['titel', 'inhalt'],
     },
   },
   {
     name: 'tabelle_erstellen',
     description:
-      'Erstellt eine echte Excel-Datei (.xlsx) mit einem oder mehreren Blättern und legt sie als Dokument in der Kundenakte ab. Verwenden, wenn jemand "Excel", "eine Tabelle", "eine Liste als Datei", "zum Sortieren/Weiterrechnen" oder eine Aufstellung mit Spalten möchte — auch, wenn er ein Foto oder einen Scan einer Liste schickt und daraus eine Tabelle haben will: Dann schreibst du alle Zeilen vom Bild selbst vollständig ab (nichts weglassen, Unleserliches als "[unleserlich]"). Spalten so, wie der Mitarbeiter sie möchte (z. B. zwei Spalten). Zahlen (Beträge, Mengen, Flächen) als Zahl angeben, ohne Tausenderpunkt und mit Punkt als Dezimalzeichen (1234.5), dann rechnet Excel damit und zeigt "1.234,5"; Postleitzahlen, Telefon-, Kunden- und Aktennummern sowie Datumsangaben als Text. Für Unterlagen des Hauses ohne Kundenbezug kunde_id=k_intern_holding. Danach kann die Datei mit datei_senden direkt in den Telegram-Chat geschickt werden.',
+      'Erstellt eine echte Excel-Datei (.xlsx) mit einem oder mehreren Blättern und legt sie als Dokument in der Kundenakte ab. Verwenden, wenn jemand "Excel", "eine Tabelle", "eine Liste als Datei", "zum Sortieren/Weiterrechnen" oder eine Aufstellung mit Spalten möchte — auch, wenn er ein Foto oder einen Scan einer Liste schickt und daraus eine Tabelle haben will: Dann schreibst du alle Zeilen vom Bild selbst vollständig ab (nichts weglassen, Unleserliches als "[unleserlich]"). Spalten so, wie der Mitarbeiter sie möchte (z. B. zwei Spalten). Zahlen (Beträge, Mengen, Flächen) als Zahl angeben, ohne Tausenderpunkt und mit Punkt als Dezimalzeichen (1234.5), dann rechnet Excel damit und zeigt "1.234,5"; Postleitzahlen, Telefon-, Kunden- und Aktennummern sowie Datumsangaben als Text. Für Unterlagen des Hauses ohne Kundenbezug kunde_id=k_intern_holding. Gehört die Tabelle zu einer Immobilie (z. B. Mieterliste), mit objekt_id statt kunde_id in die Objektakte (Ordner frei wählbar, Vorgabe „Sonstiges“). Danach kann die Datei (aus einer Kundenakte) mit datei_senden direkt in den Telegram-Chat geschickt werden.',
     input_schema: {
       type: 'object',
       properties: {
-        kunde_id: { type: 'string', description: 'Die Akte, in der die Datei abgelegt wird.' },
+        kunde_id: { type: 'string', description: 'Die Kundenakte, in der die Datei abgelegt wird (entweder kunde_id oder objekt_id).' },
+        objekt_id: { type: 'string', description: 'Statt kunde_id: das Immobilien-Objekt, in dessen Objektakte die Tabelle abgelegt wird.' },
+        ordner: { type: 'string', description: 'Nur mit objekt_id: Ordner der Objektakte, z. B. "Mieterliste", "Kostenaufstellung"; ohne Angabe "Sonstiges".' },
         titel: { type: 'string', description: 'Name der Tabelle auf Deutsch, z. B. "Mieterliste Schwabstraße". Wird Dateiname.' },
         blaetter: {
           type: 'array',
@@ -107,7 +116,7 @@ export const DOKUMENT_WERKZEUGE = [
           },
         },
       },
-      required: ['kunde_id', 'titel', 'blaetter'],
+      required: ['titel', 'blaetter'],
     },
   },
   DATEI_SENDEN_WERKZEUG,
@@ -176,38 +185,26 @@ export async function fuehreDokumentWerkzeugAus(name: string, input: any, k: Dok
   const { supabase, mitarbeiter, protokolliere } = k
   const heute = k.heute ?? heuteBerlin()
 
-  const kundeId = String(input?.kunde_id ?? '').trim()
   const titel = String(input?.titel ?? '').replace(/\s+/g, ' ').trim()
   const inhalt = String(input?.inhalt ?? '').replace(/\r\n?/g, '\n').trim()
   const art: Art = ARTEN.includes(input?.art) ? input.art : 'handout'
   const word = /^(word|docx|\.docx)$/i.test(String(input?.format ?? '').trim())
-  if (!kundeId) return 'Fehler: kunde_id fehlt. Ermittle sie mit kunden_suchen.'
+  if (!String(input?.kunde_id ?? '').trim() && !String(input?.objekt_id ?? '').trim()) return 'Fehler: kunde_id oder objekt_id fehlt. Ermittle die Akte mit kunden_suchen bzw. das Objekt mit objekte_suchen.'
   if (!titel) return 'Fehler: titel fehlt.'
   if (!inhalt) return 'Fehler: inhalt ist leer. Schreib den vollständigen Text des Dokuments in inhalt.'
   if (inhalt.length > MAX_ZEICHEN) return `Fehler: inhalt ist zu lang (${inhalt.length} Zeichen, höchstens ${MAX_ZEICHEN}). Kürze den Text oder teile ihn auf mehrere Dokumente auf.`
 
-  const akte = await ladeAkte(k, kundeId)
-  if (typeof akte === 'string') return akte
-  const akteName = kundeName(akte)
-  const fuer = SAMMELAKTEN.includes(akte.id) ? undefined : akteName
+  const ziel = await ladeZiel(k, input, /expos/i.test(titel) ? 'Exposé' : 'Sonstiges')
+  if (typeof ziel === 'string') return ziel
 
-  // Eigene private Akte: nie mit Mayer-Briefkopf. PDF auf dem eigenen Briefbogen (Bereich Privat →
-  // Einstellungen), Word mit dem Namen des Mitarbeiters im Kopf (wie die PDF ohne Briefbogen).
+  // Eigene private Akte bzw. eigenes privates Objekt: nie mit Mayer-Briefkopf. PDF auf dem eigenen
+  // Briefbogen (Bereich Privat → Einstellungen), Word mit dem Namen des Mitarbeiters im Kopf.
   let eigener: EigenerKopf | undefined
-  if (istPrivat(akte)) {
+  if (ziel.privatBesitzer !== undefined) {
     eigener = { name: mitarbeiter.name }
     if (!word) {
-      try {
-        const besitzer = String(akte.verantwortlich_email ?? '').trim().toLowerCase()
-        const { data: boegen } = await supabase.from('briefboegen').select('name, pdf_pfad, einstellungen').eq('besitzer_email', besitzer).not('pdf_pfad', 'is', null).order('name')
-        const bogen = (boegen ?? [])[0]
-        if (bogen?.pdf_pfad) {
-          const { data: datei } = await supabase.storage.from('briefboegen').download(bogen.pdf_pfad)
-          if (datei) eigener.briefbogen = { pdf: new Uint8Array(await datei.arrayBuffer()), raender: bogen.einstellungen?.raender }
-        }
-      } catch (e) {
-        console.error('Briefbogen für privates Dokument nicht ladbar — schlichter Kopf', e instanceof Error ? e.message : e)
-      }
+      const briefbogen = await ladeEigenenBriefbogen(supabase, ziel.privatBesitzer)
+      if (briefbogen) eigener.briefbogen = briefbogen
     }
   }
 
@@ -219,52 +216,53 @@ export async function fuehreDokumentWerkzeugAus(name: string, input: any, k: Dok
             titel,
             inhalt,
             artName: ART_NAME[art],
-            fuer,
+            fuer: ziel.fuer,
             stand: langesDatum(heute),
             kopf: eigener ? { name: eigener.name } : { name: FIRMA, zeile: FIRMA_ZEILE },
             urheber: eigener ? eigener.name : FIRMA,
           }),
         }
-      : await erstellePdf({ titel, inhalt, art, fuer, datum: heute, eigener })
+      : await erstellePdf({ titel, inhalt, art, fuer: ziel.fuer, datum: heute, eigener })
   } catch (e) {
     return `Fehler beim Erstellen der ${word ? 'Word-Datei' : 'PDF'}: ${e instanceof Error ? e.message : String(e)}`
   }
 
   const formatName = word ? 'Word-Datei' : 'PDF'
   const seitenText = datei.seiten ? ` (${datei.seiten} ${datei.seiten === 1 ? 'Seite' : 'Seiten'})` : ''
-  const abgelegt = await legeInAkteAb(k, akte, heute, {
+  const abgelegt = await legeAb(k, ziel, heute, {
     bytes: datei.bytes,
     dateiName: `${ohneEndung(titel)} (${deDatum(heute)}).${word ? 'docx' : 'pdf'}`,
     typ: word ? DOCX_TYP : 'application/pdf',
-    aktivitaet: (n) => `${ART_NAME[art]} als ${formatName} „${n}"${seitenText} vom Assistenten für ${mitarbeiter.name} erstellt und unter Dokumente abgelegt.`,
+    aktivitaet: (n) => `${ART_NAME[art]} als ${formatName} „${n}"${seitenText} vom Assistenten für ${mitarbeiter.name} erstellt und ${ziel.art === 'objekt' ? `im Ordner ${ziel.ordner}` : 'unter Dokumente'} abgelegt.`,
   })
   if (typeof abgelegt === 'string') return abgelegt
-  protokolliere(`${ART_NAME[art]} „${abgelegt.name}" (${formatName}) erstellt und bei ${akteName} abgelegt`)
+  protokolliere(`${ART_NAME[art]} „${abgelegt.name}" (${formatName}) erstellt und ${ziel.art === 'objekt' ? `in der Objektakte ${ziel.name} (Ordner ${ziel.ordner})` : `bei ${ziel.name}`} abgelegt`)
   const umfang = datei.seiten ? `PDF, ${datei.seiten} ${datei.seiten === 1 ? 'Seite' : 'Seiten'}` : 'Word'
-  return `Erstellt und abgelegt: „${abgelegt.name}" (${umfang}, ${abgelegt.groesse}) in der Akte von ${akteName} unter Dokumente. Im CRM öffnet man es dort mit einem Klick. ${SENDEN_HINWEIS} (kunde_id=${akte.id}, dokument_id=${abgelegt.id}) direkt in den Chat. dokument_id=${abgelegt.id}`
+  if (ziel.art === 'objekt') {
+    return `Erstellt und abgelegt: „${abgelegt.name}" (${umfang}, ${abgelegt.groesse}) in der Objektakte ${ziel.name} im Ordner ${ziel.ordner}. Im CRM öffnet man es dort unter Unterlagen mit einem Klick. objekt_id=${ziel.objekt.id}, dokument_id=${abgelegt.id}`
+  }
+  return `Erstellt und abgelegt: „${abgelegt.name}" (${umfang}, ${abgelegt.groesse}) in der Akte von ${ziel.name} unter Dokumente. Im CRM öffnet man es dort mit einem Klick. ${SENDEN_HINWEIS} (kunde_id=${ziel.akte.id}, dokument_id=${abgelegt.id}) direkt in den Chat. dokument_id=${abgelegt.id}`
 }
 
 // deno-lint-ignore no-explicit-any
 async function tabelleErstellen(input: any, k: DokumentKontext): Promise<string> {
   const { mitarbeiter, protokolliere } = k
   const heute = k.heute ?? heuteBerlin()
-  const kundeId = String(input?.kunde_id ?? '').trim()
   const titel = String(input?.titel ?? '').replace(/\s+/g, ' ').trim()
   // Manche Aufrufe schicken ein einzelnes Blatt statt einer Liste.
   const blaetter: BlattEingabe[] = Array.isArray(input?.blaetter) ? input.blaetter : input?.blaetter && typeof input.blaetter === 'object' ? [input.blaetter] : []
-  if (!kundeId) return 'Fehler: kunde_id fehlt. Ermittle sie mit kunden_suchen.'
+  if (!String(input?.kunde_id ?? '').trim() && !String(input?.objekt_id ?? '').trim()) return 'Fehler: kunde_id oder objekt_id fehlt. Ermittle die Akte mit kunden_suchen bzw. das Objekt mit objekte_suchen.'
   if (!titel) return 'Fehler: titel fehlt.'
   if (blaetter.length === 0 || blaetter.every((b) => !Array.isArray(b?.zeilen) || b.zeilen.length === 0)) {
     return 'Fehler: Die Tabelle ist leer. Gib in blaetter mindestens ein Blatt mit spalten und zeilen an (bei einem Foto alle Zeilen selbst abschreiben).'
   }
 
-  const akte = await ladeAkte(k, kundeId)
-  if (typeof akte === 'string') return akte
-  const akteName = kundeName(akte)
+  const ziel = await ladeZiel(k, input, 'Sonstiges')
+  if (typeof ziel === 'string') return ziel
 
   let mappe: ReturnType<typeof erstelleXlsx>
   try {
-    mappe = erstelleXlsx({ titel, urheber: istPrivat(akte) ? mitarbeiter.name : FIRMA, blaetter })
+    mappe = erstelleXlsx({ titel, urheber: ziel.privatBesitzer !== undefined ? mitarbeiter.name : FIRMA, blaetter })
   } catch (e) {
     return `Fehler beim Erstellen der Excel-Datei: ${e instanceof Error ? e.message : String(e)}`
   }
@@ -273,31 +271,92 @@ async function tabelleErstellen(input: any, k: DokumentKontext): Promise<string>
     ? `${zeilen} ${zeilen === 1 ? 'Zeile' : 'Zeilen'}, ${mappe.blaetter[0].spalten} ${mappe.blaetter[0].spalten === 1 ? 'Spalte' : 'Spalten'}`
     : `${mappe.blaetter.length} Blätter, ${zeilen} Zeilen`
 
-  const abgelegt = await legeInAkteAb(k, akte, heute, {
+  const abgelegt = await legeAb(k, ziel, heute, {
     bytes: mappe.bytes,
     dateiName: `${ohneEndung(titel)} (${deDatum(heute)}).xlsx`,
     typ: XLSX_TYP,
-    aktivitaet: (n) => `Excel-Tabelle „${n}" (${umfang}) vom Assistenten für ${mitarbeiter.name} erstellt und unter Dokumente abgelegt.`,
+    aktivitaet: (n) => `Excel-Tabelle „${n}" (${umfang}) vom Assistenten für ${mitarbeiter.name} erstellt und ${ziel.art === 'objekt' ? `im Ordner ${ziel.ordner}` : 'unter Dokumente'} abgelegt.`,
   })
   if (typeof abgelegt === 'string') return abgelegt
-  protokolliere(`Excel-Tabelle „${abgelegt.name}" erstellt und bei ${akteName} abgelegt`)
+  protokolliere(`Excel-Tabelle „${abgelegt.name}" erstellt und ${ziel.art === 'objekt' ? `in der Objektakte ${ziel.name} (Ordner ${ziel.ordner})` : `bei ${ziel.name}`} abgelegt`)
   const blattNamen = mappe.blaetter.map((b) => `„${b.name}"`).join(', ')
-  return `Erstellt und abgelegt: „${abgelegt.name}" (Excel, ${umfang}, Blatt ${blattNamen}, ${abgelegt.groesse}) in der Akte von ${akteName} unter Dokumente. ${SENDEN_HINWEIS} (kunde_id=${akte.id}, dokument_id=${abgelegt.id}) direkt in den Chat. dokument_id=${abgelegt.id}`
+  if (ziel.art === 'objekt') {
+    return `Erstellt und abgelegt: „${abgelegt.name}" (Excel, ${umfang}, Blatt ${blattNamen}, ${abgelegt.groesse}) in der Objektakte ${ziel.name} im Ordner ${ziel.ordner}. objekt_id=${ziel.objekt.id}, dokument_id=${abgelegt.id}`
+  }
+  return `Erstellt und abgelegt: „${abgelegt.name}" (Excel, ${umfang}, Blatt ${blattNamen}, ${abgelegt.groesse}) in der Akte von ${ziel.name} unter Dokumente. ${SENDEN_HINWEIS} (kunde_id=${ziel.akte.id}, dokument_id=${abgelegt.id}) direkt in den Chat. dokument_id=${abgelegt.id}`
 }
+
+// ---------- Ziel der Ablage: Kundenakte oder Objektakte ----------
+
+type Ziel =
+  | { art: 'akte'; akte: AkteZeile; name: string; fuer?: string; privatBesitzer?: string }
+  | { art: 'objekt'; objekt: ObjektZeile; ordner: string; name: string; fuer?: string; privatBesitzer?: string }
+
+/** Kundenakte (kunde_id) oder Objektakte (objekt_id, hat Vorrang) laden und Rechte prüfen. privatBesitzer gesetzt = eigene private Ablage. */
+// deno-lint-ignore no-explicit-any
+async function ladeZiel(k: DokumentKontext, input: any, standardOrdner: string): Promise<Ziel | string> {
+  const objektId = String(input?.objekt_id ?? '').trim()
+  if (objektId) {
+    const ordner = ordnerAusEingabe(input?.ordner, standardOrdner)
+    if ('fehler' in ordner) return ordner.fehler
+    const o = await ladeObjektMitRechten(k, objektId, 'id, bezeichnung, adresse, privat_besitzer')
+    if (typeof o === 'string') return o
+    const besitzer = String(o.privat_besitzer ?? '').trim().toLowerCase()
+    return { art: 'objekt', objekt: o, ordner: ordner.ordner, name: objektAnzeige(o), fuer: String(o.bezeichnung ?? '').trim() || undefined, privatBesitzer: besitzer || undefined }
+  }
+  const akte = await ladeAkte(k, String(input?.kunde_id ?? '').trim())
+  if (typeof akte === 'string') return akte
+  const name = kundeName(akte)
+  return {
+    art: 'akte',
+    akte,
+    name,
+    fuer: SAMMELAKTEN.includes(akte.id) ? undefined : name,
+    privatBesitzer: istPrivat(akte) ? String(akte.verantwortlich_email ?? '').trim().toLowerCase() : undefined,
+  }
+}
+
+async function legeAb(
+  k: DokumentKontext,
+  ziel: Ziel,
+  heute: string,
+  datei: { bytes: Uint8Array; dateiName: string; typ: string; aktivitaet: (anzeigeName: string, groesse: string) => string },
+): Promise<{ id: string; name: string; groesse: string } | string> {
+  if (ziel.art === 'akte') return await legeInAkteAb(k, ziel.akte, heute, datei)
+  return await legeInsObjektAb(k, ziel.objekt, heute, { ...datei, ordner: ziel.ordner })
+}
+
+/** Erster eigener Briefbogen (Bereich Privat) des Besitzers; ohne oder bei Fehlern undefined → schlichter Kopf. */
+// deno-lint-ignore no-explicit-any
+export async function ladeEigenenBriefbogen(supabase: any, besitzerEmail: string): Promise<EigenerKopf['briefbogen'] | undefined> {
+  try {
+    const besitzer = String(besitzerEmail ?? '').trim().toLowerCase()
+    if (!besitzer) return undefined
+    const { data: boegen } = await supabase.from('briefboegen').select('name, pdf_pfad, einstellungen').eq('besitzer_email', besitzer).not('pdf_pfad', 'is', null).order('name')
+    const bogen = (boegen ?? [])[0]
+    if (!bogen?.pdf_pfad) return undefined
+    const { data: datei } = await supabase.storage.from('briefboegen').download(bogen.pdf_pfad)
+    return datei ? { pdf: new Uint8Array(await datei.arrayBuffer()), raender: bogen.einstellungen?.raender } : undefined
+  } catch (e) {
+    console.error('Briefbogen für privates Dokument nicht ladbar — schlichter Kopf', e instanceof Error ? e.message : e)
+    return undefined
+  }
+}
+
 
 // ---------- Hilfen ----------
 
-function heuteBerlin(): string {
+export function heuteBerlin(): string {
   return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Berlin' }).format(new Date())
 }
 
-function deDatum(iso: string): string {
+export function deDatum(iso: string): string {
   const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})/)
   return m ? `${m[3]}.${m[2]}.${m[1]}` : iso
 }
 
 const MONATE = ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember']
-function langesDatum(iso: string): string {
+export function langesDatum(iso: string): string {
   const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})/)
   return m ? `${Number(m[3])}. ${MONATE[Number(m[2]) - 1]} ${m[1]}` : iso
 }
@@ -312,7 +371,7 @@ function formatGroesse(bytes: number): string {
   return bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-function ohneEndung(s: string): string {
+export function ohneEndung(s: string): string {
   return s.replace(/\.(pdf|docx?|xlsx?|csv)$/i, '').replace(/[\\/:*?"<>|]/g, '-').trim()
 }
 
@@ -348,7 +407,7 @@ const TABELLEN_KOPF = rgb(0.95, 0.95, 0.95)
 const GROESSE = 10.5
 const ZEILE = 15
 
-type Schriften = { normal: PDFFont; fett: PDFFont; kursiv: PDFFont; fettKursiv: PDFFont; symbol: PDFFont }
+export type Schriften = { normal: PDFFont; fett: PDFFont; kursiv: PDFFont; fettKursiv: PDFFont; symbol: PDFFont }
 
 // Haken, Kreuze und ein paar Zeichen, die Helvetica nicht hat, kommen aus der Symbolschrift
 // ZapfDingbats (ebenfalls eine Standardschrift, nichts wird eingebettet).
@@ -364,9 +423,9 @@ function symbolTeile(text: string, font: PDFFont, f: Schriften): Teil[] {
   }
   return aus
 }
-type Teil = { text: string; font: PDFFont }
+export type Teil = { text: string; font: PDFFont }
 type Wort = { teile: Teil[]; leerDavor: boolean }
-type Zeile = { teile: Teil[]; breite: number }
+export type Zeile = { teile: Teil[]; breite: number }
 
 // Was die Standardschrift (WinAnsi) nicht kennt, wird ersetzt statt die Erstellung abzubrechen.
 const ERSATZ: Record<string, string> = {
@@ -379,7 +438,7 @@ const ERSATZ: Record<string, string> = {
   '½': '1/2', '¼': '1/4', '¾': '3/4', '⅓': '1/3', '⅔': '2/3',
 }
 
-function zeichenFilter(font: PDFFont): (s: string) => string {
+export function zeichenFilter(font: PDFFont): (s: string) => string {
   const erlaubt = new Set(font.getCharacterSet())
   return (s: string) => {
     let aus = ''
@@ -407,7 +466,7 @@ function schriftFuer(l: { fett: boolean; kursiv: boolean }, f: Schriften): PDFFo
   return l.fett ? (l.kursiv ? f.fettKursiv : f.fett) : l.kursiv ? f.kursiv : f.normal
 }
 
-function umbrechen(text: Lauf[], f: Schriften, groesse: number, maxBreite: number): Zeile[] {
+export function umbrechen(text: Lauf[], f: Schriften, groesse: number, maxBreite: number): Zeile[] {
   const woerter: Wort[] = []
   let leer = false
   for (const l of text) {

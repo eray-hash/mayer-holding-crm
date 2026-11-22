@@ -31,6 +31,8 @@ import {
 } from '../../lib/terminBuchung'
 import { KUNDEN_BEREICHE, kundeDetailPfad, kundeBereichLabel } from '../../data/kundenBereiche'
 import { Modal, Field, inputClass, PrimaryButton, SecondaryButton } from '../../components/ui'
+import { EigenerKalenderVerbinden } from '../../components/kalender/EigenerKalenderVerbinden'
+import { ladeFremdBelegt, type FremdBelegt } from '../../components/kalender/fremdKalender'
 import type { KundeBereich } from '../../types'
 
 type Ansicht = 'tag' | 'woche' | 'monat'
@@ -59,6 +61,8 @@ type Eintrag = {
   termin?: Termin
   person: string
   privat: boolean
+  // Belegte Zeit aus dem eigenen Kalender (Outlook, iPhone …), siehe components/kalender/fremdKalender.ts.
+  fremd?: boolean
 }
 
 type Formular = {
@@ -93,6 +97,7 @@ export function Kalender({ privat = false }: { privat?: boolean }) {
   const [anker, setAnker] = useState(() => tagStart(new Date()))
   const [termine, setTermine] = useState<Termin[]>([])
   const [belegt, setBelegt] = useState<Belegt[]>([])
+  const [fremd, setFremd] = useState<FremdBelegt[]>([])
   const [kollegen, setKollegen] = useState<Kollege[]>([])
   const [gezeigt, setGezeigt] = useState<string[] | null>(null)
   const [fehler, setFehler] = useState('')
@@ -121,14 +126,16 @@ export function Kalender({ privat = false }: { privat?: boolean }) {
     setLaedt(true)
     setFehler('')
     try {
-      const [t, b, z] = await Promise.all([
+      const [t, b, z, f] = await Promise.all([
         ladeTermine(von, bis),
         privat ? Promise.resolve([] as Belegt[]) : ladeBelegt(von, bis),
         ladeBuchungsZusatz(von, bis).catch(() => new Map<string, BuchungsZusatz>()),
+        ladeFremdBelegt(von, bis).catch(() => [] as FremdBelegt[]),
       ])
       setTermine(t)
       setBelegt(b)
       setZusatz(z)
+      setFremd(f)
     } catch (err) {
       setFehler(err instanceof Error ? err.message : 'Kalender konnte nicht geladen werden.')
     } finally {
@@ -175,8 +182,16 @@ export function Kalender({ privat = false }: { privat?: boolean }) {
         liste.push({ key: `b${i}`, von: new Date(b.beginn), bis: new Date(b.ende), ganztags: b.ganztags, person: b.person, privat: true })
       })
     }
+    // Belegte Zeiten aus den eigenen Kalendern: die eigenen immer, die der Kollegen nur in der Teamansicht.
+    fremd.forEach((b, i) => {
+      if (!personen.includes(b.person) || (privat && b.person !== ich)) return
+      liste.push({ key: `f${i}`, von: new Date(b.beginn), bis: new Date(b.ende), ganztags: b.ganztags, person: b.person, privat: true, fremd: true })
+    })
     return liste.sort((x, y) => x.von.getTime() - y.von.getTime())
-  }, [termine, belegt, personen.join(','), privat, ich])
+  }, [termine, belegt, fremd, personen.join(','), privat, ich])
+
+  // Beschriftung eines nur belegten Zeitraums: eigener Kalender oder „Privat“ eines Kollegen.
+  const belegtText = (e: Eintrag) => (e.fremd && e.person === ich ? 'Belegt (eigener Kalender)' : `Privat · ${namen.get(e.person) ?? ''}`)
 
   // Follow-ups und To-dos stehen im eigenen Kalender mit drin (als Tagesmarken, nicht als Termine).
   const marken = useMemo(() => {
@@ -242,8 +257,8 @@ export function Kalender({ privat = false }: { privat?: boolean }) {
           <SecondaryButton onClick={() => setAnker(tagStart(new Date()))} className="text-xs">Heute</SecondaryButton>
           <button onClick={() => blaettern(-1)} className="rounded-lg border border-slate-200 bg-white p-1.5 text-slate-500 hover:bg-slate-50" title="Zurück"><ChevronLeft size={15} /></button>
           <button onClick={() => blaettern(1)} className="rounded-lg border border-slate-200 bg-white p-1.5 text-slate-500 hover:bg-slate-50" title="Weiter"><ChevronRight size={15} /></button>
-          <button onClick={() => setAboOffen(true)} className="flex items-center gap-1 rounded-lg border border-slate-200 bg-white p-1.5 text-xs text-slate-600 hover:bg-slate-50" title="In meinen Kalender übernehmen (Handy, Outlook …)">
-            <CalendarPlus size={15} /> <span className="hidden sm:inline">In meinen Kalender</span>
+          <button onClick={() => setAboOffen(true)} className="flex items-center gap-1 rounded-lg border border-slate-200 bg-white p-1.5 text-xs text-slate-600 hover:bg-slate-50" title="Mit meinem Kalender verbinden (Handy, Outlook …)">
+            <CalendarPlus size={15} /> <span className="hidden sm:inline">Mit meinem Kalender verbinden</span>
           </button>
           <button onClick={() => setEinstellungenOffen(true)} className="rounded-lg border border-slate-200 bg-white p-1.5 text-slate-500 hover:bg-slate-50" title="Erinnerungen und Sichtbarkeit"><Settings size={15} /></button>
           <PrimaryButton onClick={() => { const jetzt = new Date(); setFormular(neuesFormular(new Date(anker.getFullYear(), anker.getMonth(), anker.getDate(), Math.min(21, jetzt.getHours() + 1)))) }} className="text-xs">
@@ -300,7 +315,7 @@ export function Kalender({ privat = false }: { privat?: boolean }) {
                 {amTag.slice(0, 3).map((e) => (
                   <div key={e.key} className="truncate rounded px-1 py-px text-[11px] text-white" style={{ background: e.privat ? '#94a3b8' : farbe(e.person) }}>
                     {!e.privat && onlineGebucht(e.termin?.id) && <Globe size={10} className="mr-0.5 inline-block align-[-1px]" aria-label="Online gebucht" />}
-                    {e.privat ? `Privat · ${namen.get(e.person) ?? ''}` : `${e.ganztags ? '' : uhr(e.von) + ' '}${e.termin?.titel}`}
+                    {e.privat ? belegtText(e) : `${e.ganztags ? '' : uhr(e.von) + ' '}${e.termin?.titel}`}
                   </div>
                 ))}
                 {amTag.length + m.length > 3 && <div className="text-[10px] text-slate-400">+{amTag.length + m.length - Math.min(3, amTag.length)} weitere</div>}
@@ -326,7 +341,7 @@ export function Kalender({ privat = false }: { privat?: boolean }) {
                   </div>
                   {ganz.map((e) => (
                     <button key={e.key} onClick={() => e.termin && setDetail(e.termin)} className="mt-0.5 block w-full truncate rounded px-1 py-px text-left text-[11px] text-white" style={{ background: e.privat ? '#94a3b8' : farbe(e.person) }}>
-                      {e.privat ? `Privat · ${namen.get(e.person) ?? ''}` : e.termin?.titel}
+                      {e.privat ? belegtText(e) : e.termin?.titel}
                     </button>
                   ))}
                   {m.map((x) => (
@@ -373,7 +388,8 @@ export function Kalender({ privat = false }: { privat?: boolean }) {
           start={formular}
           ich={ich}
           kollegen={kollegen}
-          belegt={belegt}
+          belegt={[...belegt, ...fremd.filter((b) => b.person !== ich && (!b.ganztags || b.sperrt))]}
+          eigeneBelegt={fremd.filter((b) => b.person === ich && (!b.ganztags || b.sperrt))}
           termine={termine}
           onSchliessen={() => setFormular(null)}
           onGespeichert={() => { setFormular(null); lade() }}
@@ -400,7 +416,7 @@ export function Kalender({ privat = false }: { privat?: boolean }) {
           onBuchung={() => { setEinstellungenOffen(false); setBuchungOffen(true) }}
         />
       )}
-      {aboOffen && <KalenderAboFenster onSchliessen={() => setAboOffen(false)} />}
+      {aboOffen && <KalenderAboFenster onSchliessen={() => setAboOffen(false)} onGeaendert={lade} />}
       {buchungOffen && <BuchungsFenster onSchliessen={() => setBuchungOffen(false)} />}
     </div>
   )
@@ -456,6 +472,14 @@ function TagesSpalte({
           const oben = ((v - tagBeginn) / 3600000) * STUNDE_PX
           const hoehe = Math.max(18, ((b - v) / 3600000) * STUNDE_PX - 2)
           const stil = { top: oben, height: hoehe, left: `calc(${spur * breite}% + 1px)`, width: `calc(${breite}% - 2px)` }
+          if (e.fremd && e.person === ich) {
+            return (
+              <div key={e.key} className="absolute overflow-hidden rounded-md border border-dashed border-slate-300 bg-slate-100 px-1 py-0.5 text-[11px] leading-tight text-slate-500" style={stil} title="In deinem eigenen Kalender belegt (Outlook, iPhone …) — der Inhalt bleibt dort">
+                Belegt
+                <div className="truncate">eigener Kalender</div>
+              </div>
+            )
+          }
           if (e.privat || !e.termin) {
             return (
               <div key={e.key} className="absolute overflow-hidden rounded-md border border-slate-300 bg-slate-100 px-1 py-0.5 text-[11px] leading-tight text-slate-500" style={stil} title={`${namen.get(e.person) ?? 'Kollege'} ist in dieser Zeit belegt`}>
@@ -492,6 +516,7 @@ function TerminFormular({
   ich,
   kollegen,
   belegt,
+  eigeneBelegt = [],
   termine,
   onSchliessen,
   onGespeichert,
@@ -500,6 +525,8 @@ function TerminFormular({
   ich: string
   kollegen: Kollege[]
   belegt: Belegt[]
+  /** Belegte Zeiten aus dem eigenen Kalender (Outlook, iPhone …) — nur als Hinweis. */
+  eigeneBelegt?: { beginn: string; ende: string }[]
   termine: Termin[]
   onSchliessen: () => void
   onGespeichert: () => void
@@ -523,6 +550,8 @@ function TerminFormular({
   // Wer ist in der gewählten Zeit schon belegt? (aus den geladenen Daten — der Server prüft beim Speichern noch einmal verbindlich)
   const istBelegt = (email: string) =>
     belegt.some((b) => b.person === email && new Date(b.beginn) < ende && new Date(b.ende) > beginn && !termine.some((t) => t.id === f.id && new Date(t.beginn).getTime() === new Date(b.beginn).getTime()))
+
+  const selbstBelegt = !f.ganztags && eigeneBelegt.some((b) => new Date(b.beginn) < ende && new Date(b.ende) > beginn)
 
   const kundenTreffer = useMemo(() => {
     const s = kundenSuche.trim().toLowerCase()
@@ -612,6 +641,7 @@ function TerminFormular({
       <label className="mb-3 flex items-center gap-2 text-sm text-slate-600">
         <input type="checkbox" checked={f.ganztags} onChange={(e) => setF({ ...f, ganztags: e.target.checked })} /> Ganztägig
       </label>
+      {selbstBelegt && <p className="-mt-1 mb-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">In deinem eigenen Kalender bist du in dieser Zeit schon belegt.</p>}
 
       {kollegen.length > 1 && (
         <Field label="Gemeinsam mit (bekommen den Termin in ihren Kalender und eine Telegram-Nachricht)">
@@ -859,7 +889,7 @@ function EinstellungenFenster({ ich, onSchliessen, onAbo, onBuchung }: { ich: st
           </label>
           <p className="mb-2 mt-5 text-sm font-medium text-slate-700">Termine auf dem Handy und in Outlook</p>
           <button onClick={onAbo} className="flex items-center gap-1.5 text-sm font-medium text-accent-600 hover:underline">
-            <CalendarPlus size={14} /> In meinen Kalender übernehmen …
+            <CalendarPlus size={14} /> Mit meinem Kalender verbinden …
           </button>
           <p className="mb-2 mt-5 text-sm font-medium text-slate-700">Online-Terminbuchung</p>
           <p className="mb-1.5 text-xs text-slate-500">Eine eigene Seite, auf der Kunden selbst einen freien Termin bei dir buchen.</p>
@@ -879,7 +909,7 @@ function EinstellungenFenster({ ich, onSchliessen, onAbo, onBuchung }: { ich: st
 
 // Persönliches Kalender-Abo: Die Kalender-App (iPhone, Outlook, Mac, Google) holt die eigenen
 // CRM-Termine regelmäßig über eine geheime Adresse ab. Nur eine Richtung: CRM → Kalender-App.
-function KalenderAboFenster({ onSchliessen }: { onSchliessen: () => void }) {
+function KalenderAboFenster({ onSchliessen, onGeaendert }: { onSchliessen: () => void; onGeaendert?: () => void }) {
   const [abo, setAbo] = useState<KalenderAbo | null>(null)
   const [laeuft, setLaeuft] = useState(true)
   const [fehler, setFehler] = useState('')
@@ -924,7 +954,8 @@ function KalenderAboFenster({ onSchliessen }: { onSchliessen: () => void }) {
   }
 
   return (
-    <Modal open onClose={onSchliessen} title="In meinen Kalender übernehmen" width="max-w-lg">
+    <Modal open onClose={onSchliessen} title="Mit meinem Kalender verbinden" width="max-w-lg">
+      <p className="mb-1 text-sm font-medium text-slate-700">CRM-Termine in meinem Kalender zeigen</p>
       <p className="text-sm text-slate-600">
         Deine CRM-Termine (eigene und gemeinsam gebuchte) erscheinen automatisch in dem Kalender, den du sowieso benutzt — auf dem iPhone, in Outlook, am Mac oder bei Google. Einmal einrichten, danach kommt alles von selbst.
       </p>
@@ -988,6 +1019,10 @@ function KalenderAboFenster({ onSchliessen }: { onSchliessen: () => void }) {
           </div>
         </>
       )}
+
+      <div className="mt-6 border-t border-slate-200 pt-5">
+        <EigenerKalenderVerbinden onGeaendert={onGeaendert} />
+      </div>
 
       <div className="mt-5 flex justify-end">
         <PrimaryButton onClick={onSchliessen}>Fertig</PrimaryButton>

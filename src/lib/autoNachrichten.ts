@@ -99,7 +99,7 @@ export async function setzeAutoRegel(id: string, e: { aktiv?: boolean; wartezeit
 
 /** Warteschlange: geplante zuerst (nach Zeitpunkt), dann die letzten gesendeten, abgebrochenen und fehlerhaften. */
 export async function ladeAutoNachrichten(filter: { objektId?: string; grenze?: number } = {}): Promise<AutoNachricht[]> {
-  let q = client().from('auto_nachrichten').select('*').order('senden_ab', { ascending: false }).limit(filter.grenze ?? 300)
+  let q = client().from('auto_nachrichten').select('*').eq('bereich', 'immobilien').order('senden_ab', { ascending: false }).limit(filter.grenze ?? 300)
   if (filter.objektId) q = q.eq('objekt_id', filter.objektId)
   const { data, error } = await q
   if (error) throw new Error(error.message)

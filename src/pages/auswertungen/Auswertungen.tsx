@@ -1,5 +1,5 @@
 import { useDeferredValue, useEffect, useMemo, useState } from 'react'
-import { BarChart3, Download, FileSpreadsheet, LayoutTemplate, RefreshCw, Upload } from 'lucide-react'
+import { BarChart3, Download, FileSpreadsheet, LayoutTemplate, RefreshCw, TrendingUp, Upload } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { Card, EmptyState, inputClass } from '../../components/ui'
 import { supabase } from '../../lib/supabaseClient'
@@ -162,9 +162,14 @@ export function Auswertungen() {
   return (
     <div className="min-w-0 space-y-4">
       <div>
-        <h1 className="flex items-center gap-2 text-xl font-semibold text-slate-800">
-          <BarChart3 size={20} className="text-accent-600" /> Auswertungen
-        </h1>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h1 className="flex items-center gap-2 text-xl font-semibold text-slate-800">
+            <BarChart3 size={20} className="text-accent-600" /> Auswertungen
+          </h1>
+          <a href="#/auswertungen/umsatz" className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50">
+            <TrendingUp size={14} /> Umsatzvorschau
+          </a>
+        </div>
         <p className="mt-1 text-sm text-slate-500">
           Daten nach Belieben zusammenfassen – wie eine Pivottabelle in Excel. Du siehst nur, was du auch sonst im CRM sehen darfst. Gerechnet wird in deinem Browser.
         </p>

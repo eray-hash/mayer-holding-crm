@@ -72,7 +72,8 @@ export type UnterlagenStand = { angefordert: number; da: number; seit?: string }
 
 /** Unterlagen aus den Anforderungen (Link zur Hochlade-Seite): wie viele angefordert, wie viele schon da. */
 export function unterlagenVon(k: Pick<Kunde, 'unterlagenAnforderungen'>): UnterlagenStand | undefined {
-  const liste = (k.unterlagenAnforderungen ?? []).filter((a) => a.art === 'anforderung')
+  const alle = k.unterlagenAnforderungen ?? []
+  const liste = alle.filter((a) => a.art === 'anforderung')
   if (liste.length === 0) return undefined
   const angefordert = new Set<string>()
   const da = new Set<string>()
@@ -80,9 +81,10 @@ export function unterlagenVon(k: Pick<Kunde, 'unterlagenAnforderungen'>): Unterl
   for (const a of liste) {
     for (const p of a.punkte ?? []) angefordert.add(p)
     if (a.weitere?.trim()) angefordert.add(a.weitere.trim())
-    for (const e of a.eingang ?? []) da.add(e.punkt)
     if (!seit || a.datum < seit) seit = a.datum
   }
+  // Eingänge zählen auch, wenn sie über einen Erinnerungs-Link kamen (Erinnerung, Statusbericht).
+  for (const a of alle) for (const e of a.eingang ?? []) da.add(e.punkt)
   const erhalten = [...angefordert].filter((p) => da.has(p)).length
   return { angefordert: angefordert.size, da: erhalten, seit: seit?.slice(0, 10) }
 }

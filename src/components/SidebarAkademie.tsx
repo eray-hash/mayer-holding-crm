@@ -31,9 +31,9 @@ export function SidebarAkademie({ collapsed, onToggle }: { collapsed: boolean; o
           icon={<Users size={17} />}
           label="Teilnehmer"
           collapsed={collapsed}
-          active={isActive('/akademie') && !location.pathname.includes('vorlagen') && !location.pathname.includes('projekte') && !location.pathname.includes('todo') && !location.pathname.includes('seminare')}
+          active={isActive('/akademie') && !location.pathname.includes('vorlagen') && !location.pathname.includes('projekte') && !location.pathname.includes('todo') && !location.pathname.includes('seminare') && !location.pathname.includes('termine')}
         />
-        <SideLink to="/akademie/seminare" icon={<BookOpen size={17} />} label="Seminare" collapsed={collapsed} active={isActive('/akademie/seminare')} />
+        <SideLink to="/akademie/seminare" icon={<BookOpen size={17} />} label="Seminare" collapsed={collapsed} active={isActive('/akademie/seminare') || isActive('/akademie/termine')} />
         <UngeklaertSideLink collapsed={collapsed} />
         <SideLink to="/akademie/todo" icon={<ListTodo size={17} />} label="To-Do-Liste" collapsed={collapsed} active={isActive('/akademie/todo')} />
 
