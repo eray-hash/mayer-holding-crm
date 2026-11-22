@@ -58,6 +58,9 @@ export const PRIVAT_BOT_WERKZEUGE: readonly string[] = [
   'internet_recherche',
   'wunsch_notieren',
   'objekt_ins_mayer_crm',
+  'objekt_anlegen',
+  'objekt_aendern',
+  'dateien_ins_objekt',
 ]
 
 /** Darf der private Assistent dieses Werkzeug benutzen? Hotmail- und Brief-Werkzeuge über `privatWerkzeug`. */

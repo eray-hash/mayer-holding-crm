@@ -34,6 +34,10 @@ import { fuehrePflegeWerkzeugAus, istPflegeWerkzeug, type PflegeAnfrage, PFLEGE_
 import { DOKUMENT_WERKZEUGE, fuehreDokumentWerkzeugAus, istDokumentWerkzeug } from './dokumentErstellen.ts'
 import { fuehreKvWerkzeugAus, istKvWerkzeug, KV_WERKZEUGE } from './kostenvoranschlagWerkzeuge.ts'
 import { fuehreWvWerkzeugAus, istWvWerkzeug, WV_WERKZEUGE } from './wiedervorlageWerkzeuge.ts'
+import { fuehreObjektSchreibWerkzeugAus, istObjektSchreibWerkzeug, OBJEKT_SCHREIB_WERKZEUGE } from './objektWerkzeuge.ts'
+import { BUECHER_WERKZEUGE, fuehreBuecherWerkzeugAus, istBuecherWerkzeug } from './buecherWerkzeuge.ts'
+import { BESICHTIGUNG_WERKZEUGE, fuehreBesichtigungWerkzeugAus, istBesichtigungWerkzeug } from './besichtigungWerkzeuge.ts'
+import { fuehreRechnungZahlungWerkzeugAus, istRechnungZahlungWerkzeug, RECHNUNG_ZAHLUNG_WERKZEUGE } from './rechnungZahlungWerkzeuge.ts'
 import { fuehreGesendetWerkzeugAus, GESENDET_WERKZEUGE, istGesendetWerkzeug } from './gesendetWerkzeug.ts'
 import { BRIEF_WERKZEUGE, fuehrePrivatWerkzeugAus, istPrivatWerkzeug, msErlaubt, OBJEKT_WERKZEUGE, OUTLOOK_WERKZEUGE, PRIVAT_HINWEIS, privatFaehigkeiten } from './outlookWerkzeuge.ts'
 import { botToken, imPrivatBot, imPrivatBotErlaubt, mitBot, PRIVAT_BOT_HINWEIS, privatBotToken, privatWebhookGeheimnis, werkzeugeFuerPrivatBot } from './privatBot.ts'
@@ -1518,7 +1522,7 @@ export const TOOLS = [
         kunde_projekt: { type: 'string', description: 'Optional: Stichwort zu Kunde, Projekt, Person oder Thema (freier Text, Namen so wie gesagt).' },
         zustaendig: { type: 'string', description: 'Optional: wer es erledigt, falls nicht der Mitarbeiter selbst.' },
         prio: { type: 'string', enum: ['A', 'B', 'C'], description: 'Optional: A = dringend, B = normal, C = wenn Zeit ist.' },
-        bereich: { type: 'string', enum: ['beratung', 'immobilien', 'erben', 'betriebsuebergabe', 'betriebsformen', 'akademie', 'finanzierungen'], description: 'Optional: in die gemeinsame To-do-Liste dieses Bereichs statt in die eigene.' },
+        bereich: { type: 'string', enum: ['beratung', 'immobilien', 'erben', 'betriebsuebergabe', 'betriebsformen', 'akademie', 'finanzierungen', 'buecher'], description: 'Optional: in die gemeinsame To-do-Liste dieses Bereichs statt in die eigene.' },
         fuer: { type: 'string', description: 'Optional, nur Geschäftsführung: Name eines Kollegen, in dessen eigene Liste es soll.' },
       },
       required: ['aufgabe'],
@@ -1528,6 +1532,10 @@ export const TOOLS = [
   ...DOKUMENT_WERKZEUGE,
   ...KV_WERKZEUGE,
   ...WV_WERKZEUGE,
+  ...OBJEKT_SCHREIB_WERKZEUGE,
+  ...BUECHER_WERKZEUGE,
+  ...BESICHTIGUNG_WERKZEUGE,
+  ...RECHNUNG_ZAHLUNG_WERKZEUGE,
   ...GESENDET_WERKZEUGE,
   {
     name: 'todo_erledigen',
@@ -1575,6 +1583,14 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
   if (istKvWerkzeug(name)) return await fuehreKvWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
   // Wiedervorlagen auflisten, anlegen, erledigen, verschieben — wiedervorlageWerkzeuge.ts.
   if (istWvWerkzeug(name)) return await fuehreWvWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
+  // Objektakten anlegen, ändern, Dateien hineinlegen — objektWerkzeuge.ts.
+  if (istObjektSchreibWerkzeug(name)) return await fuehreObjektSchreibWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
+  // Bücher & Verlag — buecherWerkzeuge.ts.
+  if (istBuecherWerkzeug(name)) return await fuehreBuecherWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
+  // Besichtigungen von Objekten — besichtigungWerkzeuge.ts.
+  if (istBesichtigungWerkzeug(name)) return await fuehreBesichtigungWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
+  // Zahlungen auf Ausgangsrechnungen, offene Posten — rechnungZahlungWerkzeuge.ts.
+  if (istRechnungZahlungWerkzeug(name)) return await fuehreRechnungZahlungWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
   // Gesendete Mails (auch aus Outlook über info@ verschickt) — gesendetWerkzeug.ts.
   if (istGesendetWerkzeug(name)) return await fuehreGesendetWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter })
 
@@ -2625,7 +2641,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     const fremd = await rechnungInFremdemBereich(supabase, mitarbeiter, treffer[0].kunde_id)
     if (fremd === 'privat') return `Es gibt keine erfasste Rechnung mit der Nummer ${nummer}.`
     if (fremd) return nichtFreigegeben(fremd, mitarbeiter.name)
-    const { error } = await supabase.from('rechnungen').update({ status: input.status, ...(input.status === 'Bezahlt' ? { mahnstufe: null } : {}) }).eq('id', treffer[0].id)
+    const { error } = await supabase.from('rechnungen').update({ status: input.status, ...(input.status === 'Bezahlt' ? { mahnstufe: null, bezahlt_am: heute } : {}) }).eq('id', treffer[0].id)
     if (error) return `Fehler beim Speichern: ${error.message}`
     protokolliere(`Rechnung ${nummer}: Status ${treffer[0].status} -> ${input.status}`)
     return `Rechnung ${nummer} (${euro(Number(treffer[0].betrag_brutto))}) steht jetzt auf ${input.status} (vorher ${treffer[0].status}).`
@@ -3175,6 +3191,10 @@ So arbeitest du:
 - Für Fragen quer über alle Kunden oder Objekte ("was steht heute an", "wer sucht ...") nutze firmenueberblick.
 - Aufgaben und Zuständigkeiten: Fragt jemand, wer was bis wann erledigen muss, was bei ihm oder einem Kollegen ansteht oder was überfällig ist, nutze aufgaben_uebersicht (nicht firmenueberblick). Antworte nach Person gegliedert, Überfälliges zuerst, mit Datum. Ist die Liste lang, nenne zuerst das Fällige und sag, wie viel ohne Datum dazukommt; die vollständige Liste steht im CRM unter „Aufgaben nach Mitarbeiter“ (Symbol mit Häkchenliste oben rechts).
 - Immobilien-Objekte: Fragt jemand nach einem Ort, einer Adresse oder einer Immobilie ("was weißt du über Suppingen"), suchst du mit objekte_suchen und liest dann mit objektakte_lesen die ganze Objektakte. Antworte daraus vollständig, aber übersichtlich: Eckdaten, Preis, Eigentümer, Stand von Verkaufsdatenblatt, Kurzprüfung und Bewertung, welche Unterlagen da sind und was sie enthalten, offene Fragen, nächste Schritte. Ist ein Feld leer, sag kurz, dass es noch nicht eingetragen ist, statt es wegzulassen. Für den Inhalt einzelner Unterlagen nutzt du dokument_inhalt mit objekt_id.
+- Objektakten anlegen und befüllen: Will jemand ein Objekt, eine Immobilie oder eine Objektakte anlegen – auch wenn ein Makler oder Tippgeber es angeboten hat –, nimm objekt_anlegen und lege nie ersatzweise eine Kundenakte an. Den Makler oder Anbieter gibst du als anbieter mit; er wird im Verlauf der Objektakte vermerkt. Findet objekt_anlegen ein schon vorhandenes gleiches Objekt, nenne es dem Mitarbeiter und arbeite damit weiter; trotzdem=true nur, wenn er bestätigt, dass es ein anderes Objekt ist. Exposés, Prospekte, Grundbuchauszüge, Flächenaufstellungen, Pläne, Fotos und Mieterlisten zu einem Objekt gehören in die Objektakte (dateien_ins_objekt, Ordner nach Inhalt), nicht in eine Kundenakte – auch Dokumente, die bisher in einer Kundenakte geparkt sind (dann mit aus_kundenakte_entfernen=true). Eckdaten, Status, Kaufpreis, Verantwortlichen oder Follow-up eines Objekts änderst du mit objekt_aendern und gibst nur an, was sich ändert.
+- Bücher & Verlag: Die Abteilung „Bücher & Verlag“ führt die eigenen Bücher und Verlagsprojekte der Holding (z. B. Kinderbücher) von der Idee bis zum Vertrieb. Fragt jemand nach Büchern, einer Stufe („Was ist im Druck?“) oder einem Buch, nimm buecher_auflisten und für Einzelheiten buch_lesen. Dort stehen die Checkliste mit der Kennung jedes Schritts, die Kontakte und die Dateien. Meldet jemand einen Fortschritt („Lektorat ist fertig“, „ISBN ist da: …“, „setz es auf Druck“), nimm buch_aendern mit genau den genannten Feldern bzw. schritte_erledigt. Ergänzungen kommen über notiz_anhaengen, nie durch Überschreiben der Notizen. Ein neues Buch legst du nur auf ausdrücklichen Wunsch mit buch_anlegen an; Autoren, Druckereien und andere Beteiligte findest du mit buch_kontakte_suchen.
+- Besichtigungen: Besichtigungen gehören zu einem Immobilien-Objekt (objekt_id aus objekte_suchen). Für „Welche Besichtigungen stehen an?“ nimm besichtigungen_zeigen ohne objekt_id, für den Verlauf eines Objekts mit objekt_id. Eine neue Besichtigung trägst du mit besichtigung_anlegen ein, Datum und Uhrzeit immer als JJJJ-MM-TTTHH:MM in deutscher Zeit. Ist der Interessent ein Immobilien-Kontakt im CRM, gib dessen kunde_id mit. Verschieben, Absagen und das Vermerken nach dem Termin (durchgeführt, nicht erschienen, Interesse, Rückmeldung, Kaufpreisangebot, nächster Schritt) gehen über besichtigung_aendern. Das CRM verschickt daraufhin automatisch Nachrichten an den Interessenten (Bestätigung, Erinnerung, Dank, Absage, Eingang eines Kaufpreisangebots); sag das dazu, wenn du eine Besichtigung anlegst, absagst oder verschiebst. Ein Kalendertermin entsteht nicht von selbst: Will der Mitarbeiter ihn im Kalender, lege ihn mit termin_anlegen an und verknüpfe ihn über termin_id. Meldet das Ergebnis einen Kalendertermin, ziehe ihn mit termin_aendern oder termin_absagen nach.
+- Zahlungen auf Rechnungen: Nennt ein Mitarbeiter einen Zahlungseingang auf eine Ausgangsrechnung („Bäckerei Brot hat 500 € überwiesen“), nimm rechnung_zahlung_erfassen, nicht rechnung_status_setzen. Es rechnet Teilzahlungen wie das CRM, setzt die Rechnung bei vollem Betrag auf Bezahlt und vermerkt die Zahlung in der Akte. Ohne Betrag wird der ganze offene Rest gebucht; das nur, wenn der Mitarbeiter „voll bezahlt“ o. ä. sagt. Lehnt das Werkzeug wegen Überzahlung ab, frag nach und rufe es nur nach Bestätigung mit ueberzahlung_bestaetigt=true erneut auf. Für „Welche Rechnungen sind offen?“, „Wer ist im Verzug?“ oder „Was schuldet uns X noch?“ nimm rechnungen_offen; es nennt offenen Betrag, Frist, Verzug und Mahnstufe.
 - Kollegen Bescheid geben: Bittet der Mitarbeiter, einem Kollegen etwas auszurichten oder ihm kurz Bescheid zu geben ("sag Hasan, dass die Akte angelegt ist"), schickst du das mit kollegen_benachrichtigen. Dafür ist kein Termin nötig. Sag danach, wem du was geschickt hast und wer nicht mit Telegram verbunden ist.
 - To-dos ohne Kundenakte: Will der Mitarbeiter sich oder einem Bereich eine Aufgabe notieren, die zu keinem Kunden gehört ("schreib mir auf: Steuerunterlagen bis Freitag sortieren"), legst du sie mit todo_anlegen an, standardmäßig in seiner eigenen To-do-Liste. Gehört die Aufgabe zu einer Kundenakte, nimmst du aufgabe_setzen. Erledigtes hakst du mit todo_erledigen ab.
 - Gesendete Mails: Was einem Kunden geschrieben oder geschickt wurde (auch Briefe und Mails, die aus Outlook oder Webmail über info@ oder das eigene Postfach rausgingen), findest du mit gesendete_mails (nach kunde_id, Suchbegriff, Zeitraum; mit mail_id ganz lesen). Sie werden alle paar Minuten automatisch aus dem Gesendet-Ordner ins CRM übernommen und der Akte des Empfängers zugeordnet.

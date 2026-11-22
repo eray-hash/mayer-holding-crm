@@ -18,7 +18,7 @@
 
 export const SAMMELAKTEN: readonly string[] = ['k_intern_holding', 'k_eingang_ungeklaert']
 
-export const BEREICH_IDS: readonly string[] = ['beratung', 'immobilien', 'erben', 'betriebsuebergabe', 'betriebsformen', 'akademie', 'finanzierungen']
+export const BEREICH_IDS: readonly string[] = ['beratung', 'immobilien', 'erben', 'betriebsuebergabe', 'betriebsformen', 'akademie', 'finanzierungen', 'buecher']
 
 const BEREICH_NAME: Record<string, string> = {
   beratung: 'Unternehmensberatung',
@@ -28,6 +28,7 @@ const BEREICH_NAME: Record<string, string> = {
   betriebsformen: 'Betriebsformen',
   akademie: 'Akademie',
   finanzierungen: 'Finanzierungen',
+  buecher: 'Bücher & Verlag',
   privat: 'Privat',
 }
 
