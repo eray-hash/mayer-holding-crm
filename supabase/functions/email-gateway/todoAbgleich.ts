@@ -120,8 +120,18 @@ export async function gleicheTodosAb(admin: Db, ich: string, budgetMs = 60_000):
   const listenName = new Map(listen.map((l) => [l.id, l.displayName ?? '']))
 
   // Eigene, abgeglichene CRM-Aufgaben (auch solche, die inzwischen in einem Bereich liegen).
-  const { data: zeilen } = await admin.from('todos').select(SPALTEN).eq('besitzer_email', ich)
-  const crm = ((zeilen ?? []) as CrmAufgabe[])
+  // Seitenweise: Die Datenbank liefert höchstens 1000 Zeilen je Abfrage (Hasan hat über 2.600 Aufgaben).
+  const crm: CrmAufgabe[] = []
+  for (let letzte = '', seite = 0; seite < 50; seite++) {
+    let q = admin.from('todos').select(SPALTEN).eq('besitzer_email', ich).order('id', { ascending: true }).limit(1000)
+    if (letzte) q = q.gt('id', letzte)
+    const { data: zeilen, error } = await q
+    if (error) throw new Error(`Aufgaben nicht lesbar: ${error.message}`)
+    const teil = (zeilen ?? []) as CrmAufgabe[]
+    crm.push(...teil)
+    if (teil.length < 1000) break
+    letzte = teil[teil.length - 1].id
+  }
   const nachMsId = new Map(crm.filter((a) => a.ms_id).map((a) => [a.ms_id!, a]))
   const behandelt = new Set<string>()
 

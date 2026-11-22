@@ -21,6 +21,9 @@ import { useAuth } from '../../context/AuthContext'
 import { CURRENT_USER } from '../../data/constants'
 import { fmtDate, isOverdue, today, uid, fmtEUR } from '../../lib/dates'
 import { immoObjekte, immoPfade } from './privatModus'
+import { VollstaendigkeitsRing, ladePortalAngaben, vollstaendigkeitVon, type PortalAngaben } from '../../components/ObjektWasFehlt'
+import { fehlendKurz, istUnvollstaendig, PHASE_TEXT, type Vollstaendigkeit } from '../../../supabase/functions/_shared/objektVollstaendigkeit.ts'
+import { supabase } from '../../lib/supabaseClient'
 import type { Objekt, Prioritaet, ObjektGruppe, ObjektTyp } from '../../types'
 
 /** `privat`: der private Immobilien-Bereich des angemeldeten Mitarbeiters — nur eigene Objekte, neue Objekte
@@ -57,6 +60,25 @@ export function ObjektListe({ privat }: { privat?: boolean } = {}) {
   const [fPrio, setFPrio] = useState('')
   const [fVerantwortlich, setFVerantwortlich] = useState('')
   const [fOverdue, setFOverdue] = useState(false)
+  // Vollständigkeit der Akten (Kern: supabase/functions/_shared/objektVollstaendigkeit.ts). Der Link aus dem
+  // Montags-Hinweis per Telegram öffnet die Liste mit ?unvollstaendig=1.
+  const [fUnvollstaendig, setFUnvollstaendig] = useState(() => params.get('unvollstaendig') === '1')
+  const [portal, setPortal] = useState<Map<string, PortalAngaben> | null>(null)
+  const objektIds = objekte.map((o) => o.id).join(',')
+  useEffect(() => {
+    // Nummern des Inserats und Portal-Freigaben stehen nicht im CRM-Zustand — einmal für alle Objekte lesen.
+    if (privat || !objektIds) return
+    let aktiv = true
+    ladePortalAngaben(objektIds.split(','))
+      .then((m) => { if (aktiv) setPortal(m) })
+      .catch(() => { if (aktiv) setPortal(new Map()) })
+    return () => { aktiv = false }
+  }, [objektIds, privat])
+  const vollstaendigkeit = useMemo(() => {
+    const m = new Map<string, Vollstaendigkeit>()
+    for (const o of objekte) m.set(o.id, vollstaendigkeitVon(o, privat ? undefined : portal?.get(o.id)))
+    return m
+  }, [objekte, portal, privat])
   // Objektliste zum Weitergeben: Objekte ankreuzen, als „nicht öffentlich" kennzeichnen, Auswahl ausgeben.
   const [fMarkt, setFMarkt] = useState<'' | 'nicht-oeffentlich' | 'oeffentlich'>('')
   const [auswahl, setAuswahl] = useState<Set<string>>(new Set())
@@ -70,8 +92,13 @@ export function ObjektListe({ privat }: { privat?: boolean } = {}) {
       .filter((o) => !fVerantwortlich || o.verantwortlich === fVerantwortlich)
       .filter((o) => !fOverdue || isOverdue(o.followUp.date, o.followUp.done))
       .filter((o) => !fMarkt || (fMarkt === 'nicht-oeffentlich' ? !!o.offMarket : !o.offMarket))
-      .sort((a, b) => PRIORITAET_ORDER[a.prioritaet] - PRIORITAET_ORDER[b.prioritaet])
-  }, [objekte, gruppe, fStatus, fPrio, fVerantwortlich, fOverdue, fMarkt])
+      .filter((o) => !fUnvollstaendig || istUnvollstaendig(vollstaendigkeit.get(o.id)!))
+      .sort((a, b) =>
+        fUnvollstaendig
+          ? (vollstaendigkeit.get(a.id)!.prozent ?? 100) - (vollstaendigkeit.get(b.id)!.prozent ?? 100)
+          : PRIORITAET_ORDER[a.prioritaet] - PRIORITAET_ORDER[b.prioritaet],
+      )
+  }, [objekte, gruppe, fStatus, fPrio, fVerantwortlich, fOverdue, fMarkt, fUnvollstaendig, vollstaendigkeit])
 
   const gewaehlt = objekte.filter((o) => auswahl.has(o.id))
   const alleSichtbarenGewaehlt = filtered.length > 0 && filtered.every((o) => auswahl.has(o.id))
@@ -146,6 +173,11 @@ export function ObjektListe({ privat }: { privat?: boolean } = {}) {
           <input type="checkbox" checked={fOverdue} onChange={(e) => setFOverdue(e.target.checked)} className="rounded" />
           nur überfällige Follow-ups
         </label>
+        <label className="flex items-center gap-1.5 text-sm text-slate-600" title="Objekte, denen für ihren Stand noch etwas fehlt (Kaufpreis, Fotos, Exposé, Unterlagen …) — die unvollständigsten zuerst">
+          <input type="checkbox" checked={fUnvollstaendig} onChange={(e) => setFUnvollstaendig(e.target.checked)} className="rounded" />
+          nur unvollständige
+        </label>
+        <WochenhinweisSchalter email={ich} />
       </div>
 
       {view === 'liste' && auswahl.size > 0 && (
@@ -183,6 +215,7 @@ export function ObjektListe({ privat }: { privat?: boolean } = {}) {
                     aria-label="Alle angezeigten Objekte auswählen"
                   />
                 </th>
+                <th className="px-4 py-3" title="Wie vollständig die Akte für ihren Stand ist">Akte</th>
                 <th className="px-4 py-3">Objekt</th>
                 <th className="px-4 py-3">Gruppe</th>
                 <th className="px-4 py-3">Typ</th>
@@ -202,6 +235,9 @@ export function ObjektListe({ privat }: { privat?: boolean } = {}) {
                   <tr key={o.id} onClick={() => navigate(pfade.objekt(o.id))} className="cursor-pointer border-b border-slate-50 last:border-0 hover:bg-slate-50/60">
                     <td className="py-3 pl-4" onClick={(e) => e.stopPropagation()}>
                       <input type="checkbox" className="rounded" checked={auswahl.has(o.id)} onChange={() => schalte(o.id)} aria-label={`${o.bezeichnung} auswählen`} />
+                    </td>
+                    <td className="px-4 py-3">
+                      <VollstaendigkeitsZelle v={vollstaendigkeit.get(o.id)!} />
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1.5">
@@ -240,7 +276,7 @@ export function ObjektListe({ privat }: { privat?: boolean } = {}) {
                   </tr>
                 )
               })}
-              {filtered.length === 0 && <tr><td colSpan={10} className="px-4 py-10 text-center text-sm text-slate-400">Keine Objekte gefunden.</td></tr>}
+              {filtered.length === 0 && <tr><td colSpan={11} className="px-4 py-10 text-center text-sm text-slate-400">Keine Objekte gefunden.</td></tr>}
             </tbody>
           </table>
         </div>
@@ -268,6 +304,55 @@ export function ObjektListe({ privat }: { privat?: boolean } = {}) {
         />
       )}
     </div>
+  )
+}
+
+/** Ring mit Prozent; Tooltip nennt, was fehlt. Abgeschlossene Objekte (verkauft, Archiv, abgebrochen): Strich. */
+function VollstaendigkeitsZelle({ v }: { v: Vollstaendigkeit }) {
+  if (!v.gilt || v.prozent === null) return <span className="text-xs text-slate-300">–</span>
+  const titel = v.fehlend.length === 0
+    ? `Vollständig für den Stand „${PHASE_TEXT[v.phase]}“`
+    : `${v.prozent} % für den Stand „${PHASE_TEXT[v.phase]}“ — es fehlt: ${fehlendKurz(v, 8)}`
+  return <VollstaendigkeitsRing prozent={v.prozent} titel={titel} />
+}
+
+/** Eigene Einstellung für den Montags-Hinweis per Telegram (Tabelle objekt_luecken_hinweis, keine Zeile = an;
+ *  verschickt von supabase/functions/email-gateway/objektLueckenHinweis.ts). Fehlt die Tabelle noch, bleibt der
+ *  Schalter unsichtbar. */
+function WochenhinweisSchalter({ email }: { email: string }) {
+  const [an, setAn] = useState<boolean | null>(null)
+  const [fehler, setFehler] = useState('')
+  useEffect(() => {
+    if (!supabase || !email) return
+    let aktiv = true
+    supabase
+      .from('objekt_luecken_hinweis')
+      .select('aktiv')
+      .eq('email', email)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (aktiv && !error) setAn(data?.aktiv !== false)
+      })
+    return () => { aktiv = false }
+  }, [email])
+  if (an === null || !supabase) return null
+  async function schalte(wert: boolean) {
+    if (!supabase) return
+    const vorher = an
+    setAn(wert)
+    setFehler('')
+    const { error } = await supabase.from('objekt_luecken_hinweis').upsert({ email, aktiv: wert, geaendert_am: new Date().toISOString() }, { onConflict: 'email' })
+    if (error) {
+      setAn(vorher)
+      setFehler('Nicht gespeichert.')
+    }
+  }
+  return (
+    <label className="ml-auto flex items-center gap-1.5 text-xs text-slate-500" title="Montags ab 8:30 Uhr eine kurze Telegram-Nachricht: welche deiner Objekte in Vorbereitung und Vermarktung noch unvollständig sind — nur wenn es etwas gibt">
+      <input type="checkbox" checked={an} onChange={(e) => schalte(e.target.checked)} className="rounded" />
+      montags per Telegram erinnern, was fehlt
+      {fehler && <span className="text-rose-600">{fehler}</span>}
+    </label>
   )
 }
 

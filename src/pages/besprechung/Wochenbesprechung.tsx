@@ -2,9 +2,13 @@
 // fünf gemeinsamen Stufen nebeneinander, Kennzahlen, was diese Woche fällig ist (je Person) und was sich
 // seit Montag bewegt hat. Fälle lassen sich direkt verschieben (setzt den Stand der Akte; die Datenbank
 // legt dann die Wiedervorlagen des neuen Stands an).
+// Seit 22.11.2026: Vorschläge für Chance, erwarteten Umsatz und Monat je Fall (kunden.chance_vorschlag,
+// Regeln in supabase/functions/_shared/chanceKern.ts) grau an der Karte, mit „übernehmen“ je Fall und
+// „alle übernehmen“ je Stufe. Übernehmen bestätigt die Chance und trägt den Umsatz ein (auftrag_chance) —
+// damit zählt der Fall in der Umsatzvorschau.
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Check, Presentation, Undo2 } from 'lucide-react'
+import { Check, Presentation, Sparkles, Undo2 } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { Card, inputClass } from '../../components/ui'
 import { aktePfad, akteName, useKvNutzer } from '../../components/KostenvoranschlaegeSection'
@@ -15,6 +19,8 @@ import { addDays, fmtEURCent, today, uid } from '../../lib/dates'
 import { AMPEL_RANG, STUFEN, STUFE_ZURUECK, gewichtet, standVon, stufeVon, wochenEnde, zielStatus } from '../../lib/checkliste'
 import { AMPEL_PUNKT, kurzDatum, useChecklisteDaten, type Zeile } from '../checkliste/checklisteDaten'
 import { ChecklisteBearbeiten } from '../checkliste/Checkliste'
+import { berechneChanceVorschlaege, chanceVon, erwarteterUmsatz, ladeChanceVorschlaege, uebernahmePatch, vorschlagOffen, type ChanceVorschlag } from '../../lib/chanceVorschlag'
+import { monatKurz } from '../../../supabase/functions/_shared/umsatzKern.ts'
 import type { AmpelFarbe, Kunde, KundeBereich } from '../../types'
 
 const RAND: Record<AmpelFarbe, string> = { rot: 'border-l-rose-500', gelb: 'border-l-amber-400', gruen: 'border-l-emerald-500' }
@@ -44,6 +50,14 @@ export function Wochenbesprechung() {
   const [meldung, setMeldung] = useState<{ text: string; rueck?: () => void } | null>(null)
   const [erledigtDieseWoche, setErledigtDieseWoche] = useState<{ id: string; kunde_id: string; titel: string; erledigt_am: string; erledigt_von: string | null; erledigt_grund: string | null }[]>([])
   const [aktionLaeuft, setAktionLaeuft] = useState(false)
+  const [vorschlaege, setVorschlaege] = useState<Map<string, ChanceVorschlag>>(new Map())
+  const [vorschlagFehler, setVorschlagFehler] = useState('')
+  const [rechnet, setRechnet] = useState(false)
+  const [mitNeuanfragen, setMitNeuanfragen] = useState(false)
+
+  useEffect(() => {
+    ladeChanceVorschlaege().then(setVorschlaege).catch((e) => setVorschlagFehler(e instanceof Error ? e.message : 'Vorschläge ließen sich nicht laden.'))
+  }, [])
 
   const montag = addDays(wochenEnde(heute), -6)
   const sonntag = wochenEnde(heute)
@@ -63,16 +77,22 @@ export function Wochenbesprechung() {
     () =>
       alle
         .filter((z) => stufeVon(z.bereich, z.kunde.status) !== undefined)
-        .filter((z) => !z.stand.neuanfrage || (wvJeKunde.get(z.kunde.id)?.length ?? 0) > 0)
+        .filter((z) => mitNeuanfragen || !z.stand.neuanfrage || (wvJeKunde.get(z.kunde.id)?.length ?? 0) > 0)
         .filter((z) => !bereichFilter || z.bereich === bereichFilter)
         .filter((z) => !wer || z.kunde.verantwortlich === wer || (wvJeKunde.get(z.kunde.id) ?? []).some((w) => w.verantwortlich === wer)),
-    [alle, wvJeKunde, bereichFilter, wer],
+    [alle, wvJeKunde, bereichFilter, wer, mitNeuanfragen],
   )
+  const neuanfragenOhneWv = useMemo(() => alle.filter((z) => z.stand.neuanfrage && !(wvJeKunde.get(z.kunde.id)?.length)).length, [alle, wvJeKunde])
   const verantwortliche = useMemo(() => [...new Set(alle.map((z) => z.kunde.verantwortlich).filter(Boolean))].sort(), [alle])
   const zeileVon = useMemo(() => new Map(alle.map((z) => [z.kunde.id, z])), [alle])
 
-  const summe = faelle.reduce((s, z) => s + z.umsatz.netto, 0)
-  const summeGewichtet = faelle.reduce((s, z) => s + gewichtet(z.umsatz.netto, z.kunde.auftragChance?.prozent), 0)
+  // Umsatz je Fall: Kostenvoranschläge mit Betrag gehen vor, sonst die übernommene Schätzung.
+  const umsatzVonZeile = (z: Zeile) => erwarteterUmsatz(z.kunde, z.umsatz.netto)
+  const summe = faelle.reduce((s, z) => s + umsatzVonZeile(z).netto, 0)
+  const summeGewichtet = faelle.reduce((s, z) => s + gewichtet(umsatzVonZeile(z).netto, chanceVon(z.kunde)?.prozent), 0)
+  const offenerVorschlag = (z: Zeile) => (vorschlagOffen(z.kunde, vorschlaege.get(z.kunde.id), z.umsatz.netto) ? vorschlaege.get(z.kunde.id) : undefined)
+  const anzahlOffeneVorschlaege = faelle.filter((z) => offenerVorschlag(z)).length
+  const ohneChance = faelle.filter((z) => !chanceVon(z.kunde)).length
   const anzahl = (f: AmpelFarbe) => faelle.filter((z) => z.ampel.farbe === f).length
 
   // Fällig bis Sonntag: Einträge der Tabelle wiedervorlagen und das Follow-up der Akte.
@@ -175,6 +195,42 @@ export function Wochenbesprechung() {
     }
   }
 
+  /** Vorschläge übernehmen (einer oder alle einer Stufe), mit Rückgängig. */
+  function uebernimm(zeilen: Zeile[], stufenTitel?: string) {
+    const liste = zeilen.flatMap((z) => {
+      const v = offenerVorschlag(z)
+      return v ? [{ z, v }] : []
+    })
+    if (!liste.length) return
+    if (liste.length > 1 && !window.confirm(`${liste.length} Vorschläge${stufenTitel ? ` der Stufe „${stufenTitel}“` : ''} übernehmen? Chance und Umsatz gelten danach als bestätigt und zählen in der Umsatzvorschau.`)) return
+    const vorher = liste.map(({ z }) => ({ z, alt: z.kunde.auftragChance }))
+    for (const { z, v } of liste) dispatch({ type: 'UPDATE_KUNDE_IN_BEREICH', bereich: z.bereich, id: z.kunde.id, patch: uebernahmePatch(z.kunde, v, nutzer.name) })
+    const eins = liste[0]
+    setMeldung({
+      text: liste.length === 1
+        ? `Für ${akteName(eins.z.kunde)} übernommen: ${eins.v.chanceBestaetigt ? '' : `${eins.v.prozent} %, `}${eins.v.umsatzNetto ? fmtEURCent(eins.v.umsatzNetto) : 'ohne Umsatz'}${eins.v.monat ? `, ${monatKurz(eins.v.monat)}` : ''}.`
+        : `${liste.length} Vorschläge übernommen.`,
+      rueck: () => {
+        for (const { z, alt } of vorher) dispatch({ type: 'UPDATE_KUNDE_IN_BEREICH', bereich: z.bereich, id: z.kunde.id, patch: { auftragChance: alt } })
+        setMeldung(null)
+      },
+    })
+  }
+
+  async function vorschlaegeBerechnen() {
+    setRechnet(true)
+    setVorschlagFehler('')
+    try {
+      const e = await berechneChanceVorschlaege()
+      setVorschlaege(await ladeChanceVorschlaege())
+      setMeldung({ text: e.text || `${e.berechnet} Vorschläge berechnet.` })
+    } catch (e) {
+      setVorschlagFehler(e instanceof Error ? e.message : 'Die Vorschläge ließen sich nicht berechnen.')
+    } finally {
+      setRechnet(false)
+    }
+  }
+
   const offeneZeile = offen ? alle.find((z) => z.kunde.id === offen.kundeId && z.bereich === offen.bereich) : undefined
   const kw = kalenderwoche(heute)
 
@@ -229,7 +285,7 @@ export function Wochenbesprechung() {
         <Card className="p-3">
           <p className="text-xs text-slate-500">Erwarteter Umsatz netto</p>
           <p className="text-lg font-semibold tabular-nums text-slate-800">{fmtEURCent(summe)}</p>
-          <p className="text-xs text-slate-400">aus den Kostenvoranschlägen</p>
+          <p className="text-xs text-slate-400">Kostenvoranschläge, sonst übernommene Schätzung</p>
         </Card>
         <Card className="p-3">
           <p className="text-xs text-slate-500">Gewichtet nach Chance</p>
@@ -243,13 +299,41 @@ export function Wochenbesprechung() {
         </Card>
       </div>
 
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+        <p className="text-slate-600">
+          <Sparkles size={14} className="mr-1 inline text-slate-400" />
+          Chance und Umsatz: {anzahlOffeneVorschlaege} {anzahlOffeneVorschlaege === 1 ? 'Vorschlag' : 'Vorschläge'} zum Übernehmen
+          {ohneChance > 0 ? ` · ${ohneChance} ${ohneChance === 1 ? 'Fall' : 'Fälle'} ohne Chance` : ''}
+          <span className="block text-xs text-slate-400">Vorschläge stehen grau an den Karten. Übernehmen bestätigt Chance und Umsatz; erst dann zählt der Fall in der Umsatzvorschau.</span>
+        </p>
+        <div className="flex flex-wrap items-center gap-3">
+          {neuanfragenOhneWv > 0 && (
+            <label className="flex items-center gap-1.5 text-xs text-slate-500">
+              <input type="checkbox" checked={mitNeuanfragen} onChange={(e) => setMitNeuanfragen(e.target.checked)} />
+              Neuanfragen zeigen ({neuanfragenOhneWv})
+            </label>
+          )}
+          {!nutzer.nurLesen && (
+            <button
+              onClick={vorschlaegeBerechnen}
+              disabled={rechnet}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            >
+              <Sparkles size={14} /> {rechnet ? 'Wird berechnet … (bis zu einer Minute)' : 'Vorschläge neu berechnen'}
+            </button>
+          )}
+        </div>
+        {vorschlagFehler && <p className="w-full text-xs text-rose-600">{vorschlagFehler}</p>}
+      </div>
+
       <div className="overflow-x-auto pb-2">
         <div className="grid min-w-[1200px] grid-cols-6 gap-3">
           {SPALTEN.map((titel, stufe) => {
             const karten = faelle
               .filter((z) => (stufeVon(z.bereich, z.kunde.status) ?? -1) === stufe)
               .sort((a, b) => AMPEL_RANG[a.ampel.farbe] - AMPEL_RANG[b.ampel.farbe] || (a.wv[0]?.datum ?? '9').localeCompare(b.wv[0]?.datum ?? '9'))
-            const summeSpalte = karten.reduce((s, z) => s + z.umsatz.netto, 0)
+            const summeSpalte = karten.reduce((s, z) => s + umsatzVonZeile(z).netto, 0)
+            const mitVorschlag = karten.filter((z) => offenerVorschlag(z))
             return (
               <div key={titel} className={`flex flex-col gap-2 rounded-lg p-2 ${stufe === STUFE_ZURUECK ? 'bg-slate-50' : 'bg-slate-100'}`}>
                 <div className="flex items-baseline justify-between px-1">
@@ -257,8 +341,16 @@ export function Wochenbesprechung() {
                   <span className="text-xs text-slate-400">{karten.length}</span>
                 </div>
                 {summeSpalte > 0 && <p className="px-1 text-[11px] tabular-nums text-slate-400">{fmtEURCent(summeSpalte)}</p>}
+                {mitVorschlag.length > 0 && !nutzer.nurLesen && (
+                  <button onClick={() => uebernimm(mitVorschlag, titel)} className="mx-1 rounded border border-dashed border-slate-300 bg-white/60 px-1.5 py-0.5 text-left text-[11px] text-slate-500 hover:border-sky-500 hover:text-sky-700">
+                    {mitVorschlag.length === 1 ? '1 Vorschlag übernehmen' : `alle ${mitVorschlag.length} Vorschläge dieser Stufe übernehmen`}
+                  </button>
+                )}
                 {karten.map((z) => {
                   const k = z.kunde
+                  const u = umsatzVonZeile(z)
+                  const c = chanceVon(k)
+                  const v = offenerVorschlag(z)
                   return (
                     <div key={`${z.bereich}-${k.id}`} className={`space-y-1.5 rounded-md border border-l-4 border-slate-200 bg-white p-2.5 text-xs ${RAND[z.ampel.farbe]}`}>
                       <div>
@@ -269,11 +361,24 @@ export function Wochenbesprechung() {
                       </div>
                       <p className="text-slate-500">{z.stand.label}</p>
                       {z.ampel.gruende[0] && <p className={z.ampel.farbe === 'rot' ? 'text-rose-600' : 'text-slate-500'}>{z.ampel.gruende[0]}</p>}
-                      {(z.umsatz.anzahl > 0 || k.auftragChance) && (
+                      {(z.umsatz.anzahl > 0 || c) && (
                         <p className="tabular-nums text-slate-600">
-                          {z.umsatz.anzahl > 0 ? fmtEURCent(z.umsatz.netto) : 'kein Kostenvoranschlag'}
-                          {k.auftragChance && <span className={k.auftragChance.bestaetigt ? '' : 'italic text-slate-400'}> · {k.auftragChance.prozent} %</span>}
+                          {u.netto > 0 ? `${fmtEURCent(u.netto)}${u.geschaetzt ? ' (geschätzt)' : ''}` : z.umsatz.anzahl > 0 ? fmtEURCent(0) : 'ohne Umsatz'}
+                          {c && <span className={c.bestaetigt ? '' : 'italic text-slate-400'}> · {c.prozent} %</span>}
+                          {u.geschaetzt && c?.monat && <span className="text-slate-400"> · {monatKurz(c.monat)}</span>}
                         </p>
+                      )}
+                      {v && (
+                        <div className="flex items-center justify-between gap-1 rounded border border-dashed border-slate-200 bg-slate-50 px-1.5 py-1 text-[11px] text-slate-400" title={v.begruendung}>
+                          <span className="italic">
+                            Vorschlag: {v.chanceBestaetigt ? '' : `${v.prozent} % · `}{v.umsatzNetto ? fmtEURCent(v.umsatzNetto) : 'ohne Umsatz'}{v.monat ? ` · ${monatKurz(v.monat)}` : ''}
+                          </span>
+                          {!nutzer.nurLesen && (
+                            <button onClick={() => uebernimm([z])} className="shrink-0 font-medium text-slate-500 hover:text-sky-700 hover:underline" aria-label={`Vorschlag für ${akteName(k)} übernehmen`}>
+                              übernehmen
+                            </button>
+                          )}
+                        </div>
                       )}
                       <label className="flex items-center gap-1 text-[11px] text-slate-400">
                         verschieben

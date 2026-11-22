@@ -25,6 +25,7 @@ import { KostenvoranschlaegeSection, useKvNutzer } from '../../components/Kosten
 import { WiedervorlagenListe } from '../../components/WiedervorlagenListe'
 import { WillkommenHinweis } from '../../components/WillkommenHinweis'
 import { KundenberichtModal } from '../../components/KundenberichtModal'
+import { StammdatenVorschlaege } from '../../components/StammdatenVorschlaege'
 import { UnterschriftAnfragen } from '../../components/UnterschriftAnfragen'
 import { KommunikationSection } from '../../components/KommunikationSection'
 import { LoeschenKundeButton } from '../../components/LoeschenKundeButton'
@@ -138,6 +139,7 @@ export function ErbenDetail() {
           <Card className="p-5 lg:col-span-1">
             <h3 className="mb-3 text-sm font-semibold text-slate-700">Stammdaten</h3>
             <StammdatenKarte bereich="erben" kunde={mandant} labels={{ firma: 'Mandant/Familie' }} />
+            <StammdatenVorschlaege bereich="erben" kunde={mandant} nutzerName={nutzer.name} nurLesen={nutzer.nurLesen} />
             <div className="mt-4 rounded-lg bg-slate-50 p-3">
               <div className="text-xs font-medium text-slate-400">Nächste Follow-up-Aufgabe</div>
               <div className={`text-sm ${overdue ? 'font-medium text-rose-600' : 'text-slate-700'}`}>{fmtDate(mandant.followUp.date)} — {mandant.followUp.note}</div>

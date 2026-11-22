@@ -10,6 +10,7 @@ import { akteName, findeAkte, useKvNutzer } from '../../components/Kostenvoransc
 import { RechnungDetail } from '../../components/rechnungen/RechnungDetail'
 import { RechnungFormular } from '../../components/rechnungen/RechnungFormular'
 import { KontoauszugAbgleichKnopf } from '../../components/rechnungen/KontoauszugAbgleich'
+import { SteuerberaterExportKnopf } from '../../components/rechnungen/SteuerberaterExport'
 import type { Rechnung } from '../../types'
 
 type FilterId = 'alle' | 'offen' | 'ueberfaellig' | 'bezahlt' | 'entwurf'
@@ -86,6 +87,7 @@ export function Rechnungen() {
         </div>
         <div className="flex flex-wrap gap-2">
           <KontoauszugAbgleichKnopf />
+          <SteuerberaterExportKnopf />
           <PrimaryButton onClick={() => setNeuOffen(true)} disabled={nutzer.nurLesen}>
             <Plus size={15} /> Neue Rechnung
           </PrimaryButton>

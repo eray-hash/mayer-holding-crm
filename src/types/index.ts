@@ -390,7 +390,17 @@ export type SeminarBuchung = { id: string; titel: string; stand: SeminarStand }
 export type Vermittler = { name: string; kundeId?: string; bereich?: KundeBereich }
 
 /** Chance, dass der Auftrag kommt. Ein Vorschlag des Assistenten ist bestaetigt=false, bis ihn ein Berater bestätigt. */
-export type AuftragChance = { prozent: number; bestaetigt: boolean; begruendung?: string; von?: string; am?: string }
+export type AuftragChance = {
+  prozent: number
+  bestaetigt: boolean
+  begruendung?: string
+  von?: string
+  am?: string
+  /** Erwarteter Umsatz netto, solange kein Kostenvoranschlag mit Betrag da ist (Schätzung, seit 22.11.2026). */
+  umsatzNetto?: number
+  /** Erwarteter Monat des Umsatzes, JJJJ-MM. */
+  monat?: string
+}
 
 export type AmpelFarbe = 'gruen' | 'gelb' | 'rot'
 export type AmpelManuell = { farbe: AmpelFarbe; grund: string; von?: string; am?: string }

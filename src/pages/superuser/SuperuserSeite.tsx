@@ -4,6 +4,7 @@ import { RefreshCw, ShieldCheck } from 'lucide-react'
 import { Card, EmptyState, SecondaryButton, inputClass } from '../../components/ui'
 import { ladeSuperuserAuswertung, type SuperuserTeil } from '../../lib/emailGateway'
 import { useIstSuperuser } from './useIstSuperuser'
+import { WochenrueckblickEinstellung } from '../../components/WochenrueckblickEinstellung'
 
 // Superuser-Bereich (nur Mitarbeiter mit mitarbeiter.ist_superuser — der Server prüft das ebenfalls).
 // Zeigt Tatsachen zur Nutzung, den Verlauf über alle Akten, Geschäftszahlen und Technik & Kosten.
@@ -609,6 +610,7 @@ export function SuperuserSeite() {
         </div>
       </div>
 
+      <WochenrueckblickEinstellung />
       <div className="flex flex-wrap gap-1 border-b border-slate-200">
         {TEILE.map((t) => (
           <button

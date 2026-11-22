@@ -33,6 +33,24 @@ function deDatum(iso?: string): string {
   return m ? `${m[3]}.${m[2]}.${m[1]}` : ''
 }
 
+/** Offene To-dos seitenweise (die Datenbank liefert höchstens 1000 Zeilen je Abfrage; Hasan hat über 2.600). */
+// deno-lint-ignore no-explicit-any
+async function alleOffenenTodos(supabase: any): Promise<{ data: any[] }> {
+  // deno-lint-ignore no-explicit-any
+  const alle: any[] = []
+  const spalten = 'id, aufgabe, kunde_projekt, zustaendig, erledigen_bis, geplante_wiedervorlage, erledigt_am, bereich, besitzer_email'
+  const basis = () => supabase.from('todos').select(spalten).is('erledigt_am', null)
+  // Test-Doubles kennen order/range nicht — dann einfach die eine Abfrage.
+  const probe = basis()
+  if (typeof probe.order !== 'function' || typeof probe.order('id').range !== 'function') return { data: (await basis()).data ?? [] }
+  for (let von = 0; von < 50_000; von += 1000) {
+    const { data } = await basis().order('id', { ascending: true }).range(von, von + 999)
+    alle.push(...(data ?? []))
+    if (!data || data.length < 1000) break
+  }
+  return { data: alle }
+}
+
 export async function aufgabenUebersicht(
   supabase: Supa,
   fragender: Fragender,
@@ -42,7 +60,7 @@ export async function aufgabenUebersicht(
 ): Promise<string> {
   const [{ data: team }, { data: todos }, { data: freigaben }, { data: kunden }, objekteRes, { data: projekte }, wvRes] = await Promise.all([
     supabase.from('mitarbeiter').select('name, email').eq('aktiv', true),
-    supabase.from('todos').select('id, aufgabe, kunde_projekt, zustaendig, erledigen_bis, geplante_wiedervorlage, erledigt_am, bereich, besitzer_email').is('erledigt_am', null),
+    alleOffenenTodos(supabase),
     supabase.from('todo_freigaben').select('besitzer_email, empfaenger_email'),
     supabase.from('kunden').select('id, bereich, firma, ansprechpartner, verantwortlich, follow_up, verantwortlich_email'),
     supabase.from('objekte').select('id, bezeichnung, verantwortlich, follow_up, status, privat_besitzer'),

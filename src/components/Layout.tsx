@@ -23,7 +23,7 @@ import {
   ChevronDown,
   Phone,
   Lock,
-  Search, CalendarDays, BarChart3, Lightbulb, ListChecks, Eye, ShieldCheck, Calculator, ClipboardList, Presentation, Library } from 'lucide-react'
+  BookUser, Search, CalendarDays, BarChart3, Lightbulb, ListChecks, Eye, ShieldCheck, Calculator, ClipboardList, Presentation, Library } from 'lucide-react'
 import type { Bereich } from '../types'
 import { useApp } from '../context/AppContext'
 import { useAuth } from '../context/AuthContext'
@@ -224,6 +224,17 @@ export function Layout({ children }: { children: ReactNode }) {
           >
             <BarChart3 size={16} />
           </button>
+          {!imPrivatBereich && (
+            <button
+              // Partner und Vermittler (22.11.2026): wer hat was gebracht, offene Provisionen.
+              onClick={() => navigate('/partner')}
+              className="hidden rounded-lg p-2 text-slate-500 hover:bg-slate-100 sm:inline-flex"
+              title="Partner und Vermittler: wer hat was gebracht, offene Provisionen"
+              aria-label="Partner und Vermittler"
+            >
+              <BookUser size={16} />
+            </button>
+          )}
           {!imPrivatBereich && (
             <button
               // Projekt-Checkliste (Hasan und Eray, 20.11.2026): alle laufenden Fälle mit Ampel.
@@ -443,6 +454,14 @@ export function Layout({ children }: { children: ReactNode }) {
                 <aktuellerBereich.Sidebar collapsed={false} onToggle={() => setDrawerOpen(false)} />
               </div>
 
+              {/* Datei vom Handy ablegen (Kamera oder Datei wählen) — vor allem fürs iPhone, das kein „Teilen“ an Web-Apps kennt. */}
+              <button
+                onClick={() => { setDrawerOpen(false); navigate('/ablegen') }}
+                className="mb-1 flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm font-medium text-slate-700 hover:bg-slate-50 sm:hidden"
+              >
+                <Camera size={17} className="text-slate-400" />
+                Datei ablegen
+              </button>
               {/* Auf dem Handy ist in der Kopfleiste kein Platz für das Auswertungs-Symbol. */}
               <button
                 onClick={() => { setDrawerOpen(false); navigate('/auswertungen') }}
@@ -458,6 +477,15 @@ export function Layout({ children }: { children: ReactNode }) {
                 >
                   <ClipboardList size={17} className="text-slate-400" />
                   Projekt-Checkliste
+                </button>
+              )}
+              {!imPrivatBereich && (
+                <button
+                  onClick={() => { setDrawerOpen(false); navigate('/partner') }}
+                  className="mb-1 flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm font-medium text-slate-700 hover:bg-slate-50 sm:hidden"
+                >
+                  <BookUser size={17} className="text-slate-400" />
+                  Partner und Vermittler
                 </button>
               )}
               {!imPrivatBereich && (

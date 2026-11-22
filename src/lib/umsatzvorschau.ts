@@ -97,6 +97,8 @@ export function rechneUmsatzvorschau(q: UmsatzQuellen): UmsatzVorschau {
       status: a.kunde.status,
       chance: a.kunde.auftragChance?.prozent,
       chanceBestaetigt: a.kunde.auftragChance?.bestaetigt,
+      erwartetNetto: a.kunde.auftragChance?.umsatzNetto,
+      erwartetMonat: a.kunde.auftragChance?.monat,
     }))
 
   const abrechnungJeObjekt = new Map(q.abrechnungen.map((a) => [a.objektId, a]))

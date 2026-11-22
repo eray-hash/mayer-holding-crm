@@ -23,6 +23,7 @@ import { KostenvoranschlaegeSection, useKvNutzer } from '../../components/Kosten
 import { WiedervorlagenListe } from '../../components/WiedervorlagenListe'
 import { WillkommenHinweis } from '../../components/WillkommenHinweis'
 import { KundenberichtModal } from '../../components/KundenberichtModal'
+import { StammdatenVorschlaege } from '../../components/StammdatenVorschlaege'
 import { UnterschriftAnfragen } from '../../components/UnterschriftAnfragen'
 import { KommunikationSection } from '../../components/KommunikationSection'
 import { LoeschenKundeButton } from '../../components/LoeschenKundeButton'
@@ -182,6 +183,7 @@ export function KundenDetail() {
           <Card className="p-5 lg:col-span-1">
             <h3 className="mb-3 text-sm font-semibold text-slate-700">Stammdaten</h3>
             <StammdatenKarte bereich="beratung" kunde={kunde} />
+            <StammdatenVorschlaege bereich="beratung" kunde={kunde} nutzerName={nutzer.name} nurLesen={nutzer.nurLesen} />
             <div className="mt-4">
               <SecondaryButton onClick={() => setSendEmailOpen(true)} className="w-full justify-center">
                 <Mail size={14} /> E-Mail senden

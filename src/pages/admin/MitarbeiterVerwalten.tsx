@@ -6,6 +6,7 @@ import { inviteMitarbeiter, generateLoginLink, updateMitarbeiterEmail } from '..
 import { ALLE_BEREICHE, bereichLabel } from '../../data/bereiche'
 import { Card, Field, inputClass, PrimaryButton, EmptyState } from '../../components/ui'
 import type { Bereich } from '../../types'
+import { StammdatenNachtrag } from '../../components/StammdatenVorschlaege'
 
 type MitarbeiterRow = {
   id: string
@@ -252,6 +253,7 @@ export function MitarbeiterVerwalten() {
       <WerSiehtWas />
 
       <PostfaecherVerwaltung />
+      <div className="mb-6"><StammdatenNachtrag /></div>
 
       <Card className="mb-6 p-5">
         <h3 className="mb-3 text-sm font-semibold text-slate-700">Neuer Mitarbeiter</h3>

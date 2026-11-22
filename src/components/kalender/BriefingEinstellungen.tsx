@@ -6,10 +6,14 @@ import { supabase } from '../../lib/supabaseClient'
 // (Stand, letzte Kontakte, Offenes, fehlende Unterlagen, Gesprächspunkte). Gespeichert in der eigenen Zeile
 // von kalender_einstellungen — nur die eigenen Spalten, damit Erinnerungen, Sichtbarkeit und Abo-Kennung
 // unberührt bleiben. Keine Zeile = Standard (an, 60 Minuten vorher, keine Morgenübersicht).
+//
+// Dazu die Nachfrage nach Kundenterminen (email-gateway/nachTermin.ts, Spalte nachfrage_an, Standard an): 10 bis
+// 20 Minuten nach dem Ende eines Termins mit Kundenakte fragt der Assistent „Wie lief der Termin …?“ und legt aus
+// der Antwort das Gesprächsprotokoll an. Fehlt die Spalte noch (SQL nicht eingespielt), bleibt der Schalter weg.
 
-type Werte = { briefing_an: boolean; briefing_vorlauf: number; briefing_morgen: boolean }
+type Werte = { briefing_an: boolean; briefing_vorlauf: number; briefing_morgen: boolean; nachfrage_an: boolean }
 
-const STANDARD: Werte = { briefing_an: true, briefing_vorlauf: 60, briefing_morgen: false }
+const STANDARD: Werte = { briefing_an: true, briefing_vorlauf: 60, briefing_morgen: false, nachfrage_an: true }
 const VORLAUF_WAHL = [15, 30, 45, 60, 90, 120]
 
 function vorlaufText(m: number): string {
@@ -22,27 +26,35 @@ export function BriefingEinstellungen({ ich }: { ich: string }) {
   const email = (ich ?? '').trim().toLowerCase()
   const [werte, setWerte] = useState<Werte | null>(null)
   const [fehler, setFehler] = useState('')
+  const [mitNachfrage, setMitNachfrage] = useState(true)
 
   useEffect(() => {
     if (!supabase || !email) return
     let aktiv = true
-    supabase
-      .from('kalender_einstellungen')
-      .select('briefing_an, briefing_vorlauf, briefing_morgen')
-      .eq('email', email)
-      .maybeSingle()
-      .then(({ data, error }) => {
-        if (!aktiv) return
-        if (error) {
-          setFehler('Die Einstellungen zum Termin-Briefing konnten nicht geladen werden.')
-          return
-        }
-        setWerte({
-          briefing_an: data?.briefing_an !== false,
-          briefing_vorlauf: VORLAUF_WAHL.includes(Number(data?.briefing_vorlauf)) ? Number(data?.briefing_vorlauf) : STANDARD.briefing_vorlauf,
-          briefing_morgen: data?.briefing_morgen === true,
-        })
+    const client = supabase
+    const lies = (spalten: string) => client.from('kalender_einstellungen').select(spalten).eq('email', email).maybeSingle()
+    ;(async () => {
+      let { data, error } = await lies('briefing_an, briefing_vorlauf, briefing_morgen, nachfrage_an')
+      let nachfrageDa = true
+      if (error) {
+        // Spalte nachfrage_an noch nicht angelegt: ohne sie laden, Schalter ausblenden.
+        nachfrageDa = false
+        ;({ data, error } = await lies('briefing_an, briefing_vorlauf, briefing_morgen'))
+      }
+      if (!aktiv) return
+      if (error) {
+        setFehler('Die Einstellungen zum Termin-Briefing konnten nicht geladen werden.')
+        return
+      }
+      const z = (data ?? null) as Record<string, unknown> | null
+      setMitNachfrage(nachfrageDa)
+      setWerte({
+        briefing_an: z?.briefing_an !== false,
+        briefing_vorlauf: VORLAUF_WAHL.includes(Number(z?.briefing_vorlauf)) ? Number(z?.briefing_vorlauf) : STANDARD.briefing_vorlauf,
+        briefing_morgen: z?.briefing_morgen === true,
+        nachfrage_an: z?.nachfrage_an !== false,
       })
+    })()
     return () => {
       aktiv = false
     }
@@ -111,6 +123,17 @@ export function BriefingEinstellungen({ ich }: { ich: string }) {
             </span>
           </label>
         </div>
+      )}
+      {mitNachfrage && (
+        <label className="mt-3 flex items-start gap-2 text-sm text-slate-700">
+          <input type="checkbox" className="mt-0.5" checked={werte.nachfrage_an} onChange={(e) => speichern({ nachfrage_an: e.target.checked })} />
+          <span>
+            Nach Kundenterminen nachfragen
+            <span className="block text-xs text-slate-500">
+              Etwa eine Viertelstunde nach dem Ende eines Termins mit Kundenakte fragt der Assistent: „Wie lief der Termin?“ Aus deiner Antwort (Sprachnachricht oder Text) legt er das Gesprächsprotokoll an und schlägt Wiedervorlagen für die nächsten Schritte vor.
+            </span>
+          </span>
+        </label>
       )}
       {fehler && <p className="mt-2 text-xs font-medium text-rose-600">{fehler}</p>}
     </div>

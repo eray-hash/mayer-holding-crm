@@ -29,6 +29,38 @@ export default defineConfig({
           { src: 'icons/icon-192-maskable.png', sizes: '192x192', type: 'image/png', purpose: 'maskable' },
           { src: 'icons/icon-512-maskable.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
         ],
+        // „Teilen → Mayer CRM" (nur Android/Chrome mit installierter App; das iPhone kennt das nicht):
+        // Der Service-Worker nimmt den POST in public/teilen-sw.js an, legt die Dateien zwischen und
+        // leitet auf #/ablegen um. Die Adresse ist relativ zum Manifest, liegt also im Scope.
+        share_target: {
+          action: './teilen-ziel',
+          method: 'POST',
+          enctype: 'multipart/form-data',
+          params: {
+            title: 'titel',
+            text: 'text',
+            url: 'adresse',
+            files: [
+              {
+                name: 'dateien',
+                accept: [
+                  'image/*',
+                  'application/pdf',
+                  'text/*',
+                  'audio/*',
+                  'message/rfc822',
+                  'application/msword',
+                  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                  'application/vnd.ms-excel',
+                  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                  '.pdf', '.jpg', '.jpeg', '.png', '.heic', '.doc', '.docx', '.xls', '.xlsx', '.txt', '.eml', '.csv',
+                ],
+              },
+            ],
+          },
+        },
+        // Langes Drücken auf das App-Symbol (Android) führt direkt zur Ablage-Seite.
+        shortcuts: [{ name: 'Datei ablegen', short_name: 'Ablegen', url: './#/ablegen', icons: [{ src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png' }] }],
       },
       workbox: {
         // App-Shell-Strategie: HashRouter-Routen sind alle derselbe index.html, es gibt also
@@ -39,6 +71,9 @@ export default defineConfig({
         // zwischengespeichert werden, sonst startet die installierte App ohne Netz nicht.
         maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
         navigateFallback: 'index.html',
+        // Teilen-Ziel (POST an ./teilen-ziel) — eigener Abschnitt neben Workbox, siehe public/teilen-sw.js.
+        // Am Zwischenspeichern und am automatischen Aktualisieren (registerType: 'autoUpdate') ändert das nichts.
+        importScripts: ['teilen-sw.js'],
       },
     }),
   ],

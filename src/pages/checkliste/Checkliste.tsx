@@ -12,8 +12,11 @@ import { holeLeistungen } from '../../lib/leistungen'
 import { ladeSeminare } from '../../lib/seminare'
 import { checklisteVorschlag } from '../../lib/emailGateway'
 import { WiedervorlagenListe } from '../../components/WiedervorlagenListe'
+import { PartnerAuswahl } from '../../components/PartnerAuswahl'
 import { WillkommenSchalter } from '../../components/WillkommenSchalter'
 import { WillkommenHinweis } from '../../components/WillkommenHinweis'
+import { ChanceVorschlagFeld } from '../../components/ChanceVorschlagFeld'
+import { chanceVon, erwarteterUmsatz, umsatzFelder } from '../../lib/chanceVorschlag'
 import { fmtEURCent, today } from '../../lib/dates'
 import {
   AMPEL_LABEL, AMPEL_RANG, gewichtet,
@@ -63,8 +66,8 @@ export function Checkliste() {
       })
   }, [alle, suche, bereichFilter, ampelFilter, wer, mitNeuanfragen, mitAbgeschlossenen, wvJeKunde])
 
-  const summe = sichtbar.reduce((s, z) => s + z.umsatz.netto, 0)
-  const summeGewichtet = sichtbar.reduce((s, z) => s + gewichtet(z.umsatz.netto, z.kunde.auftragChance?.prozent), 0)
+  const summe = sichtbar.reduce((s, z) => s + erwarteterUmsatz(z.kunde, z.umsatz.netto).netto, 0)
+  const summeGewichtet = sichtbar.reduce((s, z) => s + gewichtet(erwarteterUmsatz(z.kunde, z.umsatz.netto).netto, z.kunde.auftragChance?.prozent), 0)
   const zaehle = (f: AmpelFarbe) => sichtbar.filter((z) => z.ampel.farbe === f).length
   const offeneZeile = offen ? alle.find((z) => z.kunde.id === offen.kundeId && z.bereich === offen.bereich) : undefined
 
@@ -186,7 +189,7 @@ export function Checkliste() {
                     <td className="px-3 py-2 text-xs text-slate-700">{k.vermittler?.name || '–'}</td>
                     <td className="max-w-[200px] px-3 py-2 text-xs text-slate-700">{k.dienstleistungen?.join(', ') || k.seminare?.map((s) => s.titel).join(', ') || '–'}</td>
                     <td className="whitespace-nowrap px-3 py-2 text-right text-xs tabular-nums text-slate-700">
-                      {z.umsatz.anzahl ? fmtEURCent(z.umsatz.netto) : '–'}
+                      {z.umsatz.anzahl ? fmtEURCent(z.umsatz.netto) : chanceVon(k)?.umsatzNetto ? `${fmtEURCent(chanceVon(k)!.umsatzNetto!)} (geschätzt)` : '–'}
                       {z.umsatz.ohneBetrag > 0 && <span className="block text-slate-400">{z.umsatz.ohneBetrag} ohne Betrag</span>}
                     </td>
                     <td className="whitespace-nowrap px-3 py-2 text-right text-xs tabular-nums">
@@ -260,6 +263,8 @@ export function ChecklisteBearbeiten({
   const [chance, setChance] = useState<string>(k.auftragChance ? String(k.auftragChance.prozent) : '')
   const [bestaetigt, setBestaetigt] = useState(k.auftragChance?.bestaetigt ?? false)
   const [begruendung, setBegruendung] = useState(k.auftragChance?.begruendung ?? '')
+  const [umsatzSchaetzung, setUmsatzSchaetzung] = useState(chanceVon(k)?.umsatzNetto ? String(chanceVon(k)!.umsatzNetto) : '')
+  const [umsatzMonat, setUmsatzMonat] = useState(chanceVon(k)?.monat ?? '')
   const [followUpErledigt, setFollowUpErledigt] = useState(false)
   const offenesFollowUp = k.followUp && !k.followUp.done && (k.followUp.date || k.followUp.note?.trim()) ? k.followUp : undefined
   const [naechste, setNaechste] = useState(k.naechsteSchritte ?? '')
@@ -311,13 +316,15 @@ export function ChecklisteBearbeiten({
     }
     const treffer = alleAkten.find((z) => akteName(z.kunde) === vermittler.trim())
     const jetzt = new Date().toISOString()
-    const alteChance = k.auftragChance
+    const alteChance = chanceVon(k)
+    const zusatz = umsatzFelder(umsatzSchaetzung, umsatzMonat)
     const chanceNeu =
       prozent === undefined
         ? undefined
-        : alteChance && alteChance.prozent === prozent && alteChance.bestaetigt === bestaetigt && (alteChance.begruendung ?? '') === begruendung
-          ? alteChance
-          : { prozent, bestaetigt, begruendung: begruendung.trim() || undefined, von: nutzerName, am: jetzt }
+        : alteChance && alteChance.prozent === prozent && alteChance.bestaetigt === bestaetigt && (alteChance.begruendung ?? '') === begruendung &&
+            alteChance.umsatzNetto === zusatz.umsatzNetto && alteChance.monat === zusatz.monat
+          ? k.auftragChance
+          : ({ prozent, bestaetigt, begruendung: begruendung.trim() || undefined, von: nutzerName, am: jetzt, ...zusatz } as Kunde['auftragChance'])
     const patch: Partial<Kunde> = {
       sachverhalt: sachverhalt.trim() || undefined,
       branche: branche.trim() || undefined,
@@ -377,6 +384,8 @@ export function ChecklisteBearbeiten({
               <datalist id="checkliste-akten">{akteNamen.map((n) => <option key={n} value={n} />)}</datalist>
             </label>
           </div>
+          {/* Partner-Verzeichnis (/partner): speichert sofort, unabhängig vom Speichern-Knopf oben. */}
+          <PartnerAuswahl kundeId={k.id} nurLesen={nurLesen} onGewaehlt={(p) => { if (!vermittler.trim()) setVermittler(p.name || p.firma) }} />
 
           <div>
             <span className={feld}>Unsere Dienstleistungen</span>
@@ -426,8 +435,25 @@ export function ChecklisteBearbeiten({
               Chance bestätigt (unbestätigte Werte erscheinen in der Liste kursiv)
             </label>
           )}
+          <ChanceVorschlagFeld
+            kundeId={k.id}
+            nurLesen={nurLesen}
+            kvUmsatz={zeile.umsatz.netto}
+            umsatz={umsatzSchaetzung}
+            setUmsatz={setUmsatzSchaetzung}
+            monat={umsatzMonat}
+            setMonat={setUmsatzMonat}
+            onUebernehmen={(v) => {
+              if (!v.chanceBestaetigt) {
+                setChance(String(v.prozent))
+                setBegruendung(v.begruendung)
+              }
+              setBestaetigt(true)
+              setHinweis('Vorschlag eingesetzt. Mit „Speichern“ gilt er als bestätigt.')
+            }}
+          />
           <p className="text-xs text-slate-400">
-            Gewichteter Umsatz: {fmtEURCent(gewichtet(zeile.umsatz.netto, chance === '' ? undefined : Number(chance)))}. Den Umsatz selbst rechnet die Liste aus den Kostenvoranschlägen der Akte.
+            Gewichteter Umsatz: {fmtEURCent(gewichtet(zeile.umsatz.netto > 0 ? zeile.umsatz.netto : (umsatzFelder(umsatzSchaetzung, umsatzMonat).umsatzNetto ?? 0), chance === '' ? undefined : Number(chance)))}. Kostenvoranschläge der Akte gehen vor, sonst zählt der geschätzte Umsatz.
           </p>
 
           <div>

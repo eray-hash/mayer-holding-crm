@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Plus, Check, RotateCcw, Trash2, Share2, Upload, Download, ChevronDown, ArrowRightLeft, Bell, X, ListOrdered, Wand2 } from 'lucide-react'
+import { Plus, Check, RotateCcw, Trash2, Share2, Upload, Download, ChevronDown, ArrowRightLeft, Bell, X, ListOrdered, Wand2, Sparkles, EyeOff, CalendarClock, Merge } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { useAuth } from '../../context/AuthContext'
 import { supabase, isSupabaseConfigured } from '../../lib/supabaseClient'
@@ -11,6 +11,26 @@ import { ALLE_BEREICHE } from '../../data/bereiche'
 import type { ToDoEintrag, Bereich } from '../../types'
 import { analysiereToDoDatei, toDoCsvText, zeitaufwandskosten } from '../../lib/todoExcelImport'
 import type { ToDoImportVorschau, ToDoImportWert } from '../../lib/todoExcelImport'
+import { istNurLesen, meldeGesperrt } from '../../lib/nurLesen'
+import {
+  aenderungenFuer,
+  AKTION_NAME,
+  ART_NAME,
+  analysiereTodos,
+  AUFRAEUM_ARTEN,
+  buendele,
+  deDatum,
+  istEndstatus,
+  ladeOffeneTodos,
+  naechsterWerktag,
+  plusTage,
+  stuecke,
+  type AkteName,
+  type AufraeumAktion,
+  type AufraeumArt,
+  type AufraeumTodo,
+  type AufraeumVorschlag,
+} from '../../../supabase/functions/_shared/todoAufraeumen.ts'
 
 // Zwei Arten von Listen teilen sich dieselbe Tabelle/Komponente:
 // - Privat: eigene, isolierte Liste pro Mitarbeiter (RLS: besitzer_email), optional mit Lese-/
@@ -113,6 +133,7 @@ function ToDoListeKern({ scope }: { scope: Scope }) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [importVorschau, setImportVorschau] = useState<{ dateiname: string; vorschau?: ToDoImportVorschau; fehler?: string } | null>(null)
   const [priorisierung, setPriorisierung] = useState<{ laeuft: boolean; meldung?: string; fehler?: boolean }>({ laeuft: false })
+  const [aufraeumenOpen, setAufraeumenOpen] = useState(false)
 
   useEffect(() => {
     if (!supabase) return
@@ -180,6 +201,9 @@ function ToDoListeKern({ scope }: { scope: Scope }) {
 
   // Knopf nur für Listen, die die Automatik auch bearbeitet: Bereichslisten und die eigene private Liste.
   const darfPriorisieren = isSupabaseConfigured && isEmailGatewayConfigured && darfSchreiben && (scope.kind === 'bereich' || aktiveListe === eigeneEmail)
+
+  // Aufräumen (Doppel, lange unberührt, lange überfällig …): nur eigene Liste oder Bereichsliste, nur mit Schreibrecht.
+  const darfAufraeumen = isSupabaseConfigured && darfSchreiben && (scope.kind === 'bereich' || aktiveListe === eigeneEmail)
 
   async function jetztPriorisieren() {
     setPriorisierung({ laeuft: true })
@@ -311,6 +335,11 @@ function ToDoListeKern({ scope }: { scope: Scope }) {
           {darfPriorisieren && (
             <SecondaryButton onClick={jetztPriorisieren} disabled={priorisierung.laeuft}>
               <ListOrdered size={14} /> {priorisierung.laeuft ? 'Priorisiere …' : 'Jetzt priorisieren'}
+            </SecondaryButton>
+          )}
+          {darfAufraeumen && (
+            <SecondaryButton onClick={() => setAufraeumenOpen(true)}>
+              <Sparkles size={14} /> Aufräumen
             </SecondaryButton>
           )}
           <SecondaryButton onClick={() => exportiereCsv(sichtbar, dateiname)}>
@@ -574,6 +603,14 @@ function ToDoListeKern({ scope }: { scope: Scope }) {
           onUebernehmen={importUebernehmen}
         />
       )}
+      {aufraeumenOpen && (
+        <AufraeumenModal
+          scope={scope}
+          eigeneEmail={eigeneEmail}
+          onClose={() => setAufraeumenOpen(false)}
+          onGeaendert={() => neuLaden().catch(() => undefined)}
+        />
+      )}
       {freigabenOpen && (
         <FreigabenModal
           besitzerEmail={eigeneEmail}
@@ -771,6 +808,356 @@ function FreigabenModal({ besitzerEmail, alleMitarbeiter, onClose }: { besitzerE
       </div>
       <div className="mt-4 flex justify-end">
         <SecondaryButton onClick={onClose}>Schließen</SecondaryButton>
+      </div>
+    </Modal>
+  )
+}
+
+// ---------- Aufräumen ----------
+// Regeln im gemeinsamen Kern supabase/functions/_shared/todoAufraeumen.ts (gleich wie der Assistent todos_aufraeumen).
+// Die Aufgaben werden hier frisch und vollständig gelesen (seitenweise, mit Microsoft-Spalten), geändert wird direkt in
+// der Datenbank in Bündeln, danach lädt das CRM neu. „Erledigen“ ist weich (abgehakt + Vermerk), Löschen nur auf Klick.
+// Microsoft-Aufgaben: Der Abgleich (email-gateway/todoAbgleich.ts) trägt Erledigt/Frist/Stand und Löschungen zurück.
+
+const HEUTE_AUFRAEUMEN = () => today()
+const BEHALTEN_SCHLUESSEL = (liste: string) => `todoAufraeumenBehalten:${liste}`
+
+function liesBehalten(liste: string): Set<string> {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(BEHALTEN_SCHLUESSEL(liste)) ?? '[]') as string[])
+  } catch {
+    return new Set()
+  }
+}
+function schreibeBehalten(liste: string, ids: Set<string>) {
+  try {
+    localStorage.setItem(BEHALTEN_SCHLUESSEL(liste), JSON.stringify([...ids].slice(-2000)))
+  } catch {
+    // Speicher im Browser nicht verfügbar — dann gilt „Behalten“ nur bis zum Schließen.
+  }
+}
+
+async function ladeAktenNamen(): Promise<AkteName[]> {
+  if (!supabase) return []
+  const akten: AkteName[] = []
+  const lies = async (tabelle: string, spalten: string, namen: string[]) => {
+    const { data } = await supabase!.from(tabelle).select(spalten).limit(1000)
+    for (const z of (data ?? []) as unknown as Record<string, string | null>[]) {
+      for (const n of namen) if (z[n]) akten.push({ name: String(z[n]), abgeschlossen: istEndstatus(z.status) })
+    }
+  }
+  await Promise.all([
+    lies('kunden', 'firma, ansprechpartner, status', ['firma', 'ansprechpartner']),
+    lies('objekte', 'bezeichnung, status', ['bezeichnung']),
+    lies('projekte', 'name, status', ['name']),
+  ]).catch(() => undefined)
+  return akten
+}
+
+const bereichLabel = (b: string) => ALLE_BEREICHE.find((x) => x.id === b)?.label ?? b
+
+function AufraeumenModal({ scope, eigeneEmail, onClose, onGeaendert }: { scope: Scope; eigeneEmail: string; onClose: () => void; onGeaendert: () => Promise<unknown> }) {
+  const listenKey = scope.kind === 'bereich' ? `bereich:${scope.bereich}` : `eigen:${eigeneEmail}`
+  const [todos, setTodos] = useState<AufraeumTodo[] | null>(null)
+  const [akten, setAkten] = useState<AkteName[]>([])
+  const [ladeFehler, setLadeFehler] = useState<string | null>(null)
+  const [tageAlt, setTageAlt] = useState(90)
+  const [behalten, setBehalten] = useState<Set<string>>(() => liesBehalten(listenKey))
+  const [auswahl, setAuswahl] = useState<Set<string>>(new Set())
+  const [zugeklappt, setZugeklappt] = useState<Set<AufraeumArt>>(new Set())
+  const [anzahlSichtbar, setAnzahlSichtbar] = useState<Record<string, number>>({})
+  const [laeuft, setLaeuft] = useState(false)
+  const [meldung, setMeldung] = useState<{ text: string; fehler?: boolean } | null>(null)
+  // Monatlicher Telegram-Hinweis (nur eigene Liste). null = Einstellung nicht lesbar (Tabelle fehlt) → kein Schalter.
+  const [hinweis, setHinweis] = useState<boolean | null>(null)
+
+  async function laden() {
+    if (!supabase) return
+    setLadeFehler(null)
+    try {
+      const [t, a] = await Promise.all([
+        ladeOffeneTodos(supabase, scope.kind === 'bereich' ? { bereich: scope.bereich } : { besitzer: eigeneEmail }),
+        ladeAktenNamen(),
+      ])
+      setTodos(t)
+      setAkten(a)
+    } catch (err) {
+      setLadeFehler(err instanceof Error ? err.message : 'Die Aufgaben ließen sich nicht laden.')
+    }
+  }
+
+  useEffect(() => {
+    laden()
+    if (scope.kind === 'privat' && supabase) {
+      supabase
+        .from('todo_aufraeumen_einstellungen')
+        .select('monatlich_hinweis')
+        .eq('email', eigeneEmail)
+        .maybeSingle()
+        .then(({ data, error }) => setHinweis(error ? null : data?.monatlich_hinweis === true))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const alleVorschlaege = useMemo(
+    () => (todos ? analysiereTodos(todos, { heute: HEUTE_AUFRAEUMEN(), tageAlt, akten, bereichName: bereichLabel }) : []),
+    [todos, tageAlt, akten],
+  )
+  const vorschlaege = useMemo(() => alleVorschlaege.filter((v) => !behalten.has(v.schluessel)), [alleVorschlaege, behalten])
+  const nachId = useMemo(() => new Map((todos ?? []).map((t) => [t.id, t])), [todos])
+  const betroffen = useMemo(() => new Set(vorschlaege.flatMap((v) => v.todo_ids.filter((id) => id !== v.behalten_id))).size, [vorschlaege])
+  const hatMicrosoft = vorschlaege.some((v) => v.todo_ids.some((id) => nachId.get(id)?.ms_id))
+  const mehrereListen = new Set(vorschlaege.map((v) => v.liste)).size > 1
+
+  async function hinweisSetzen(an: boolean) {
+    if (!supabase) return
+    if (istNurLesen()) return meldeGesperrt()
+    setHinweis(an)
+    const { error } = await supabase.from('todo_aufraeumen_einstellungen').upsert({ email: eigeneEmail, monatlich_hinweis: an, geaendert_am: new Date().toISOString() })
+    if (error) {
+      setHinweis(!an)
+      setMeldung({ text: `Einstellung nicht gespeichert: ${error.message}`, fehler: true })
+    }
+  }
+
+  function behaltenSetzen(v: AufraeumVorschlag) {
+    const neu = new Set(behalten)
+    neu.add(v.schluessel)
+    setBehalten(neu)
+    schreibeBehalten(listenKey, neu)
+  }
+
+  async function anwenden(liste: AufraeumVorschlag[], aktion?: AufraeumAktion) {
+    if (!supabase || liste.length === 0 || laeuft) return
+    if (istNurLesen()) return meldeGesperrt()
+    const heute = HEUTE_AUFRAEUMEN()
+    // „Erledigen“ bei Doppeln heißt zusammenführen — sonst wäre auch die behaltene Aufgabe weg.
+    const aenderungen = liste.flatMap((v) => aenderungenFuer(v, nachId, { heute, aktion: aktion === 'erledigen' && v.art === 'doppelt' ? 'zusammenfuehren' : aktion }))
+    const { buendel, loeschen } = buendele(aenderungen)
+    const anzahl = new Set(aenderungen.map((a) => a.id)).size
+    if (anzahl === 0) return setMeldung({ text: 'Nichts zu ändern — die Aufgaben sind schon erledigt.' })
+    if (loeschen.length > 0 && !confirm(`${loeschen.length} ${loeschen.length === 1 ? 'Aufgabe' : 'Aufgaben'} endgültig löschen? Das lässt sich nicht rückgängig machen.${hatMicrosoft ? ' Sie werden auch in Microsoft To Do gelöscht.' : ''}`)) return
+    if (loeschen.length === 0 && anzahl > 20 && !confirm(`${anzahl} Aufgaben ändern? Abgehakte lassen sich unter „Erledigt“ wieder öffnen.`)) return
+    setLaeuft(true)
+    setMeldung(null)
+    let geaendert = 0
+    let geloescht = 0
+    const fehler: string[] = []
+    try {
+      for (const b of buendel) {
+        for (const teil of stuecke(b.ids)) {
+          const { data, error } = await supabase.from('todos').update(b.felder).in('id', teil).select('id')
+          if (error) fehler.push(error.message)
+          else geaendert += (data ?? []).length
+        }
+      }
+      for (const teil of stuecke(loeschen)) {
+        const { data, error } = await supabase.from('todos').delete().in('id', teil).select('id')
+        if (error) fehler.push(error.message)
+        else geloescht += (data ?? []).length
+      }
+    } finally {
+      await onGeaendert()
+      await laden()
+      setAuswahl(new Set())
+      setLaeuft(false)
+    }
+    const teile = [geaendert ? `${geaendert} geändert` : '', geloescht ? `${geloescht} gelöscht` : ''].filter(Boolean).join(', ')
+    setMeldung({
+      text: fehler.length
+        ? `Teilweise fehlgeschlagen (${fehler[0]}). ${teile || 'Nichts geändert.'}`
+        : `Erledigt: ${teile}.${hatMicrosoft ? ' In Microsoft To Do erscheint das beim nächsten Abgleich (alle 3 Minuten; bei sehr vielen Aufgaben dauert es einige Durchläufe).' : ''}`,
+      fehler: fehler.length > 0,
+    })
+  }
+
+  function aktionsText(v: AufraeumVorschlag, aktion: AufraeumAktion = v.vorschlag): string {
+    if (aktion === 'verschieben') return `Auf ${deDatum(v.datum ?? naechsterWerktag(plusTage(HEUTE_AUFRAEUMEN(), 7)))} verschieben`
+    return AKTION_NAME[aktion]
+  }
+
+  const kopf =
+    scope.kind === 'bereich'
+      ? `Liste ${scope.label} — für alle Mitarbeiter sichtbar, Änderungen gelten für alle.`
+      : 'Deine eigene Liste.'
+
+  return (
+    <Modal open onClose={onClose} title="To-dos aufräumen" width="max-w-4xl" aktionen={<SecondaryButton onClick={onClose}>Schließen</SecondaryButton>}>
+      <p className="text-sm text-slate-600">
+        {kopf} Nichts wird ohne Klick geändert. „Erledigen“ hakt ab und schreibt „aufgeräumt am …“ in den aktuellen Stand — unter „Erledigt“ lässt sich alles wieder öffnen.
+        Löschen ist endgültig.
+      </p>
+      {hatMicrosoft && (
+        <p className="mt-2 rounded-lg bg-sky-50 px-3 py-2 text-xs text-sky-800">
+          Viele dieser Aufgaben kommen aus Microsoft To Do. Änderungen gehen beim nächsten Abgleich dorthin zurück: Abgehaktes wird dort abgehakt, Gelöschtes dort gelöscht.
+        </p>
+      )}
+      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+        <label className="flex items-center gap-2 text-slate-600">
+          Ohne Frist unberührt seit über
+          <select value={tageAlt} onChange={(e) => setTageAlt(Number(e.target.value))} className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm">
+            {[60, 90, 180, 365].map((n) => (
+              <option key={n} value={n}>
+                {n} Tagen
+              </option>
+            ))}
+          </select>
+        </label>
+        {hinweis !== null && (
+          <label className="flex items-center gap-2 text-slate-600">
+            <input type="checkbox" checked={hinweis} onChange={(e) => hinweisSetzen(e.target.checked)} />
+            Einmal im Monat per Telegram erinnern, wenn sich alte To-dos sammeln
+          </label>
+        )}
+      </div>
+      {meldung && <p className={`mt-3 text-sm ${meldung.fehler ? 'text-rose-600' : 'text-emerald-700'}`}>{meldung.text}</p>}
+      {ladeFehler && <p className="mt-3 text-sm text-rose-600">{ladeFehler}</p>}
+      {!todos && !ladeFehler && <p className="mt-4 text-sm text-slate-400">Prüfe die Aufgaben …</p>}
+      {todos && (
+        <p className="mt-3 text-sm font-medium text-slate-700">
+          {vorschlaege.length === 0 ? `Nichts aufzuräumen (${todos.length} offen).` : `${betroffen} von ${todos.length} offenen Aufgaben lassen sich wohl aufräumen.`}
+          {behalten.size > 0 && (
+            <button
+              className="ml-2 text-xs font-normal text-slate-400 underline hover:text-slate-600"
+              onClick={() => {
+                setBehalten(new Set())
+                schreibeBehalten(listenKey, new Set())
+              }}
+            >
+              Ausgeblendete wieder zeigen
+            </button>
+          )}
+        </p>
+      )}
+
+      <div className="mt-3 space-y-3">
+        {AUFRAEUM_ARTEN.map((art) => {
+          const teil = vorschlaege.filter((v) => v.art === art)
+          if (teil.length === 0) return null
+          const anzahl = teil.reduce((s, v) => s + v.todo_ids.filter((id) => id !== v.behalten_id).length, 0)
+          const zu = zugeklappt.has(art)
+          const gewaehlt = teil.filter((v) => auswahl.has(v.schluessel))
+          const ziel = gewaehlt.length ? gewaehlt : teil
+          const sichtbar = teil.slice(0, anzahlSichtbar[art] ?? 50)
+          let letzteListe = ''
+          return (
+            <div key={art} className="rounded-xl border border-slate-200">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 bg-slate-50 px-3 py-2">
+                <button
+                  className="flex items-center gap-1.5 text-sm font-semibold text-slate-700"
+                  onClick={() => setZugeklappt((z) => (z.has(art) ? new Set([...z].filter((x) => x !== art)) : new Set([...z, art])))}
+                >
+                  <ChevronDown size={14} className={zu ? '-rotate-90' : ''} />
+                  {ART_NAME[art]} · {anzahl}
+                </button>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    className="rounded-md px-2 py-1 text-xs text-slate-500 hover:bg-slate-100"
+                    onClick={() => setAuswahl((a) => (gewaehlt.length === teil.length ? new Set([...a].filter((k) => !teil.some((v) => v.schluessel === k))) : new Set([...a, ...teil.map((v) => v.schluessel)])))}
+                  >
+                    {gewaehlt.length === teil.length ? 'Auswahl aufheben' : 'Alle auswählen'}
+                  </button>
+                  <button
+                    disabled={laeuft}
+                    onClick={() => anwenden(ziel)}
+                    className="rounded-md bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+                  >
+                    {gewaehlt.length ? `${gewaehlt.length} ausgewählte` : 'Alle'}: Vorschlag anwenden
+                  </button>
+                  <button
+                    disabled={laeuft}
+                    onClick={() => anwenden(ziel, 'loeschen')}
+                    className="rounded-md bg-rose-50 px-2 py-1 text-xs font-medium text-rose-700 hover:bg-rose-100 disabled:opacity-50"
+                  >
+                    {gewaehlt.length ? `${gewaehlt.length} ausgewählte` : 'Alle'} löschen
+                  </button>
+                </div>
+              </div>
+              {!zu && (
+                <ul className="divide-y divide-slate-50">
+                  {sichtbar.map((v) => {
+                    const ueberschrift = mehrereListen && v.liste !== letzteListe ? v.liste_name : null
+                    letzteListe = v.liste
+                    const haupt = nachId.get(v.behalten_id ?? v.todo_ids[0])
+                    return (
+                      <li key={v.schluessel}>
+                        {ueberschrift && <p className="bg-white px-3 pt-2 text-xs font-medium text-slate-400">{ueberschrift}</p>}
+                        <div className="flex flex-col gap-2 px-3 py-2 sm:flex-row sm:items-start">
+                          <label className="flex min-w-0 flex-1 items-start gap-2">
+                            <input
+                              type="checkbox"
+                              className="mt-1"
+                              checked={auswahl.has(v.schluessel)}
+                              onChange={(e) => setAuswahl((a) => (e.target.checked ? new Set([...a, v.schluessel]) : new Set([...a].filter((k) => k !== v.schluessel))))}
+                            />
+                            <span className="min-w-0">
+                              {v.art === 'doppelt' ? (
+                                <span className="block space-y-0.5">
+                                  {v.todo_ids.map((id) => (
+                                    <span key={id} className="block break-words text-sm text-slate-800">
+                                      {nachId.get(id)?.aufgabe}
+                                      {id === v.behalten_id && <span className="ml-1.5 rounded bg-emerald-50 px-1.5 py-0.5 text-[11px] font-medium text-emerald-700">bleibt</span>}
+                                      {nachId.get(id)?.erledigen_bis && <span className="ml-1.5 text-xs text-slate-400">bis {fmtDate(nachId.get(id)!.erledigen_bis!)}</span>}
+                                    </span>
+                                  ))}
+                                </span>
+                              ) : (
+                                <span className="block break-words text-sm text-slate-800">{haupt?.aufgabe}</span>
+                              )}
+                              <span className="block text-xs text-slate-400">{v.grund}</span>
+                            </span>
+                          </label>
+                          <div className="flex flex-shrink-0 flex-wrap items-center gap-1.5 sm:justify-end">
+                            <button
+                              disabled={laeuft}
+                              onClick={() => anwenden([v])}
+                              className="inline-flex items-center gap-1 rounded-md bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+                            >
+                              {v.vorschlag === 'zusammenfuehren' ? <Merge size={12} /> : v.vorschlag === 'verschieben' ? <CalendarClock size={12} /> : <Check size={12} />}
+                              {aktionsText(v)}
+                            </button>
+                            {v.vorschlag === 'erledigen' && (
+                              <button
+                                disabled={laeuft}
+                                onClick={() => anwenden([v], 'verschieben')}
+                                title="Frist in einer Woche setzen statt abhaken"
+                                className="inline-flex items-center gap-1 rounded-md bg-slate-100 px-2 py-1 text-xs text-slate-600 hover:bg-slate-200 disabled:opacity-50"
+                              >
+                                <CalendarClock size={12} /> {aktionsText(v, 'verschieben')}
+                              </button>
+                            )}
+                            <button
+                              onClick={() => behaltenSetzen(v)}
+                              title="Behalten: Vorschlag ausblenden (in diesem Browser)"
+                              className="inline-flex items-center gap-1 rounded-md bg-slate-100 px-2 py-1 text-xs text-slate-600 hover:bg-slate-200"
+                            >
+                              <EyeOff size={12} /> Behalten
+                            </button>
+                            <button
+                              disabled={laeuft}
+                              onClick={() => anwenden([v], 'loeschen')}
+                              title={v.art === 'doppelt' ? 'Die anderen löschen (eine bleibt)' : 'Endgültig löschen'}
+                              className="rounded-md bg-rose-50 p-1.5 text-rose-600 hover:bg-rose-100 disabled:opacity-50"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
+                        </div>
+                      </li>
+                    )
+                  })}
+                  {teil.length > sichtbar.length && (
+                    <li className="px-3 py-2">
+                      <button className="text-xs text-accent-700 hover:underline" onClick={() => setAnzahlSichtbar((a) => ({ ...a, [art]: (a[art] ?? 50) + 100 }))}>
+                        Weitere {Math.min(100, teil.length - sichtbar.length)} von {teil.length - sichtbar.length} zeigen
+                      </button>
+                    </li>
+                  )}
+                </ul>
+              )}
+            </div>
+          )
+        })}
       </div>
     </Modal>
   )

@@ -1120,6 +1120,20 @@ export type HydratedData = {
 // Lädt den aktuellen, geteilten Stand beim Start (und kann für ein manuelles "Aktualisieren" erneut
 // aufgerufen werden). Es gibt noch keine Supabase-Realtime-Anbindung — Änderungen eines anderen
 // Geräts/Mitarbeiters werden beim nächsten Neuladen der Seite sichtbar, nicht live.
+/** Alle To-dos seitenweise: Die Datenbank liefert höchstens 1000 Zeilen je Abfrage, Hasan allein hat über 2.600
+ *  (aus Microsoft To Do). Ohne Seiten fehlte in seiner Liste mehr als die Hälfte (22.11.2026). */
+async function alleTodoZeilen(): Promise<{ data: unknown[] | null; error: { message: string } | null }> {
+  if (!supabase) return { data: [], error: null }
+  const alle: unknown[] = []
+  for (let von = 0; von < 50_000; von += 1000) {
+    const { data, error } = await supabase.from('todos').select('*').order('id', { ascending: true }).range(von, von + 999)
+    if (error) return { data: null, error }
+    alle.push(...(data ?? []))
+    if (!data || data.length < 1000) break
+  }
+  return { data: alle, error: null }
+}
+
 export async function hydrateFromSupabase(): Promise<HydratedData | null> {
   if (!supabase) return null
   const [
@@ -1161,7 +1175,7 @@ export async function hydrateFromSupabase(): Promise<HydratedData | null> {
     supabase.from('mail_vorlagen').select('*'),
     supabase.from('notizen').select('*'),
     supabase.from('abwesenheiten').select('*'),
-    supabase.from('todos').select('*'),
+    alleTodoZeilen(),
     supabase.from('todo_freigaben').select('*'),
     supabase.from('verbindlichkeiten').select('*'),
     supabase.from('mitarbeiter').select('name').eq('aktiv', true).order('name'),

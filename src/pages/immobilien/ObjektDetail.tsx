@@ -33,7 +33,9 @@ import { ObjektExposeErstellen } from '../../components/ObjektExposeErstellen'
 import { ObjektBilderVerwalten } from '../../components/ObjektBilderVerwalten'
 import { ObjektAnGesucheSenden } from '../../components/ObjektAnGesucheSenden'
 import { ObjektPassendeGesuche } from '../../components/ObjektPassendeGesuche'
+import { PartnerAuswahl } from '../../components/PartnerAuswahl'
 import { immoPfade, immoObjekte, privateGesuche } from './privatModus'
+import { ObjektWasFehlt } from '../../components/ObjektWasFehlt'
 
 const TABS = [
   { id: 'uebersicht', label: 'Übersicht' },
@@ -228,6 +230,8 @@ export function ObjektDetail({ privat }: { privat?: boolean } = {}) {
         </div>
       </Card>
 
+      {/* Was fehlt noch in der Akte (Kern: supabase/functions/_shared/objektVollstaendigkeit.ts) — springt in den richtigen Reiter. */}
+      <ObjektWasFehlt objekt={objekt} privat={privat} />
       <div className="mb-4 flex gap-1 overflow-x-auto border-b border-slate-200">
         {(privat ? TABS_PRIVAT : TABS).map((t) => (
           <button
@@ -329,6 +333,11 @@ export function ObjektDetail({ privat }: { privat?: boolean } = {}) {
             </ul>
           </Card>
 
+          {!privat && (
+            <Card className="p-5 lg:col-span-3">
+              <PartnerAuswahl objektId={objekt.id} standardRolle="angeboten" titel="Angeboten von / Partner" />
+            </Card>
+          )}
           <ExposeSection objekt={objekt} />
         </div>
       )}

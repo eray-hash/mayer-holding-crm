@@ -9,6 +9,7 @@ import { supabase } from '../../lib/supabaseClient'
 import { brauchtDateiLink, holeAnhangUrl } from '../../lib/emailGateway'
 import { ladeKundenDokumentHoch, erzeugeKundenDownloadUrl } from '../../lib/kundenDokumenteStorage'
 import { KontoauszugAbgleichKnopf } from '../../components/rechnungen/KontoauszugAbgleich'
+import { SteuerberaterExportKnopf } from '../../components/rechnungen/SteuerberaterExport'
 import type { Verbindlichkeit, VerbindlichkeitStatus } from '../../types'
 
 // Gegenstück zur Rechnungen-Seite: Geld, das Mayer Holding selbst schuldet (Lieferanten-/
@@ -127,6 +128,7 @@ export function Verbindlichkeiten() {
         </div>
         <div className="flex flex-wrap gap-2">
           <KontoauszugAbgleichKnopf />
+          <SteuerberaterExportKnopf />
           {!nutzer.nurLesen && <PrimaryButton onClick={() => setNeu(true)}><Plus size={15} /> Neue Verbindlichkeit</PrimaryButton>}
         </div>
       </div>

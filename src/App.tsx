@@ -58,11 +58,13 @@ import { PrivatGesuche, PrivatImmoKundeDetail, PrivatImmoKundenListe, PrivatObje
 import { Kalender } from './pages/kalender/Kalender'
 import { Auswertungen } from './pages/auswertungen/Auswertungen'
 import { Umsatzvorschau } from './pages/auswertungen/Umsatzvorschau'
+import { PartnerSeite } from './pages/partner/Partner'
 import { PostfachEinrichtenHinweis } from './components/PostfachEinstellungen'
 import { ToDoListe, BereichToDoListe } from './pages/todo/ToDoListe'
 import { HeuteScreen } from './pages/heute/HeuteScreen'
 import { Postfach } from './pages/postfach/Postfach'
 import { UngeklaerteEingaenge } from './pages/eingang/UngeklaerteEingaenge'
+import { Ablegen } from './pages/ablegen/Ablegen'
 import { Kampagnen } from './pages/kampagnen/Kampagnen'
 import { MeinProfil } from './pages/profil/MeinProfil'
 import { MitarbeiterVerwalten } from './pages/admin/MitarbeiterVerwalten'
@@ -112,12 +114,15 @@ function AdminRoutesContent() {
         <Route path="/heute" element={<HeuteScreen />} />
         <Route path="/postfach" element={<Postfach />} />
         <Route path="/eingaenge" element={<UngeklaerteEingaenge />} />
+        <Route path="/ablegen" element={<Ablegen />} />
         <Route path="/kalender" element={<Kalender />} />
         <Route path="/aufgaben" element={<AufgabenUebersicht />} />
         <Route path="/superuser" element={<SuperuserSeite />} />
         {/* Für alle: Was jemand sieht, begrenzt die Datenbank (Bereichsrechte) schon im App-Zustand. */}
         <Route path="/auswertungen" element={<Auswertungen />} />
         <Route path="/auswertungen/umsatz" element={<Umsatzvorschau />} />
+        {/* Für alle: Partner sieht jeder aktive Mitarbeiter, Zuordnungen nur mit Rechten an Akte/Objekt (Datenbank). */}
+        <Route path="/partner" element={<PartnerSeite />} />
         {/* Für alle: Sichtbarkeit regelt die Datenbank (Bereichsrechte, private Einträge nur für den Besitzer). */}
         <Route path="/kostenvoranschlaege" element={<Kostenvoranschlaege />} />
         <Route path="/checkliste" element={<Checkliste />} />

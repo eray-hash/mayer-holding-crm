@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { setzeOffeneMail } from '../../lib/assistentKontext'
 import { Link, useNavigate } from 'react-router-dom'
-import { Inbox, Send, RefreshCw, UserPlus, Check, X, AlertTriangle, Plus, Reply, ListPlus, Search, Sparkles, Megaphone, Building2, ArrowLeft } from 'lucide-react'
+import { Inbox, Send, RefreshCw, UserPlus, Check, X, AlertTriangle, Plus, Reply, ListPlus, Search, Sparkles, Megaphone, Building2, ArrowLeft, Lightbulb } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { useAuth } from '../../context/AuthContext'
 import { isEmailInboxDbConfigured, fetchStoredEmails, searchStoredEmails, assignMail, ignoreMail } from '../../lib/emailInboxDb'
@@ -9,6 +9,7 @@ import { isSentEmailsDbConfigured, fetchSentEmails, searchSentEmails } from '../
 import { isLeadsDbConfigured, fetchOffeneLeads, setLeadStatus } from '../../lib/leadsDb'
 import { isEmailGatewayConfigured, classifyNewLeads } from '../../lib/emailGateway'
 import { ordneMailObjektZu } from '../../lib/objektMail'
+import { ladeMailVorschlaege, setzeVorschlagStand, type MailMitVorschlag, type VorschlagKandidat } from '../../lib/mailVorschlaege'
 import { matchKundeByEmail, suggestKunde } from '../../lib/matchKunde'
 import { KUNDEN_BEREICHE, kundeBereichLabel } from '../../data/kundenBereiche'
 import { useBereichsRechte } from '../../lib/bereichsRechte'
@@ -21,7 +22,7 @@ import { MailAnhangLink } from '../../components/MailAnhangLink'
 import { PrimaryButton, SecondaryButton, EmptyState, inputClass } from '../../components/ui'
 import type { EingegangeneEmail, GesendeteEmail, KundeBereich, VorgeschlagenerLead } from '../../types'
 
-type Ordner = 'posteingang' | 'gesendet' | 'leads'
+type Ordner = 'posteingang' | 'gesendet' | 'leads' | 'vorschlaege'
 
 function neuerKunde(lead: VorgeschlagenerLead, bereich: KundeBereich) {
   return {
@@ -71,6 +72,10 @@ export function Postfach() {
   const [leadBereichWahl, setLeadBereichWahl] = useState<Record<string, KundeBereich>>({})
   const [klassifiziereNeueLeads, setKlassifiziereNeueLeads] = useState(false)
 
+  // Zuordnungs-Vorschläge der Post-Zuordnung (Server vermutet eine Akte, ist aber nicht sicher).
+  const [vorschlaege, setVorschlaege] = useState<MailMitVorschlag[]>([])
+  const [vorschlaegeLoading, setVorschlaegeLoading] = useState(false)
+
   const [composeOpen, setComposeOpen] = useState(false)
   const [vorlagenOpen, setVorlagenOpen] = useState(false)
   const [antwortAn, setAntwortAn] = useState<{ to: string; subject: string; postfachId?: string } | null>(null)
@@ -108,6 +113,41 @@ export function Postfach() {
     }
   }
 
+  async function ladeVorschlaege() {
+    setVorschlaegeLoading(true)
+    try {
+      const liste = await ladeMailVorschlaege()
+      // In den Posteingang-Stand übernehmen, damit „Zuordnen“ dieselbe Zuordnung nutzt wie im Posteingang.
+      if (liste.length > 0) dispatch({ type: 'ADD_EINGEGANGENE_EMAILS', emails: liste.map((v) => ({ id: uid('mail'), ...v.mail })) })
+      setVorschlaege(liste)
+    } catch (err) {
+      // Still: Der Posteingang soll nicht wegen der Vorschläge eine Fehlermeldung zeigen.
+      console.error('Vorschläge konnten nicht geladen werden:', err)
+    } finally {
+      setVorschlaegeLoading(false)
+    }
+  }
+
+  // Nur Akten anbieten, die der Mitarbeiter sehen darf (die anderen sind im Stand gar nicht geladen).
+  function sichtbareKandidaten(v: MailMitVorschlag): VorschlagKandidat[] {
+    return v.kandidaten.filter((k) => KUNDEN_BEREICHE.find((b) => b.id === k.bereich)?.get(state).some((x) => x.id === k.kundeId))
+  }
+
+  async function vorschlagZuordnen(v: MailMitVorschlag, k: VorschlagKandidat) {
+    const imStand = state.eingegangeneEmails.find((e) => e.messageId === v.mail.messageId)
+    if (!imStand) return
+    zuweisen(imStand.id, k.bereich, k.kundeId)
+    setVorschlaege((liste) => liste.filter((x) => x.mail.messageId !== v.mail.messageId))
+    setSelectedId(null)
+    await setzeVorschlagStand(v.mail.messageId, 'uebernommen', session?.user.email ?? '').catch((err) => console.error('Vorschlag konnte nicht abgeschlossen werden:', err))
+  }
+
+  async function vorschlagVerwerfen(v: MailMitVorschlag) {
+    setVorschlaege((liste) => liste.filter((x) => x.mail.messageId !== v.mail.messageId))
+    setSelectedId(null)
+    await setzeVorschlagStand(v.mail.messageId, 'verworfen', session?.user.email ?? '').catch((err) => console.error('Vorschlag konnte nicht verworfen werden:', err))
+  }
+
   async function ladeGesendet(l = gesendetLimit) {
     setGesendetLoading(true)
     setError('')
@@ -121,7 +161,10 @@ export function Postfach() {
   }
 
   useEffect(() => {
-    if (isEmailInboxDbConfigured) ladePosteingang(limit)
+    if (isEmailInboxDbConfigured) {
+      ladePosteingang(limit)
+      ladeVorschlaege()
+    }
     if (isEmailGatewayConfigured && isLeadsDbConfigured) {
       setKlassifiziereNeueLeads(true)
       classifyNewLeads()
@@ -139,6 +182,7 @@ export function Postfach() {
   useEffect(() => {
     if (ordner === 'gesendet' && isSentEmailsDbConfigured && gesendet.length === 0) ladeGesendet(gesendetLimit)
     if (ordner === 'leads' && isLeadsDbConfigured && leads.length === 0) ladeLeads()
+    if (ordner === 'vorschlaege' && isEmailInboxDbConfigured) ladeVorschlaege()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ordner])
 
@@ -262,8 +306,9 @@ export function Postfach() {
   }, [offeneMailKennung])
   const selectedGesendet = ordner === 'gesendet' ? gesendet.find((m) => m.id === selectedId) : undefined
   const selectedLead = ordner === 'leads' ? leads.find((l) => l.id === selectedId) : undefined
+  const selectedVorschlag = ordner === 'vorschlaege' ? vorschlaege.find((v) => v.mail.messageId === selectedId) : undefined
 
-  const dbConfigured = ordner === 'posteingang' ? isEmailInboxDbConfigured : ordner === 'gesendet' ? isSentEmailsDbConfigured : isLeadsDbConfigured
+  const dbConfigured = ordner === 'posteingang' || ordner === 'vorschlaege' ? isEmailInboxDbConfigured : ordner === 'gesendet' ? isSentEmailsDbConfigured : isLeadsDbConfigured
 
   return (
     <div className="flex flex-col gap-4 xl:h-[calc(100vh-7.5rem)] xl:flex-row">
@@ -303,6 +348,16 @@ export function Postfach() {
             <Sparkles size={15} /> Neue Leads
             {leads.length > 0 && <span className="ml-auto rounded-full bg-rose-500 px-1.5 text-xs font-semibold text-white">{leads.length}</span>}
           </button>
+          <button
+            onClick={() => { setOrdner('vorschlaege'); setSelectedId(null) }}
+            className={`flex flex-shrink-0 items-center gap-2 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium xl:w-full ${
+              ordner === 'vorschlaege' ? 'bg-accent-50 text-accent-700' : 'text-slate-600 hover:bg-slate-50'
+            }`}
+            title="Mails, bei denen eine Akte vermutet wird — mit einem Klick zuordnen oder verwerfen"
+          >
+            <Lightbulb size={15} /> Vorschläge
+            {vorschlaege.length > 0 && <span className="ml-auto rounded-full bg-amber-500 px-1.5 text-xs font-semibold text-white">{vorschlaege.length}</span>}
+          </button>
           {klassifiziereNeueLeads && (
             <p className="px-3 pt-1 text-[11px] text-slate-400">Neue Absender werden im Hintergrund geprüft …</p>
           )}
@@ -337,18 +392,18 @@ export function Postfach() {
           {/* Mail-Liste */}
           <div className={`${selectedId ? 'hidden xl:flex' : 'flex'} flex-shrink-0 flex-col rounded-xl border border-slate-200 bg-white xl:w-80`}>
             <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2">
-              <span className="text-xs font-medium text-slate-500">{ordner === 'posteingang' ? 'Posteingang' : ordner === 'gesendet' ? 'Gesendet' : 'Neue Leads'}</span>
+              <span className="text-xs font-medium text-slate-500">{ordner === 'posteingang' ? 'Posteingang' : ordner === 'gesendet' ? 'Gesendet' : ordner === 'vorschlaege' ? 'Vorschläge zur Zuordnung' : 'Neue Leads'}</span>
               <button
-                onClick={() => (ordner === 'posteingang' ? ladePosteingang(limit) : ordner === 'gesendet' ? ladeGesendet(gesendetLimit) : ladeLeads())}
-                disabled={loading || gesendetLoading || leadsLoading}
+                onClick={() => (ordner === 'posteingang' ? ladePosteingang(limit) : ordner === 'gesendet' ? ladeGesendet(gesendetLimit) : ordner === 'vorschlaege' ? ladeVorschlaege() : ladeLeads())}
+                disabled={loading || gesendetLoading || leadsLoading || vorschlaegeLoading}
                 className="rounded-md p-1 text-slate-400 hover:bg-slate-50 hover:text-slate-600"
                 title="Aktualisieren"
               >
-                <RefreshCw size={13} className={loading || gesendetLoading || leadsLoading ? 'animate-spin' : ''} />
+                <RefreshCw size={13} className={loading || gesendetLoading || leadsLoading || vorschlaegeLoading ? 'animate-spin' : ''} />
               </button>
             </div>
 
-            {ordner !== 'leads' && (
+            {(ordner === 'posteingang' || ordner === 'gesendet') && (
               <div className="relative border-b border-slate-100 p-2">
                 <Search size={13} className="pointer-events-none absolute left-5 top-1/2 -translate-y-1/2 text-slate-400" />
                 <input
@@ -416,6 +471,30 @@ export function Postfach() {
                   ))
                 ))}
 
+              {ordner === 'vorschlaege' &&
+                (vorschlaege.length === 0 ? (
+                  <EmptyState text={vorschlaegeLoading ? 'Vorschläge werden geladen …' : 'Keine offenen Vorschläge.'} />
+                ) : (
+                  vorschlaege.map((v) => (
+                    <button
+                      key={v.mail.messageId}
+                      onClick={() => setSelectedId(v.mail.messageId)}
+                      className={`block w-full border-b border-slate-50 px-3 py-2.5 text-left ${selectedId === v.mail.messageId ? 'bg-accent-50' : 'hover:bg-slate-50'}`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="truncate text-sm font-medium text-slate-800">{v.mail.vonName}</span>
+                        <span className="flex-shrink-0 text-[11px] text-slate-400">{fmtDateTime(v.mail.datum).split(',')[0]}</span>
+                      </div>
+                      <div className="truncate text-xs text-slate-600">{v.mail.betreff}</div>
+                      {sichtbareKandidaten(v)[0] && (
+                        <div className="mt-1 flex items-center gap-1 truncate text-[11px] font-medium text-amber-700">
+                          <Lightbulb size={11} /> {sichtbareKandidaten(v)[0].name}
+                        </div>
+                      )}
+                    </button>
+                  ))
+                ))}
+
               {ordner === 'leads' &&
                 (leads.length === 0 ? (
                   <EmptyState text="Keine offenen Lead-Vorschläge." />
@@ -437,7 +516,7 @@ export function Postfach() {
                 ))}
             </div>
 
-            {ordner !== 'leads' && !query.trim() && (
+            {(ordner === 'posteingang' || ordner === 'gesendet') && !query.trim() && (
               <div className="border-t border-slate-100 p-2">
                 <SecondaryButton
                   onClick={() => (ordner === 'posteingang' ? mehrLadenPosteingang() : mehrLadenGesendet())}
@@ -528,7 +607,16 @@ export function Postfach() {
               />
             )}
 
-            {!selectedMail && !selectedGesendet && !selectedLead && <EmptyState text="Wähle links einen Eintrag aus." />}
+            {selectedVorschlag && (
+              <VorschlagDetail
+                vorschlag={selectedVorschlag}
+                kandidaten={sichtbareKandidaten(selectedVorschlag)}
+                onZuordnen={(k) => vorschlagZuordnen(selectedVorschlag, k)}
+                onVerwerfen={() => vorschlagVerwerfen(selectedVorschlag)}
+              />
+            )}
+
+            {!selectedMail && !selectedGesendet && !selectedLead && !selectedVorschlag && <EmptyState text="Wähle links einen Eintrag aus." />}
           </div>
         </>
       )}
@@ -544,6 +632,64 @@ export function Postfach() {
         }}
       />
       <MailVorlagenModal open={vorlagenOpen} onClose={() => setVorlagenOpen(false)} />
+    </div>
+  )
+}
+
+function VorschlagDetail({
+  vorschlag,
+  kandidaten,
+  onZuordnen,
+  onVerwerfen,
+}: {
+  vorschlag: MailMitVorschlag
+  kandidaten: VorschlagKandidat[]
+  onZuordnen: (k: VorschlagKandidat) => void
+  onVerwerfen: () => void
+}) {
+  const { mail } = vorschlag
+  return (
+    <div>
+      <div className="mb-4">
+        <h2 className="text-base font-semibold text-slate-800">{mail.betreff}</h2>
+        <p className="mt-1 text-xs text-slate-500">
+          Von: {mail.vonName} ({mail.von}) · {fmtDateTime(mail.datum)}
+        </p>
+      </div>
+      <p className="mb-4 whitespace-pre-wrap text-sm text-slate-700">{mail.ausschnitt || '(kein Textausschnitt verfügbar)'}</p>
+      {mail.anhaenge && mail.anhaenge.length > 0 && (
+        <div className="mb-4 space-y-1.5">
+          <p className="text-xs font-semibold text-slate-500">Anhänge</p>
+          {mail.anhaenge.map((a) => (
+            <MailAnhangLink key={a.url} anhang={a} />
+          ))}
+        </div>
+      )}
+      <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+        <p className="mb-2 text-xs font-semibold text-amber-800">Gehört diese Mail zu einer dieser Akten?</p>
+        {kandidaten.length === 0 ? (
+          <p className="text-xs text-amber-800">Die vermutete Akte liegt in einem Bereich, den du nicht siehst.</p>
+        ) : (
+          <div className="space-y-2">
+            {kandidaten.map((k) => (
+              <div key={k.kundeId} className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-white px-3 py-2">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-medium text-slate-800">{k.name}</div>
+                  <div className="text-[11px] text-slate-500">{kundeBereichLabel(k.bereich)} · {k.grund}</div>
+                </div>
+                <PrimaryButton onClick={() => onZuordnen(k)} className="flex-shrink-0 text-xs">
+                  <Check size={13} /> Zuordnen
+                </PrimaryButton>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="mt-3">
+          <SecondaryButton onClick={onVerwerfen} className="text-xs">
+            <X size={13} /> Verwerfen
+          </SecondaryButton>
+        </div>
+      </div>
     </div>
   )
 }

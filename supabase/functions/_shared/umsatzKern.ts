@@ -24,6 +24,11 @@
 //       Chance zählt ein offenes Angebot mit 0 € — wie in der Wochenbesprechung („ohne Chance zählt nichts“);
 //     - erwarteter Monat = Datum des Kostenvoranschlags + Vorlauf (ANGEBOT_VORLAUF_MONATE: angenommen
 //       1 Monat, offen 2 Monate), frühestens der laufende Monat. Ohne Datum gilt das Anlagedatum.
+// (c2) Geschätzter Umsatz einer Akte (seit 22.11.2026, Chance-Vorschläge in der Wochenbesprechung): Hat
+//     eine laufende Akte eine Chance und einen erwarteten Umsatz (auftrag_chance.umsatzNetto), aber keinen
+//     zählenden Kostenvoranschlag mit Betrag und keine Rechnung, zählt die Schätzung wie ein offenes
+//     Angebot: Umsatz × Chance im erwarteten Monat (auftrag_chance.monat, sonst laufender Monat + 2),
+//     frühestens jetzt. Nicht bei Immobilien-Kunden (die Provision zählt am Objekt).
 // (d) Immobilien-Provision je Objekt = Provision in Euro × Anteil nach Stand des Objekts
 //     (OBJEKT_STUFEN, z. B. reserviert 50 %, Notartermin 80 %, beurkundet 95 %, Kaufpreis gezahlt 100 %).
 //     Erwarteter Monat = laufender Monat + Vorlauf der Stufe. Ab „Verkauft“ zählt ein Objekt hier nicht
@@ -146,6 +151,10 @@ export type AkteEingabe = {
   /** Chance in Prozent (Projekt-Checkliste). */
   chance?: number
   chanceBestaetigt?: boolean
+  /** Geschätzter Umsatz netto (auftrag_chance.umsatzNetto), zählt nur ohne Kostenvoranschlag mit Betrag und ohne Rechnung. */
+  erwartetNetto?: number
+  /** Erwarteter Monat JJJJ-MM (auftrag_chance.monat). */
+  erwartetMonat?: string
 }
 
 export type ObjektEingabe = {
@@ -521,10 +530,25 @@ export function berechneUmsatzvorschau(e: UmsatzEingabe, optionen: UmsatzOptione
       verweis: kv.kundeId ? { typ: 'akte', id: kv.kundeId, bereich: akte?.bereich } : { typ: 'angebot', id: kv.id },
     })
   }
+  // (c2) Geschätzter Umsatz der Akten ohne Kostenvoranschlag mit Betrag
+  const aktenMitRechnung = new Set(e.rechnungen.map((r) => r.kundeId).filter(Boolean) as string[])
   for (const a of e.akten) {
     const b = bereichKennung(a.bereich)
     if (b === 'privat' || !darf(b) || istAkteAbgeschlossen(a.status)) continue
-    if (a.chance !== undefined && a.chance !== null && Number(a.chance) > 0 && !aktenMitBetrag.has(a.id)) hinweise.aktenMitChanceOhneAngebot++
+    const hatChance = a.chance !== undefined && a.chance !== null && Number.isFinite(Number(a.chance))
+    const geschaetzt = Number(a.erwartetNetto)
+    if (hatChance && geschaetzt > 0 && b !== 'immobilien' && !aktenMitBetrag.has(a.id) && !aktenMitRechnung.has(a.id)) {
+      const prozent = Math.max(0, Math.min(100, Number(a.chance)))
+      const monat = maxMonat(monatVon(a.erwartetMonat) ?? plusMonate(aktuell, ANGEBOT_VORLAUF_MONATE.offen), aktuell)
+      posten.push({
+        art: 'angebot', id: `schaetzung:${a.id}`, titel: a.name || 'ohne Namen', zusatz: 'Schätzung (ohne Kostenvoranschlag)', bereich: b, monat,
+        betrag: runde2(geschaetzt), anteil: prozent / 100, gewichtet: runde2((geschaetzt * prozent) / 100),
+        warum: `${euro(geschaetzt)} geschätzt, Chance ${prozentText(prozent)}${a.chanceBestaetigt === false ? ' (Vorschlag, noch nicht bestätigt)' : ''} → ${monatName(monat)}`,
+        verweis: { typ: 'akte', id: a.id, bereich: a.bereich },
+      })
+      continue
+    }
+    if (hatChance && Number(a.chance) > 0 && !aktenMitBetrag.has(a.id)) hinweise.aktenMitChanceOhneAngebot++
   }
 
   // (d) Immobilien-Provision
@@ -675,6 +699,6 @@ export function kurzbericht(v: UmsatzVorschau, art: ZeitraumArt, bereich?: strin
   if (h.objekteOhnePreis && (!bereich || bereich === 'immobilien')) luecken.push(`${h.objekteOhnePreis} ${h.objekteOhnePreis === 1 ? 'Objekt' : 'Objekte'} ohne Kaufpreis`)
   if (h.objekteMitAnnahme && (!bereich || bereich === 'immobilien')) luecken.push(`bei ${h.objekteMitAnnahme} ${h.objekteMitAnnahme === 1 ? 'Objekt' : 'Objekten'} ist keine Provision hinterlegt, gerechnet mit 3 % netto`)
   if (luecken.length) zeilen.push(`Lücken: ${luecken.join('; ')}.`)
-  zeilen.push('Regeln: Rechnungen zählen voll im Rechnungsmonat; Angebote mit der Chance der Akte (angenommen = 100 %) im Monat Angebotsdatum + 2 (angenommen + 1), frühestens jetzt; Provision = Kaufpreis × Satz × Anteil nach Stand (reserviert 50 %, Notartermin 80 %, beurkundet 95 %, Kaufpreis gezahlt 100 %).')
+  zeilen.push('Regeln: Rechnungen zählen voll im Rechnungsmonat; Angebote mit der Chance der Akte (angenommen = 100 %) im Monat Angebotsdatum + 2 (angenommen + 1), frühestens jetzt; Akten ohne Kostenvoranschlag mit ihrem geschätzten Umsatz × Chance im erwarteten Monat; Provision = Kaufpreis × Satz × Anteil nach Stand (reserviert 50 %, Notartermin 80 %, beurkundet 95 %, Kaufpreis gezahlt 100 %).')
   return zeilen.join('\n')
 }

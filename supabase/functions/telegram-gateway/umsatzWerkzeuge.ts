@@ -58,7 +58,7 @@ export function bereichAusEingabe(roh: unknown): string | undefined {
   return undefined
 }
 
-type KundeZeile = { id: string; bereich: string | null; firma: string | null; ansprechpartner: string | null; status: string | null; auftrag_chance: { prozent?: number; bestaetigt?: boolean } | null; verantwortlich_email: string | null }
+type KundeZeile = { id: string; bereich: string | null; firma: string | null; ansprechpartner: string | null; status: string | null; auftrag_chance: { prozent?: number; bestaetigt?: boolean; umsatzNetto?: number; monat?: string } | null; verantwortlich_email: string | null }
 
 function akteName(a: Pick<KundeZeile, 'firma' | 'ansprechpartner'>): string {
   const f = String(a.firma ?? '').trim()
@@ -89,6 +89,8 @@ export async function ladeUmsatzEingabe(supabase: Supa, m: RechteMitarbeiter, he
     status: String(k.status ?? ''),
     chance: k.auftrag_chance && Number.isFinite(Number(k.auftrag_chance.prozent)) ? Number(k.auftrag_chance.prozent) : undefined,
     chanceBestaetigt: k.auftrag_chance?.bestaetigt,
+    erwartetNetto: Number(k.auftrag_chance?.umsatzNetto) > 0 ? Number(k.auftrag_chance!.umsatzNetto) : undefined,
+    erwartetMonat: typeof k.auftrag_chance?.monat === 'string' ? k.auftrag_chance.monat : undefined,
   }))
 
   // Kostenvoranschläge: wie die Zeilenregel — mit Bereich nur freigegeben, ohne Bereich für alle, private nie.

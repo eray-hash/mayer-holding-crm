@@ -320,7 +320,7 @@ export function Umsatzvorschau() {
           <ul className="mt-2 list-disc space-y-0.5 pl-5 text-amber-800">
             {h.angeboteOhneChance > 0 && <li>{h.angeboteOhneChance} offene {h.angeboteOhneChance === 1 ? 'Angebot hat' : 'Angebote haben'} keine Chance in der Akte und {h.angeboteOhneChance === 1 ? 'zählt' : 'zählen'} deshalb nicht mit (in der Projekt-Checkliste nachtragen).</li>}
             {h.angeboteOhneBetrag > 0 && <li>{h.angeboteOhneBetrag} {h.angeboteOhneBetrag === 1 ? 'Angebot hat' : 'Angebote haben'} keinen Betrag.</li>}
-            {h.aktenMitChanceOhneAngebot > 0 && <li>{h.aktenMitChanceOhneAngebot} laufende {h.aktenMitChanceOhneAngebot === 1 ? 'Akte hat' : 'Akten haben'} eine Chance, aber keinen Kostenvoranschlag mit Betrag — ohne Betrag gibt es nichts zu erwarten.</li>}
+            {h.aktenMitChanceOhneAngebot > 0 && <li>{h.aktenMitChanceOhneAngebot} laufende {h.aktenMitChanceOhneAngebot === 1 ? 'Akte hat' : 'Akten haben'} eine Chance, aber weder Kostenvoranschlag mit Betrag noch geschätzten Umsatz — in der Wochenbesprechung den Vorschlag übernehmen oder einen Umsatz eintragen.</li>}
             {darfImmo && h.objekteOhnePreis > 0 && <li>{h.objekteOhnePreis} {h.objekteOhnePreis === 1 ? 'Objekt' : 'Objekte'} ab „Reserviert“ ohne Kaufpreis.</li>}
             {darfImmo && h.objekteMitAnnahme > 0 && <li>Bei {h.objekteMitAnnahme} {h.objekteMitAnnahme === 1 ? 'Objekt' : 'Objekten'} ist keine Provision hinterlegt; gerechnet mit {STANDARD_PROVISION.prozentNetto} % netto.</li>}
           </ul>
