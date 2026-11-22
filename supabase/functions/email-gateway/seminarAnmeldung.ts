@@ -9,6 +9,8 @@
 // Die Zustimmung (Teilnahmebedingungen, Datenschutz) wird mit Zeitpunkt, Gerät und genauem Wortlaut gespeichert.
 // Alles läuft mit dem Dienstschlüssel; der Link ist der einzige Schlüssel.
 
+import { alleZeilen } from '../_shared/alleZeilen.ts'
+
 export const BEDINGUNGEN_VORLAGE = 'vl_akademie_seminar_bedingungen'
 export const DATENSCHUTZ_TEXT =
   'Ich habe die Datenschutzhinweise gelesen und bin einverstanden, dass meine Angaben zur Bearbeitung meiner Anmeldung gespeichert werden.'
@@ -164,7 +166,7 @@ export async function seminarAnmelden(
   let kundeId: string | null = null
   let akteNeu = false
   let akteFehler = ''
-  const { data: kunden } = await admin.from('kunden').select('id, email').eq('bereich', 'akademie')
+  const { data: kunden } = await alleZeilen(() => admin.from('kunden').select('id, email').eq('bereich', 'akademie'))
   // deno-lint-ignore no-explicit-any
   const vorhanden = ((kunden ?? []) as any[]).find((k) => String(k.email ?? '').trim().toLowerCase() === email)
   if (vorhanden) kundeId = String(vorhanden.id)

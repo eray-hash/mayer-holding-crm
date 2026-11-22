@@ -29,6 +29,7 @@
 // - Wirft nie: Fehler stehen im Protokoll, die nächste Auswertung holt den Zeitraum nach.
 import { kiAufruf, setzeAnlass } from '../_shared/kiVerbrauch.ts'
 import { entschaerfe, kuerze, merkeWunsch, normTitel, OFFENE_STATUS, type WunschZeile } from '../_shared/wuensche.ts'
+import { alleZeilen } from '../_shared/alleZeilen.ts'
 
 // deno-lint-ignore no-explicit-any
 type Db = any
@@ -322,7 +323,7 @@ export type Problem = { titel: string; beschreibung: string; anzahl: number }
 
 /** Namen von Kunden und Firmen — nur, um sie aus Texten herauszuhalten. */
 async function ladeNamen(admin: Db): Promise<string[]> {
-  const { data } = await admin.from('kunden').select('firma, ansprechpartner')
+  const { data } = await alleZeilen(() => admin.from('kunden').select('firma, ansprechpartner'))
   const namen: string[] = []
   for (const k of (data ?? []) as { firma?: string | null; ansprechpartner?: string | null }[]) {
     for (const n of [k.firma, k.ansprechpartner]) if (typeof n === 'string' && n.trim()) namen.push(n.trim())

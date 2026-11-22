@@ -11,6 +11,7 @@
 
 import { alsIso, LAGE_TEXT, OBJEKT_ABGESCHLOSSEN, nachPerson, ordneAufgabenZu, ordneZu, personenNamen, type RohAufgabe } from '../_shared/aufgabenKern.ts'
 import { darfAkte, darfBereich, darfObjekt, type RechteMitarbeiter } from './rechte.ts'
+import { alleZeilen } from '../_shared/alleZeilen.ts'
 
 const BEREICH_NAME: Record<string, string> = {
   beratung: 'Unternehmensberatung',
@@ -62,11 +63,11 @@ export async function aufgabenUebersicht(
     supabase.from('mitarbeiter').select('name, email').eq('aktiv', true),
     alleOffenenTodos(supabase),
     supabase.from('todo_freigaben').select('besitzer_email, empfaenger_email'),
-    supabase.from('kunden').select('id, bereich, firma, ansprechpartner, verantwortlich, follow_up, verantwortlich_email'),
+    alleZeilen(() => supabase.from('kunden').select('id, bereich, firma, ansprechpartner, verantwortlich, follow_up, verantwortlich_email')),
     supabase.from('objekte').select('id, bezeichnung, verantwortlich, follow_up, status, privat_besitzer'),
     supabase.from('projekte').select('id, bereich, name, verantwortlich, meilensteine, besitzer_email'),
     // Im privaten Assistenten gibt es keine Wiedervorlagen (private Kontakte haben keine).
-    fragender.nurPrivat === true ? Promise.resolve({ data: [] }) : supabase.from('wiedervorlagen').select('id, kunde_id, bereich, titel, faellig, verantwortlich, quelle').is('erledigt_am', null),
+    fragender.nurPrivat === true ? Promise.resolve({ data: [] }) : alleZeilen(() => supabase.from('wiedervorlagen').select('id, kunde_id, bereich, titel, faellig, verantwortlich, quelle').is('erledigt_am', null)),
   ])
   const teamListe = ((team ?? []) as { name: string; email: string | null }[]).filter((m) => m.name)
   const nameZuEmail = new Map(teamListe.filter((m) => m.email).map((m) => [String(m.email).toLowerCase(), m.name]))

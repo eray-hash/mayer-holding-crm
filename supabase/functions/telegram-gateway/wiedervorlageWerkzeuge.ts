@@ -12,6 +12,7 @@
 
 import { alsIso, ordneZu, personenNamen } from '../_shared/aufgabenKern.ts'
 import { darfAkte, darfBereich, istEigene, istPrivat, nichtFreigegeben, type RechteMitarbeiter, SAMMELAKTEN } from './rechte.ts'
+import { alleZeilen } from '../_shared/alleZeilen.ts'
 
 // deno-lint-ignore no-explicit-any
 type Supa = any
@@ -172,10 +173,14 @@ export async function fuehreWvWerkzeugAus(name: string, input: any, k: WvKontext
       if (istPrivat(akte)) return istEigene(mitarbeiter, akte.verantwortlich_email) ? 'Private Kontakte haben keine Wiedervorlagen.' : 'Fehler: Diese Akte gibt es für dich nicht.'
       if (!darfAkte(mitarbeiter, akte)) return nichtFreigegeben(akte.bereich, mitarbeiter.name)
     }
-    let q = supabase.from('wiedervorlagen').select(WV_SPALTEN).is('erledigt_am', null)
-    if (kundeId) q = q.eq('kunde_id', kundeId)
-    if (bis) q = q.lte('faellig', bis)
-    const { data, error } = await q.order('faellig', { ascending: true }).limit(2000)
+    // Seitenweise: offene Wiedervorlagen können mehr als 1000 werden (Grenze der Datenbank je Abfrage).
+    const baue = () => {
+      let q = supabase.from('wiedervorlagen').select(WV_SPALTEN).is('erledigt_am', null)
+      if (kundeId) q = q.eq('kunde_id', kundeId)
+      if (bis) q = q.lte('faellig', bis)
+      return q.order('faellig', { ascending: true })
+    }
+    const { data, error } = await alleZeilen(baue)
     if (error) return `Fehler beim Laden: ${error.message}`
     let liste: WvZeile[] = ((data ?? []) as WvZeile[]).filter((w) => darfWv(mitarbeiter, w))
 

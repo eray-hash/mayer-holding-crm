@@ -37,6 +37,7 @@ import {
 } from '../_shared/todoAufraeumen.ts'
 import { privatBotAktiv as privatBotAktivStandard } from '../_shared/telegramPrivat.ts'
 import { adresse, type RechteMitarbeiter } from './rechte.ts'
+import { alleZeilen } from '../_shared/alleZeilen.ts'
 
 // deno-lint-ignore no-explicit-any
 type Supa = any
@@ -93,7 +94,8 @@ const kurz = (s: string, n = 60) => {
 export async function ladeAkten(supabase: Supa): Promise<AkteName[]> {
   const akten: AkteName[] = []
   const lies = async (tabelle: string, spalten: string, namen: string[]) => {
-    const { data } = await supabase.from(tabelle).select(spalten).limit(1000)
+    // Seitenweise: Akten werden mehr als 1000 (Grenze der Datenbank je Abfrage).
+    const { data } = await alleZeilen(() => supabase.from(tabelle).select(spalten))
     for (const z of (data ?? []) as Record<string, string | null>[]) {
       for (const n of namen) if (z[n]) akten.push({ name: String(z[n]), abgeschlossen: istEndstatus(z.status) })
     }

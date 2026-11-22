@@ -17,6 +17,7 @@ import { haltWach, lassSchlafen } from './wachHalten'
 import { geschaetzteDauer, istVerwaist, naechsteFotoNr, naechsteSegmentNr, type LokaleAufnahme } from './warteschlange'
 import type { GespraechArt, GespraechEinwilligung, GespraechMarker, GespraechMarkerArt } from './typen'
 import * as server from './server'
+import { nimmtGeradeAuf } from './direktLink'
 
 export type AufnahmeVorbereitung = {
   art: GespraechArt
@@ -90,6 +91,11 @@ export function useSitzung(): SitzungStand {
   )
 }
 
+/** Läuft eine Aufnahme (auch pausiert oder unterbrochen)? Dann ändern Direkt-Links und Startseite nichts. */
+export function nimmtAuf(): boolean {
+  return nimmtGeradeAuf(stand.automat.phase)
+}
+
 /** Aufnahmezeit insgesamt in ms (inkl. früherer Teile beim Fortsetzen). */
 export function gesamtMs(jetzt = Date.now()): number {
   return stand.basisMs + dauerMs(stand.automat, jetzt)
@@ -121,7 +127,9 @@ function neueId(): string {
 
 /** Schritt 1: Was wird aufgenommen? Danach zeigt die Oberfläche die Einwilligung. */
 export function vorbereiten(v: AufnahmeVorbereitung): void {
-  if (rekorder?.laeuft) throw new Error('Es läuft bereits eine Aufnahme.')
+  // Auch eine unterbrochene Aufnahme (Anruf, App verlassen — Rekorder schon gestoppt) nicht überschreiben:
+  // sonst ginge ihr Stand verloren, z. B. wenn währenddessen ein Direkt-Link geöffnet wird.
+  if (rekorder?.laeuft || nimmtAuf()) throw new Error('Es läuft bereits eine Aufnahme.')
   if (stand.automat.phase === 'beendet' || stand.automat.phase === 'fehler') stand = { ...LEER }
   setze({ ...LEER, vorbereitung: v, automat: schritt(START, { typ: 'einwilligung_zeigen' }) })
 }

@@ -25,6 +25,7 @@ import { deDatum, FIRMA, heuteBerlin } from './dokumentErstellen.ts'
 import { type ExposeBildDaten, type ExposeKontakt, erstelleExposePdf } from './exposePdf.ts'
 import { type AblageKontext, gibFuerPortalFrei, ladeObjektMitRechten, legeInsObjektAb, objektAnzeige, type ObjektZeile } from './objektAblage.ts'
 import type { ObjektDokument } from './objektakte.ts'
+import { telefonFuerMitarbeiter } from '../_shared/profilKern.ts'
 
 // deno-lint-ignore no-explicit-any
 type Supa = any
@@ -331,7 +332,8 @@ async function exposeErstellen(input: any, k: ExposeKontext): Promise<string> {
   if (!ohneAnsprechpartner) {
     const kontakt = await ladeKontakt(supabase, mitarbeiter, text(input.ansprechpartner))
     if (typeof kontakt === 'string') return kontakt
-    kontakte.push({ titel: 'Ihr Ansprechpartner', name: kontakt.name, telefon: kontakt.telefon ?? '', email: kontakt.email ?? '', firma })
+    const telefon = privat ? (kontakt.telefon ?? '') : await telefonFuerMitarbeiter(supabase, { name: kontakt.name, email: kontakt.email, telefon: kontakt.telefon })
+    kontakte.push({ titel: 'Ihr Ansprechpartner', name: kontakt.name, telefon, email: kontakt.email ?? '', firma })
   }
   if (mitVermittler) kontakte.push({ titel: 'Vermittler', ...vermittler! })
 

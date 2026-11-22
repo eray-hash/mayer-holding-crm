@@ -53,6 +53,7 @@ export const PRIVAT_BOT_WERKZEUGE: readonly string[] = [
   'termin_absagen',
   'termin_aendern',
   'termin_briefing',
+  'termin_zuordnen',
   'objekt_luecken',
   'fotos_ins_objekt',
   'titelbild_vorschlagen',

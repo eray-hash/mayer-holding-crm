@@ -17,6 +17,9 @@
 //   Akte nicht sehen darf (darfBezug), wenn er nicht mit Telegram verbunden ist, und bei privaten Akten, wenn der
 //   Besitzer den privaten Assistenten nutzt (der interne Weg schreibt nur in den Verlauf des Mayer-Bots — Privates
 //   soll nicht dort landen).
+// - Runde 5: Übersprungen (es wird gar nichts gesendet), wenn zum Termin schon eine Aufnahme aus der Gesprächs-App
+//   vorliegt (gespraech_aufnahmen.termin_id, ohne verworfene) — das Protokoll entsteht dann aus der Aufnahme. Ist die
+//   Tabelle nicht lesbar, wird wie bisher gefragt (Fehler im Ergebnis).
 // - Wenig Lärm: je Mitarbeiter höchstens eine Nachfrage je Lauf (die nächste folgt frühestens im nächsten Takt)
 //   und höchstens HOECHSTENS_JE_TAG am Tag.
 // - Ohne KI. Wirft nie: Fehler stehen im Protokoll und im Ergebnis.
@@ -119,6 +122,22 @@ export function frageUeberAssistent(supabaseUrl: string, dienstSchluessel: strin
   }
 }
 
+/** Termine (aus `ids`), zu denen eine nicht verworfene Aufnahme der Gesprächs-App existiert. Wirft nie. */
+export async function termineMitAufnahme(admin: Db, ids: string[], fehler: string[]): Promise<Set<string>> {
+  if (ids.length === 0) return new Set()
+  try {
+    const { data, error } = await admin.from('gespraech_aufnahmen').select('termin_id').in('termin_id', ids).neq('status', 'verworfen')
+    if (error) {
+      fehler.push(`Aufnahmen nicht lesbar: ${error.message}`)
+      return new Set()
+    }
+    return new Set(((data ?? []) as { termin_id: string | null }[]).map((z) => String(z.termin_id ?? '')).filter(Boolean))
+  } catch (err) {
+    fehler.push(`Aufnahmen nicht lesbar: ${err instanceof Error ? err.message : String(err)}`)
+    return new Set()
+  }
+}
+
 async function ladeEinstellungen(admin: Db, fehler: string[]): Promise<Map<string, boolean> | null> {
   const { data, error } = await admin.from('kalender_einstellungen').select('email, nachfrage_an')
   if (error) {
@@ -187,6 +206,11 @@ async function lauf(admin: Db, o: NachfrageOptionen, ergebnis: NachfrageErgebnis
   }
   const erledigt = new Set(((schon ?? []) as { id: string }[]).map((z) => z.id))
   termine = termine.filter((t) => !erledigt.has(schluessel(t.id)))
+  if (termine.length === 0) return
+
+  // Schon aufgenommen? Dann nicht fragen (eine Abfrage für alle).
+  const mitAufnahme = await termineMitAufnahme(admin, termine.map((t) => t.id), ergebnis.fehler)
+  termine = termine.filter((t) => !mitAufnahme.has(String(t.id)))
   if (termine.length === 0) return
 
   // Wie oft heute schon gefragt (je Besitzer)?

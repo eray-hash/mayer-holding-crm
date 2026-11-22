@@ -6,6 +6,7 @@
 // Alles läuft mit dem Dienstschlüssel; der Link ist der einzige Nachweis, deshalb strenge Prüfung des Zeichens.
 import { pruefeSpeicherPfad } from '../_shared/speicherPfad.ts'
 import { belegtVon, ueberschneidet, zeitraumText, type FremdZeile, type TerminZeile } from '../_shared/besichtigungZeiten.ts'
+import { alleZeilen } from '../_shared/alleZeilen.ts'
 
 export const PORTAL_TEXTE = { agb: 'vl_immo_portal_agb', provision: 'vl_immo_portal_provision', widerruf: 'vl_immo_portal_widerruf' } as const
 const TOKEN = /^[A-Za-z0-9_-]{43,128}$/
@@ -278,7 +279,7 @@ export async function freieBesichtigungsZeiten(admin: Admin, o: { id: string; ve
     const von = new Date(Math.min(...mitPlatz.map((z) => Date.parse(z.beginn))) - 86400000).toISOString()
     const bis = new Date(Math.max(...mitPlatz.map((z) => Date.parse(z.ende))) + 86400000).toISOString()
     const [t, fr] = await Promise.all([
-      admin.from('termine').select('id, beginn, ende, ganztags, besitzer_email, teilnehmer').eq('ganztags', false).lt('beginn', bis).gt('ende', von).limit(5000),
+      alleZeilen(() => admin.from('termine').select('id, beginn, ende, ganztags, besitzer_email, teilnehmer').eq('ganztags', false).lt('beginn', bis).gt('ende', von)),
       admin.from('kalender_fremd').select('email, belegt').in('email', emails),
     ])
     termine = (t.data ?? []) as TerminZeile[]

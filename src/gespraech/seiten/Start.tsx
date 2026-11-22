@@ -1,8 +1,8 @@
 // Startseite der Gesprächs-App: großer Aufnahmeknopf, „Jetzt / als Nächstes“ (Termin mit Akte), Art der
 // Aufnahme, freiwillige Zuordnung zu einer Akte; darüber unvollständige und noch hochzuladende Aufnahmen.
 import { useEffect, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
-import { CalendarClock, ChevronRight, CloudOff, Mic, NotebookPen, Phone, RotateCcw, Trash2, Users } from 'lucide-react'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { CalendarClock, ChevronRight, CloudOff, Info, Mic, NotebookPen, Phone, RotateCcw, Trash2, Users } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
 import { AkteWahl, type AkteAuswahl } from '../komponenten/AkteWahl'
 import { useEinstellungen } from '../einstellungen'
@@ -12,6 +12,17 @@ import { unvollstaendigeAuswerten, unvollstaendigeFortsetzen, useSitzung, verwer
 import { ladeTerminVorschlag, type TerminVorschlag } from '../termine'
 import { istVerwaist, standText, type LokaleAufnahme } from '../warteschlange'
 import type { GespraechArt } from '../typen'
+import type { DirektVorbereitung } from '../direktLink'
+import { hilfeVorladen } from '../komponenten/hilfeDaten'
+
+/** Übergabe vom Direkt-Link (App.tsx, AufnehmenEinstieg), wenn etwas aus dem Link nicht auffindbar war. */
+type StartZustand = { vorbelegung?: DirektVorbereitung; hinweis?: string } | null
+
+function akteAus(v: DirektVorbereitung | undefined): AkteAuswahl {
+  if (v?.kundeId) return { art: 'kunde', id: v.kundeId, bereich: v.kundeBereich ?? '', name: v.kundeName ?? v.titel }
+  if (v?.objektId) return { art: 'objekt', id: v.objektId, name: v.objektName ?? v.titel }
+  return null
+}
 
 const MODI: { art: GespraechArt; titel: string; hinweis: string; Icon: typeof Users }[] = [
   { art: 'termin', titel: 'Termin', hinweis: 'Gespräch vor Ort — Handy offen auf den Tisch legen, Mikrofon zu den Sprechenden.', Icon: Users },
@@ -27,14 +38,23 @@ const MODI: { art: GespraechArt; titel: string; hinweis: string; Icon: typeof Us
 export function Start() {
   const { mitarbeiter } = useAuth()
   const navigate = useNavigate()
+  const ort = useLocation()
+  const [uebergabe] = useState<StartZustand>(() => (ort.state as StartZustand) ?? null)
+  const vorbelegt = uebergabe?.vorbelegung
   const e = useEinstellungen()
   const s = useSitzung()
   const online = useOnline()
   const lokale = useLokaleAufnahmen()
-  const [art, setArt] = useState<GespraechArt>(e.standardModus)
-  const [akte, setAkte] = useState<AkteAuswahl>(null)
-  const [titel, setTitel] = useState('')
-  const [terminId, setTerminId] = useState<string | undefined>()
+  const [art, setArt] = useState<GespraechArt>(vorbelegt?.art ?? e.standardModus)
+  const [akte, setAkte] = useState<AkteAuswahl>(() => akteAus(vorbelegt))
+  const [titel, setTitel] = useState(vorbelegt?.titel ?? '')
+  const [terminId, setTerminId] = useState<string | undefined>(vorbelegt?.terminId)
+  const [hinweis, setHinweis] = useState<string | null>(uebergabe?.hinweis ?? null)
+
+  // Übergabe nur einmal anwenden (Zurück/neu laden belegt nicht erneut vor).
+  useEffect(() => {
+    if (ort.state) navigate('.', { replace: true, state: null })
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
   const [vorschlag, setVorschlag] = useState<TerminVorschlag | null | undefined>(undefined)
   const [fehler, setFehler] = useState<string | null>(null)
   const [arbeitet, setArbeitet] = useState<string | null>(null)
@@ -43,7 +63,11 @@ export function Start() {
     if (!mitarbeiter?.email) return
     let aktiv = true
     ladeTerminVorschlag(mitarbeiter.email)
-      .then((v) => aktiv && setVorschlag(v))
+      .then((v) => {
+        if (aktiv) setVorschlag(v)
+        // Spickzettel und Leitfaden schon jetzt aufs Gerät laden — im Termin gibt es oft kein Netz.
+        if (v) void hilfeVorladen({ terminId: v.termin.id, kundeId: v.bezug?.art === 'kunde' ? v.bezug.id : undefined, objektId: v.bezug?.art === 'objekt' ? v.bezug.id : undefined })
+      })
       .catch(() => aktiv && setVorschlag(null))
     return () => {
       aktiv = false
@@ -70,7 +94,7 @@ export function Start() {
         art,
         titel: titel.trim() || (akte ? akte.name : MODI.find((m) => m.art === art)!.titel),
         kundeId: akte?.art === 'kunde' ? akte.id : undefined,
-        kundeBereich: akte?.art === 'kunde' ? akte.bereich : undefined,
+        kundeBereich: akte?.art === 'kunde' ? akte.bereich || undefined : undefined,
         kundeName: akte?.art === 'kunde' ? akte.name : undefined,
         objektId: akte?.art === 'objekt' ? akte.id : undefined,
         objektName: akte?.art === 'objekt' ? akte.name : undefined,
@@ -109,6 +133,16 @@ export function Start() {
       {!online && (
         <div className="flex items-center gap-2 rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-800">
           <CloudOff className="h-4 w-4 shrink-0" /> Kein Netz — Aufnehmen geht trotzdem, hochgeladen wird später.
+        </div>
+      )}
+
+      {hinweis && (
+        <div className="flex items-start gap-2 rounded-xl bg-sky-50 px-3 py-2 text-sm text-sky-900">
+          <Info className="mt-0.5 h-4 w-4 shrink-0" />
+          <span className="flex-1">{hinweis} Bitte prüfen und dann aufnehmen.</span>
+          <button type="button" onClick={() => setHinweis(null)} className="text-xs font-medium text-sky-700">
+            OK
+          </button>
         </div>
       )}
 

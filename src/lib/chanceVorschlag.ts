@@ -8,6 +8,7 @@
 import type { Kunde } from '../types'
 import { call } from './emailGateway'
 import { supabase } from './supabaseClient'
+import { alleZeilen } from './alleZeilen'
 import {
   chanceAusVorschlag, leseGespeicherteChance, leseVorschlag, type ChanceVorschlag, type GespeicherteChance,
 } from '../../supabase/functions/_shared/chanceKern.ts'
@@ -19,9 +20,12 @@ export { leseGespeicherteChance, leseVorschlag }
 export async function ladeChanceVorschlaege(kundeId?: string): Promise<Map<string, ChanceVorschlag>> {
   const m = new Map<string, ChanceVorschlag>()
   if (!supabase) return m
-  let q = supabase.from('kunden').select('id, chance_vorschlag')
-  if (kundeId) q = q.eq('id', kundeId)
-  const { data, error } = await q.not('chance_vorschlag', 'is', null).limit(5000)
+  const db = supabase
+  // Seitenweise (die Datenbank liefert höchstens 1000 Zeilen je Abfrage; ein limit(5000) hilft nicht).
+  const { data, error } = await alleZeilen(() => {
+    const q = db.from('kunden').select('id, chance_vorschlag')
+    return (kundeId ? q.eq('id', kundeId) : q).not('chance_vorschlag', 'is', null)
+  })
   if (error) throw new Error(`Vorschläge ließen sich nicht laden: ${error.message}`)
   for (const z of (data ?? []) as { id: string; chance_vorschlag: unknown }[]) {
     const v = leseVorschlag(z.chance_vorschlag)

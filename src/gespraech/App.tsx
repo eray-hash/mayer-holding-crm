@@ -1,6 +1,6 @@
 // Gesprächs-App „Mayer Gespräch“: eigener Einstieg (gespraech/index.html), gleiche Anmeldung wie das CRM
 // (AuthProvider, LoginScreen, PasswortFestlegen werden mitbenutzt). Seiten siehe typen.ts (Adressen).
-import { useEffect, type ReactNode } from 'react'
+import { useEffect, useMemo, type ReactNode } from 'react'
 import { HashRouter, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { House, ListChecks, LoaderCircle, Settings } from 'lucide-react'
 import { AuthProvider, useAuth } from '../context/AuthContext'
@@ -12,7 +12,11 @@ import { Aufnehmen } from './seiten/Aufnehmen'
 import { AufnahmeRoute } from './seiten/AufnahmeRoute'
 import { Einstellungen } from './seiten/Einstellungen'
 import { Start } from './seiten/Start'
-import { useSitzung, vorbereiten } from './sitzung'
+import { nimmtAuf, useSitzung, vorbereiten } from './sitzung'
+import { leseAufnehmenZiel } from '../../supabase/functions/_shared/gespraechLink.ts'
+import { loeseDirektLinkAuf } from './direktLink'
+import { direktLader } from './direktLinkLader'
+import { einstellungen } from './einstellungen'
 import { Vorbereitung } from './auswertung/Vorbereitung'
 import { richteHochladenEin, setzePerson } from './uploader'
 
@@ -65,7 +69,7 @@ function Rahmen() {
       <main className="mx-auto w-full max-w-md flex-1 px-4 py-4" style={{ paddingBottom: nimmtAuf ? 'max(1.5rem, env(safe-area-inset-bottom))' : 'calc(5rem + env(safe-area-inset-bottom))' }}>
         <Routes>
           <Route path="/" element={<Start />} />
-          <Route path="/aufnehmen" element={<Aufnehmen />} />
+          <Route path="/aufnehmen" element={<AufnehmenEinstieg />} />
           <Route path="/aufnahme/:id" element={<AufnahmeRoute />} />
           <Route path="/aufnahmen" element={<AufnahmenListe />} />
           <Route path="/einstellungen" element={<Einstellungen />} />
@@ -91,6 +95,54 @@ function Rahmen() {
       )}
     </div>
   )
+}
+
+/**
+ * #/aufnehmen — mit Direkt-Link (?termin=…|kunde=…|objekt=…&art=…, siehe _shared/gespraechLink.ts) wird die
+ * Aufnahme vorbereitet und es geht gleich zur Einwilligung; Aufnehmen.tsx liest dann nur die vorbereitete Sitzung.
+ * Läuft schon eine Aufnahme, bleibt sie unberührt. Ist etwas aus dem Link nicht auffindbar, kommt die Startseite
+ * mit allem Übrigen vorbelegt und einem Hinweis. Danach wird der Suchteil entfernt (neu laden startet nichts neu).
+ */
+function AufnehmenEinstieg() {
+  const ort = useLocation()
+  const navigate = useNavigate()
+  const { mitarbeiter } = useAuth()
+  const ziel = useMemo(() => leseAufnehmenZiel(ort.search), [ort.search])
+  const email = mitarbeiter?.email ?? ''
+
+  useEffect(() => {
+    if (!ziel) return
+    if (nimmtAuf()) {
+      navigate('/aufnehmen', { replace: true })
+      return
+    }
+    let aktiv = true
+    void loeseDirektLinkAuf(ziel, direktLader(email), einstellungen().standardModus).then(({ vorbereitung, hinweis }) => {
+      if (!aktiv) return
+      if (hinweis) {
+        navigate('/', { replace: true, state: { vorbelegung: vorbereitung, hinweis } })
+        return
+      }
+      try {
+        vorbereiten(vorbereitung)
+        navigate('/aufnehmen', { replace: true })
+      } catch (err) {
+        navigate('/', { replace: true, state: { hinweis: err instanceof Error ? err.message : String(err) } })
+      }
+    })
+    return () => {
+      aktiv = false
+    }
+  }, [ziel, email, navigate])
+
+  if (ziel)
+    return (
+      <div className="flex flex-col items-center gap-3 py-16 text-slate-600">
+        <LoaderCircle className="h-8 w-8 animate-spin" />
+        <div className="text-sm">Aufnahme wird vorbereitet …</div>
+      </div>
+    )
+  return <Aufnehmen />
 }
 
 /** Vorbereitung eines Termins (Briefing), danach direkt in die Aufnahme. */

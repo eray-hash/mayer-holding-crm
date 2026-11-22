@@ -13,6 +13,7 @@ import { KontoauszugAbgleichKnopf } from '../../components/rechnungen/Kontoauszu
 import { SteuerberaterExportKnopf } from '../../components/rechnungen/SteuerberaterExport'
 import { RechnungVorschlaege } from '../../components/rechnungen/RechnungVorschlaege'
 import type { Rechnung } from '../../types'
+import { NeuHinweis } from '../../components/NeuHinweis'
 
 type FilterId = 'alle' | 'offen' | 'ueberfaellig' | 'bezahlt' | 'entwurf'
 
@@ -102,6 +103,7 @@ export function Rechnungen() {
       </div>
 
       {/* Rechnungsvorschläge: was noch in Rechnung zu stellen ist (RechnungVorschlaege.tsx) */}
+      <NeuHinweis name="rechnungsvorschlaege" text="Fällige Rechnungen schlägt das CRM jetzt selbst vor" neuigkeit="rechnungsvorschlaege" className="mb-2" />
       <RechnungVorschlaege onRechnungAngelegt={(id) => setTimeout(() => detailOeffnen(id), 0)} />
 
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">

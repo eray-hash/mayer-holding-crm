@@ -6,7 +6,10 @@
 //    auf eine Zeitmarke springt im Abspieler dorthin (die Tonabschnitte laufen nacheinander, Links kurz gültig).
 //  - In die Akte: jeder Vorschlag als Karte mit Haken und änderbaren Feldern; „Übernehmen“ ruft
 //    gespraech_uebernehmen (Server legt nichts doppelt an; Übernommenes ist danach abgehakt und gesperrt).
-//    Verschickt wird von hier nichts — der Mail-Entwurf landet als Notiz in der Akte.
+//    Verschickt wird von hier nichts — der Mail-Entwurf landet als Notiz in der Akte. Seit Runde 5 auch der
+//    vorbefüllte Fragebogen und die Aktenfelder (FragebogenKarten.tsx).
+//  - Teilen (Runde 5, Teilen.tsx): an Kollegen per Telegram, Gesprächsnotiz an den Kunden (nur per Knopf + Bestätigung).
+// Auf dem Reiter „Abschrift“ zeigt SpracheUebersetzung.tsx die erkannte Sprache und auf Wunsch die deutsche Fassung.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { GespraechAufnahme, GespraechSegment } from '../typen'
@@ -26,10 +29,15 @@ import {
   uebernehmen,
   zeit,
   type AkteKurz,
+  type AufnahmeR5,
   type TeamMitglied,
   type UebernahmeErgebnis,
 } from './api'
 import { BEREICH_NAMEN } from '../akten'
+import { aendere, feld, Karte, Schalter, UEBER_LEISTE } from './bausteine'
+import { DeutscheFassung, istFremdsprachig, SprachLeiste } from './SpracheUebersetzung'
+import { TeilenSeite } from './Teilen'
+import { afAlsDaten, afStart, AktenfelderKarten, fbStart, FragebogenKarte, type AfZeile, type FbZeile } from './FragebogenKarten'
 
 export type AuswertungSeiteProps = {
   id: string
@@ -37,9 +45,7 @@ export type AuswertungSeiteProps = {
   neuLaden: () => void
 }
 
-type Reiter = 'ergebnis' | 'abschrift' | 'akte'
-
-const feld = 'w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-base focus:border-indigo-500 focus:outline-none'
+type Reiter = 'ergebnis' | 'abschrift' | 'akte' | 'teilen'
 const MARKER_ZEICHEN: Record<string, string> = { wichtig: '★', aufgabe: '✓', frage: '?' }
 const MARKER_NAME: Record<string, string> = { wichtig: 'Wichtig', aufgabe: 'Aufgabe', frage: 'Frage' }
 const STAMMDATEN_NAME: Record<string, string> = { telefon: 'Telefon', email: 'E-Mail', anschrift: 'Anschrift', firma: 'Firma', ansprechpartner: 'Ansprechpartner', sonstiges: 'Sonstiges' }
@@ -83,21 +89,31 @@ export function AuswertungSeite({ id, zeile, neuLaden }: AuswertungSeiteProps) {
       </div>
 
       <div className="-mx-4 mt-3 flex border-b border-slate-200 bg-white px-2">
-        {(['ergebnis', 'abschrift', 'akte'] as Reiter[]).map((r) => (
-          <button key={r} onClick={() => setReiter(r)} className={`flex-1 border-b-2 px-2 py-2.5 text-sm font-medium ${reiter === r ? 'border-indigo-600 text-indigo-700' : 'border-transparent text-slate-500'}`}>
-            {r === 'ergebnis' ? 'Ergebnis' : r === 'abschrift' ? 'Abschrift' : 'In die Akte'}
+        {(['ergebnis', 'abschrift', 'akte', 'teilen'] as Reiter[]).map((r) => (
+          <button key={r} onClick={() => setReiter(r)} className={`flex-1 border-b-2 px-1 py-2.5 text-sm font-medium ${reiter === r ? 'border-indigo-600 text-indigo-700' : 'border-transparent text-slate-500'}`}>
+            {r === 'ergebnis' ? 'Ergebnis' : r === 'abschrift' ? 'Abschrift' : r === 'akte' ? 'In die Akte' : 'Teilen'}
           </button>
         ))}
       </div>
 
       <div className="pt-4">
         {reiter === 'ergebnis' && <Ergebnis zeile={zeile} />}
-        {reiter === 'abschrift' && <Abschrift zeile={zeile} segmente={segmente} links={links} springe={abspieler.springe} />}
+        {reiter === 'abschrift' && (
+          <>
+            {zeile.status !== 'verworfen' && <SprachLeiste id={id} zeile={zeile as AufnahmeR5} neuLaden={neuLaden} />}
+            {istFremdsprachig(zeile as AufnahmeR5) && zeile.status !== 'verworfen' ? (
+              <DeutscheFassung id={id} zeile={zeile as AufnahmeR5} springe={abspieler.springe} original={<Abschrift zeile={zeile} segmente={segmente} links={links} springe={abspieler.springe} />} />
+            ) : (
+              <Abschrift zeile={zeile} segmente={segmente} links={links} springe={abspieler.springe} />
+            )}
+          </>
+        )}
         {reiter === 'akte' && <InDieAkte id={id} zeile={zeile} neuLaden={neuLaden} />}
+        {reiter === 'teilen' && <TeilenSeite id={id} zeile={zeile as AufnahmeR5} neuLaden={neuLaden} />}
       </div>
 
-      {/* Auf dem Reiter „In die Akte“ steht unten der Knopf „Übernehmen“; der Ton läuft trotzdem weiter. */}
-      {segmente.length > 0 && zeile.status !== 'verworfen' && <Abspieler {...abspieler} segmente={segmente} links={links} versteckt={reiter === 'akte'} />}
+      {/* Auf den Reitern „In die Akte“ und „Teilen“ ist der Abspieler versteckt; der Ton läuft trotzdem weiter. */}
+      {segmente.length > 0 && zeile.status !== 'verworfen' && <Abspieler {...abspieler} segmente={segmente} links={links} versteckt={reiter === 'akte' || reiter === 'teilen'} />}
     </div>
   )
 }
@@ -166,9 +182,6 @@ function useAbspieler(segmente: GespraechSegment[], links: Map<string, string>) 
   const src = links.get(segmente[index]?.pfad ?? '') ?? ''
   return { ref, index, position, src, springe, geladen, zuEnde, zeitUpdate }
 }
-
-// Klebt unten über der Leiste der App (Start / Meine Aufnahmen / Einstellungen).
-const UEBER_LEISTE = { bottom: 'calc(4.5rem + env(safe-area-inset-bottom))' }
 
 function Abspieler(p: ReturnType<typeof useAbspieler> & { segmente: GespraechSegment[]; links: Map<string, string>; versteckt?: boolean }) {
   const gesamt = p.segmente.reduce((n, s) => n + (Number(s.dauer_s) || 0), 0)
@@ -357,7 +370,8 @@ function passendesMitglied(name: string, team: TeamMitglied[]): string {
   return treffer.length === 1 ? treffer[0].email : ''
 }
 
-function InDieAkte({ id, zeile, neuLaden }: AuswertungSeiteProps) {
+function InDieAkte({ id, zeile: zeileRoh, neuLaden }: AuswertungSeiteProps) {
+  const zeile = zeileRoh as AufnahmeR5
   const a = zeile.analyse
   const u = zeile.uebernommen
   const [akte, setAkte] = useState<AkteKurz | null>(null)
@@ -373,6 +387,9 @@ function InDieAkte({ id, zeile, neuLaden }: AuswertungSeiteProps) {
   const [termine, setTermine] = useState<Termin[]>(() => (a?.termine ?? []).map((t) => ({ titel: t.titel ?? '', datum: alsDatum(t.datum), uhrzeit: alsUhrzeit(t.uhrzeit), dauer_min: 60, ort: t.ort ?? '', mit: t.mit ?? '', an: true })))
   const [sd, setSd] = useState<Sd[]>(() => (a?.stammdaten ?? []).map((s) => ({ feld: s.feld, wert: s.wert ?? '', an: true })))
   const [mail, setMail] = useState({ betreff: a?.mail_entwurf?.betreff ?? '', text: a?.mail_entwurf?.text ?? '', an: !!(a?.mail_entwurf?.betreff || a?.mail_entwurf?.text) })
+  const [fb, setFb] = useState<FbZeile[]>(() => fbStart(a?.fragebogen))
+  const [fbAn, setFbAn] = useState(true)
+  const [af, setAf] = useState<AfZeile[]>(() => afStart(a?.aktenfelder))
   const [audio, setAudio] = useState(false)
   const [fotosAn, setFotosAn] = useState(false)
   const [laeuft, setLaeuft] = useState(false)
@@ -405,6 +422,10 @@ function InDieAkte({ id, zeile, neuLaden }: AuswertungSeiteProps) {
   if (zeile.status !== 'fertig') return <p className="text-sm text-slate-500">Übernehmen geht erst, wenn die Auswertung fertig ist.</p>
 
   const privat = (akte?.bereich ?? zeile.kunde_bereich) === 'privat'
+  const aktenwert = (f: string): string => {
+    const w = akte ? (akte as Record<string, unknown>)[f] : ''
+    return Array.isArray(w) ? w.filter(Boolean).join(', ') : String(w ?? '').trim()
+  }
   const fertig = (liste: Record<string, string> | undefined, i: number) => !!liste?.[String(i)]
   const protokollFertig = !!u?.protokollId
   const fehlendeDaten = wv.some((w, i) => w.an && !fertig(u?.wiedervorlagen, i) && (!w.titel.trim() || !w.faellig)) || termine.some((t, i) => t.an && !fertig(u?.termine, i) && (!t.titel.trim() || !t.datum))
@@ -427,6 +448,8 @@ function InDieAkte({ id, zeile, neuLaden }: AuswertungSeiteProps) {
           audioInAkte: audio,
           fotosInAkte: fotosAn,
           mailEntwurf: mail.an,
+          fragebogen: fbAn && !u?.fragebogen && fb.some((x) => x.an && x.antwort.trim()),
+          aktenfelder: privat ? [] : af.filter((x) => x.an && x.wert.trim() && !u?.aktenfelder?.[x.feld] && !aktenwert(x.feld)).map((x) => x.feld),
         },
         {
           zusammenfassung,
@@ -436,6 +459,8 @@ function InDieAkte({ id, zeile, neuLaden }: AuswertungSeiteProps) {
           termine: termine.map((t) => ({ titel: t.titel, datum: t.datum, uhrzeit: t.uhrzeit || undefined, ort: t.ort || undefined, mit: t.mit || undefined, dauer_min: t.dauer_min })),
           stammdaten: sd.map((s) => ({ feld: s.feld, wert: s.wert })),
           mail_entwurf: { betreff: mail.betreff, text: mail.text },
+          ...(fb.length ? { fragebogen: fb.filter((x) => x.an && x.antwort.trim()).map(({ an: _an, ...x }) => x) } : {}),
+          ...(af.length ? { aktenfelder: afAlsDaten(af.filter((x) => x.an)) } : {}),
         },
       )
       setErgebnis(r)
@@ -447,7 +472,6 @@ function InDieAkte({ id, zeile, neuLaden }: AuswertungSeiteProps) {
     }
   }
 
-  const aktenwert = (f: string): string => (akte ? String((akte as Record<string, unknown>)[f] ?? '').trim() : '')
 
   return (
     <div className="space-y-3">
@@ -535,12 +559,18 @@ function InDieAkte({ id, zeile, neuLaden }: AuswertungSeiteProps) {
         )
       })}
 
+      {!privat && af.length > 0 && <AktenfelderKarten zeilen={af} setZeilen={setAf} akte={akte} erledigt={u?.aktenfelder} />}
+
+      {!privat && fb.length > 0 && (
+        <FragebogenKarte name={a.fragebogen_vorlage?.name ?? 'Fragebogen'} zeilen={fb} setZeilen={setFb} an={fbAn} setAn={setFbAn} fertig={!!u?.fragebogen} notiz={!!u?.fragebogen?.notiz} />
+      )}
+
       {(a.mail_entwurf?.betreff || a.mail_entwurf?.text) && (
         <Karte titel="Mail-Entwurf als Notiz in die Akte" an={mail.an} setAn={(an) => setMail({ ...mail, an })} fertig={!!u?.mailEntwurf}>
           <input className={feld} value={mail.betreff} placeholder="Betreff" disabled={!!u?.mailEntwurf} onChange={(e) => setMail({ ...mail, betreff: e.target.value })} />
           <textarea className={`${feld} mt-2 min-h-[8rem]`} value={mail.text} disabled={!!u?.mailEntwurf} onChange={(e) => setMail({ ...mail, text: e.target.value })} />
           <div className="mt-1 flex items-center justify-between">
-            <p className="text-xs text-slate-500">Wird nicht verschickt.</p>
+            <p className="text-xs text-slate-500">Wird hier nicht verschickt — senden geht auf dem Reiter „Teilen“.</p>
             <button className="text-xs text-indigo-600" onClick={() => void navigator.clipboard?.writeText(`${mail.betreff}\n\n${mail.text}`).catch(() => {})}>Text kopieren</button>
           </div>
         </Karte>
@@ -577,34 +607,5 @@ function InDieAkte({ id, zeile, neuLaden }: AuswertungSeiteProps) {
       </button>
       {!zeile.kunde_id && <p className="text-center text-xs text-slate-500">Zuerst eine Akte zuordnen.</p>}
     </div>
-  )
-}
-
-function aendere<T>(liste: T[], i: number, teil: Partial<T>): T[] {
-  return liste.map((x, n) => (n === i ? { ...x, ...teil } : x))
-}
-
-function Karte({ titel, an, setAn, fest, fertig, children }: { titel: string; an: boolean; setAn?: (an: boolean) => void; fest?: boolean; fertig?: boolean; children: React.ReactNode }) {
-  return (
-    <div className={`rounded-xl border p-3 ${fertig ? 'border-emerald-200 bg-emerald-50/50' : an ? 'border-indigo-200 bg-white' : 'border-slate-200 bg-slate-50 opacity-75'}`}>
-      <label className="mb-2 flex items-center gap-2">
-        <input type="checkbox" className="h-5 w-5 accent-indigo-600" checked={fertig || an} disabled={fertig || fest || !setAn} onChange={(e) => setAn?.(e.target.checked)} />
-        <span className="text-sm font-semibold text-slate-800">{titel}</span>
-        {fertig && <span className="ml-auto text-xs font-medium text-emerald-700">übernommen</span>}
-      </label>
-      {children}
-    </div>
-  )
-}
-
-function Schalter({ text, an, setAn, gesperrt, zusatz }: { text: string; an: boolean; setAn: (an: boolean) => void; gesperrt?: boolean; zusatz?: string }) {
-  return (
-    <label className="flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-3">
-      <input type="checkbox" className="mt-0.5 h-5 w-5 accent-indigo-600" checked={an} disabled={gesperrt} onChange={(e) => setAn(e.target.checked)} />
-      <span>
-        <span className="block text-sm font-medium text-slate-800">{text}</span>
-        {zusatz && <span className="block text-xs text-slate-500">{zusatz}</span>}
-      </span>
-    </label>
   )
 }

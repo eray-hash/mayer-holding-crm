@@ -18,6 +18,12 @@
 //   Objekte nur ihr Besitzer. Ist die Akte privat und nutzt der Besitzer den privaten Assistenten, geht das
 //   Briefing über diesen Bot (wie die Erinnerungen in kalender.ts) — nie ersatzweise über den Mayer-Bot.
 // - Höchstens 6 Briefings mit KI je Lauf (der Rest folgt im nächsten Takt, solange das Fenster offen ist).
+// - Runde 5: Das Briefing endet mit „🎙️ Gespräch aufnehmen: <Link>“ — Direkt-Link in die Gesprächs-App mit Termin
+//   und Akte (_shared/gespraechLink.ts), ein Tipp bis zur Einwilligung.
+// - Runde 5, Erinnerung zum Terminbeginn (beimTerminbeginn, wahlweise, Spalte gespraech_erinnerung, Standard aus):
+//   von 1 Minute vor bis 5 Minuten nach Beginn eines Termins mit Akte eine kurze Telegram-Nachricht mit dem
+//   Direkt-Link. Einmal je Termin, Empfänger und Beginn (Sperrzeile `aufnahme|…`, art 'aufnahme'); nicht, wenn zum
+//   Termin schon eine Aufnahme läuft oder vorliegt. Gleiche Rechte- und Privat-Regeln wie das Briefing. Ohne KI.
 // - Wirft nie: Fehler stehen im Protokoll und im Ergebnis.
 
 import {
@@ -40,6 +46,8 @@ import {
   uhrzeit,
 } from '../_shared/terminBriefingKern.ts'
 import { privatBotAktiv, sendePrivat } from '../_shared/telegramPrivat.ts'
+import { aufnehmenLink } from '../_shared/gespraechLink.ts'
+import { termineMitAufnahme } from './nachTermin.ts'
 import { berlinTagesbeginn, berlinZeit, plusTage } from './tagesmeldung.ts'
 
 // deno-lint-ignore no-explicit-any
@@ -61,7 +69,7 @@ export type BriefingOptionen = {
   apiKey?: string | null
 }
 
-export type BriefingErgebnis = { gesendet: number; morgen: number; fehler: string[] }
+export type BriefingErgebnis = { gesendet: number; morgen: number; aufnahme: number; fehler: string[] }
 
 export const VORLAUF_STANDARD = 60
 export const VORLAUF_WAHL = [15, 30, 45, 60, 90, 120]
@@ -93,7 +101,7 @@ export function istFaellig(minutenBis: number, vorlauf: number): boolean {
   return minutenBis > SPIELRAUM && minutenBis <= vorlauf + SPIELRAUM
 }
 
-export function schluessel(art: 'vorlauf', terminId: string, email: string, beginn: string): string
+export function schluessel(art: 'vorlauf' | 'aufnahme', terminId: string, email: string, beginn: string): string
 export function schluessel(art: 'morgen', email: string, datum: string): string
 export function schluessel(art: string, ...teile: string[]): string {
   return [art, ...teile].join('|')
@@ -141,15 +149,22 @@ async function vermerkeZustellung(admin: Db, id: string, zugestellt: boolean): P
 }
 
 export async function sendeTerminBriefings(admin: Db, o: BriefingOptionen): Promise<BriefingErgebnis> {
-  const ergebnis: BriefingErgebnis = { gesendet: 0, morgen: 0, fehler: [] }
+  const ergebnis: BriefingErgebnis = { gesendet: 0, morgen: 0, aufnahme: 0, fehler: [] }
+  const jetzt = o.jetzt ?? new Date()
   try {
     const einst = await ladeEinstellungen(admin, ergebnis.fehler)
-    if (!einst) return ergebnis
-    const jetzt = o.jetzt ?? new Date()
-    await vorDemTermin(admin, o, jetzt, einst, ergebnis)
-    await morgenUebersicht(admin, o, jetzt, einst, ergebnis)
+    if (einst) {
+      await vorDemTermin(admin, o, jetzt, einst, ergebnis)
+      await morgenUebersicht(admin, o, jetzt, einst, ergebnis)
+    }
   } catch (err) {
     ergebnis.fehler.push(err instanceof Error ? err.message : String(err))
+  }
+  // Unabhängig vom Briefing (eigene Einstellung): Erinnerung zum Terminbeginn.
+  try {
+    await beimTerminbeginn(admin, o, jetzt, ergebnis)
+  } catch (err) {
+    ergebnis.fehler.push(`Erinnerung zum Terminbeginn: ${err instanceof Error ? err.message : String(err)}`)
   }
   if (ergebnis.fehler.length > 0) console.error('Termin-Briefing:', ergebnis.fehler.join(' | '))
   return ergebnis
@@ -256,7 +271,7 @@ async function vorDemTermin(admin: Db, o: BriefingOptionen, jetzt: Date, einst: 
     }
     mitKi++
     const punkte = await gespraechspunkte(akteText(daten), { funktion: 'email-gateway', ki: o.ki, apiKey: o.apiKey })
-    const text = briefingText(daten, { termin: f.t, minutenBis: f.minutenBis, namen, gespraechspunkte: punkte })
+    const text = mitAufnahmeLink(briefingText(daten, { termin: f.t, minutenBis: f.minutenBis, namen, gespraechspunkte: punkte }), linkBasis ?? (await ladeLinkBasis(admin)), f.t.id, bezug)
     for (const k of meine) {
       const ok = await zustellen(admin, o, team.get(k.p)!, istPrivaterBezug(bezug), text, privatMerker).catch(() => false)
       if (ok) ergebnis.gesendet++
@@ -353,6 +368,115 @@ async function morgenUebersicht(admin: Db, o: BriefingOptionen, jetzt: Date, ein
   const grenze = new Date(jetzt.getTime() - 60 * 86400000).toISOString()
   const { error: weg } = await admin.from(TABELLE).delete().lt('gesendet_am', grenze)
   if (weg) console.error('Termin-Briefing: alte Vermerke nicht gelöscht', weg.message)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Gesprächs-App: Direkt-Link im Briefing und Erinnerung zum Terminbeginn (Runde 5)
+
+/** Direkt-Link in die Gesprächs-App: Termin und Akte vorgewählt, die App geht gleich zur Einwilligung. */
+export function aufnahmeLinkZu(linkBasis: string, terminId: string, bezug: Bezug): string {
+  return aufnehmenLink(linkBasis, { termin: terminId, ...(bezug.art === 'kunde' ? { kunde: bezug.id } : { objekt: bezug.id }) })
+}
+
+/** Hängt „🎙️ Gespräch aufnehmen: <Link>“ an (Telegram erlaubt 4096 Zeichen, das Briefing ist auf 3900 begrenzt). */
+export function mitAufnahmeLink(text: string, linkBasis: string, terminId: string, bezug: Bezug): string {
+  return `${text}\n\n🎙️ Gespräch aufnehmen: ${aufnahmeLinkZu(linkBasis, terminId, bezug)}`
+}
+
+/** Fenster der Erinnerung um den Beginn (Minuten): von 1 vor bis 5 nach Beginn (falls ein Takt ausfällt). */
+export const ERINNERUNG_VOR = 1
+export const ERINNERUNG_NACH = 5
+const ERINNERUNGEN_HOECHSTENS = 20
+
+/** `zusatz` z. B. „mit Josef Lehle“ bzw. „zu Lagerhalle Neu-Ulm“ (leer, wenn der Name fehlt). */
+export function erinnerungsText(t: Pick<BriefingTermin, 'titel' | 'beginn'>, zusatz: string, link: string): string {
+  const titel = String(t.titel ?? '').trim().slice(0, 100) || 'Termin'
+  return `🎙️ Dein Termin „${titel}“ (${uhrzeit(t.beginn)} Uhr)${zusatz ? ` ${zusatz.slice(0, 90)}` : ''} beginnt.\nGespräch aufnehmen: ${link}`
+}
+
+async function akteZusatz(admin: Db, bezug: Bezug): Promise<string> {
+  if (bezug.art === 'kunde') {
+    const { data } = await admin.from('kunden').select('firma, ansprechpartner').eq('id', bezug.id).maybeSingle()
+    const name = String(data?.ansprechpartner ?? '').trim() || String(data?.firma ?? '').trim()
+    return name ? `mit ${name}` : ''
+  }
+  const { data } = await admin.from('objekte').select('bezeichnung').eq('id', bezug.id).maybeSingle()
+  const name = String(data?.bezeichnung ?? '').trim()
+  return name ? `zu ${name}` : ''
+}
+
+async function beimTerminbeginn(admin: Db, o: BriefingOptionen, jetzt: Date, ergebnis: BriefingErgebnis): Promise<void> {
+  // Wer will erinnert werden? (Standard aus — meist niemand, dann keine weitere Abfrage)
+  const { data: einst, error: einstFehler } = await admin.from('kalender_einstellungen').select('email').eq('gespraech_erinnerung', true)
+  if (einstFehler) {
+    // Spalte noch nicht angelegt (SQL nicht eingespielt): still nichts tun.
+    if (!/gespraech_erinnerung/.test(einstFehler.message ?? '')) ergebnis.fehler.push(`Einstellungen nicht lesbar: ${einstFehler.message}`)
+    return
+  }
+  const wollen = new Set(((einst ?? []) as { email: string }[]).map((z) => adresse(z.email)).filter(Boolean))
+  if (wollen.size === 0) return
+
+  const ab = new Date(jetzt.getTime() - ERINNERUNG_NACH * 60000).toISOString()
+  const bis = new Date(jetzt.getTime() + ERINNERUNG_VOR * 60000).toISOString()
+  const { data, error } = await admin.from('termine').select(TERMIN_SPALTEN).eq('ganztags', false).gte('beginn', ab).lte('beginn', bis).order('beginn', { ascending: true }).limit(200)
+  if (error) {
+    ergebnis.fehler.push(`Termine nicht lesbar: ${error.message}`)
+    return
+  }
+  const termine = ((data ?? []) as BriefingTermin[]).filter((t) => !istAbgesagterTitel(String(t.titel ?? '')))
+  const faellig = termine
+    .map((t) => ({ t, personen: [...new Set([t.besitzer_email, ...(t.teilnehmer ?? [])].map(adresse).filter((p) => p && wollen.has(p)))] }))
+    .filter((f) => f.personen.length > 0)
+  if (faellig.length === 0) return
+
+  const team = await ladeTeam(admin)
+  const kandidaten = faellig.flatMap((f) => f.personen.filter((p) => team.get(p)?.chat).map((p) => ({ f, p, id: schluessel('aufnahme', f.t.id, p, new Date(f.t.beginn).toISOString()) })))
+  if (kandidaten.length === 0) return
+  const { data: schon, error: schonFehler } = await admin.from(TABELLE).select('id').in('id', kandidaten.map((k) => k.id))
+  if (schonFehler) {
+    ergebnis.fehler.push(`Vermerke nicht lesbar: ${schonFehler.message}`)
+    return
+  }
+  const erledigt = new Set(((schon ?? []) as { id: string }[]).map((z) => z.id))
+  const offen = kandidaten.filter((k) => !erledigt.has(k.id))
+  if (offen.length === 0) return
+
+  // Läuft zum Termin schon eine Aufnahme (oder liegt eine vor)? Dann keine Erinnerung.
+  const terminIds = [...new Set(offen.map((k) => k.f.t.id))]
+  const mitAufnahme = await termineMitAufnahme(admin, terminIds, ergebnis.fehler)
+
+  const teamAdressen = new Set(team.keys())
+  const teamNamen = [...team.values()].map((p) => p.name)
+  const lader = kandidatenLader(admin)
+  const privatMerker = new Map<string, boolean>()
+  const bezuege = new Map<string, Bezug | null>()
+  let linkBasis: string | null = null
+  let versucht = 0
+
+  for (const k of offen) {
+    if (versucht >= ERINNERUNGEN_HOECHSTENS) break
+    const t = k.f.t
+    if (mitAufnahme.has(String(t.id))) continue
+    if (!bezuege.has(t.id)) {
+      try {
+        bezuege.set(t.id, await findeBezug(admin, t, { team: teamAdressen, teamNamen, lader }))
+      } catch (err) {
+        ergebnis.fehler.push(`Bezug zu Termin ${t.id} nicht ermittelbar: ${err instanceof Error ? err.message : String(err)}`)
+        bezuege.set(t.id, null)
+      }
+    }
+    const bezug = bezuege.get(t.id)
+    const p = team.get(k.p)!
+    if (!bezug || !darfBezug(p, bezug)) continue
+    if (!(await beanspruche(admin, { id: k.id, termin_id: t.id, empfaenger: k.p, art: 'aufnahme', beginn: t.beginn, gesendet_am: jetzt.toISOString() }, ergebnis.fehler))) continue
+    versucht++
+    linkBasis ??= await ladeLinkBasis(admin)
+    const zusatz = await akteZusatz(admin, bezug).catch(() => '')
+    const text = erinnerungsText(t, zusatz, aufnahmeLinkZu(linkBasis, t.id, bezug))
+    const ok = await zustellen(admin, o, p, istPrivaterBezug(bezug), text, privatMerker).catch(() => false)
+    if (ok) ergebnis.aufnahme++
+    await vermerkeZustellung(admin, k.id, ok)
+  }
 }
 
 /** Kurzform für die Morgenübersicht: Uhrzeit, Titel, Akte, Stand, Offenes in Zahlen. */

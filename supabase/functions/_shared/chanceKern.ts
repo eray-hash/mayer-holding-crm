@@ -30,6 +30,7 @@
 //   Monat + Vorlauf nach Stufe (VORLAUF_JE_STUFE). Frühestens der laufende Monat.
 
 import { ANGEBOT_VORLAUF_MONATE, AKTE_ENDSTAENDE, angebotNetto, euro, monatName, monatVon, plusMonate } from './umsatzKern.ts'
+import { alleZeilen } from './alleZeilen.ts'
 
 // ─── Stellschrauben ──────────────────────────────────────────────────────────────────────────────
 
@@ -478,17 +479,20 @@ type Db = any
 
 /** Liest alles, was die Regel braucht. Ohne kundeIds alle Akten (Rechte prüft der Aufrufer danach). */
 export async function ladeChanceGrundlagen(db: Db, opt: { heute: string; kundeIds?: string[]; jetztIso?: string }): Promise<ChanceGrundlagen> {
-  let q = db.from('kunden').select(AKTEN_SPALTEN)
-  if (opt.kundeIds?.length) q = q.in('id', opt.kundeIds)
+  const akteAbfrage = () => {
+    const q = db.from('kunden').select(AKTEN_SPALTEN)
+    return opt.kundeIds?.length ? q.in('id', opt.kundeIds) : q
+  }
   const jetzt = opt.jetztIso ?? new Date().toISOString()
+  // Seitenweise: die Datenbank liefert höchstens 1000 Zeilen je Abfrage (ein limit(5000) hilft nicht).
   const [akten, kvs, rechnungen, termine, preise, alleBereiche] = await Promise.all([
-    q.limit(5000),
-    db.from('kostenvoranschlaege').select('id, kunde_id, bereich, privat_besitzer, name, status, datum, erstellt_am, betrag, positionen, aufschlag_prozent, ust_satz').limit(5000),
-    db.from('rechnungen').select('kunde_id, status').limit(5000),
-    db.from('termine').select('kunde_id, beginn').gte('beginn', jetzt).limit(5000),
+    alleZeilen(akteAbfrage),
+    alleZeilen(() => db.from('kostenvoranschlaege').select('id, kunde_id, bereich, privat_besitzer, name, status, datum, erstellt_am, betrag, positionen, aufschlag_prozent, ust_satz')),
+    alleZeilen(() => db.from('rechnungen').select('kunde_id, status')),
+    alleZeilen(() => db.from('termine').select('kunde_id, beginn').gte('beginn', jetzt)),
     db.from('leistungen_preisliste').select('bezeichnung, preis_tag_von, preis_tag_bis, preis_stunde_von, preis_stunde_bis').limit(500),
     // Für den Median je Bereich braucht es den Bereich aller Akten, nicht nur der gefragten.
-    db.from('kunden').select('id, bereich').limit(5000),
+    alleZeilen(() => db.from('kunden').select('id, bereich')),
   ])
   for (const [name, r] of [['Akten', akten], ['Kostenvoranschläge', kvs], ['Rechnungen', rechnungen], ['Termine', termine], ['Preisliste', preise], ['Akten', alleBereiche]] as const) {
     if (r.error) throw new Error(`${name} nicht lesbar (${r.error.message})`)

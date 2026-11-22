@@ -25,6 +25,7 @@
 
 import { akteAusZeile, aktePfad, CRM_BASIS_STANDARD, euro, fehlendeUnterlagen, ladeBerichtDaten, statusLesbar } from './kundenberichtKern.ts'
 import { kiAufruf } from './kiVerbrauch.ts'
+import { alleZeilen } from './alleZeilen.ts'
 
 // deno-lint-ignore no-explicit-any
 type Db = any
@@ -243,13 +244,14 @@ export function kandidatenLader(db: Db): { kunden: () => Promise<KundeKurz[]>; o
   return {
     kunden: () =>
       (k ??= (async () => {
-        const { data, error } = await db.from('kunden').select('id, bereich, firma, ansprechpartner, email, verantwortlich_email').limit(5000)
+        // Seitenweise (die Datenbank liefert höchstens 1000 Zeilen je Abfrage; ein limit(5000) hilft nicht).
+        const { data, error } = await alleZeilen(() => db.from('kunden').select('id, bereich, firma, ansprechpartner, email, verantwortlich_email'))
         if (error) throw new Error(`Akten ließen sich nicht lesen: ${error.message}`)
         return (data ?? []) as KundeKurz[]
       })()),
     objekte: () =>
       (o ??= (async () => {
-        const { data, error } = await db.from('objekte').select('id, bezeichnung, privat_besitzer').limit(2000)
+        const { data, error } = await alleZeilen(() => db.from('objekte').select('id, bezeichnung, privat_besitzer'))
         if (error) throw new Error(`Objekte ließen sich nicht lesen: ${error.message}`)
         return (data ?? []) as ObjektKurz[]
       })()),

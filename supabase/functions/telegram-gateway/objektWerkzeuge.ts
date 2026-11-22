@@ -28,6 +28,7 @@ import { istSichererPfad } from '../_shared/speicherPfad.ts'
 import { speicherOrt } from './dateiSenden.ts'
 import { OBJEKT_STATUS, objektStatus, type ObjektDokument, type ObjektRow, sucheObjekte } from './objektakte.ts'
 import { adresse, darfAkte, darfObjekt, darfObjekte, istFremdePrivatakte, istPrivat, istUnsichtbaresObjekt, nichtFreigegeben, type RechteMitarbeiter } from './rechte.ts'
+import { alleZeilen } from '../_shared/alleZeilen.ts'
 
 // deno-lint-ignore no-explicit-any
 type Supa = any
@@ -663,7 +664,10 @@ async function dateienInsObjekt(input: any, k: ObjektKontext): Promise<string> {
       }
       // Liegt die Datei schon in einer Akte oder einem Objekt, das er nicht sehen darf? Dann nicht anfassen.
       if (!referenzen) {
-        const [{ data: kz }, { data: oz }] = await Promise.all([supabase.from('kunden').select(KUNDE_SPALTEN), supabase.from('objekte').select('id, dokumente, privat_besitzer')])
+        const [{ data: kz }, { data: oz }] = await Promise.all([
+          alleZeilen(() => supabase.from('kunden').select(KUNDE_SPALTEN)),
+          alleZeilen(() => supabase.from('objekte').select('id, dokumente, privat_besitzer')),
+        ])
         referenzen = { kunden: (kz ?? []) as KundeZeile[], objekte: (oz ?? []) as ObjektRow[] }
       }
       const enthaelt = (liste: unknown) => (Array.isArray(liste) ? liste : []).some((d: { url?: string; herkunft?: string }) => d?.url === url || d?.herkunft === url)

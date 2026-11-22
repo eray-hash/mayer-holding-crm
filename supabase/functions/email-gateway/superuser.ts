@@ -25,6 +25,7 @@ import { berlinZeit, plusTage, istDienstSchluessel } from './tagesmeldung.ts'
 import { ordneAufgabenZu, ordneZu, personenNamen, OBJEKT_ABGESCHLOSSEN, type RohAufgabe } from '../_shared/aufgabenKern.ts'
 import { nurMayerObjekte } from '../_shared/privatZugriff.ts'
 import { wochenrueckblickAdressen } from './wochenrueckblickEmpfaenger.ts'
+import { alleZeilen, schluesselVon } from '../_shared/alleZeilen.ts'
 
 // deno-lint-ignore no-explicit-any
 type Db = any
@@ -103,17 +104,13 @@ function alsObjekt(w: unknown): Record<string, unknown> | null {
 
 // deno-lint-ignore no-explicit-any
 async function ladeAlle(admin: Db, tabelle: string, spalten: string, filter?: (q: any) => any): Promise<any[]> {
-  // deno-lint-ignore no-explicit-any
-  const alle: any[] = []
-  for (let ab = 0; ab < 20000; ab += 1000) {
-    let q = admin.from(tabelle).select(spalten).range(ab, ab + 999)
-    if (filter) q = filter(q)
-    const { data, error } = await q
-    if (error) throw new Error(`${tabelle} nicht lesbar: ${error.message}`)
-    alle.push(...(data ?? []))
-    if (!data || data.length < 1000) break
-  }
-  return alle
+  // Seitenweise mit eindeutiger Sortierung (ohne Sortierung können sich Seiten überschneiden oder Zeilen fehlen).
+  const { data, error } = await alleZeilen(() => {
+    const q = admin.from(tabelle).select(spalten)
+    return filter ? filter(q) : q
+  }, { ordnung: schluesselVon(tabelle), hoechstens: 20000 })
+  if (error) throw new Error(`${tabelle} nicht lesbar: ${error.message}`)
+  return data
 }
 
 type TeamMitglied = { name: string; email: string; telegram_chat_id: number | string | null; ist_superuser: boolean; telegram_pending: unknown }

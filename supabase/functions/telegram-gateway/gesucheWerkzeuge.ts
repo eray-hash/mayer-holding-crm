@@ -18,6 +18,7 @@
 
 import { type AbgleichObjekt, bestandVon, budgetText, eckdatenTexte, type Gesuch, gesucheDesKontakts, type KundenZeile, objektAusZeile, type ObjektZeile, pruefe, type Pruefung, vergleichePruefungen } from '../_shared/gesuchAbgleich.ts'
 import { adresse, darfAkte, darfObjekt, darfObjekte, istFremdePrivatakte, istPrivat, istUnsichtbaresObjekt, nichtFreigegeben, type RechteMitarbeiter, SAMMELAKTEN } from './rechte.ts'
+import { alleZeilen } from '../_shared/alleZeilen.ts'
 
 // deno-lint-ignore no-explicit-any
 type Supa = any
@@ -146,13 +147,13 @@ export function grundText(t: Pruefung): string {
 }
 
 async function ladeKunden(supabase: Supa): Promise<Kunde[] | string> {
-  const { data, error } = await supabase.from('kunden').select(KUNDEN_SPALTEN).limit(5000)
+  const { data, error } = await alleZeilen(() => supabase.from('kunden').select(KUNDEN_SPALTEN))
   if (error) return `Fehler beim Laden der Akten: ${error.message}`
   return (data ?? []) as Kunde[]
 }
 
 async function ladeObjekte(supabase: Supa): Promise<ObjektZeile[] | string> {
-  const { data, error } = await supabase.from('objekte').select(OBJEKT_SPALTEN).limit(5000)
+  const { data, error } = await alleZeilen(() => supabase.from('objekte').select(OBJEKT_SPALTEN))
   if (error) return `Fehler beim Laden der Objekte: ${error.message}`
   return (data ?? []) as ObjektZeile[]
 }

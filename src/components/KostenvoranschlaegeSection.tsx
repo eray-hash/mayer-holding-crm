@@ -16,6 +16,7 @@ import { herunterladen } from '../lib/briefe'
 import { ladeKundenDokumentHoch } from '../lib/kundenDokumenteStorage'
 import { erzeugeKvPdf, kvPdfDateiname, type AngebotAngaben, type KvArt } from '../lib/kostenvoranschlagPdf'
 import { KvPositionenEditor, euroText, type KvPositionenWert } from './KvPositionenEditor'
+import { KvAkteVorschlag } from './KvAkteVorschlag'
 import {
   KV_STATUS,
   aendereKostenvoranschlag,
@@ -378,6 +379,18 @@ export function KvBearbeitenModal({
               </optgroup>
             ))}
           </select>
+          {(akte === OHNE_AKTE || akte === OHNE_AKTE_PRIVAT) && (
+            <KvAkteVorschlag
+              name={name}
+              beschreibung={beschreibung}
+              notiz={notiz}
+              privat={akte === OHNE_AKTE_PRIVAT}
+              onWaehlen={(id) => {
+                setAkteSuche('')
+                setAkte(id)
+              }}
+            />
+          )}
           {eintrag?.dokument && (
             <p className="mt-1.5 text-xs text-slate-400">Die verknüpfte Datei „{eintrag.dokument.name}“ bleibt verknüpft, auch wenn du die Akte wechselst.</p>
           )}

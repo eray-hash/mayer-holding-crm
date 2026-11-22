@@ -35,6 +35,7 @@ import { type Dok, findeDokument, findeKollege, sendeDokumentAnChat, speicherOrt
 import { formatGroesse, freierName, fuehreObjektSchreibWerkzeugAus, OBJEKT_ORDNER, ordnerVon, speicherName } from './objektWerkzeuge.ts'
 import { bereichName, darfAkte, darfObjekt, istEigene, istFremdePrivatakte, istPrivat, istUnsichtbaresObjekt, nichtFreigegeben, type RechteMitarbeiter, SAMMELAKTEN } from './rechte.ts'
 import { sensibleArt } from './sensibel.ts'
+import { alleZeilen } from '../_shared/alleZeilen.ts'
 
 // deno-lint-ignore no-explicit-any
 type Supa = any
@@ -344,8 +345,13 @@ type Verwendung = { art: 'kunde' | 'objekt'; id: string; dokId: string; schluess
 
 /** Alle Stellen in Kunden- und Objektakten, die auf eine Datei im eigenen Speicher zeigen. */
 async function ladeVerwendungen(supabase: Supa): Promise<Verwendung[]> {
-  const [{ data: kunden, error: e1 }, { data: objekte, error: e2 }] = await Promise.all([supabase.from('kunden').select('id, dokumente'), supabase.from('objekte').select('id, dokumente')])
-  if (e1 || e2) throw new Error(`Verwendungen ließen sich nicht prüfen (${(e1 ?? e2).message})`)
+  // Vollständig und seitenweise: fehlte eine Akte (Grenze 1000 Zeilen je Abfrage), sähe eine benutzte Datei unbenutzt aus.
+  const [{ data: kunden, error: e1 }, { data: objekte, error: e2 }] = await Promise.all([
+    alleZeilen(() => supabase.from('kunden').select('id, dokumente')),
+    alleZeilen(() => supabase.from('objekte').select('id, dokumente')),
+  ])
+  const fehler = e1 ?? e2
+  if (fehler) throw new Error(`Verwendungen ließen sich nicht prüfen (${fehler.message})`)
   const aus: Verwendung[] = []
   for (const kz of (kunden ?? []) as { id: string; dokumente: unknown }[]) {
     for (const d of Array.isArray(kz.dokumente) ? (kz.dokumente as Dok[]) : []) {

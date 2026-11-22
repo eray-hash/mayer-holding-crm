@@ -49,6 +49,7 @@ import type {
   Verbindlichkeit,
 } from '../types'
 import type { Projekt } from '../types/project'
+import { alleZeilen } from './alleZeilen'
 
 export { isSupabaseConfigured }
 
@@ -752,10 +753,11 @@ function syncSimpleCollection(client: NonNullable<typeof supabase>, prev: AppDat
     client.from(cfg.table).delete().in('id', geloeschteIds).then(({ error }) => logFehler(`${cfg.table} löschen`, error))
   }
 
-  // To-dos: bei vorhandenen Aufgaben nur die geänderten Felder schreiben — die automatische Priorisierung auf dem
+  // To-dos, Verbindlichkeiten, Rechnungen: bei vorhandenen Zeilen nur die geänderten Felder schreiben (Server ergänzt Belege,
+  // Zahlungen aus Kontoauszügen usw.). To-dos: die automatische Priorisierung auf dem
   // Server (todoPriorisierung.ts) setzt prio/reihenfolge, und ein Fenster mit älterem Stand soll sie nicht zurückdrehen,
   // nur weil dort ein anderes Feld bearbeitet wird.
-  const vorherNachId = cfg.table === 'todos' ? new Map(prevListe.map((x) => [x.id, x])) : null
+  const vorherNachId = cfg.table === 'todos' || cfg.table === 'verbindlichkeiten' || cfg.table === 'rechnungen' ? new Map(prevListe.map((x) => [x.id, x])) : null
   for (const item of diffById(prevListe, nextListe)) {
     const vorher = vorherNachId?.get(item.id)
     if (vorher) {
@@ -1123,19 +1125,17 @@ export type HydratedData = {
 /** Alle To-dos seitenweise: Die Datenbank liefert höchstens 1000 Zeilen je Abfrage, Hasan allein hat über 2.600
  *  (aus Microsoft To Do). Ohne Seiten fehlte in seiner Liste mehr als die Hälfte (22.11.2026). */
 async function alleTodoZeilen(): Promise<{ data: unknown[] | null; error: { message: string } | null }> {
-  if (!supabase) return { data: [], error: null }
-  const alle: unknown[] = []
-  for (let von = 0; von < 50_000; von += 1000) {
-    const { data, error } = await supabase.from('todos').select('*').order('id', { ascending: true }).range(von, von + 999)
-    if (error) return { data: null, error }
-    alle.push(...(data ?? []))
-    if (!data || data.length < 1000) break
-  }
-  return { data: alle, error: null }
+  const db = supabase
+  if (!db) return { data: [], error: null }
+  const { data, error } = await alleZeilen(() => db.from('todos').select('*'))
+  return error ? { data: null, error } : { data, error: null }
 }
 
 export async function hydrateFromSupabase(): Promise<HydratedData | null> {
-  if (!supabase) return null
+  const db = supabase
+  if (!db) return null
+  // Jede Tabelle seitenweise (alleZeilen): Die Datenbank liefert höchstens 1000 Zeilen je Abfrage, ohne Fehler —
+  // Akten, Verlaufseinträge der Abteilungen (Zeiten, Ablage, Treffer) usw. wachsen darüber hinaus.
   const [
     kundenRes,
     objekteRes,
@@ -1159,27 +1159,27 @@ export async function hydrateFromSupabase(): Promise<HydratedData | null> {
     mitarbeiterRes,
     abteilungRes,
   ] = await Promise.all([
-    supabase.from('kunden').select('*'),
-    supabase.from('objekte').select('*'),
-    supabase.from('protokolle').select('*'),
-    supabase.from('objekt_vorschlaege').select('*'),
-    supabase.from('vorlagen').select('*'),
-    supabase.from('rechnungen').select('*'),
-    supabase.from('konzepte').select('*'),
-    supabase.from('vertraege').select('*'),
-    supabase.from('objekt_finanzierungen').select('*'),
-    supabase.from('projekte').select('*'),
-    supabase.from('fonds_investoren').select('*'),
-    supabase.from('fonds_dokumente_allgemein').select('*'),
-    supabase.from('importierte_dokumente').select('*'),
-    supabase.from('mail_vorlagen').select('*'),
-    supabase.from('notizen').select('*'),
-    supabase.from('abwesenheiten').select('*'),
+    alleZeilen(() => db.from('kunden').select('*')),
+    alleZeilen(() => db.from('objekte').select('*')),
+    alleZeilen(() => db.from('protokolle').select('*')),
+    alleZeilen(() => db.from('objekt_vorschlaege').select('*')),
+    alleZeilen(() => db.from('vorlagen').select('*')),
+    alleZeilen(() => db.from('rechnungen').select('*')),
+    alleZeilen(() => db.from('konzepte').select('*')),
+    alleZeilen(() => db.from('vertraege').select('*')),
+    alleZeilen(() => db.from('objekt_finanzierungen').select('*')),
+    alleZeilen(() => db.from('projekte').select('*')),
+    alleZeilen(() => db.from('fonds_investoren').select('*')),
+    alleZeilen(() => db.from('fonds_dokumente_allgemein').select('*')),
+    alleZeilen(() => db.from('importierte_dokumente').select('*')),
+    alleZeilen(() => db.from('mail_vorlagen').select('*')),
+    alleZeilen(() => db.from('notizen').select('*')),
+    alleZeilen(() => db.from('abwesenheiten').select('*')),
     alleTodoZeilen(),
-    supabase.from('todo_freigaben').select('*'),
-    supabase.from('verbindlichkeiten').select('*'),
-    supabase.from('mitarbeiter').select('name').eq('aktiv', true).order('name'),
-    supabase.from('abteilung_eintraege').select('art, daten'),
+    alleZeilen(() => db.from('todo_freigaben').select('*')),
+    alleZeilen(() => db.from('verbindlichkeiten').select('*')),
+    db.from('mitarbeiter').select('name').eq('aktiv', true).order('name'),
+    alleZeilen(() => db.from('abteilung_eintraege').select('art, daten')),
   ])
   // Fehlt diese Tabelle einmal oder antwortet sie nicht, soll deshalb nicht das ganze CRM leer bleiben.
   if (abteilungRes.error) console.error('[crmSync] abteilung_eintraege:', abteilungRes.error.message)

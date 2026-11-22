@@ -16,6 +16,10 @@ const ERFUNDEN = [
   /^(vielen dank|danke)( für (ihre|eure) aufmerksamkeit)?[.!]?$/i,
   /^bis zum nächsten mal[.!]?$/i,
   /^copyright .{0,60}$/i,
+  // Dasselbe in anderen Sprachen (Aufnahmen mit automatischer Spracherkennung, seit Runde 5).
+  /^(thank you|thanks) (so much )?for watching[.!]?$/i,
+  /^altyaz[ıi] .{0,60}$/i,
+  /^(izlediğiniz için teşekkürler|abone olmayı unutmayın)[.!]?$/i,
   /^\.{1,5}$/,
 ]
 
@@ -30,6 +34,8 @@ export type Abschrift = {
   stuecke: { ab: number; text: string }[]
   /** Länge laut Dienst in Sekunden (falls geliefert). */
   dauer?: number
+  /** Erkannte Sprache laut Dienst (z. B. „turkish“ oder „tr“), falls geliefert. */
+  sprache?: string
 }
 
 /** Fehler des Abschrift-Dienstes; `status` 429 = Mengengrenze (später erneut versuchen). */
@@ -47,14 +53,15 @@ export function abschriftEingerichtet(): boolean {
  * Schreibt eine Tonaufnahme ab. `hinweis`: Namen, die vorkommen können, und/oder der unmittelbar davor
  * gesprochene Text (bei Aufnahmen in Abschnitten) — verbessert die Schreibweise; höchstens 600 Zeichen.
  */
-export async function schreibeAb(bytes: Uint8Array, dateiname: string, contentType: string, hinweis = '', timeoutMs = 100_000): Promise<Abschrift> {
+export async function schreibeAb(bytes: Uint8Array, dateiname: string, contentType: string, hinweis = '', timeoutMs = 100_000, sprachWahl?: string | null): Promise<Abschrift> {
   const groq = Deno.env.get('GROQ_API_KEY')
   const schluessel = groq ?? Deno.env.get('OPENAI_API_KEY')
   if (!schluessel) throw new AbschriftFehler('Die Abschrift von Aufnahmen ist noch nicht eingerichtet (kein Schlüssel hinterlegt).', 0)
   if (bytes.length > TRANSKRIPTION_MAX_BYTES) throw new AbschriftFehler('Der Aufnahme-Abschnitt ist für die Abschrift zu groß (über 24 MB).', 413)
   const url = Deno.env.get('TRANSKRIPTION_URL') ?? (groq ? 'https://api.groq.com/openai/v1/audio/transcriptions' : 'https://api.openai.com/v1/audio/transcriptions')
   const modell = Deno.env.get('TRANSKRIPTION_MODELL') ?? (groq ? 'whisper-large-v3-turbo' : 'whisper-1')
-  const sprache = Deno.env.get('TRANSKRIPTION_SPRACHE') ?? 'de'
+  // sprachWahl: undefined = Vorgabe (TRANSKRIPTION_SPRACHE, sonst Deutsch); null oder '' = automatisch erkennen lassen.
+  const sprache = sprachWahl === undefined ? (Deno.env.get('TRANSKRIPTION_SPRACHE') ?? 'de') : (sprachWahl ?? '')
   const form = new FormData()
   form.append('file', new Blob([bytes.slice().buffer as ArrayBuffer], { type: contentType || 'application/octet-stream' }), dateiname)
   form.append('model', modell)
@@ -71,6 +78,7 @@ export async function schreibeAb(bytes: Uint8Array, dateiname: string, contentTy
   const stuecke = roh
     .map((s) => ({ ab: Math.max(0, Math.round(Number(s?.start) * 10) / 10 || 0), text: String(s?.text ?? '').trim() }))
     .filter((s) => s.text && !istErfunden(s.text))
-  if (istErfunden(text)) return { text: '', stuecke: [], dauer: Number(data?.duration) || undefined }
-  return { text, stuecke, dauer: Number(data?.duration) || undefined }
+  const erkannt = typeof data?.language === 'string' && data.language.trim() ? { sprache: data.language.trim() } : {}
+  if (istErfunden(text)) return { text: '', stuecke: [], dauer: Number(data?.duration) || undefined, ...erkannt }
+  return { text, stuecke, dauer: Number(data?.duration) || undefined, ...erkannt }
 }

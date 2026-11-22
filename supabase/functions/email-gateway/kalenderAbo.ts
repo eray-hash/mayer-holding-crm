@@ -10,6 +10,8 @@
 //   Ausgeschiedene (nicht mehr aktive) Mitarbeiter bekommen nichts mehr.
 // - Der Kundenname steht in der Beschreibung, nie ein Verweis ins CRM.
 
+import { alleZeilen } from '../_shared/alleZeilen.ts'
+
 // Der Dienst-Zugang zur Datenbank — in postfach.ts genauso typisiert, dort aber nicht exportiert.
 // deno-lint-ignore no-explicit-any
 type Db = any
@@ -31,7 +33,7 @@ export type AboTermin = {
 const TAG_MS = 86400000
 const TAGE_ZURUECK = 60
 const MONATE_VORAUS = 18
-const MAX_TERMINE = 5000
+const MAX_TERMINE = 5000 // gelesen wird seitenweise (alleZeilen) — die Datenbank liefert höchstens 1000 je Abfrage
 const UID_DOMAIN = 'kalender.mayer-holding-crm'
 const TOKEN_MUSTER = /^[A-Za-z0-9_-]{32,128}$/
 
@@ -223,8 +225,8 @@ export async function kalenderAboAntwort(admin: Db, token: string | null, method
     const muster = ich.replace(/[\\%_]/g, (z) => `\\${z}`)
     const [eigene, dabei] = await Promise.all([
       // Per Mail-Einladung übernommene Termine stehen schon im Kalender des Postfachs — nicht doppelt liefern.
-      admin.from('termine').select(spalten).ilike('besitzer_email', muster).or('quelle.is.null,quelle.neq.einladung').lt('beginn', bis).gt('ende', von).order('beginn').limit(MAX_TERMINE),
-      admin.from('termine').select(spalten).contains('teilnehmer', [ich]).or('quelle.is.null,quelle.neq.einladung').lt('beginn', bis).gt('ende', von).order('beginn').limit(MAX_TERMINE),
+      alleZeilen(() => admin.from('termine').select(spalten).ilike('besitzer_email', muster).or('quelle.is.null,quelle.neq.einladung').lt('beginn', bis).gt('ende', von).order('beginn'), { hoechstens: MAX_TERMINE }),
+      alleZeilen(() => admin.from('termine').select(spalten).contains('teilnehmer', [ich]).or('quelle.is.null,quelle.neq.einladung').lt('beginn', bis).gt('ende', von).order('beginn'), { hoechstens: MAX_TERMINE }),
     ])
     if (eigene.error) throw new Error(eigene.error.message)
     if (dabei.error) throw new Error(dabei.error.message)

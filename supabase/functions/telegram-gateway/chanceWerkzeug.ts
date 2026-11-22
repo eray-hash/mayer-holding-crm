@@ -14,6 +14,7 @@ import {
 } from '../_shared/chanceKern.ts'
 import { euro, leseDeutscheZahl, monatName, monatVon, plusMonate } from '../_shared/umsatzKern.ts'
 import { bereichIdVon, bereichName, darfAkte, darfBereich, istFremdePrivatakte, istPrivat, nichtFreigegeben, type RechteMitarbeiter, SAMMELAKTEN } from './rechte.ts'
+import { alleZeilen } from '../_shared/alleZeilen.ts'
 
 // deno-lint-ignore no-explicit-any
 type Supa = any
@@ -198,10 +199,13 @@ export async function fuehreChanceWerkzeugAus(name: string, input: Record<string
       }
     }
 
-    let q = supabase.from('kunden').select(SPALTEN).neq('bereich', 'privat')
-    if (kundeId) q = q.eq('id', kundeId)
-    if (bereich) q = q.eq('bereich', bereich)
-    const { data, error } = await q.limit(5000)
+    // Seitenweise (die Datenbank liefert höchstens 1000 Zeilen je Abfrage).
+    const { data, error } = await alleZeilen(() => {
+      let q = supabase.from('kunden').select(SPALTEN).neq('bereich', 'privat')
+      if (kundeId) q = q.eq('id', kundeId)
+      if (bereich) q = q.eq('bereich', bereich)
+      return q
+    })
     if (error) return `Fehler beim Laden: ${error.message}`
     const alle = input.alle === true
     const zeilen = ((data ?? []) as Zeile[])

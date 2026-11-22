@@ -1,10 +1,27 @@
 // Daten für Prüfbildschirm, Liste und Vorbereitung der Gesprächs-App. Server-Aktionen dieses Teils:
 // gespraech_uebernehmen, gespraech_akte_setzen, gespraech_vorbereitung (supabase/functions/email-gateway/
-// gespraechUebernehmen.ts). Gelesen wird sonst mit dem eigenen Login (Zeilenschutz der Datenbank).
+// gespraechUebernehmen.ts), seit Runde 5 außerdem gespraech_uebersetzen, gespraech_teilen,
+// gespraech_kundennotiz_vermerken und gespraech_neu_auswerten mit Sprache (gespraechPipeline.ts). Die
+// Gesprächsnotiz an den Kunden geht über den normalen Versand des CRM (sendEmail → Aktion send).
+// Gelesen wird sonst mit dem eigenen Login (Zeilenschutz der Datenbank).
 
-import { callAuthenticated } from '../../lib/emailGateway'
+import { callAuthenticated, sendEmail } from '../../lib/emailGateway'
 import { supabase } from '../../lib/supabaseClient'
 import { GESPRAECH_SPEICHER, type GespraechAufnahme, type GespraechUebernommen } from '../typen'
+import type { AktenfeldName, Aktenfelder, FragebogenAntwort, GespraechGeteilt, GespraechSprache, GespraechUebersetzung } from '../../../supabase/functions/_shared/gespraechSchema.ts'
+
+/** Zeile mit den Feldern aus Runde 5 (Sprache, Übersetzung, Teilen; Fragebogen und Aktenfelder in analyse). */
+export type AufnahmeR5 = Omit<GespraechAufnahme, 'sprecher' | 'analyse' | 'uebernommen'> & {
+  sprache?: GespraechSprache | null
+  sprache_erkannt?: string | null
+  uebersetzung?: GespraechUebersetzung | null
+  geteilt?: GespraechGeteilt[] | null
+  audio_geloescht_am?: string | null
+  besitzer?: boolean
+  sprecher?: { label: string; name?: string; rolle?: string; sek?: number; text?: string }[] | null
+  analyse: (NonNullable<GespraechAufnahme['analyse']> & { fragebogen?: FragebogenAntwort[]; fragebogen_vorlage?: { id: string; name: string }; aktenfelder?: Aktenfelder }) | null
+  uebernommen: (GespraechUebernommen & { fragebogen?: { dokumentId?: string; notiz?: boolean }; aktenfelder?: Record<string, string> }) | null
+}
 
 export type Auswahl = {
   protokoll: true
@@ -16,6 +33,10 @@ export type Auswahl = {
   audioInAkte: boolean
   fotosInAkte: boolean
   mailEntwurf: boolean
+  /** Vorbefüllten Fragebogen als PDF in die Akte. */
+  fragebogen?: boolean
+  /** Diese Aktenfelder füllen (nur, wenn sie in der Akte leer sind). */
+  aktenfelder?: AktenfeldName[]
 }
 
 export type Bearbeitet = {
@@ -26,6 +47,8 @@ export type Bearbeitet = {
   termine?: { titel: string; datum: string; uhrzeit?: string; ort?: string; mit?: string; dauer_min?: number }[]
   stammdaten?: { feld: string; wert: string }[]
   mail_entwurf?: { betreff: string; text: string }
+  fragebogen?: FragebogenAntwort[]
+  aktenfelder?: Aktenfelder
 }
 
 export type UebernahmeErgebnis = { ok: true; zeilen: string[]; hinweise: string[]; uebernommen: GespraechUebernommen }
@@ -110,11 +133,22 @@ export async function ladeTeam(): Promise<TeamMitglied[]> {
   return ((data ?? []) as TeamMitglied[]).filter((m) => m.name && m.email).map((m) => ({ ...m, email: String(m.email).toLowerCase() }))
 }
 
-export type AkteKurz = { id: string; bereich: string; firma: string | null; ansprechpartner: string | null; telefon: string | null; email: string | null; anschrift: string | null }
+export type AkteKurz = {
+  id: string
+  bereich: string
+  firma: string | null
+  ansprechpartner: string | null
+  telefon: string | null
+  email: string | null
+  anschrift: string | null
+  sachverhalt?: string | null
+  branche?: string | null
+  dienstleistungen?: string[] | null
+}
 
 export async function ladeAkte(id: string): Promise<AkteKurz | null> {
   if (!supabase || !id) return null
-  const { data } = await supabase.from('kunden').select('id, bereich, firma, ansprechpartner, telefon, email, anschrift').eq('id', id).maybeSingle()
+  const { data } = await supabase.from('kunden').select('id, bereich, firma, ansprechpartner, telefon, email, anschrift, sachverhalt, branche, dienstleistungen').eq('id', id).maybeSingle()
   return (data as AkteKurz | null) ?? null
 }
 
@@ -220,4 +254,89 @@ export function alsDatum(wert: unknown): string {
 export function alsUhrzeit(wert: unknown): string {
   const m = String(wert ?? '').trim().match(/^(\d{1,2})[:.](\d{2})/)
   return m && Number(m[1]) < 24 && Number(m[2]) < 60 ? `${m[1].padStart(2, '0')}:${m[2]}` : ''
+}
+
+// ---------- Runde 5: Sprache, Übersetzung, Teilen ----------
+
+/** Mit einer anderen Sprache neu abschreiben und auswerten (nur der Besitzer, solange der Ton da ist). */
+export async function neuAbschreiben(id: string, sprache: GespraechSprache): Promise<void> {
+  await callAuthenticated({ action: 'gespraech_neu_auswerten', id, sprache })
+}
+
+/** Deutsche Fassung der Abschrift, Absatz für Absatz. `fertig: false` = noch einmal aufrufen (lange Gespräche). */
+export async function uebersetzeAbschrift(id: string): Promise<{ absaetze: string[]; fertig: boolean; hinweis?: string }> {
+  return (await callAuthenticated({ action: 'gespraech_uebersetzen', id, art: 'abschrift' })) as { absaetze: string[]; fertig: boolean; hinweis?: string }
+}
+
+/** Mail-Entwurf bzw. Gesprächsnotiz in die Sprache des Kunden (Kürzel wie tr oder Schlüssel wie tuerkisch). */
+export async function uebersetzeText(id: string, art: 'mail' | 'notiz', sprache: string, betreff: string, text: string): Promise<{ betreff: string; text: string; sprache: string }> {
+  return (await callAuthenticated({ action: 'gespraech_uebersetzen', id, art, sprache, betreff, text })) as { betreff: string; text: string; sprache: string }
+}
+
+export type TeilenEmpfaenger = { email: string; name: string; darf: boolean; telegram: boolean }
+
+export async function teilenEmpfaenger(id: string): Promise<TeilenEmpfaenger[]> {
+  const d = (await callAuthenticated({ action: 'gespraech_teilen', id, pruefen: true })) as { empfaenger: TeilenEmpfaenger[] }
+  return d.empfaenger ?? []
+}
+
+export async function teilen(id: string, an: string[], notiz: string): Promise<{ gesendet: string[]; nicht: { name: string; grund: string }[] }> {
+  return (await callAuthenticated({ action: 'gespraech_teilen', id, an, notiz })) as { gesendet: string[]; nicht: { name: string; grund: string }[] }
+}
+
+/** Eigene Signatur aus „Mein Profil“ (HTML) — wird wie beim normalen Mailversand angehängt. */
+export async function ladeSignatur(email: string): Promise<string> {
+  if (!supabase || !email) return ''
+  const { data } = await supabase.from('mitarbeiter').select('signatur_html').eq('email', email).maybeSingle()
+  return String((data as { signatur_html?: string | null } | null)?.signatur_html ?? '').trim()
+}
+
+/** Die Signatur als reiner Text — gleiche Umwandlung wie im Fenster „Neue E-Mail“ des CRM. */
+export function signaturAlsText(signaturHtml: string): string {
+  return signaturHtml.replace(/<br\s*\/?>/gi, '\n').replace(/<\/p>/gi, '\n\n').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/\n{3,}/g, '\n\n').trim()
+}
+
+function htmlSicher(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+
+function alsHtml(text: string): string {
+  return text
+    .split(/\n{2,}/)
+    .map((absatz) => `<p>${htmlSicher(absatz).replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1">$1</a>').replace(/\n/g, '<br>')}</p>`)
+    .join('')
+}
+
+/**
+ * Gesprächsnotiz an den Kunden senden: über den normalen Versand des CRM (Aktion send — landet in gesendete_emails und im
+ * Mail-Verlauf der Akte), mit der eigenen Signatur; danach den Eintrag im Verlauf der Akte (gespraech_kundennotiz_vermerken).
+ * Gibt einen Hinweis zurück, wenn die Mail zwar raus ist, der Verlaufseintrag aber nicht gelang.
+ */
+export async function sendeKundennotiz(a: {
+  id: string
+  an: string
+  anName: string
+  betreff: string
+  text: string
+  signaturHtml: string
+  akte: { id: string; bereich: string; firma: string | null }
+  postfachId?: string
+  sprache?: string
+}): Promise<{ hinweis?: string }> {
+  const signaturText = a.signaturHtml ? signaturAlsText(a.signaturHtml) : ''
+  await sendEmail(
+    a.an,
+    a.betreff,
+    signaturText ? `${a.text}\n\n--\n${signaturText}` : a.text,
+    `<div>${alsHtml(a.text)}</div>${a.signaturHtml ? `<div>${a.signaturHtml}</div>` : ''}`,
+    { toName: a.anName || a.an, kundeBereich: a.akte.bereich, kundeId: a.akte.id, kundeName: a.akte.firma ?? undefined, ohneRechnungsErkennung: true } as Parameters<typeof sendEmail>[4],
+    undefined,
+    a.postfachId ? { postfachId: a.postfachId } : undefined,
+  )
+  try {
+    await callAuthenticated({ action: 'gespraech_kundennotiz_vermerken', id: a.id, an: a.an, betreff: a.betreff, sprache: a.sprache })
+    return {}
+  } catch (e) {
+    return { hinweis: `Die Mail ist verschickt, aber der Eintrag im Verlauf der Akte fehlt: ${e instanceof Error ? e.message : String(e)}` }
+  }
 }

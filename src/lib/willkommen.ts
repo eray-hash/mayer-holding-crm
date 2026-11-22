@@ -3,6 +3,7 @@
 // (email-gateway/willkommen.ts). Hier: anzeigen, abbrechen, sofort senden, Schalter und Wartezeit.
 import { supabase } from './supabaseClient'
 import { call } from './emailGateway'
+import { alleZeilen } from './alleZeilen'
 
 export type WillkommenStatus = 'geplant' | 'ohne_adresse' | 'gesendet' | 'abgebrochen' | 'fehler'
 
@@ -47,7 +48,8 @@ export async function ladeWillkommen(kundeId: string): Promise<WillkommenNachric
 }
 
 export async function ladeAlleWillkommen(): Promise<Map<string, WillkommenNachricht>> {
-  const { data, error } = await client().from('willkommen_nachrichten').select('*').limit(5000)
+  // Seitenweise: eine Zeile je neuer Akte — die Datenbank liefert höchstens 1000 Zeilen je Abfrage.
+  const { data, error } = await alleZeilen(() => client().from('willkommen_nachrichten').select('*'))
   if (error) throw new Error(error.message)
   return new Map((data ?? []).map((z) => [z.kunde_id as string, ausZeile(z)]))
 }

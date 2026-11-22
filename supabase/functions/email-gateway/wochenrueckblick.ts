@@ -46,6 +46,7 @@ import { findeBezug, istAbgesagterTitel, istPrivaterBezug, kandidatenLader, SAMM
 import { kiAufruf } from '../_shared/kiVerbrauch.ts'
 import { EINSTELLUNG_ID, empfaengerAus, ladeEinstellung, moeglicheEmpfaenger, normalisiereEinstellung, type Einstellung } from './wochenrueckblickEmpfaenger.ts'
 import { istSuperuserAdressen, superuserAnhang } from './superuser.ts'
+import { alleZeilen, schluesselVon } from '../_shared/alleZeilen.ts'
 
 // Einstellung und Empfänger stehen in wochenrueckblickEmpfaenger.ts (dort lesen sie auch tagesmeldung.ts und superuser.ts).
 export { EINSTELLUNG_ID, empfaengerAus, ladeEinstellung, moeglicheEmpfaenger, normalisiereEinstellung, VORGABE, wochenrueckblickAdressen } from './wochenrueckblickEmpfaenger.ts'
@@ -165,18 +166,13 @@ export function artDesWechsels(bereich: string, w: { von: string | null; nach: s
 
 // deno-lint-ignore no-explicit-any
 async function ladeAlle(admin: Db, tabelle: string, spalten: string, filter?: (q: any) => any): Promise<any[]> {
-  // deno-lint-ignore no-explicit-any
-  const alle: any[] = []
-  for (let ab = 0; ab < 20000; ab += 1000) {
-    let q = admin.from(tabelle).select(spalten)
-    if (filter) q = filter(q)
-    q = q.range(ab, ab + 999)
-    const { data, error } = await q
-    if (error) throw new Error(`${tabelle} nicht lesbar: ${error.message}`)
-    alle.push(...(data ?? []))
-    if (!data || data.length < 1000) break
-  }
-  return alle
+  // Seitenweise mit eindeutiger Sortierung (ohne Sortierung können sich Seiten überschneiden oder Zeilen fehlen).
+  const { data, error } = await alleZeilen(() => {
+    const q = admin.from(tabelle).select(spalten)
+    return filter ? filter(q) : q
+  }, { ordnung: schluesselVon(tabelle), hoechstens: 20000 })
+  if (error) throw new Error(`${tabelle} nicht lesbar: ${error.message}`)
+  return data
 }
 
 // ---------------------------------------------------------------------------------------------

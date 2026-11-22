@@ -11,6 +11,7 @@ import { ladeKundenDokumentHoch, erzeugeKundenDownloadUrl } from '../../lib/kund
 import { KontoauszugAbgleichKnopf } from '../../components/rechnungen/KontoauszugAbgleich'
 import { SteuerberaterExportKnopf } from '../../components/rechnungen/SteuerberaterExport'
 import type { Verbindlichkeit, VerbindlichkeitStatus } from '../../types'
+import { erkanntAus, fehltKurz, istUnvollstaendig, type ErkanntInfo } from '../../../supabase/functions/_shared/belegLuecken.ts'
 
 // Gegenstück zur Rechnungen-Seite: Geld, das Mayer Holding selbst schuldet (Lieferanten-/
 // Kostenrechnungen) statt Geld, das Kunden schulden. Wird sowohl automatisch aus eingehenden
@@ -61,13 +62,19 @@ const KATEGORIEN = [
   'Sonstiges',
 ]
 
-type FilterId = 'alle' | 'offen' | 'ueberfaellig' | 'pruefen' | 'bezahlt'
+type FilterId = 'alle' | 'offen' | 'ueberfaellig' | 'pruefen' | 'unvollstaendig' | 'bezahlt'
 
-const FILTER: { id: FilterId; label: string; leer: string; passt: (v: Verbindlichkeit) => boolean }[] = [
+// Seit 22.11.2026: „Unvollständig“ = Beleg, Betrag oder Rechnungsnummer fehlt bzw. wohl keine Rechnung
+// (Regeln: supabase/functions/_shared/belegLuecken.ts, dieselben wie im Assistenten). Was der Server
+// automatisch erkannt hat (Spalte automatisch_erkannt), lädt die Seite selbst nach.
+const angaben = (v: Verbindlichkeit) => ({ beleg: v.beleg ?? null, brutto: v.betragBrutto ?? null, netto: v.betragNetto ?? null, rechnungsnummer: v.rechnungsnummer ?? null })
+
+const FILTER: { id: FilterId; label: string; leer: string; passt: (v: Verbindlichkeit, e?: ErkanntInfo | null) => boolean }[] = [
   { id: 'alle', label: 'Alle', leer: 'Keine Verbindlichkeiten.', passt: () => true },
   { id: 'offen', label: 'Offen', leer: 'Nichts offen.', passt: (v) => effektiverStatus(v) !== 'bezahlt' },
   { id: 'ueberfaellig', label: 'Überfällig', leer: 'Nichts überfällig.', passt: (v) => effektiverStatus(v) === 'ueberfaellig' },
   { id: 'pruefen', label: 'Zu prüfen', leer: 'Nichts zu prüfen.', passt: zuPruefen },
+  { id: 'unvollstaendig', label: 'Unvollständig', leer: 'Alles vollständig.', passt: (v, e) => istUnvollstaendig(angaben(v), e) },
   { id: 'bezahlt', label: 'Bezahlt', leer: 'Noch nichts als bezahlt markiert.', passt: (v) => v.status === 'bezahlt' },
 ]
 
@@ -93,6 +100,7 @@ export function Verbindlichkeiten() {
   const [neu, setNeu] = useState(false)
 
   const liste = state.verbindlichkeiten
+  const erkannt = useErkannt(liste.length)
 
   const kpis = useMemo(() => {
     const offen = liste.filter((v) => effektiverStatus(v) !== 'bezahlt').reduce((s, v) => s + (v.betragBrutto ?? 0), 0)
@@ -105,7 +113,7 @@ export function Verbindlichkeiten() {
   const sichtbar = useMemo(
     () =>
       liste
-        .filter(aktiverFilter.passt)
+        .filter((v) => aktiverFilter.passt(v, erkannt.get(v.id)))
         .filter((v) => !suchtext || `${v.lieferant} ${v.lieferantEmail ?? ''} ${v.rechnungsnummer ?? ''} ${v.kategorie ?? ''}`.toLowerCase().includes(suchtext))
         .sort((a, b) => {
           const r = rang(a) - rang(b)
@@ -114,7 +122,7 @@ export function Verbindlichkeiten() {
           if (rang(a) === 1) return (a.zahlungsziel ?? '').localeCompare(b.zahlungsziel ?? '')
           return (b.bezahltAm ?? b.datum).localeCompare(a.bezahltAm ?? a.datum)
         }),
-    [liste, aktiverFilter, suchtext],
+    [liste, aktiverFilter, suchtext, erkannt],
   )
 
   const offeneV = offenId ? liste.find((v) => v.id === offenId) : undefined
@@ -142,7 +150,7 @@ export function Verbindlichkeiten() {
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap gap-1.5">
           {FILTER.map((f) => {
-            const anzahl = liste.filter(f.passt).length
+            const anzahl = liste.filter((v) => f.passt(v, erkannt.get(v.id))).length
             const aktiv = f.id === filter
             return (
               <button
@@ -188,6 +196,7 @@ export function Verbindlichkeiten() {
                       {v.quelle === 'email-automatisch' ? <><Mail size={11} /> aus E-Mail</> : 'von Hand'}
                       {v.beleg && <><span>·</span><Paperclip size={11} /> Beleg</>}
                     </div>
+                    <FehltZeile v={v} e={erkannt.get(v.id)} />
                   </td>
                   <td className="px-4 py-3 text-slate-500">{v.rechnungsnummer || <span className="text-amber-600">fehlt</span>}</td>
                   <td className="whitespace-nowrap px-4 py-3 text-slate-500">{fmtDate(v.datum)}</td>
@@ -223,6 +232,7 @@ export function Verbindlichkeiten() {
                   <div className="text-xs text-slate-500">
                     {v.rechnungsnummer ? `Nr. ${v.rechnungsnummer}` : <span className="text-amber-600">Nr. fehlt</span>} · {fmtDate(v.datum)}
                   </div>
+                  <FehltZeile v={v} e={erkannt.get(v.id)} />
                 </div>
                 <div className="shrink-0 text-right font-semibold text-slate-800">{betrag ?? <span className="text-sm font-normal text-amber-600">Betrag fehlt</span>}</div>
               </div>
@@ -242,6 +252,47 @@ export function Verbindlichkeiten() {
 
       {offeneV && <VerbindlichkeitDetail key={offeneV.id} v={offeneV} onClose={() => setOffenId(null)} />}
       {neu && <VerbindlichkeitDetail onClose={() => setNeu(false)} />}
+    </div>
+  )
+}
+
+/** Was der Server bei den Verbindlichkeiten automatisch erkannt hat (nur lesen; fehlt die Spalte noch, bleibt es leer). */
+function useErkannt(anzahl: number): Map<string, ErkanntInfo> {
+  const [karte, setKarte] = useState<Map<string, ErkanntInfo>>(new Map())
+  useEffect(() => {
+    if (!supabase) return
+    const db = supabase
+    let aktiv = true
+    ;(async () => {
+      const neu = new Map<string, ErkanntInfo>()
+      for (let ab = 0; ab < 20000; ab += 1000) {
+        const { data, error } = await db.from('verbindlichkeiten').select('id, automatisch_erkannt').not('automatisch_erkannt', 'is', null).order('id').range(ab, ab + 999)
+        if (error || !data) break
+        for (const z of data as { id: string; automatisch_erkannt: unknown }[]) {
+          const e = erkanntAus(z.automatisch_erkannt)
+          if (e) neu.set(z.id, e)
+        }
+        if (data.length < 1000) break
+      }
+      if (aktiv) setKarte(neu)
+    })()
+    return () => {
+      aktiv = false
+    }
+  }, [anzahl])
+  return karte
+}
+
+/** Kurzer Hinweis je Zeile: was fehlt, oder dass Angaben automatisch ergänzt wurden. */
+function FehltZeile({ v, e }: { v: Verbindlichkeit; e?: ErkanntInfo }) {
+  const fehlt = fehltKurz(angaben(v), e)
+  const ergaenzt = !!e?.felder?.length && zuPruefen(v)
+  if (!fehlt && !ergaenzt) return null
+  return (
+    <div className="mt-0.5 text-xs text-amber-600">
+      {fehlt && <>fehlt: {fehlt}</>}
+      {fehlt && ergaenzt && ' · '}
+      {ergaenzt && 'automatisch ergänzt – bitte prüfen'}
     </div>
   )
 }

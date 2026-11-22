@@ -69,7 +69,9 @@ import { Kampagnen } from './pages/kampagnen/Kampagnen'
 import { MeinProfil } from './pages/profil/MeinProfil'
 import { MitarbeiterVerwalten } from './pages/admin/MitarbeiterVerwalten'
 import { Wuensche } from './pages/admin/Wuensche'
+import { Neuigkeiten } from './pages/neuigkeiten/Neuigkeiten'
 import { Dubletten } from './pages/admin/Dubletten'
+import { NeuanfragenSichten } from './pages/neuanfragen/Sichten'
 import { AufgabenUebersicht } from './pages/aufgaben/AufgabenUebersicht'
 import { Kostenvoranschlaege } from './pages/kostenvoranschlaege/Kostenvoranschlaege'
 import { Checkliste } from './pages/checkliste/Checkliste'
@@ -133,7 +135,9 @@ function AdminRoutesContent() {
         <Route path="/profil" element={<MeinProfil />} />
         <Route path="/mitarbeiter" element={<RequireAdmin><MitarbeiterVerwalten /></RequireAdmin>} />
         <Route path="/wuensche" element={<Wuensche />} />
+        <Route path="/neuigkeiten" element={<Neuigkeiten />} />
         <Route path="/dubletten" element={<Dubletten />} />
+        <Route path="/neuanfragen" element={<NeuanfragenSichten />} />
 
         {/* Privat: bewusst NICHT per RequireBereich beschränkt — jeder Mitarbeiter hat seinen
             eigenen, persönlichen Bereich, das ist keine von der GF zuteilbare Berechtigung.

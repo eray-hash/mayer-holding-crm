@@ -18,6 +18,7 @@ import {
   vorschlagText,
 } from '../_shared/stammdatenVorschlag.ts'
 import { darfAkte, type RechteMitarbeiter } from './rechte.ts'
+import { alleZeilen } from '../_shared/alleZeilen.ts'
 
 // deno-lint-ignore no-explicit-any
 type Supa = any
@@ -75,7 +76,7 @@ async function ladeAkten(supabase: Supa, mitarbeiter: RechteMitarbeiter, kundeId
     if (!data || !darfAkte(mitarbeiter, data)) return 'Fehler: Es gibt keine Akte mit dieser kunde_id. Ermittle sie mit kunden_suchen.'
     return [data as AkteZeile]
   }
-  const { data, error } = await supabase.from('kunden').select(SPALTEN).neq('bereich', 'privat')
+  const { data, error } = await alleZeilen(() => supabase.from('kunden').select(SPALTEN).neq('bereich', 'privat'))
   if (error) return `Fehler beim Laden: ${error.message}`
   return ((data ?? []) as AkteZeile[]).filter((a) => offeneVorschlaege(a.stammdaten_vorschlaege).length > 0 && darfAkte(mitarbeiter, a))
 }

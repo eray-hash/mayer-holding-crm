@@ -247,3 +247,47 @@ Deno.test('frageUeberAssistent: interner Aufruf mit Dienst-Schlüssel, art mitte
   const abgelehnt = await frageUeberAssistent('https://x', 'k', (() => Promise.resolve(new Response('nein', { status: 409 }))) as unknown as typeof fetch)('a', 't', 'v')
   assertEquals(abgelehnt, false)
 })
+
+// ---------------------------------------------------------------------------------------------
+// Runde 5: Aufnahme zum Termin vorhanden → keine Nachfrage
+
+Deno.test('Aufnahme zum Termin vorhanden → gar nichts senden, nichts vermerken', async () => {
+  const d = db()
+  d.tabelle('gespraech_aufnahmen').push({ id: 'g1', termin_id: 't1', mitarbeiter_email: ANDREAS, status: 'analyse' })
+  const gesendet: Gesendet[] = []
+  const r = await frageNachTerminen(d, optionen(gesendet))
+  assertEquals(r.fehler, [])
+  assertEquals(r.gefragt, 0)
+  assertEquals(gesendet.length, 0)
+  assertEquals(d.tabelle('termin_briefings').length, 0)
+})
+
+Deno.test('Aufnahme eines Kollegen zum selben Termin zählt auch; verworfene und andere Termine nicht', async () => {
+  const kollege = db()
+  kollege.tabelle('gespraech_aufnahmen').push({ id: 'g1', termin_id: 't1', mitarbeiter_email: HASAN, status: 'fertig' })
+  const g1: Gesendet[] = []
+  await frageNachTerminen(kollege, optionen(g1))
+  assertEquals(g1.length, 0)
+
+  const verworfen = db()
+  verworfen.tabelle('gespraech_aufnahmen').push({ id: 'g2', termin_id: 't1', mitarbeiter_email: ANDREAS, status: 'verworfen' })
+  verworfen.tabelle('gespraech_aufnahmen').push({ id: 'g3', termin_id: 't_anderer', mitarbeiter_email: ANDREAS, status: 'fertig' })
+  verworfen.tabelle('gespraech_aufnahmen').push({ id: 'g4', termin_id: null, kunde_id: 'k_lehle', mitarbeiter_email: ANDREAS, status: 'fertig' })
+  const g2: Gesendet[] = []
+  assertEquals((await frageNachTerminen(verworfen, optionen(g2))).gefragt, 1)
+})
+
+Deno.test('Aufnahmen nicht lesbar → wie bisher fragen, Fehler im Ergebnis', async () => {
+  const d = db()
+  const echt = d.from.bind(d)
+  // deno-lint-ignore no-explicit-any
+  ;(d as any).from = (tabelle: string) => {
+    if (tabelle !== 'gespraech_aufnahmen') return echt(tabelle)
+    const kette = { select: () => kette, in: () => kette, neq: () => Promise.resolve({ data: null, error: { message: 'relation "gespraech_aufnahmen" does not exist' } }) }
+    return kette
+  }
+  const gesendet: Gesendet[] = []
+  const r = await frageNachTerminen(d, optionen(gesendet))
+  assertEquals(r.gefragt, 1)
+  assertStringIncludes(r.fehler.join(' '), 'Aufnahmen nicht lesbar')
+})

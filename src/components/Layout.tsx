@@ -40,6 +40,8 @@ import { DokumentenImportModal } from './DokumentenImportModal'
 import { KiAssistentPanel } from './KiAssistentPanel'
 import { GespraechAufzeichnenGlobal } from './GespraechAufzeichnenGlobal'
 import { GlobaleSuche } from './GlobaleSuche'
+import { NeuigkeitenKnopf } from './NeuigkeitenKnopf'
+import { NeuHinweis } from './NeuHinweis'
 import { SidebarBeratung } from './SidebarBeratung'
 import { SidebarImmobilien } from './SidebarImmobilien'
 import { SidebarErben } from './SidebarErben'
@@ -282,6 +284,8 @@ export function Layout({ children }: { children: ReactNode }) {
             <Camera size={16} />
           </button>
 
+          {/* „Neu im CRM“ (23.11.2026): Zahl der ungelesenen Neuerungen, Klick öffnet /neuigkeiten. */}
+          {isSupabaseConfigured && session && <NeuigkeitenKnopf />}
           <div className="relative">
             <button
               onClick={() => setBenachrichtigungenOpen((o) => !o)}
@@ -465,6 +469,16 @@ export function Layout({ children }: { children: ReactNode }) {
                 <Mic size={17} className="text-slate-400" />
                 <span>Gesprächs-App öffnen<span className="block text-xs font-normal text-slate-400">iPhone: in Safari „Teilen“ → „Zum Home-Bildschirm“</span></span>
               </a>
+              <div className="mb-2 px-3"><NeuHinweis name="gespraechs-app" text="Gespräch aufnehmen, Protokoll kommt von selbst" neuigkeit="gespraechs-app" /></div>
+              {!imPrivatBereich && (
+                <button
+                  onClick={() => { setDrawerOpen(false); navigate('/neuanfragen') }}
+                  className="mb-1 flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  <Sparkles size={17} className="text-slate-400" />
+                  Neuanfragen sichten
+                </button>
+              )}
               {/* Datei vom Handy ablegen (Kamera oder Datei wählen) — vor allem fürs iPhone, das kein „Teilen“ an Web-Apps kennt. */}
               <button
                 onClick={() => { setDrawerOpen(false); navigate('/ablegen') }}

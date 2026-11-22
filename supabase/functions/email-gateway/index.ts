@@ -237,6 +237,7 @@ import {
   zieheBesitzUm,
 } from './postfach.ts'
 import { loescheTermin, sendeErinnerungen, sendeTelegram, speichereTermin } from './kalender.ts'
+import { ordneTermineZu, terminZuordnenAktion } from './terminZuordnung.ts'
 import { ordneNeueMailsZu } from './mailZuordnung.ts'
 import { pruefePrivatePost } from './privatPostZuordnung.ts'
 import { aboLink, kalenderAboAntwort } from './kalenderAbo.ts'
@@ -258,6 +259,7 @@ AUSFUEHRER.crm_termin_absagen = async (admin, ich, p) => {
 import { BUCHUNGS_AKTIONEN, buchungAktion } from './buchung.ts'
 import { sendeTodoErinnerungen } from './todoErinnerung.ts'
 import { pruefeTodoAufraeumHinweise } from './todoAufraeumenHinweis.ts'
+import { pruefeNeuigkeitenTipps } from './neuigkeitenTipp.ts'
 import { holeGesendeteMails } from './gesendetAbruf.ts'
 import { gesendetKennung, neueMessageId } from './gesendetMessageId.ts'
 import { ladeVolltexteNach, volltextMinutenSchritt } from './mailVolltext.ts'
@@ -265,6 +267,7 @@ import { ordneMailObjektZu } from './objektMail.ts'
 import { legeEingaengeAb, macheAblageRueckgaengig, nimmEingaengeHeraus } from './eingang.ts'
 import { pruefeNeueTreffer } from './gesuchTreffer.ts'
 import { pruefeStammdaten, stammdatenNachtragAktion } from './stammdatenErgaenzen.ts'
+import { belegErgaenzenAktion, haikuAuslesen, pruefeBelege } from './belegErgaenzen.ts'
 import { istDienstSchluessel, sendeTagesmeldungen, tagesmeldungTest } from './tagesmeldung.ts'
 import { pruefeObjektLueckenHinweis } from './objektLueckenHinweis.ts'
 import { pruefeBonitaet } from './bonitaet.ts'
@@ -276,12 +279,16 @@ import { priorisiereListe, pruefeTodoPriorisierung, type Liste as TodoListe } fr
 import { versendeWillkommen } from './willkommen.ts'
 import { pruefeKundenberichte } from './kundenbericht.ts'
 import { sendeTerminBriefings } from './terminBriefing.ts'
+import { tagesplanAktion } from './tagesplan.ts'
+import { sendeTagesplanMeldungen } from './tagesplanMeldungen.ts'
 import { frageNachTerminen, frageUeberAssistent } from './nachTermin.ts'
 import { gespraechAkteSetzen, gespraechUebernehmen, gespraechVorbereitung } from './gespraechUebernehmen.ts'
 import { versendeAutoNachrichten } from './autoNachrichten.ts'
 import { kiEntscheidung, pruefeNeueAnfragen } from './anfragenManager.ts'
 import { akteZuObjektAktion, haikuOrdner, setzeHaengendeUmzuegeFort, stosseUmzugAn } from './akteZuObjekt.ts'
 import { dublettenAktion } from './dublettenZusammenfuehren.ts'
+import { neuanfrageAktion } from './neuanfrageTriage.ts'
+import { kvZuordnungAktion } from './kvZuordnung.ts'
 import { portalBesichtigung, portalDokument, portalLaden, portalZustimmen } from './objektPortal.ts'
 import { starteRenditeMarktvergleich } from './renditeMarkt.ts'
 import { beantworteUnterschrift } from './unterschrift.ts'
@@ -290,11 +297,14 @@ import { beantworteKundenUnterlagen } from './kundenUnterlagen.ts'
 import { beantworteKundenPortal, KUNDENPORTAL_AKTIONEN } from './kundenPortal.ts'
 import { pruefeWunschAnalyse, wunschAnalyseTest } from './wunschAnalyse.ts'
 import { pruefeSuperuserWochenbericht, superuserAuswertung, superuserWochenberichtTest } from './superuser.ts'
+import { datensicherungAktion, pruefeNaechtlicheSicherung } from './datensicherung.ts'
 import { pruefeWochenrueckblick, wochenrueckblickEinstellung, wochenrueckblickTest } from './wochenrueckblick.ts'
 import { GESPRAECH_AKTIONEN, gespraechAktion, gespraechMinutentakt } from './gespraechPipeline.ts'
 import { pruefeRechnungVorschlaege, pruefeRechnungVorschlagHinweis } from './rechnungVorschlaege.ts'
+import { pruefeMahnVorschlaege } from './mahnVorschlag.ts'
 import { aktuellePerson, kiAufruf, mitAnlass, setzeAnlass, setzePerson, setzePrivat } from '../_shared/kiVerbrauch.ts'
 import { darfObjekt, darfPrivatKunde, istPrivaterKunde, istPrivatesObjekt } from '../_shared/privatZugriff.ts'
+import { alleZeilen } from '../_shared/alleZeilen.ts'
 
 const ALLOWED_ORIGINS = [
   'https://eray-hash.github.io',
@@ -2814,6 +2824,7 @@ async function fetchAlleEingegangeneEmails(supabase: ReturnType<typeof createCli
       // Mails aus persönlichen Postfächern sind privat — daraus werden keine Leads abgeleitet.
       .is('besitzer_email', null)
       .order('mail_datum', { ascending: false })
+      .order('id', { ascending: true }) // eindeutig, sonst können Seiten sich bei gleicher Uhrzeit überschneiden
       .range(from, from + pageSize - 1)
     if (error) throw new Error(error.message)
     all.push(...(data ?? []))
@@ -2911,8 +2922,9 @@ async function classifyNewLeads(): Promise<{ geprueft: number; vorgeschlagen: nu
   // korrekt abgelehnt, die beiden Mails danach kündigten ein echtes Erstgespräch samt Unterlagen
   // und eine Rechnung an — wurden aber nie mehr geprüft, weil der Absender schon einen Eintrag hatte).
   const [{ data: bekannteKunden }, { data: bekannteLeads }] = await Promise.all([
-    supabase.from('kunden').select('email'),
-    supabase.from('vorgeschlagene_leads').select('email, status, erstellt_am'),
+    // Seitenweise: Lead-Vorschläge werden bald mehr als 1000 (Grenze je Abfrage) — sonst würden bekannte Absender neu geprüft.
+    alleZeilen<{ email: string }>(() => supabase.from('kunden').select('email')),
+    alleZeilen<{ email: string; status: string; erstellt_am: string }>(() => supabase.from('vorgeschlagene_leads').select('email, status, erstellt_am')),
   ])
   const kundenEmails = new Set((bekannteKunden ?? []).map((r: { email: string }) => (r.email ?? '').trim().toLowerCase()))
   const endgueltigBekannt = new Set(
@@ -3380,6 +3392,12 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       })
       // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
       EdgeRuntime.waitUntil(briefingLauf)
+      // Tagesablauf per Telegram (tagesplanMeldungen.ts): „Dein Tag“ werktags ab 7:45, „Offen geblieben“ ab 17:30 — nur wer es
+      // eingeschaltet hat (tagesplan_einstellungen), einmal je Person und Tag; ohne KI; wirft nie.
+      // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
+      EdgeRuntime.waitUntil(sendeTagesplanMeldungen(admin, { sende: sendeTelegram }).then((r) => {
+        if (r.morgen > 0 || r.abend > 0 || r.fehler.length > 0) console.log(`Tagesablauf-Meldungen: ${r.morgen} morgens, ${r.abend} abends.`, r.fehler.join(' | '))
+      }))
       // Nachfrage nach Kundenterminen (nachTermin.ts): 10–20 Minuten nach dem Ende eines Termins mit Kundenakte fragt der
       // Assistent den Besitzer einmal „Wie lief der Termin …?“ — über telegram-gateway in seinen Gesprächsverlauf, damit er
       // die Antwort als Gesprächsprotokoll ablegt (nachTerminWerkzeug.ts). Ohne KI; wirft nie.
@@ -3411,6 +3429,13 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
       EdgeRuntime.waitUntil(ordneNeueMailsZu(admin, { hoechstens: 25, zeitBudgetMs: 30_000 }).then((r) => {
         if (r.zugeordnet > 0 || r.vorschlaege > 0 || r.rundschreiben > 0 || r.fehler.length > 0) console.log(`Post-Zuordnung: ${r.geprueft} geprüft, ${r.zugeordnet} zugeordnet, ${r.vorschlaege} Vorschläge, ${r.rundschreiben} Rundschreiben.`, r.fehler.join(' | '))
+      }))
+      // Termin → Akte (terminZuordnung.ts): je Lauf höchstens 20 noch nie geprüfte Termine ohne Akte (kommende zuerst) —
+      // E-Mail-Adresse eines Gastes bei genau einer Akte setzt die Akte, ein Name im Titel nur einen Vorschlag für den
+      // Kalender. Ohne KI, ohne Nachrichten; jeder Termin einmal (neu erst nach Änderung von Titel/Gästen); wirft nie.
+      // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
+      EdgeRuntime.waitUntil(ordneTermineZu(admin).then((r) => {
+        if (r.zugeordnet > 0 || r.vorschlaege > 0 || r.fehler.length > 0) console.log(`Termin-Zuordnung: ${r.geprueft} geprüft, ${r.zugeordnet} zugeordnet, ${r.vorschlaege} Vorschläge.`, r.fehler.join(' | '))
       }))
       // Private Post (privatPostZuordnung.ts): Mails in persönlichen Postfächern einmal bewerten — vermutete Akte als
       // Vorschlag nur für den Besitzer (nie automatisch zuordnen/übergeben), Rundschreiben für seine Ansicht markieren.
@@ -3455,6 +3480,24 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       EdgeRuntime.waitUntil(pruefeStammdaten(admin).then((r) => {
         if (r.ergaenzt > 0 || r.vorgeschlagen > 0) console.log(`Stammdaten aus Signaturen: ${r.geprueft} geprüft, ${r.ergaenzt} ergänzt, ${r.vorgeschlagen} Vorschläge.`)
       }))
+      // Belege und Angaben der Verbindlichkeiten (belegErgaenzen.ts): höchstens alle 2 Minuten bis zu 3 Verbindlichkeiten mit
+      // Original-Mail — Rechnungs-Anhang als Beleg kopieren, reine HTML-Belege als PDF ablegen, leere Angaben per Haiku füllen
+      // (gekennzeichnet „bitte prüfen“). Eigene Sperre, eigener Rahmen für die Kostenzuordnung; ohne Nachrichten; wirft nie.
+      {
+        const kiSchluessel = Deno.env.get('ANTHROPIC_API_KEY')
+        const beginn = Date.now()
+        // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
+        EdgeRuntime.waitUntil(mitAnlass(() => {
+          setzeAnlass('beleg_ergaenzen')
+          return pruefeBelege(admin, {
+            ki: kiSchluessel ? haikuAuslesen(kiSchluessel) : undefined,
+            ladeBytes: (url: string) => ladeDokumentBytes(admin, url),
+            restMs: () => SCHRITT_HOECHSTENS_MS - (Date.now() - beginn),
+          })
+        }).then((r) => {
+          if (r.geprueft > 0 || r.fehler.length > 0) console.log(`Belege der Verbindlichkeiten: ${r.geprueft} bearbeitet, ${r.belege} Beleg(e), ${r.felder} Angabe(n), noch offen ${r.offen}.`, r.fehler.slice(0, 3).join(' | '))
+        }))
+      }
       // Einmaliges Nachladen gekürzter Mailtexte (mailVolltext.ts): je Lauf bis zu 40 Weiterleitungs-Mails (ohne Netz) und
       // 8 Umzugs-Mails (IMAP, nur lesend), bis nichts mehr offen ist; danach nur noch alle 30 Minuten ein Blick. Ohne KI,
       // ohne Nachrichten; wirft nie.
@@ -3470,6 +3513,13 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       // werktags 9–10 Uhr, einmal je Monat, private Listen nur über den privaten Bot; außerhalb des Fensters ohne Datenbankzugriff; wirft nie.
       // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
       EdgeRuntime.waitUntil(pruefeTodoAufraeumHinweise(admin))
+      // Tipp der Woche aus „Neu im CRM“ (neuigkeitenTipp.ts): dienstags ab 10 Uhr höchstens eine Nachricht je Mitarbeiter
+      // mit einer Neuerung, die ihn betrifft und die er noch nicht gelesen hat; je Mitarbeiter abschaltbar (Standard an).
+      // Außerhalb des Fensters ohne Datenbankzugriff; ohne KI; wirft nie.
+      // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
+      EdgeRuntime.waitUntil(pruefeNeuigkeitenTipps(admin, sendeTelegram).then((r) => {
+        if (r.gesendet > 0 || r.meldungen.length > 0) console.log(`Tipp der Woche: ${r.gesendet} gesendet.`, r.meldungen.join(' | '))
+      }))
       // Montags ab 8:30: Wochenhinweis „Was fehlt in deinen Objektakten?“ (objektLueckenHinweis.ts) — nur Telegram an die
       // Verantwortlichen, höchstens einmal pro Woche, je Mitarbeiter abschaltbar; außerhalb des Fensters ohne Datenbankzugriff; wirft nie.
       const objektLuecken = await pruefeObjektLueckenHinweis(admin, sendeTelegram)
@@ -3484,9 +3534,23 @@ Deno.serve((req: Request) => mitAnlass(async () => {
         const h = await pruefeRechnungVorschlagHinweis(admin, sendeTelegram)
         if (h.gesendet > 0 || h.meldungen.length > 0) console.log(`Rechnungs-Wochenhinweis: ${h.gesendet} gesendet.`, h.meldungen.join(' | '))
       }))
+      // Mahnvorschläge (mahnVorschlag.ts): ab 9 Uhr einmal am Tag überfällige Rechnungen prüfen, nächsten Mahnschritt als
+      // Vorschlag ablegen und dem Zuständigen per Telegram melden (je Person eine Nachricht, abschaltbar). Sendet nie an Kunden;
+      // vor 9 Uhr und außerhalb jeder fünften Minute ohne Datenbankzugriff; wirft nie.
+      // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
+      EdgeRuntime.waitUntil(pruefeMahnVorschlaege(admin, sendeTelegram).then((m) => {
+        if (m.gelaufen) console.log(`Mahnvorschläge: ${m.neu} neu, ${m.wieder} wieder offen, ${m.gesendet} gesendet, ${m.erledigt} erledigt, ${m.uebersprungen} übersprungen, ${m.nachrichten} Nachrichten.`)
+      }))
       // Superuser-Wochenbericht (freitags ab 16 Uhr, einmal) — siehe superuser.ts; sonst ohne Datenbankzugriff.
       // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
       EdgeRuntime.waitUntil(pruefeSuperuserWochenbericht(admin, sendeTelegram))
+      // Tägliche Datensicherung (datensicherung.ts): ab 2:30 Uhr einmal je Nacht beansprucht, alle Tabellen als gepackte
+      // Dateien in den privaten Eimer `sicherungen`, 14/8/12 aufbewahrt. Nach dem dritten Fehlschlag einer Nacht genau eine
+      // Telegram-Nachricht an die Superuser. Außerhalb von 2:30–5:59 Uhr ohne Datenbankzugriff; wirft nie.
+      // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
+      EdgeRuntime.waitUntil(pruefeNaechtlicheSicherung(admin, sendeTelegram).then((r) => {
+        if (r.gelaufen || r.gemeldet) console.log(`Datensicherung (Nacht): ${r.ok ? 'gelungen' : 'fehlgeschlagen'}${r.gemeldet ? `, ${r.gemeldet} Nachricht(en)` : ''}.`)
+      }))
       // Wochenrückblick für die Geschäftsführung (wochenrueckblick.ts): am eingestellten Wochentag ab der eingestellten
       // Stunde (Vorgabe freitags 16 Uhr), einmal je Kalenderwoche, nur an die Empfänger der Einstellung. Im Hintergrund
       // (wahlweise zwei Sätze Zusammenfassung per KI), eigener Rahmen für die Kostenzuordnung; wirft nie.
@@ -3532,6 +3596,15 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       }
       return new Response(JSON.stringify({ ok: true, gesendet: ergebnis.gesendet }), { headers })
     }
+    // ---------- Datensicherung (siehe datensicherung.ts): nur Geschäftsführung und Superuser ----------
+    if (body.action === 'datensicherung') {
+      // { aufgabe: 'stand' | 'jetzt' | 'herunterladen' (name?) | 'meldung' (an) }
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
+      const ergebnis = await datensicherungAktion(req, admin, body, (p) => EdgeRuntime.waitUntil(p))
+      return new Response(JSON.stringify(ergebnis.daten), { status: ergebnis.status, headers })
+    }
+
     // ---------- Superuser (siehe superuser.ts): nur Mitarbeiter mit ist_superuser ----------
     if (body.action === 'superuser_auswertung' || body.action === 'superuser_wochenbericht_test') {
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
@@ -3572,6 +3645,17 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       if (!ergebnis.ok) return new Response(JSON.stringify({ error: ergebnis.fehler }), { status: ergebnis.status, headers })
       return new Response(JSON.stringify(ergebnis), { headers })
     }
+    // Termin von Hand einer Akte zuordnen, Verknüpfung lösen oder Vorschlag ablehnen (terminZuordnung.ts, CRM-Kalender).
+    if (body.action === 'termin_zuordnen') {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const aufrufer = await ermittleAufrufer(req, admin, body)
+      if (!aufrufer) {
+        return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
+      }
+      const ergebnis = await terminZuordnenAktion(admin, aufrufer.email, body)
+      return new Response(JSON.stringify(ergebnis.daten), { status: ergebnis.status, headers })
+    }
+
     if (body.action === 'termin_speichern' || body.action === 'termin_loeschen') {
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
       const aufrufer = await ermittleAufrufer(req, admin, body)
@@ -4691,6 +4775,24 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       return new Response(JSON.stringify(ergebnis.daten), { status: ergebnis.status, headers })
     }
 
+    // Belege und Angaben der Verbindlichkeiten einmalig für alle ergänzen (belegErgaenzen.ts) — nur Geschäftsführung.
+    // { schritt: 'vorschau' } liest nur (ohne KI); { schritt: 'ausfuehren', ids?: [...] } bearbeitet bis zu 20 je Aufruf.
+    if (body.action === 'beleg_ergaenzen') {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const aufrufer = await ermittleAufrufer(req, admin, body)
+      if (!aufrufer) {
+        return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
+      }
+      const kiSchluessel = Deno.env.get('ANTHROPIC_API_KEY')
+      const beginn = Date.now()
+      const ergebnis = await belegErgaenzenAktion(admin, aufrufer, body, {
+        ki: kiSchluessel ? haikuAuslesen(kiSchluessel) : undefined,
+        ladeBytes: (url: string) => ladeDokumentBytes(admin, url),
+        restMs: () => SCHRITT_HOECHSTENS_MS - (Date.now() - beginn),
+      })
+      return new Response(JSON.stringify(ergebnis.daten), { status: ergebnis.status, headers })
+    }
+
     if (body.action === 'willkommen_jetzt') {
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
       const aufrufer = await ermittleAufrufer(req, admin, body)
@@ -4735,12 +4837,36 @@ Deno.serve((req: Request) => mitAnlass(async () => {
         dienst,
         darfKunde: (kundeId) => (aufrufer ? darfKundeServer(admin, aufrufer.email, kundeId) : Promise.resolve(false)),
         darfObjekt: (objektId) => (aufrufer ? darfObjektServer(admin, aufrufer.email, objektId) : Promise.resolve(false)),
+        // Teilen mit Kollegen (gespraech_teilen): darf der Empfänger die Akte bzw. das Objekt sehen?
+        darfKundeFuer: (email, kundeId) => darfKundeServer(admin, email, kundeId),
+        darfObjektFuer: (email, objektId) => darfObjektServer(admin, email, objektId),
         // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
         imHintergrund: (arbeit) => EdgeRuntime.waitUntil(arbeit),
         restMs: () => WORKER_LEBENSDAUER_MS - (Date.now() - WORKER_GEBOOTET),
         warteAufNeuenWorker: warteBisWorkerAbgeloestWird,
         sendeTelegram,
       })
+      return new Response(JSON.stringify(ergebnis.daten), { status: ergebnis.status, headers })
+    }
+
+    // Neuanfragen sichten (neuanfrageTriage.ts): erste Mail + Dubletten laden, KI-Einschätzung je Neuanfrage
+    // (Haiku 5.5, gespeichert in kunden.triage_vorschlag), Entscheidung/„später“ merken — nur eigene Bereiche.
+    if (body.action === 'neuanfrage_einschaetzung') {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const aufrufer = await ermittleAufrufer(req, admin, body)
+      if (!aufrufer) {
+        return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
+      }
+      const ergebnis = await neuanfrageAktion(
+        {
+          admin,
+          aufrufer: { email: aufrufer.email, name: aufrufer.name },
+          heute: new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Berlin' }).format(new Date()),
+          darfBereich: (bereich) => darfBereichServer(admin, aufrufer.email, bereich),
+          protokolliere: (text) => console.log(`[neuanfragen] ${aufrufer.email}: ${text}`),
+        },
+        body,
+      )
       return new Response(JSON.stringify(ergebnis.daten), { status: ergebnis.status, headers })
     }
 
@@ -4755,6 +4881,17 @@ Deno.serve((req: Request) => mitAnlass(async () => {
         { admin, aufrufer: { email: aufrufer.email, name: aufrufer.name }, heute: new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Berlin' }).format(new Date()) },
         body,
       )
+      return new Response(JSON.stringify(ergebnis.daten), { status: ergebnis.status, headers })
+    }
+
+    // Kostenvoranschläge ohne Akte zuordnen, mit Vorschau (kvZuordnung.ts) — nur Geschäftsführung/Admins.
+    if (body.action === 'kv_zuordnen') {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const aufrufer = await ermittleAufrufer(req, admin, body)
+      if (!aufrufer) {
+        return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
+      }
+      const ergebnis = await kvZuordnungAktion({ admin, aufrufer: { email: aufrufer.email, name: aufrufer.name } }, body)
       return new Response(JSON.stringify(ergebnis.daten), { status: ergebnis.status, headers })
     }
 
@@ -4940,6 +5077,23 @@ Deno.serve((req: Request) => mitAnlass(async () => {
         const grund = err instanceof Error ? err.message : String(err)
         return new Response(JSON.stringify({ error: `Die Liste konnte nicht priorisiert werden: ${grund}` }), { status: 500, headers })
       }
+    }
+
+    // Tagesablauf (siehe tagesplan.ts): drei Lösungsvorschläge für ein festgefahrenes To-do (Haiku 5.5, schreibt nichts) und
+    // „Anruf notieren“ in den Verlauf einer Akte/eines Objekts — nur mit eigenem Login und mit Recht auf To-do bzw. Akte.
+    if (body.action === 'tagesplan') {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const aufrufer = await ermittleAufrufer(req, admin, body)
+      if (!aufrufer) {
+        return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
+      }
+      setzeAnlass('tagesplan')
+      const ergebnis = await tagesplanAktion(admin, aufrufer, body, {
+        darfKunde: (id) => darfKundeServer(admin, aufrufer.email, id),
+        darfObjekt: (id) => darfObjektServer(admin, aufrufer.email, id),
+        darfBereich: (bereich) => darfBereichServer(admin, aufrufer.email, bereich),
+      })
+      return new Response(JSON.stringify(ergebnis.body), { status: ergebnis.status, headers })
     }
 
     // KI-Vorschlag für die Projekt-Checkliste einer Akte (siehe checklisteVorschlag.ts) — nur mit eigenem
@@ -5212,7 +5366,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       return new Response(JSON.stringify({ ok: true }), { headers })
     }
 
-    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "public_objekt_portal", "public_objekt_portal_zustimmen", "public_objekt_portal_dokument", "public_objekt_portal_besichtigung", "bewertung_recherche_start", "bewertung_recherche_schritt", "kunden_umfeld_recherche", "steuer_analyse_start", "steuer_analyse_schritt", "dokument_lesen", "dokument_inhalte", "postfaecher_liste", "postfach_verbinden", "postfach_trennen", "postfach_abruf", "postfach_ordner", "mail_zuordnen", "mail_freigeben", "mail_anhang_url", "termin_speichern", "termin_loeschen", "termin_erinnerungen", "tagesmeldung_test", "kontoauszug_auslesen", "kontoauszug_abgleich_auslesen", "rendite_marktvergleich", "checkliste_vorschlag", "todos_priorisieren", "willkommen_jetzt", "auto_nachricht_jetzt", "anfrage_pruefen_jetzt", "akte_zu_objekt", "mail_zuordnung_lauf", "wochenrueckblick_test", "wochenrueckblick_einstellung", "chance_vorschlaege", "stammdaten_nachtrag", "dubletten", "public_seminar_termin", "public_seminar_anmelden", "public_unterschrift_laden", "public_unterschrift_absenden", "gesendet_abruf" oder "firmenwissen_answer"' }), { status: 400, headers })
+    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "public_objekt_portal", "public_objekt_portal_zustimmen", "public_objekt_portal_dokument", "public_objekt_portal_besichtigung", "bewertung_recherche_start", "bewertung_recherche_schritt", "kunden_umfeld_recherche", "steuer_analyse_start", "steuer_analyse_schritt", "dokument_lesen", "dokument_inhalte", "postfaecher_liste", "postfach_verbinden", "postfach_trennen", "postfach_abruf", "postfach_ordner", "mail_zuordnen", "mail_freigeben", "mail_anhang_url", "termin_speichern", "termin_loeschen", "termin_erinnerungen", "tagesmeldung_test", "kontoauszug_auslesen", "kontoauszug_abgleich_auslesen", "rendite_marktvergleich", "checkliste_vorschlag", "todos_priorisieren", "willkommen_jetzt", "auto_nachricht_jetzt", "anfrage_pruefen_jetzt", "akte_zu_objekt", "mail_zuordnung_lauf", "wochenrueckblick_test", "wochenrueckblick_einstellung", "chance_vorschlaege", "stammdaten_nachtrag", "beleg_ergaenzen", "dubletten", "neuanfrage_einschaetzung", "kv_zuordnen", "termin_zuordnen", "datensicherung", "tagesplan", "public_seminar_termin", "public_seminar_anmelden", "public_unterschrift_laden", "public_unterschrift_absenden", "gesendet_abruf" oder "firmenwissen_answer"' }), { status: 400, headers })
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }

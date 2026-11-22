@@ -17,6 +17,9 @@
     { "src": "icons/icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ],
   "shortcuts": [
+    { "name": "Termin aufnehmen", "short_name": "Termin", "description": "Laufenden oder gleich beginnenden Termin aufnehmen", "url": "./#/aufnehmen?art=termin", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" }] },
+    { "name": "Telefonat aufnehmen", "short_name": "Telefonat", "description": "Telefonat auf Lautsprecher aufnehmen", "url": "./#/aufnehmen?art=telefon", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" }] },
+    { "name": "Notiz einsprechen", "short_name": "Notiz", "description": "Kurze Notiz einsprechen", "url": "./#/aufnehmen?art=notiz", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" }] },
     { "name": "Meine Aufnahmen", "short_name": "Aufnahmen", "url": "./#/aufnahmen", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" }] }
   ]
 }

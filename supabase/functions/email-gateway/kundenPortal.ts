@@ -35,6 +35,7 @@ import {
 } from '../_shared/kundenberichtKern.ts'
 import { eigenerSpeicher, istSichererPfad } from '../_shared/speicherPfad.ts'
 import { nochGueltig } from './kundenUnterlagen.ts'
+import { telefonFuerMitarbeiter } from '../_shared/profilKern.ts'
 import {
   ABGELAUFEN,
   BEENDET,
@@ -204,6 +205,7 @@ async function baueSeite(admin: Admin, z: Zugang, k: any, jetzt: Date, ctx: Port
     verantwortlicher(admin, k),
   ])
   if (!daten) throw new Error('Akte verschwunden')
+  const kontaktTelefon = kontakt ? await telefonFuerMitarbeiter(admin, { email: kontakt.email, name: kontakt.name, telefon: kontakt.telefon }) : ''
 
   // Nur Mails, die wirklich an den Kunden gingen.
   const anKunden = new Set(
@@ -289,7 +291,7 @@ async function baueSeite(admin: Admin, z: Zugang, k: any, jetzt: Date, ctx: Port
       faelligAm: ISO.test(String(r.zahlungsziel ?? '')) ? String(r.zahlungsziel).slice(0, 10) : '',
       mitPdf: pdfDa(r),
     })),
-    kontakt: kontakt ? { name: kontakt.name, telefon: kontakt.telefon, email: kontakt.email } : null,
+    kontakt: kontakt ? { name: kontakt.name, telefon: kontaktTelefon, email: kontakt.email } : null,
     nachricht: nachrichtMoeglich(z, jetzt),
     gueltigBis: z.gueltig_bis,
     ...(hinweis ? { hinweis } : {}),

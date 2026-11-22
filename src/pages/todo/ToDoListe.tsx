@@ -31,6 +31,8 @@ import {
   type AufraeumTodo,
   type AufraeumVorschlag,
 } from '../../../supabase/functions/_shared/todoAufraeumen.ts'
+import { alleZeilen } from '../../lib/alleZeilen'
+import { HeuteEinplanenKnopf } from '../../components/tagesplan/HeuteEinplanenKnopf'
 
 // Zwei Arten von Listen teilen sich dieselbe Tabelle/Komponente:
 // - Privat: eigene, isolierte Liste pro Mitarbeiter (RLS: besitzer_email), optional mit Lese-/
@@ -411,6 +413,8 @@ function ToDoListeKern({ scope }: { scope: Scope }) {
               )}
             </button>
             <div className="mt-2 flex items-center justify-end gap-1.5 border-t border-slate-100 pt-2">
+              {/* Tagesablauf: das To-do in den heutigen Plan legen (nur eigene Liste, offen). */}
+              {scope.kind === 'privat' && aktiveListe === eigeneEmail && ansicht === 'offen' && <HeuteEinplanenKnopf todo={t} />}
               {darfSchreiben && scope.kind === 'privat' && <BereichZuweisenDropdown onWaehlen={(b) => bereichZuweisen(t, b)} />}
               {darfSchreiben && scope.kind === 'bereich' && (
                 <button onClick={() => inPrivateListeVerschieben(t)} title="In meine private Liste verschieben" className="rounded-md bg-slate-100 p-1.5 text-slate-600 hover:bg-slate-200">
@@ -510,6 +514,8 @@ function ToDoListeKern({ scope }: { scope: Scope }) {
                 {ansicht === 'erledigt' && <td className="px-3 py-3 whitespace-nowrap text-slate-400">{t.erledigtAm}</td>}
                 <td className="px-3 py-3 text-right">
                   <div className="flex items-center justify-end gap-1.5">
+                    {/* Tagesablauf: das To-do in den heutigen Plan legen (nur eigene Liste, offen). */}
+                    {scope.kind === 'privat' && aktiveListe === eigeneEmail && ansicht === 'offen' && <HeuteEinplanenKnopf todo={t} />}
                     {darfSchreiben && scope.kind === 'privat' && (
                       <BereichZuweisenDropdown onWaehlen={(b) => bereichZuweisen(t, b)} />
                     )}
@@ -841,7 +847,8 @@ async function ladeAktenNamen(): Promise<AkteName[]> {
   if (!supabase) return []
   const akten: AkteName[] = []
   const lies = async (tabelle: string, spalten: string, namen: string[]) => {
-    const { data } = await supabase!.from(tabelle).select(spalten).limit(1000)
+    // Seitenweise: Akten werden mehr als 1000 (Grenze der Datenbank je Abfrage).
+    const { data } = await alleZeilen(() => supabase!.from(tabelle).select(spalten))
     for (const z of (data ?? []) as unknown as Record<string, string | null>[]) {
       for (const n of namen) if (z[n]) akten.push({ name: String(z[n]), abgeschlossen: istEndstatus(z.status) })
     }

@@ -39,6 +39,7 @@ import {
   type StammdatenVorschlag,
   wertAnzeige,
 } from '../_shared/stammdatenVorschlag.ts'
+import { alleZeilen } from '../_shared/alleZeilen.ts'
 
 // deno-lint-ignore no-explicit-any
 type Db = any
@@ -292,7 +293,7 @@ export async function ladeEigeneDaten(admin: Db): Promise<EigeneDaten> {
 
 /** Alle Akten, die in Frage kommen (nicht privat, keine Sammelakte), nach id sortiert. */
 export async function ladeAkten(admin: Db): Promise<AkteZeile[]> {
-  const { data, error } = await admin.from('kunden').select(AKTEN_SPALTEN).neq('bereich', 'privat')
+  const { data, error } = await alleZeilen(() => admin.from('kunden').select(AKTEN_SPALTEN).neq('bereich', 'privat'))
   if (error) throw new Error(`Akten nicht lesbar: ${error.message}`)
   return ((data ?? []) as AkteZeile[]).filter(kommtInFrage).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
 }

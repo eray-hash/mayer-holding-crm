@@ -101,6 +101,8 @@ export type GespraechMarkerArt = GespraechMarker['art']
 // Ein- und Ausgaben der Server-Aktionen im email-gateway (Helfer „pipeline“)
 
 export type GespraechAnlegenEingabe = {
+  /** Sprache des Gesprächs (Schlüssel aus SPRACHEN in _shared/gespraechSchema.ts: deutsch|automatisch|tuerkisch|englisch …). */
+  sprache?: string
   art: GespraechArt
   kundeId?: string
   kundeBereich?: string

@@ -23,6 +23,19 @@
 // Rechte: Schreiben darf nur der Besitzer. Lesen (gespraech_stand/gespraech_liste/Fotos) darf zusätzlich, wer die
 // verknüpfte Akte sehen darf — Audio aber nur der Besitzer. Die Übernahme in die Akte (gespraech_uebernehmen)
 // liegt in gespraechUebernehmen.ts.
+//
+// Runde 5 (22.11.2026):
+// - Sprachen: Jede Aufnahme hat eine Sprache (Spalte sprache: deutsch | automatisch | tuerkisch | englisch …, siehe
+//   SPRACHEN in _shared/gespraechSchema.ts). Bei „automatisch“ bestimmt die Spracherkennung die Sprache selbst; die
+//   erkannte Sprache steht je Abschnitt (segmente[].sprache) und als Hauptsprache in sprache_erkannt. Auswertung,
+//   Protokoll und Mail-Entwurf sind immer Deutsch. gespraech_uebersetzen liefert auf Anforderung die deutsche
+//   Fassung der Abschrift (in Teilen, zwischengespeichert in uebersetzung) bzw. Mail-Entwurf/Gesprächsnotiz in der
+//   Sprache des Kunden. gespraech_neu_auswerten {sprache} schreibt mit einer anderen Sprache neu ab.
+// - Fragebogen: Hat der Bereich der Akte eine Fragebogen-Vorlage (vorlagen.typ 'Fragebogen'), füllt die Auswertung
+//   zusätzlich `fragebogen` (nur Gesagtes) und `aktenfelder` (Sachverhalt, Branche, Dienstleistungen) als Vorschläge.
+// - Teilen: gespraech_teilen schickt Zusammenfassung + Link per Telegram an Kollegen, die die Akte sehen dürfen
+//   ({pruefen:true} nennt die möglichen Empfänger). gespraech_kundennotiz_vermerken trägt eine über den normalen
+//   Versand (Aktion send) verschickte Gesprächsnotiz in den Verlauf der Akte und in geteilt ein.
 
 import { kiAufruf, setzeAnlass, setzePerson, setzePrivat } from '../_shared/kiVerbrauch.ts'
 import { type Abschrift, AbschriftFehler, schreibeAb, TRANSKRIPTION_MAX_BYTES } from '../_shared/transkription.ts'
@@ -35,9 +48,18 @@ import {
   type GespraechFoto,
   type GespraechMarker,
   type GespraechSegment,
+  type GespraechGeteilt,
+  type GespraechUebersetzung,
+  fragenAusVorlage,
+  hauptsprache,
   leereAnalyse,
   normalisiereAnalyse,
+  normalisiereSprachwahl,
+  ordneFragebogenZu,
+  spracheAusErkennung,
+  sprachName,
   type SprecherRolle,
+  whisperSprache,
 } from '../_shared/gespraechSchema.ts'
 
 // deno-lint-ignore no-explicit-any
@@ -101,15 +123,21 @@ export type GespraechHilfen = {
   warteAufNeuenWorker?: () => Promise<void>
   /** Fortsetzung als neue Anfrage anstoßen (gespraech_weiter). */
   stosseAn?: (id: string) => Promise<void>
-  schreibeAb?: (bytes: Uint8Array, dateiname: string, mime: string, hinweis: string, timeoutMs: number) => Promise<Abschrift>
+  /** `sprache`: Kürzel für die Spracherkennung, null = automatisch erkennen (undefined = Vorgabe des Dienstes). Die
+   *  Antwort darf die erkannte Sprache mitliefern (`sprache`). */
+  schreibeAb?: (bytes: Uint8Array, dateiname: string, mime: string, hinweis: string, timeoutMs: number, sprache?: string | null) => Promise<Abschrift & { sprache?: string }>
   ki?: KiFunktion
+  /** Teilen mit Kollegen: darf diese Person (E-Mail) die Akte bzw. das Objekt sehen? Fehlt es, ist Teilen aus. */
+  darfKundeFuer?: (email: string, kundeId: string) => Promise<boolean>
+  darfObjektFuer?: (email: string, objektId: string) => Promise<boolean>
   sendeTelegram?: (chat: number | string | null, text: string) => Promise<boolean>
   sendePrivat?: (chat: number | string | null, text: string) => Promise<boolean>
   privatBotAktiv?: (email: string) => Promise<boolean>
   jetzt?: () => number
 }
 
-type H = Required<Omit<GespraechHilfen, 'dienst' | 'darfKunde' | 'darfObjekt'>> & Pick<GespraechHilfen, 'dienst' | 'darfKunde' | 'darfObjekt'>
+type Optional = 'dienst' | 'darfKunde' | 'darfObjekt' | 'darfKundeFuer' | 'darfObjektFuer'
+type H = Required<Omit<GespraechHilfen, Optional>> & Pick<GespraechHilfen, Optional>
 
 function mitStandard(admin: Db, h: GespraechHilfen): H {
   return {
@@ -258,7 +286,7 @@ type Kontext = {
 async function ladeKontext(admin: Db, z: Zeile): Promise<Kontext> {
   const [team, kunde, objekt, termin]: [Zeile[], Zeile | null, Zeile | null, Zeile | null] = await Promise.all([
     admin.from('mitarbeiter').select('name, email, telegram_chat_id, aktiv').eq('aktiv', true).then((r: Zeile) => (r.data ?? []) as Zeile[]),
-    z.kunde_id ? admin.from('kunden').select('id, bereich, firma, ansprechpartner, email, telefon, anschrift').eq('id', z.kunde_id).maybeSingle().then((r: Zeile) => r.data ?? null) : null,
+    z.kunde_id ? admin.from('kunden').select('id, bereich, firma, ansprechpartner, email, telefon, anschrift, sachverhalt, branche, dienstleistungen').eq('id', z.kunde_id).maybeSingle().then((r: Zeile) => r.data ?? null) : null,
     z.objekt_id ? admin.from('objekte').select('id, bezeichnung, privat_besitzer').eq('id', z.objekt_id).maybeSingle().then((r: Zeile) => r.data ?? null) : null,
     z.termin_id ? admin.from('termine').select('id, titel').eq('id', z.termin_id).maybeSingle().then((r: Zeile) => r.data ?? null) : null,
   ])
@@ -279,10 +307,11 @@ async function ladeKontext(admin: Db, z: Zeile): Promise<Kontext> {
   }
 }
 
-/** Schreibhilfe für die Spracherkennung: Namen aus Akte und Team, danach das Ende des vorigen Abschnitts. */
-export function abschriftHinweis(k: Pick<Kontext, 'besitzerName' | 'team' | 'kunde' | 'objekt'>, vorher: string): string {
+/** Schreibhilfe für die Spracherkennung: Namen aus Akte und Team, danach das Ende des vorigen Abschnitts. Ist die
+ *  Sprache nicht Deutsch (oder automatisch), ohne deutschen Satz — der würde die Erkennung Richtung Deutsch ziehen. */
+export function abschriftHinweis(k: Pick<Kontext, 'besitzerName' | 'team' | 'kunde' | 'objekt'>, vorher: string, deutsch = true): string {
   const namen = [...new Set([txt(k.kunde?.ansprechpartner, 120), txt(k.kunde?.firma, 120), txt(k.objekt?.bezeichnung, 120), k.besitzerName, ...k.team].filter(Boolean))]
-  let kopf = namen.length ? `Gespräch der Mayer Holding. Namen: ${namen.join(', ')}.` : ''
+  let kopf = namen.length ? (deutsch ? `Gespräch der Mayer Holding. Namen: ${namen.join(', ')}.` : `${namen.join(', ')}.`) : ''
   if (kopf.length > 300) kopf = kopf.slice(0, 299).replace(/,[^,]*$/, '') + '.'
   const ende = vorher.trim().slice(-280)
   return [kopf, ende].filter(Boolean).join(' ')
@@ -419,12 +448,15 @@ export async function transkribiereSegment(admin: Db, id: string, nr: number, hi
       if (error || !blob) throw new Error('Der Abschnitt ist im Speicher nicht zu finden (Hochladen unvollständig?).')
       const bytes = new Uint8Array(await blob.arrayBuffer())
       if (bytes.length === 0) throw new Error('Der Abschnitt ist leer.')
-      const ab = await h.schreibeAb(bytes, seg.pfad.split('/').pop() || `seg_${nr}`, seg.mime, abschriftHinweis(k, vorher), timeoutMs)
+      // Sprache laut Einstellung der Aufnahme: Kürzel oder null (= automatisch erkennen lassen).
+      const code = whisperSprache(z.sprache)
+      const ab = await h.schreibeAb(bytes, seg.pfad.split('/').pop() || `seg_${nr}`, seg.mime, abschriftHinweis(k, vorher, code === 'de'), timeoutMs, code)
+      const sprache = spracheAusErkennung(ab.sprache) ?? code ?? undefined
       await aendere(admin, id, (r) => {
         const s = segmenteVon(r).find((x) => x.nr === nr)
         if (!s || s.status !== 'hochgeladen') return null
         const dauer = zahl(s.dauer_s) ?? (ab.dauer ? Math.round(ab.dauer) : undefined)
-        return { segmente: ersetzeSegment(segmenteVon(r), { ...s, status: 'transkribiert', text: ab.text, stuecke: ab.stuecke, ...(dauer !== undefined ? { dauer_s: dauer } : {}), seit: null, fehler: null }) }
+        return { segmente: ersetzeSegment(segmenteVon(r), { ...s, status: 'transkribiert', text: ab.text, stuecke: ab.stuecke, ...(dauer !== undefined ? { dauer_s: dauer } : {}), ...(sprache ? { sprache } : {}), seit: null, fehler: null }) }
       }, h.jetzt())
       return 'ok'
     } catch (err) {
@@ -531,6 +563,17 @@ export function baueAbsaetze(saetze: Einheit[], labels: string[], personen: Bear
   return aus
 }
 
+/** Hauptsprache der Abschrift (Kürzel) — aus den abgeschriebenen Abschnitten, sonst aus der Einstellung. */
+export function erkannteSprache(z: Zeile): string | null {
+  return hauptsprache(segmenteVon(z).filter((s) => s.status === 'transkribiert'), whisperSprache(z.sprache))
+}
+
+/** Deutscher Name der Hauptsprache, wenn sie nicht Deutsch ist (sonst leer). */
+function sprachHinweis(z: Zeile): string {
+  const c = erkannteSprache(z)
+  return c && c !== 'de' ? sprachName(c) : ''
+}
+
 function artText(art: GespraechArt): string {
   return art === 'telefon' ? 'ein Telefonat (über Lautsprecher aufgenommen)' : art === 'notiz' ? 'eine gesprochene Notiz des Mitarbeiters' : 'ein Gespräch vor Ort'
 }
@@ -574,8 +617,9 @@ async function sprecherSchritt(admin: Db, z: Zeile, h: H, timeoutMs: number): Pr
       'Ordne jeden Satz einem Sprecher zu. Kürzel: M = der aufnehmende Mitarbeiter (M2 = ein weiterer Mitarbeiter), K = Kunde bzw. Gesprächspartner (K2, K3 bei mehreren), S = sonstige Person (S2 …).',
       'Achte auf Fragen und Antworten, Anreden, Sie/Du und darauf, wer berät und wer erzählt. Ein Satz kann auch eine kurze Rückmeldung sein („Ja.“, „Genau.“).',
       'Gib nur die Stellen an, an denen der Sprecher wechselt, und die erste Satznummer des Ausschnitts. Namen nur, wenn sie im Gespräch fallen oder aus den Angaben eindeutig sind — nichts erfinden.',
+      sprachHinweis(z) ? `Die Abschrift ist ganz oder teilweise auf ${sprachHinweis(z)}; ordne trotzdem genauso zu.` : '',
       'Antworte ausschließlich, indem du das Werkzeug sprecher_zuordnen aufrufst, ohne weiteren Text.',
-    ].join('\n')
+    ].filter(Boolean).join('\n')
     const antwort = await h.ki({ system, prompt, werkzeug: SPRECHER_WERKZEUG, maxTokens: 4000, timeoutMs })
     labels = [...labels, ...wendeWechselAn(antwort.wechsel, von, bis, labels[von - 1] ?? 'M')]
     for (const p of Array.isArray(antwort.personen) ? antwort.personen : []) {
@@ -632,8 +676,82 @@ const ANALYSE_WERKZEUG: KiWerkzeug = {
 
 const WOCHENTAGE = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag']
 
+/** Höchstzahl der Fragen, die an die Auswertung gehen (Rest der Vorlage bleibt unbeantwortet). */
+export const FRAGEN_AN_KI = 150
+
+export type FragebogenKontext = { vorlage: { id: string; name: string } | null; fragen: string[]; leistungen: string[]; aktenfelder: boolean }
+
+/**
+ * Fragebogen der Akte: Vorlage des Bereichs (vorlagen.typ 'Fragebogen', bevorzugt „Mandantenfragebogen“) und die
+ * Bezeichnungen der Preisliste für die Dienstleistungen. Ohne Akte oder bei privaten Akten nichts. Wirft nie.
+ */
+export async function ladeFragebogenKontext(admin: Db, kunde: Zeile | null): Promise<FragebogenKontext> {
+  const leer: FragebogenKontext = { vorlage: null, fragen: [], leistungen: [], aktenfelder: false }
+  const bereich = txt(kunde?.bereich, 40)
+  if (!kunde || !bereich || bereich === 'privat') return leer
+  try {
+    const [vorlagen, leistungen]: [Zeile[], Zeile[]] = await Promise.all([
+      admin.from('vorlagen').select('id, name, text').eq('bereich', bereich).eq('typ', 'Fragebogen').limit(20).then((r: Zeile) => (r.data ?? []) as Zeile[]),
+      admin.from('leistungen_preisliste').select('bezeichnung').order('sortierung', { ascending: true }).limit(100).then((r: Zeile) => (r.data ?? []) as Zeile[]),
+    ])
+    const mitText = vorlagen.filter((v) => txt(v.text, 50))
+    const v = mitText.find((x) => /mandantenfragebogen/i.test(String(x.name ?? ''))) ?? mitText[0]
+    const fragen = v ? fragenAusVorlage(String(v.text)).slice(0, FRAGEN_AN_KI) : []
+    return {
+      vorlage: v && fragen.length ? { id: String(v.id), name: txt(v.name, 200) || 'Fragebogen' } : null,
+      fragen,
+      leistungen: [...new Set(leistungen.map((l) => txt(l.bezeichnung, 150)).filter(Boolean))],
+      aktenfelder: true,
+    }
+  } catch (err) {
+    console.error('Gespräch: Fragebogen nicht geladen:', err)
+    return { ...leer, aktenfelder: true }
+  }
+}
+
+/** Werkzeug der Auswertung, bei Bedarf um Fragebogen und Aktenfelder erweitert. */
+export function analyseWerkzeug(fk: Pick<FragebogenKontext, 'fragen' | 'aktenfelder'>): KiWerkzeug {
+  const props: Record<string, unknown> = { ...(ANALYSE_WERKZEUG.input_schema.properties as Record<string, unknown>) }
+  if (fk.fragen.length) {
+    props.fragebogen = {
+      type: 'array',
+      description: 'Nur Fragen aus der Fragenliste, zu denen im Gespräch ausdrücklich etwas gesagt wurde.',
+      items: {
+        type: 'object',
+        properties: {
+          nr: { type: 'integer', description: 'Nummer der Frage in der Liste' },
+          frage: { type: 'string', description: 'Die Frage genau wie in der Liste' },
+          antwort: { type: 'string', description: 'Kurz und sachlich auf Deutsch, nur Gesagtes' },
+          sicher: { type: 'boolean', description: 'true nur, wenn die Antwort eindeutig gesagt wurde' },
+        },
+        required: ['nr', 'antwort', 'sicher'],
+      },
+    }
+  }
+  if (fk.aktenfelder) {
+    props.aktenfelder = {
+      type: 'object',
+      description: 'Vorschläge für die Akte, nur aus dem Gesagten; Felder weglassen, zu denen nichts gesagt wurde.',
+      properties: {
+        sachverhalt: { type: 'string', description: 'Zwei, drei Sätze: worum es bei diesem Auftrag geht' },
+        branche: { type: 'string', description: 'Branche des Kunden' },
+        dienstleistungen: { type: 'array', items: { type: 'string' }, description: 'Gewünschte Leistungen der Mayer Holding, möglichst Bezeichnungen aus der Preisliste' },
+      },
+    }
+  }
+  return { ...ANALYSE_WERKZEUG, input_schema: { ...ANALYSE_WERKZEUG.input_schema, properties: props } }
+}
+
+function aktenfeldZeile(kunde: Zeile | null): string {
+  if (!kunde) return ''
+  const dl = Array.isArray(kunde.dienstleistungen) ? kunde.dienstleistungen.map((x: unknown) => txt(x, 100)).filter(Boolean).join(', ') : ''
+  return `Felder der Akte (leer = noch nicht ausgefüllt): Sachverhalt: ${txt(kunde.sachverhalt, 600) || 'leer'} · Branche: ${txt(kunde.branche, 120) || 'leer'} · Dienstleistungen: ${dl || 'leer'}`
+}
+
 async function analyseSchritt(admin: Db, z: Zeile, h: H, timeoutMs: number): Promise<void> {
   const k = await ladeKontext(admin, z)
+  const sprache = erkannteSprache(z)
+  const fremdsprache = sprache && sprache !== 'de' ? sprachName(sprache) : ''
   const b = (z.bearbeitung ?? {}) as Bearbeitung
   const { saetze, luecken } = zerlegeInSaetze(segmenteVon(z))
   const absaetze: GespraechAbsatz[] = Array.isArray(z.sprecher) && z.sprecher.length ? z.sprecher : baueAbsaetze(saetze, b.labels ?? [], b.personen, k.besitzerName)
@@ -649,6 +767,7 @@ async function analyseSchritt(admin: Db, z: Zeile, h: H, timeoutMs: number): Pro
     if (abschrift.length > 350_000) abschrift = `${abschrift.slice(0, 200_000)}\n[… Mitte gekürzt …]\n${abschrift.slice(-150_000)}`
     const marker = (Array.isArray(z.marker) ? z.marker : []) as GespraechMarker[]
     const d = new Date(`${tag}T12:00:00Z`)
+    const fk = await ladeFragebogenKontext(admin, k.kunde)
     const prompt = [
       `Datum des Gesprächs: ${WOCHENTAGE[d.getUTCDay()]}, ${tag}. Art: ${artText(z.art)}.`,
       `Mitarbeiter, der aufgenommen hat: ${k.besitzerName}.`,
@@ -658,6 +777,9 @@ async function analyseSchritt(admin: Db, z: Zeile, h: H, timeoutMs: number): Pro
       marker.length ? `Markierungen des Mitarbeiters während des Gesprächs:\n${marker.map((m) => `[${mmss(m.sek)}] ${m.art}: ${txt(m.text, 300)}`).join('\n')}` : '',
       txt(z.notizen) ? `Notizen des Mitarbeiters:\n${txt(z.notizen, 5000)}` : '',
       luecken.length ? `Hinweis: Teil ${luecken.join(', ')} der Aufnahme fehlt in der Abschrift.` : '',
+      fk.aktenfelder ? aktenfeldZeile(k.kunde) : '',
+      fk.aktenfelder && fk.leistungen.length ? `Dienstleistungen laut Preisliste: ${fk.leistungen.join(', ')}` : '',
+      fk.vorlage ? `Fragebogen „${fk.vorlage.name}“ — beantworte nur Fragen, zu denen im Gespräch etwas gesagt wurde:\n${fk.fragen.map((f, i) => `${i + 1}. ${f}`).join('\n')}` : '',
       `Abschrift (Sprecher automatisch zugeordnet, kann Fehler enthalten):\n${abschrift}`,
     ].filter(Boolean).join('\n\n')
     const system = [
@@ -666,14 +788,28 @@ async function analyseSchritt(admin: Db, z: Zeile, h: H, timeoutMs: number): Pro
       'Schreibe in einfachem, klarem Deutsch ohne englische Wörter und ohne Fachjargon.',
       `Daten immer als JJJJ-MM-TT. Rechne Angaben wie „nächsten Dienstag“ oder „Ende des Monats“ vom Gesprächsdatum aus um; ist kein Tag erkennbar, lass das Datum weg (Termine und Wiedervorlagen ohne Tag ganz weglassen).`,
       'Stammdaten nur, wenn sie ausdrücklich genannt wurden und in der Akte fehlen oder abweichen.',
+      fremdsprache ? `Die Abschrift ist ganz oder teilweise auf ${fremdsprache}. Schreibe trotzdem alle Felder auf Deutsch (auch Zusammenfassung, Listen und Mail-Entwurf); Namen, Orte und Beträge unverändert übernehmen.` : '',
+      fk.vorlage ? 'fragebogen: nur Fragen aus der Fragenliste, zu denen im Gespräch ausdrücklich etwas gesagt wurde; nr = Nummer der Frage; antwort kurz und sachlich; sicher = true nur, wenn die Antwort eindeutig gesagt wurde. Nichts schließen oder schätzen — lieber weglassen.' : '',
+      fk.aktenfelder ? 'aktenfelder: sachverhalt = zwei, drei Sätze, worum es bei dem Auftrag geht; branche = Branche des Kunden; dienstleistungen = gewünschte Leistungen der Mayer Holding (möglichst Bezeichnungen aus der Preisliste). Nur aus dem Gesagten; Felder weglassen, zu denen nichts gesagt wurde.' : '',
       z.art === 'notiz'
         ? 'Es ist eine gesprochene Notiz ohne Kunden: mail_entwurf mit leerem Betreff und leerem Text.'
         : `mail_entwurf: kurze Nachfass-Mail an den Kunden in der Sie-Form, freundlich und schlicht; fasst Vereinbarungen, nächste Schritte und fehlende Unterlagen zusammen, nur Gesagtes. Anrede mit Namen, wenn bekannt („Sehr geehrte Frau …“/„Sehr geehrter Herr …“, sonst „Guten Tag“). Schluss: „Mit freundlichen Grüßen“, darunter „${k.besitzerName}“. Keine Platzhalter in eckigen Klammern.`,
       'Antworte ausschließlich, indem du das Werkzeug auswertung_speichern aufrufst, ohne weiteren Text.',
-    ].join('\n')
-    const roh = await h.ki({ system, prompt, werkzeug: ANALYSE_WERKZEUG, maxTokens: 8000, timeoutMs })
+    ].filter(Boolean).join('\n')
+    const roh = await h.ki({ system, prompt, werkzeug: analyseWerkzeug(fk), maxTokens: fk.vorlage ? 12000 : 8000, timeoutMs })
     analyse = normalisiereAnalyse(roh, tag)
     if (z.art === 'notiz') analyse.mail_entwurf = { betreff: '', text: '' }
+    // Fragebogen nur auf die Fragen der Vorlage (Frage genau wie dort), Aktenfelder nur bei einer Akte.
+    delete analyse.fragebogen
+    delete analyse.fragebogen_vorlage
+    if (fk.vorlage) {
+      const fb = ordneFragebogenZu(roh.fragebogen, fk.fragen)
+      if (fb.length) {
+        analyse.fragebogen = fb
+        analyse.fragebogen_vorlage = fk.vorlage
+      }
+    }
+    if (!fk.aktenfelder) delete analyse.aktenfelder
   }
   analyse.sprecher = sprecherListe
   const stempel = new Date(h.jetzt()).toISOString()
@@ -683,6 +819,7 @@ async function analyseSchritt(admin: Db, z: Zeile, h: H, timeoutMs: number): Pro
     return {
       analyse,
       sprecher: absaetze,
+      sprache_erkannt: sprache,
       status: 'fertig',
       fehler: null,
       bearbeitung: { ...rb, schritt: 'fertig', seit: null, versuche: 0, fehler: null, letzter_versuch: stempel },
@@ -920,6 +1057,9 @@ export const GESPRAECH_AKTIONEN = new Set([
   'gespraech_datei_url',
   'gespraech_verwerfen',
   'gespraech_weiter',
+  'gespraech_uebersetzen',
+  'gespraech_teilen',
+  'gespraech_kundennotiz_vermerken',
 ])
 
 async function ladeZeile(admin: Db, id: unknown): Promise<Zeile | null> {
@@ -1034,6 +1174,8 @@ export async function gespraechAktion(admin: Db, aufrufer: GespraechAufrufer | n
       marker: [],
       fotos: [],
       einwilligung,
+      // Sprache nur, wenn die App sie schickt (ältere Fassungen: Vorgabe der Tabelle = deutsch).
+      ...(body.sprache !== undefined && body.sprache !== null ? { sprache: normalisiereSprachwahl(body.sprache) } : {}),
       aufbewahren_bis: aufbewahrenBis(body.aufbewahrenTage, jetzt) ?? plusTage(heuteBerlin(jetzt), STANDARD_AUFBEWAHREN_TAGE),
       bearbeitung: {},
       stand: 0,
@@ -1073,6 +1215,11 @@ export async function gespraechAktion(admin: Db, aufrufer: GespraechAufrufer | n
     const { data, error } = await admin.storage.from(GESPRAECH_BUCKET).createSignedUrl(pfad, 3600)
     if (error || !data?.signedUrl) return fehler(500, 'Die Datei lässt sich gerade nicht öffnen.')
     return ok({ url: data.signedUrl })
+  }
+
+  if (aktion === 'gespraech_uebersetzen' && txt(body.art, 20) !== 'mail' && txt(body.art, 20) !== 'notiz') {
+    if (!(await darfLesen(z, aufrufer, h))) return fehler(403, 'Diese Aufnahme ist für dich nicht freigegeben.')
+    return await uebersetzeAbschrift(admin, z, h)
   }
 
   // ---- Ab hier nur der Besitzer ----
@@ -1162,6 +1309,8 @@ export async function gespraechAktion(admin: Db, aufrufer: GespraechAufrufer | n
     const aenderung: Zeile = {}
     if (typeof body.notizen === 'string') aenderung.notizen = body.notizen.slice(0, 20_000)
     if (typeof body.titel === 'string') aenderung.titel = txt(body.titel, 200) || null
+    // Gilt für Abschnitte, die noch nicht abgeschrieben sind (sonst „Neu auswerten“ mit Sprache).
+    if (typeof body.sprache === 'string') aenderung.sprache = normalisiereSprachwahl(body.sprache)
     const bis = aufbewahrenBis(body.aufbewahrenTage, jetzt)
     if (bis) aenderung.aufbewahren_bis = bis
     if (body.kundeId !== undefined || body.objektId !== undefined || body.terminId !== undefined) {
@@ -1193,6 +1342,8 @@ export async function gespraechAktion(admin: Db, aufrufer: GespraechAufrufer | n
     if (neu && !['fehler', 'fertig'].includes(z.status) && z.abgeschlossen_am) return fehler(409, 'Die Auswertung läuft noch.')
     const nummern = (Array.isArray(body.nummern) ? body.nummern : []).map(zahl).filter((n: number | null): n is number => n !== null && Number.isInteger(n) && n >= 0 && n <= 9999)
     const dauer = zahl(body.dauer_s)
+    const neueSprache = neu && typeof body.sprache === 'string' ? normalisiereSprachwahl(body.sprache) : null
+    if (neueSprache && neueSprache !== normalisiereSprachwahl(z.sprache) && z.audio_geloescht_am) return fehler(410, 'Der Ton ist schon gelöscht — mit einer anderen Sprache lässt sich nicht mehr neu abschreiben.')
     const r = await aendere(admin, id, (x) => {
       let segmente = segmenteVon(x)
       // Abschnitte, die die App aufgenommen, aber noch nicht angemeldet hat: als „offen“ vormerken.
@@ -1200,19 +1351,33 @@ export async function gespraechAktion(admin: Db, aufrufer: GespraechAufrufer | n
       if (neu) {
         segmente = segmente.map((s) => (s.status === 'fehler' && s.pfad && !x.audio_geloescht_am ? { ...s, status: 'hochgeladen', versuche: 0, seit: null, fehler: null } : s))
       }
+      // Andere Sprache gewählt: alle Abschnitte mit Ton noch einmal abschreiben.
+      const sprachWechsel = !!neueSprache && neueSprache !== normalisiereSprachwahl(x.sprache) && !x.audio_geloescht_am
+      if (sprachWechsel) {
+        segmente = segmente.map((s) => {
+          if (s.status !== 'transkribiert' || !s.pfad) return s
+          const { text: _t, stuecke: _s, sprache: _sp, ...rest } = s
+          return { ...rest, status: 'hochgeladen' as const, versuche: 0, seit: null, fehler: null }
+        })
+      }
       return {
         segmente,
         ...(dauer !== null ? { dauer_s: Math.round(dauer) } : {}),
         abgeschlossen_am: x.abgeschlossen_am ?? stempel,
         status: segmente.some((s) => s.status === 'offen') ? 'hochladen' : 'transkription',
         fehler: null,
-        ...(neu ? { bearbeitung: {}, gemeldet_am: null, transkript: null } : {}),
+        ...(neueSprache ? { sprache: neueSprache } : {}),
+        ...(neu ? { bearbeitung: {}, gemeldet_am: null, transkript: null, uebersetzung: null, sprache_erkannt: null } : {}),
       }
     }, jetzt)
     if (!r) return fehler(404, 'Diese Aufnahme gibt es nicht mehr.')
     h.imHintergrund(arbeiteGespraech(admin, id, h))
     return ok({ ok: true, aufnahme: fuerAntwort(r, true) })
   }
+
+  if (aktion === 'gespraech_uebersetzen') return await uebersetzeMail(admin, z, body, h)
+  if (aktion === 'gespraech_teilen') return await teileMitKollegen(admin, z, aufrufer, body, h)
+  if (aktion === 'gespraech_kundennotiz_vermerken') return await vermerkeKundennotiz(admin, z, aufrufer, body, h)
 
   if (aktion === 'gespraech_verwerfen') {
     const pfade = [...segmenteVon(z).map((s) => s.pfad), ...((Array.isArray(z.fotos) ? z.fotos : []) as GespraechFoto[]).map((f) => f.pfad)].filter((p) => typeof p === 'string' && p)
@@ -1267,4 +1432,301 @@ export async function gespraechListe(admin: Db, aufrufer: GespraechAufrufer, bod
     uebernommen: !!uebernommen,
   }))
   return ok({ zeilen, weitere: alle.length > (seite + 1) * SEITE })
+}
+
+// ---------- Übersetzen (nur auf Anforderung) ----------
+
+/** So viele Zeichen Abschrift gehen höchstens in einen Übersetzungs-Aufruf. */
+export const UEBERSETZUNG_ZEICHEN = 12_000
+
+const ABSCHRIFT_UEBERSETZEN: KiWerkzeug = {
+  name: 'uebersetzung_speichern',
+  description: 'Speichert die deutsche Übersetzung der nummerierten Absätze.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      absaetze: {
+        type: 'array',
+        items: { type: 'object', properties: { nr: { type: 'integer' }, text: { type: 'string' } }, required: ['nr', 'text'] },
+      },
+    },
+    required: ['absaetze'],
+  },
+}
+
+const MAIL_UEBERSETZEN: KiWerkzeug = {
+  name: 'mail_uebersetzen',
+  description: 'Speichert die übersetzte Mail.',
+  input_schema: { type: 'object', properties: { betreff: { type: 'string' }, text: { type: 'string' } }, required: ['betreff', 'text'] },
+}
+
+/** Kurze Prüfsumme (FNV-1a) — erkennt, ob sich der deutsche Text seit der letzten Übersetzung geändert hat. */
+export function pruefsumme(s: string): string {
+  let h = 0x811c9dc5
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i)
+    h = Math.imul(h, 0x01000193) >>> 0
+  }
+  return h.toString(16).padStart(8, '0')
+}
+
+function absaetzeVon(z: Zeile): GespraechAbsatz[] {
+  return (Array.isArray(z.sprecher) ? z.sprecher : []).filter((a: unknown) => a && typeof a === 'object' && typeof (a as GespraechAbsatz).text === 'string') as GespraechAbsatz[]
+}
+
+/** Hat die Abschrift Teile, die nicht Deutsch sind? */
+function hatFremdsprache(z: Zeile): boolean {
+  const erkannt = txt(z.sprache_erkannt, 10) || erkannteSprache(z)
+  if (erkannt && erkannt !== 'de') return true
+  return segmenteVon(z).some((s) => s.status === 'transkribiert' && !!s.sprache && spracheAusErkennung(s.sprache) !== 'de' && txt(s.text, 10) !== '')
+}
+
+/**
+ * gespraech_uebersetzen {id} (bzw. art 'abschrift'): deutsche Fassung der Abschrift, Absatz für Absatz (Spalte sprecher).
+ * Übersetzt in Teilen von höchstens UEBERSETZUNG_ZEICHEN Zeichen, so viele die Zeit dieses Aufrufs erlaubt, und speichert
+ * nach jedem Teil (uebersetzung.abschrift). `fertig: false` = die App ruft noch einmal auf. Lesen dürfen alle, die die
+ * Aufnahme sehen dürfen.
+ */
+export async function uebersetzeAbschrift(admin: Db, z: Zeile, hilfen: GespraechHilfen): Promise<Antwort> {
+  const h = mitStandard(admin, hilfen)
+  if (!['fertig', 'fehler'].includes(z.status)) return fehler(409, 'Die Abschrift ist noch nicht fertig.')
+  const absaetze = absaetzeVon(z)
+  if (!absaetze.length) return fehler(409, 'Es gibt keine Abschrift zum Übersetzen.')
+  if (!hatFremdsprache(z)) return fehler(400, 'Die Abschrift ist schon auf Deutsch.')
+  const u = (z.uebersetzung && typeof z.uebersetzung === 'object' ? z.uebersetzung : {}) as GespraechUebersetzung
+  const fertigListe: string[] = u.abschrift && u.abschrift.quelle === absaetze.length && Array.isArray(u.abschrift.absaetze) ? u.abschrift.absaetze.slice(0, absaetze.length).map(String) : []
+  if (fertigListe.length >= absaetze.length) return ok({ absaetze: fertigListe, fertig: true })
+  setzeAnlass('gespraech_uebersetzung')
+  setzePerson(z.mitarbeiter_email)
+  if (z.kunde_bereich === 'privat') setzePrivat()
+  const start = h.jetzt()
+  const budget = Math.min(110_000, h.restMs() - 15_000)
+  const system = [
+    'Du übersetzt die Abschrift eines Kundengesprächs der Mayer Holding ins Deutsche.',
+    'Übersetze jeden nummerierten Absatz vollständig und sinngetreu in einfaches Deutsch — nichts weglassen, nichts zusammenfassen, nichts ergänzen. Absätze, die schon Deutsch sind, unverändert übernehmen. Namen, Orte, Zahlen und Beträge unverändert.',
+    'Antworte ausschließlich, indem du das Werkzeug uebersetzung_speichern aufrufst, ohne weiteren Text.',
+  ].join('\n')
+  let hinweis = ''
+  while (fertigListe.length < absaetze.length) {
+    const bleibt = budget - (h.jetzt() - start)
+    if (bleibt < 30_000) break
+    const von = fertigListe.length
+    let bis = von
+    let zeichen = 0
+    while (bis < absaetze.length && (bis === von || zeichen + absaetze[bis].text.length <= UEBERSETZUNG_ZEICHEN)) {
+      zeichen += absaetze[bis].text.length
+      bis++
+    }
+    const prompt = absaetze.slice(von, bis).map((a, i) => `${von + i + 1}: ${a.text}`).join('\n')
+    let antwort: Record<string, unknown>
+    try {
+      antwort = await h.ki({ system, prompt, werkzeug: ABSCHRIFT_UEBERSETZEN, maxTokens: 16000, timeoutMs: Math.max(20_000, Math.min(100_000, bleibt - 5_000)) })
+    } catch (err) {
+      const meldung = err instanceof Error ? err.message : String(err)
+      if (fertigListe.length === 0) return fehler(502, `Die Übersetzung ist nicht gelungen: ${meldung}`)
+      hinweis = `Ein Teil der Übersetzung fehlt noch (${meldung}). Bitte später noch einmal versuchen.`
+      break
+    }
+    const nachNr = new Map<number, string>()
+    for (const e of Array.isArray(antwort.absaetze) ? antwort.absaetze : []) {
+      // deno-lint-ignore no-explicit-any
+      const o = e as any
+      const nr = zahl(o?.nr)
+      const t = typeof o?.text === 'string' ? o.text.trim() : ''
+      if (nr !== null && t) nachNr.set(nr - 1, t)
+    }
+    for (let i = von; i < bis; i++) fertigListe.push(nachNr.get(i) ?? `[nicht übersetzt] ${absaetze[i].text}`)
+    const stempel = new Date(h.jetzt()).toISOString()
+    const stand = [...fertigListe]
+    await aendere(admin, z.id, (r) => {
+      const ru = (r.uebersetzung && typeof r.uebersetzung === 'object' ? r.uebersetzung : {}) as GespraechUebersetzung
+      const alt = ru.abschrift && ru.abschrift.quelle === absaetze.length ? ru.abschrift.absaetze ?? [] : []
+      if (alt.length >= stand.length) return null
+      return { uebersetzung: { ...ru, abschrift: { absaetze: stand, quelle: absaetze.length, fertig: stand.length >= absaetze.length, am: stempel } } }
+    }, h.jetzt()).catch((err) => console.error(`Gespräch ${z.id}: Übersetzung nicht gespeichert:`, err))
+  }
+  return ok({ absaetze: fertigListe, fertig: fertigListe.length >= absaetze.length, ...(hinweis ? { hinweis } : {}) })
+}
+
+/**
+ * gespraech_uebersetzen {id, art: 'mail' | 'notiz', sprache, betreff, text}: deutschen Mail-Entwurf bzw. die
+ * Gesprächsnotiz in die Sprache des Kunden übersetzen (nur der Besitzer). Gleicher Text → gespeicherte Übersetzung.
+ */
+// deno-lint-ignore no-explicit-any
+export async function uebersetzeMail(admin: Db, z: Zeile, body: Record<string, any>, hilfen: GespraechHilfen): Promise<Antwort> {
+  const h = mitStandard(admin, hilfen)
+  const art: 'mail' | 'notiz' = body.art === 'notiz' ? 'notiz' : 'mail'
+  const ziel = spracheAusErkennung(body.sprache) ?? whisperSprache(body.sprache)
+  if (!ziel || ziel === 'de') return fehler(400, 'Bitte eine andere Sprache als Deutsch wählen.')
+  const betreff = txt(body.betreff, 300)
+  const text = typeof body.text === 'string' ? body.text.replace(/\r\n?/g, '\n').trim().slice(0, 8000) : ''
+  if (!text) return fehler(400, 'Es gibt keinen Text zum Übersetzen.')
+  const schluessel = pruefsumme(`${ziel}|${betreff}|${text}`)
+  const u = (z.uebersetzung && typeof z.uebersetzung === 'object' ? z.uebersetzung : {}) as GespraechUebersetzung
+  const gespeichert = u[art]
+  if (gespeichert && gespeichert.schluessel === schluessel) return ok({ betreff: gespeichert.betreff, text: gespeichert.text, sprache: ziel })
+  setzeAnlass('gespraech_uebersetzung')
+  setzePerson(z.mitarbeiter_email)
+  if (z.kunde_bereich === 'privat') setzePrivat()
+  const name = sprachName(ziel)
+  let antwort: Record<string, unknown>
+  try {
+    antwort = await h.ki({
+      system: [
+        `Du übersetzt eine Mail der Mayer Holding an einen Kunden aus dem Deutschen in die Sprache „${name}“.`,
+        'Höflich, sinngetreu und vollständig; Absätze, Aufzählungen, Anrede und Gruß beibehalten. Namen, Daten, Uhrzeiten, Beträge und Adressen unverändert. Nichts ergänzen, nichts weglassen.',
+        'Antworte ausschließlich, indem du das Werkzeug mail_uebersetzen aufrufst, ohne weiteren Text.',
+      ].join('\n'),
+      prompt: `Betreff: ${betreff || '(ohne)'}\n\nText:\n${text}`,
+      werkzeug: MAIL_UEBERSETZEN,
+      maxTokens: 6000,
+      timeoutMs: Math.max(20_000, Math.min(90_000, h.restMs() - 15_000)),
+    })
+  } catch (err) {
+    return fehler(502, `Die Übersetzung ist nicht gelungen: ${err instanceof Error ? err.message : String(err)}`)
+  }
+  const neuBetreff = txt(antwort.betreff, 300)
+  const neuText = typeof antwort.text === 'string' ? antwort.text.trim().slice(0, 12000) : ''
+  if (!neuText) return fehler(502, 'Die Übersetzung ist leer zurückgekommen. Bitte noch einmal versuchen.')
+  const stempel = new Date(h.jetzt()).toISOString()
+  await aendere(admin, z.id, (r) => {
+    const ru = (r.uebersetzung && typeof r.uebersetzung === 'object' ? r.uebersetzung : {}) as GespraechUebersetzung
+    return { uebersetzung: { ...ru, [art]: { sprache: ziel, schluessel, betreff: neuBetreff, text: neuText, am: stempel } } }
+  }, h.jetzt()).catch((err) => console.error(`Gespräch ${z.id}: Übersetzung nicht gespeichert:`, err))
+  return ok({ betreff: neuBetreff, text: neuText, sprache: ziel })
+}
+
+// ---------- Teilen ----------
+
+const ART_KURZ: Record<string, string> = { termin: 'Kundentermin', telefon: 'Telefonat', notiz: 'Gesprächsnotiz' }
+/** Derselbe Kollege bekommt dieselbe Aufnahme frühestens nach so langer Zeit noch einmal (gegen versehentliches Doppeltippen). */
+export const TEILEN_SPERRE_MS = 10 * 60_000
+const HOECHSTENS_EMPFAENGER = 5
+
+function geteiltVon(z: Zeile): GespraechGeteilt[] {
+  return (Array.isArray(z.geteilt) ? z.geteilt : []).filter((g: unknown) => g && typeof g === 'object') as GespraechGeteilt[]
+}
+
+function deTag(iso: string): string {
+  return iso.split('-').reverse().join('.')
+}
+
+/** Text der Telegram-Nachricht an einen Kollegen (Zusammenfassung, nächste Schritte, Link). */
+export function teilenText(z: Zeile, k: Pick<Kontext, 'besitzerName' | 'akteName'>, notiz: string, jetzt: number): string {
+  const a = (z.analyse ?? {}) as Partial<GespraechAnalyse>
+  const tag = deTag(heuteBerlin(Date.parse(z.erstellt_am) || jetzt))
+  const worum = k.akteName || txt(z.titel, 120) || 'Aufnahme'
+  let zusammenfassung = typeof a.zusammenfassung === 'string' ? a.zusammenfassung.trim() : ''
+  if (zusammenfassung.length > 900) zusammenfassung = `${zusammenfassung.slice(0, 899).trimEnd()}…`
+  const schritte = (Array.isArray(a.naechste_schritte) ? a.naechste_schritte : []).slice(0, 5).map((s) => `- ${txt(s?.text, 200)}${s?.faellig ? ` (bis ${deTag(String(s.faellig))})` : ''}`).filter((x) => x.length > 2)
+  return [
+    `🎙️ ${k.besitzerName} teilt ein Gespräch mit dir: ${worum} — ${ART_KURZ[z.art] ?? 'Gespräch'} vom ${tag}`,
+    notiz ? `„${notiz}“` : '',
+    zusammenfassung,
+    schritte.length ? `Nächste Schritte:\n${schritte.join('\n')}` : '',
+    `Ansehen: ${GESPRAECH_APP_LINK}${z.id}`,
+  ].filter(Boolean).join('\n\n')
+}
+
+/**
+ * gespraech_teilen {id, pruefen: true} → { empfaenger: [{email, name, darf, telegram}] }
+ * gespraech_teilen {id, an: [email…], notiz?} → schickt Zusammenfassung + Link per Telegram (Mayer-Bot) an Kollegen, die
+ * die Akte sehen dürfen; vermerkt jede Sendung in `geteilt`. Nur fertige Aufnahmen mit (nicht privater) Akte.
+ */
+// deno-lint-ignore no-explicit-any
+export async function teileMitKollegen(admin: Db, z: Zeile, aufrufer: GespraechAufrufer, body: Record<string, any>, hilfen: GespraechHilfen): Promise<Antwort> {
+  const h = mitStandard(admin, hilfen)
+  if (z.status !== 'fertig' || !z.analyse) return fehler(409, 'Teilen geht erst, wenn die Auswertung fertig ist.')
+  if (!z.kunde_id && !z.objekt_id) return fehler(409, 'Bitte zuerst eine Akte zuordnen — geteilt wird nur, was an einer Akte hängt.')
+  const k = await ladeKontext(admin, z)
+  if (k.privat) return fehler(409, 'Private Aufnahmen lassen sich nicht mit Kollegen teilen.')
+  const pruefer = z.kunde_id ? h.darfKundeFuer : h.darfObjektFuer
+  if (!pruefer) return fehler(501, 'Teilen ist auf dem Server noch nicht eingerichtet.')
+  const darf = (email: string) => pruefer(email, z.kunde_id ? String(z.kunde_id) : String(z.objekt_id)).catch(() => false)
+  const ich = aufrufer.email.toLowerCase()
+  const { data: teamRoh } = await admin.from('mitarbeiter').select('name, email, telegram_chat_id, aktiv').eq('aktiv', true)
+  const team = ((teamRoh ?? []) as Zeile[])
+    .map((m) => ({ name: txt(m.name, 120), email: String(m.email ?? '').trim().toLowerCase(), chat: m.telegram_chat_id ?? null }))
+    .filter((m) => m.email && m.email !== ich)
+
+  if (body.pruefen === true) {
+    const empfaenger = []
+    for (const m of team) empfaenger.push({ email: m.email, name: m.name || m.email, darf: await darf(m.email), telegram: !!m.chat })
+    empfaenger.sort((a, b) => Number(b.darf && b.telegram) - Number(a.darf && a.telegram) || a.name.localeCompare(b.name, 'de'))
+    return ok({ empfaenger })
+  }
+
+  const an = [...new Set((Array.isArray(body.an) ? body.an : typeof body.an === 'string' ? [body.an] : []).map((x: unknown) => String(x ?? '').trim().toLowerCase()).filter(Boolean))] as string[]
+  if (!an.length) return fehler(400, 'Bitte mindestens einen Kollegen auswählen.')
+  if (an.length > HOECHSTENS_EMPFAENGER) return fehler(400, `Bitte höchstens ${HOECHSTENS_EMPFAENGER} Kollegen auf einmal auswählen.`)
+  const notiz = txt(body.notiz, 500).replace(/\s+/g, ' ')
+  const jetzt = h.jetzt()
+  const text = teilenText(z, k, notiz, jetzt)
+  const bisher = geteiltVon(z)
+  const gesendet: string[] = []
+  const nicht: { name: string; grund: string }[] = []
+  const neu: GespraechGeteilt[] = []
+  for (const email of an) {
+    const m = team.find((x) => x.email === email)
+    if (!m) {
+      nicht.push({ name: email, grund: email === ich ? 'das bist du selbst' : 'kein aktiver Mitarbeiter' })
+      continue
+    }
+    const name = m.name || m.email
+    if (!(await darf(m.email))) {
+      nicht.push({ name, grund: 'darf diese Akte nicht sehen' })
+      continue
+    }
+    if (!m.chat) {
+      nicht.push({ name, grund: 'hat Telegram nicht verbunden' })
+      continue
+    }
+    if (bisher.some((g) => g.art === 'kollege' && g.an === m.email && g.ok && jetzt - Date.parse(g.am) < TEILEN_SPERRE_MS)) {
+      nicht.push({ name, grund: 'hat sie gerade eben schon bekommen' })
+      continue
+    }
+    const zugestellt = await h.sendeTelegram(m.chat, text).catch(() => false)
+    neu.push({ art: 'kollege', an: m.email, name, am: new Date(jetzt).toISOString(), von: aufrufer.name || ich, ok: zugestellt })
+    if (zugestellt) gesendet.push(name)
+    else nicht.push({ name, grund: 'Telegram hat die Nachricht nicht angenommen' })
+  }
+  if (neu.length) {
+    await aendere(admin, z.id, (r) => ({ geteilt: [...geteiltVon(r), ...neu].slice(-100) }), h.jetzt()).catch((err) => console.error(`Gespräch ${z.id}: Teilen nicht vermerkt:`, err))
+  }
+  return ok({ gesendet, nicht })
+}
+
+/**
+ * gespraech_kundennotiz_vermerken {id, an, betreff, sprache?}: Die App hat die Gesprächsnotiz über den normalen
+ * Versand des CRM (Aktion send, mit Signatur, landet in gesendete_emails) verschickt; hier kommt der Eintrag in den
+ * Verlauf der Akte und in `geteilt`. Ein zweiter gleicher Aufruf binnen zwei Minuten trägt nichts doppelt ein.
+ */
+// deno-lint-ignore no-explicit-any
+export async function vermerkeKundennotiz(admin: Db, z: Zeile, aufrufer: GespraechAufrufer, body: Record<string, any>, hilfen: GespraechHilfen): Promise<Antwort> {
+  const h = mitStandard(admin, hilfen)
+  const kundeId = txt(z.kunde_id, 80)
+  if (!kundeId) return fehler(409, 'Die Aufnahme hängt an keiner Akte.')
+  if (!h.darfKunde || !(await h.darfKunde(kundeId))) return fehler(403, 'Diese Akte ist für dich nicht freigegeben.')
+  const an = txt(body.an, 300)
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(an.split(/[,;]/)[0].trim())) return fehler(400, 'Die Empfänger-Adresse fehlt oder ist ungültig.')
+  const betreff = txt(body.betreff, 300) || 'Gesprächsnotiz'
+  const sprache = spracheAusErkennung(body.sprache)
+  const jetzt = h.jetzt()
+  if (geteiltVon(z).some((g) => g.art === 'kunde' && g.an === an && g.betreff === betreff && jetzt - Date.parse(g.am) < 120_000)) return ok({ ok: true, schon: true })
+  const heute = heuteBerlin(jetzt)
+  const worum = txt(z.titel, 120) || `${ART_KURZ[z.art] ?? 'Gespräch'} vom ${deTag(heuteBerlin(Date.parse(z.erstellt_am) || jetzt))}`
+  const eintrag = {
+    id: crypto.randomUUID(),
+    date: heute,
+    text: `Gesprächsnotiz zur Aufnahme „${worum}“ an ${an} geschickt — Betreff: ${betreff}${sprache && sprache !== 'de' ? ` (auf ${sprachName(sprache)})` : ''}.`,
+    user: aufrufer.name || aufrufer.email,
+  }
+  // Verlauf frisch lesen und nur ihn (plus letzte Aktivität) schreiben.
+  const { data: akte, error } = await admin.from('kunden').select('id, activities').eq('id', kundeId).maybeSingle()
+  if (error || !akte) return fehler(500, `Die Akte ließ sich nicht lesen: ${error?.message ?? 'nicht gefunden'}. Die Mail ist trotzdem verschickt.`)
+  const { error: e2 } = await admin.from('kunden').update({ activities: [eintrag, ...(Array.isArray(akte.activities) ? akte.activities : [])], letzte_aktivitaet: heute }).eq('id', kundeId)
+  if (e2) return fehler(500, `Der Verlaufseintrag ließ sich nicht speichern: ${e2.message}. Die Mail ist trotzdem verschickt.`)
+  const vermerk: GespraechGeteilt = { art: 'kunde', an, betreff, am: new Date(jetzt).toISOString(), von: aufrufer.name || aufrufer.email, ...(sprache ? { sprache } : {}) }
+  await aendere(admin, z.id, (r) => ({ geteilt: [...geteiltVon(r), vermerk].slice(-100) }), h.jetzt()).catch((err) => console.error(`Gespräch ${z.id}: Kundennotiz nicht vermerkt:`, err))
+  return ok({ ok: true })
 }

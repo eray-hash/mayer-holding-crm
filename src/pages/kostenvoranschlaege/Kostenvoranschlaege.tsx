@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Calculator, Download, FilePlus2, Lock, Plus, Search } from 'lucide-react'
+import { Calculator, Download, FilePlus2, Link2, Lock, Plus, Search } from 'lucide-react'
 import { utils } from 'xlsx'
 import type { CellObject } from 'xlsx'
 import { useApp } from '../../context/AppContext'
+import { useAuth } from '../../context/AuthContext'
+import { KvZuordnungVorschlaege } from '../../components/KvZuordnungVorschlaege'
 import { Card, EmptyState, PrimaryButton, SecondaryButton, inputClass } from '../../components/ui'
 import { KvAngebotModal, KvBearbeitenModal, KvListe, akteName, findeAkte, kvStatusLabel, useKvAktionen, useKvNutzer } from '../../components/KostenvoranschlaegeSection'
 import { useBereichsRechte } from '../../lib/bereichsRechte'
@@ -24,6 +26,11 @@ export function Kostenvoranschlaege({ privat }: { privat?: boolean } = {}) {
   const [angebot, setAngebot] = useState(false)
   const { darf } = useBereichsRechte()
   const { statusAendern, loeschen, uebernehmen } = useKvAktionen(setAlle, setFehler)
+  // Einmalige Zuordnung der Einträge ohne Akte (22.11.2026) — nur Geschäftsführung/Admins, nicht in „Ansehen als …“.
+  const { echterMitarbeiter } = useAuth()
+  const darfZuordnen = !privat && !nutzer.nurLesen && !!echterMitarbeiter && (echterMitarbeiter.rolle === 'geschaeftsfuehrung' || !!echterMitarbeiter.ist_admin)
+  const [zuordnungOffen, setZuordnungOffen] = useState(false)
+  const [neuLaden, setNeuLaden] = useState(0)
 
   useEffect(() => {
     let aktiv = true
@@ -35,7 +42,7 @@ export function Kostenvoranschlaege({ privat }: { privat?: boolean } = {}) {
     return () => {
       aktiv = false
     }
-  }, [])
+  }, [neuLaden])
 
   // Im Modus „Ansehen als …“ lädt die Datenbank mit dem eigenen Login; hier wird auf das gefiltert,
   // was die angesehene Person sehen würde (eigene private Einträge, freigegebene Bereiche).
@@ -59,6 +66,8 @@ export function Kostenvoranschlaege({ privat }: { privat?: boolean } = {}) {
       return [k.name, k.beschreibung, k.notiz, akte ? akteName(akte.kunde) : ''].some((t) => t.toLowerCase().includes(such))
     })
   }, [imUmfang, statusFilter, suche, state])
+
+  const ohneAkte = useMemo(() => alle.filter((k) => !k.kundeId).length, [alle])
 
   const summeVon = (s: KvStatus) => kvSumme(imUmfang.filter((k) => k.status === s))
 
@@ -136,6 +145,16 @@ export function Kostenvoranschlaege({ privat }: { privat?: boolean } = {}) {
         </div>
       </div>
 
+      {darfZuordnen && ohneAkte > 0 && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <span className="flex items-center gap-2">
+            <Link2 size={16} className="shrink-0" />
+            {ohneAkte} {ohneAkte === 1 ? 'Kostenvoranschlag' : 'Kostenvoranschläge'} ohne Akte — sie fehlen in Umsatzvorschau, Rechnungsvorschlägen und Wiedervorlagen.
+          </span>
+          <SecondaryButton onClick={() => setZuordnungOffen(true)}>Vorschläge ansehen</SecondaryButton>
+        </div>
+      )}
+
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Kennzahl titel="Anzahl" wert={String(imUmfang.length)} />
         <Kennzahl titel="Summe offen" wert={fmtEURCent(summeVon('offen'))} farbe="text-amber-700" />
@@ -171,6 +190,8 @@ export function Kostenvoranschlaege({ privat }: { privat?: boolean } = {}) {
           <KvListe eintraege={gefiltert} nurLesen={nutzer.nurLesen} onBearbeiten={(kv) => setFenster({ eintrag: kv })} onStatus={statusAendern} onLoeschen={loeschen} />
         </>
       )}
+
+      {darfZuordnen && <KvZuordnungVorschlaege open={zuordnungOffen} onClose={() => setZuordnungOffen(false)} onZugeordnet={() => setNeuLaden((n) => n + 1)} />}
 
       <KvAngebotModal open={angebot} onClose={() => setAngebot(false)} eintraege={gefiltert} />
 

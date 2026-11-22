@@ -11,6 +11,7 @@
 
 import { berechneUmsatzvorschau, bereichKennung, BEREICH_NAMEN, kurzbericht, OBJEKT_STUFEN, type AkteEingabe, type AngebotEingabe, type ObjektEingabe, type RechnungEingabe, type ZeitraumArt } from '../_shared/umsatzKern.ts'
 import { darfAkte, darfBereich, darfObjekte, nichtFreigegeben, type RechteMitarbeiter } from './rechte.ts'
+import { alleZeilen } from '../_shared/alleZeilen.ts'
 
 // deno-lint-ignore no-explicit-any
 type Supa = any
@@ -74,10 +75,12 @@ function zahl(v: unknown): number {
 /** Lädt alles, was der Mitarbeiter sehen darf, in die Eingaben des Rechenkerns. */
 export async function ladeUmsatzEingabe(supabase: Supa, m: RechteMitarbeiter, heute: string) {
   // Akten (ohne private)
-  const { data: kundenRoh, error: kFehler } = await supabase
-    .from('kunden')
-    .select('id, bereich, firma, ansprechpartner, status, auftrag_chance, verantwortlich_email')
-    .neq('bereich', 'privat')
+  const { data: kundenRoh, error: kFehler } = await alleZeilen(() =>
+    supabase
+      .from('kunden')
+      .select('id, bereich, firma, ansprechpartner, status, auftrag_chance, verantwortlich_email')
+      .neq('bereich', 'privat'),
+  )
   if (kFehler) throw new Error(`Akten ließen sich nicht laden: ${kFehler.message}`)
   // Wie im CRM: die Sammelakten liegen in der Unternehmensberatung und zählen mit deren Recht (Prüfung im Kern).
   const kunden = ((kundenRoh ?? []) as KundeZeile[]).filter((k) => darfAkte(m, k))

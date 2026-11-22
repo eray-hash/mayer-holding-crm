@@ -28,6 +28,8 @@ export type GespraechSegment = {
   text?: string
   /** Zeitmarken der Spracherkennung innerhalb des Abschnitts: Sekunde ab Abschnittsbeginn + Text. */
   stuecke?: { ab: number; text: string }[]
+  /** Von der Spracherkennung gemeldete Sprache dieses Abschnitts (Kürzel wie de, tr, en). */
+  sprache?: string
   /** Nur Server: Beginn der laufenden Abschrift (Sperre), Zahl der Versuche, letzter Fehler. */
   seit?: string | null
   versuche?: number
@@ -69,6 +71,118 @@ export type GespraechAufnahme = {
   /** Zusätzlich zum Vertrag: wann das Audio gelöscht wurde (Frist oder Verwerfen). */
   audio_geloescht_am?: string | null
   abgeschlossen_am?: string | null
+  /** Sprache der Aufnahme laut Einstellung (Schlüssel aus SPRACHEN, Standard „deutsch“). Seit Runde 5. */
+  sprache?: GespraechSprache | null
+  /** Erkannte Hauptsprache der Abschrift (Kürzel wie de, tr, en), gesetzt bei der Auswertung. */
+  sprache_erkannt?: string | null
+  /** Zwischenspeicher der Übersetzungen (nur auf Anforderung, siehe gespraech_uebersetzen). */
+  uebersetzung?: GespraechUebersetzung | null
+  /** Wer die Aufnahme geteilt bekommen hat (Kollegen per Telegram, Gesprächsnotiz an den Kunden). */
+  geteilt?: GespraechGeteilt[] | null
+}
+
+/** Zwischenspeicher der Übersetzungen einer Aufnahme (Spalte uebersetzung). */
+export type GespraechUebersetzung = {
+  /** Deutsche Fassung der Abschrift, Absatz für Absatz wie Spalte sprecher; `quelle` = Zahl der Absätze beim Übersetzen. */
+  abschrift?: { absaetze: string[]; quelle: number; fertig: boolean; am: string }
+  /** Mail-Entwurf bzw. Gesprächsnotiz in der Sprache des Kunden; `schluessel` = Prüfsumme des deutschen Textes. */
+  mail?: { sprache: string; schluessel: string; betreff: string; text: string; am: string }
+  notiz?: { sprache: string; schluessel: string; betreff: string; text: string; am: string }
+}
+
+export type GespraechGeteilt =
+  | { art: 'kollege'; an: string; name: string; am: string; von: string; ok: boolean }
+  | { art: 'kunde'; an: string; betreff: string; am: string; von: string; sprache?: string }
+
+// ---------- Sprachen ----------
+
+/**
+ * Wählbare Sprachen einer Aufnahme. `code` geht an die Spracherkennung (Whisper); „automatisch“ lässt die
+ * Spracherkennung selbst entscheiden. Auswertung, Protokoll und Mail-Entwurf sind immer Deutsch.
+ */
+export const SPRACHEN = [
+  { schluessel: 'deutsch', name: 'Deutsch', code: 'de' },
+  { schluessel: 'automatisch', name: 'Automatisch erkennen', code: null },
+  { schluessel: 'tuerkisch', name: 'Türkisch', code: 'tr' },
+  { schluessel: 'englisch', name: 'Englisch', code: 'en' },
+  { schluessel: 'arabisch', name: 'Arabisch', code: 'ar' },
+  { schluessel: 'russisch', name: 'Russisch', code: 'ru' },
+  { schluessel: 'polnisch', name: 'Polnisch', code: 'pl' },
+  { schluessel: 'rumaenisch', name: 'Rumänisch', code: 'ro' },
+  { schluessel: 'italienisch', name: 'Italienisch', code: 'it' },
+  { schluessel: 'franzoesisch', name: 'Französisch', code: 'fr' },
+  { schluessel: 'spanisch', name: 'Spanisch', code: 'es' },
+  { schluessel: 'kroatisch', name: 'Kroatisch', code: 'hr' },
+  { schluessel: 'serbisch', name: 'Serbisch', code: 'sr' },
+  { schluessel: 'bosnisch', name: 'Bosnisch', code: 'bs' },
+  { schluessel: 'albanisch', name: 'Albanisch', code: 'sq' },
+  { schluessel: 'griechisch', name: 'Griechisch', code: 'el' },
+  { schluessel: 'persisch', name: 'Persisch', code: 'fa' },
+  { schluessel: 'ukrainisch', name: 'Ukrainisch', code: 'uk' },
+  { schluessel: 'bulgarisch', name: 'Bulgarisch', code: 'bg' },
+  { schluessel: 'ungarisch', name: 'Ungarisch', code: 'hu' },
+  { schluessel: 'portugiesisch', name: 'Portugiesisch', code: 'pt' },
+  { schluessel: 'niederlaendisch', name: 'Niederländisch', code: 'nl' },
+] as const
+export type GespraechSprache = (typeof SPRACHEN)[number]['schluessel']
+
+// Namen, die die Spracherkennung zurückmeldet (Groq/OpenAI: englische Namen wie „turkish“), → Kürzel.
+const ERKANNT_NAME: Record<string, string> = {
+  german: 'de', turkish: 'tr', english: 'en', arabic: 'ar', russian: 'ru', polish: 'pl', romanian: 'ro', moldavian: 'ro', moldovan: 'ro',
+  italian: 'it', french: 'fr', spanish: 'es', castilian: 'es', croatian: 'hr', serbian: 'sr', bosnian: 'bs', albanian: 'sq', greek: 'el',
+  persian: 'fa', ukrainian: 'uk', bulgarian: 'bg', hungarian: 'hu', portuguese: 'pt', dutch: 'nl', flemish: 'nl', kurdish: 'ku',
+  azerbaijani: 'az', macedonian: 'mk', slovenian: 'sl', slovak: 'sk', czech: 'cs', vietnamese: 'vi', chinese: 'zh', farsi: 'fa',
+}
+const SPRACH_NAME_DE: Record<string, string> = Object.fromEntries([
+  ...SPRACHEN.filter((s) => s.code).map((s) => [s.code as string, s.name]),
+  ['ku', 'Kurdisch'], ['az', 'Aserbaidschanisch'], ['mk', 'Mazedonisch'], ['sl', 'Slowenisch'], ['sk', 'Slowakisch'], ['cs', 'Tschechisch'],
+  ['vi', 'Vietnamesisch'], ['zh', 'Chinesisch'],
+])
+
+/** Einstellung der App (auch „türkisch“, „Türkisch“, „tr“) → Schlüssel aus SPRACHEN; Unbekanntes → „deutsch“. */
+export function normalisiereSprachwahl(x: unknown): GespraechSprache {
+  const t = typeof x === 'string' ? x.trim().toLowerCase().replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss') : ''
+  if (!t) return 'deutsch'
+  if (t === 'auto' || t === 'automatisch erkennen') return 'automatisch'
+  const treffer = SPRACHEN.find((s) => s.schluessel === t || s.code === t || s.name.toLowerCase().replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue') === t)
+  return treffer ? treffer.schluessel : 'deutsch'
+}
+
+/** Kürzel für die Spracherkennung; null = automatisch erkennen lassen. */
+export function whisperSprache(wahl: unknown): string | null {
+  const s = normalisiereSprachwahl(wahl)
+  return SPRACHEN.find((x) => x.schluessel === s)?.code ?? null
+}
+
+/** Von der Spracherkennung gemeldete Sprache („Turkish“, „turkish“, „tr“) → Kürzel; sonst null. */
+export function spracheAusErkennung(x: unknown): string | null {
+  const t = typeof x === 'string' ? x.trim().toLowerCase() : ''
+  if (!t) return null
+  if (/^[a-z]{2}$/.test(t)) return t
+  return ERKANNT_NAME[t] ?? null
+}
+
+/** Deutscher Name einer Sprache zum Kürzel („tr“ → „Türkisch“); unbekannt → das Kürzel in Großbuchstaben. */
+export function sprachName(code: unknown): string {
+  const c = typeof code === 'string' ? code.trim().toLowerCase() : ''
+  if (!c) return ''
+  return SPRACH_NAME_DE[c] ?? c.toUpperCase()
+}
+
+/** Hauptsprache einer Aufnahme: die Sprache mit dem meisten abgeschriebenen Text (Abschnitte ohne Angabe zählen
+ *  zur Vorgabe `ohneAngabe`, z. B. „de“ bei Einstellung Deutsch). Ohne Text: die Vorgabe. */
+export function hauptsprache(segmente: { sprache?: string; text?: string; status?: string }[], ohneAngabe: string | null): string | null {
+  const summe = new Map<string, number>()
+  for (const s of segmente) {
+    const laenge = String(s.text ?? '').trim().length
+    const code = spracheAusErkennung(s.sprache) ?? ohneAngabe
+    if (!laenge || !code) continue
+    summe.set(code, (summe.get(code) ?? 0) + laenge)
+  }
+  let beste: string | null = null
+  let max = 0
+  for (const [c, n] of summe) if (n > max) [beste, max] = [c, n]
+  return beste ?? ohneAngabe
 }
 
 // ---------- Auswertungs-Schema ----------
@@ -97,10 +211,22 @@ export type GespraechAnalyse = {
   mail_entwurf: { betreff: string; text: string }
   sprecher: { label: string; name?: string; rolle?: SprecherRolle }[]
   chance_hinweis?: { prozent?: number; begruendung: string }
+  /** Antworten auf den Fragebogen des Bereichs (Vorlage fragebogen_vorlage), nur aus dem Gesagten. Seit Runde 5. */
+  fragebogen?: FragebogenAntwort[]
+  fragebogen_vorlage?: { id: string; name: string }
+  /** Vorschläge für die Felder der Projekt-Checkliste der Akte (nur Gesagtes; übernommen wird nur in leere Felder). */
+  aktenfelder?: Aktenfelder
 }
+
+export type FragebogenAntwort = { frage: string; antwort: string; sicher: boolean }
+export type Aktenfelder = { sachverhalt?: string; branche?: string; dienstleistungen?: string[] }
+export const AKTENFELDER = ['sachverhalt', 'branche', 'dienstleistungen'] as const
+export type AktenfeldName = (typeof AKTENFELDER)[number]
 
 /** Höchstzahl je Liste — mehr ist bei einem Gespräch nie sinnvoll und bläht nur die Prüfansicht auf. */
 export const LISTEN_GRENZE = 25
+/** Höchstzahl der Fragen eines Fragebogens (der Erben-Fragebogen hat über 100). */
+export const FRAGEBOGEN_GRENZE = 200
 
 export function leereAnalyse(): GespraechAnalyse {
   return {
@@ -325,7 +451,146 @@ export function normalisiereAnalyse(roh: unknown, bezug?: string): GespraechAnal
     const p = typeof c.prozent === 'number' ? c.prozent : betrag(c.prozent)
     aus.chance_hinweis = p === null || p === undefined || !Number.isFinite(p) ? { begruendung } : { prozent: Math.max(0, Math.min(100, Math.round(p))), begruendung }
   }
+  // Fragebogen und Aktenfelder: nur, wenn etwas da ist (ältere Auswertungen bleiben unverändert).
+  const fragebogen = normalisiereFragebogen(r.fragebogen)
+  if (fragebogen.length) {
+    aus.fragebogen = fragebogen
+    const v = r.fragebogen_vorlage && typeof r.fragebogen_vorlage === 'object' ? (r.fragebogen_vorlage as Record<string, unknown>) : null
+    const vid = v ? text(v.id, 80) : ''
+    if (vid) aus.fragebogen_vorlage = { id: vid, name: text(v!.name, 200) }
+  }
+  const felder = normalisiereAktenfelder(r.aktenfelder)
+  if (Object.keys(felder).length) aus.aktenfelder = felder
   return aus
+}
+
+/** Antworten auf einen Fragebogen: Frage und Antwort Pflicht, `sicher` nur bei ausdrücklichem true, je Frage einmal. */
+export function normalisiereFragebogen(x: unknown): FragebogenAntwort[] {
+  const gesehen = new Set<string>()
+  const aus: FragebogenAntwort[] = []
+  for (const e of liste(x)) {
+    if (!e || typeof e !== 'object' || Array.isArray(e)) continue
+    const o = e as Record<string, unknown>
+    const frage = text(o.frage, 300)
+    const antwort = text(o.antwort, 800)
+    if (!frage || !antwort) continue
+    const s = frage.toLowerCase()
+    if (gesehen.has(s)) continue
+    gesehen.add(s)
+    aus.push({ frage, antwort, sicher: o.sicher === true })
+    if (aus.length >= FRAGEBOGEN_GRENZE) break
+  }
+  return aus
+}
+
+/** Vorschläge für die Aktenfelder: Sachverhalt (mehrzeilig, kurz), Branche, Dienstleistungen (Liste). Leeres entfällt. */
+export function normalisiereAktenfelder(x: unknown): Aktenfelder {
+  const o = (x && typeof x === 'object' && !Array.isArray(x) ? x : {}) as Record<string, unknown>
+  const aus: Aktenfelder = {}
+  const sachverhalt = langtext(o.sachverhalt, 1500)
+  if (sachverhalt && text(sachverhalt)) aus.sachverhalt = sachverhalt
+  const branche = text(o.branche, 120)
+  if (branche) aus.branche = branche
+  const dl = typeof o.dienstleistungen === 'string' ? o.dienstleistungen.split(/[,;\n]/) : o.dienstleistungen
+  const dienstleistungen = textListe(dl, 150)
+  if (dienstleistungen.length) aus.dienstleistungen = dienstleistungen
+  return aus
+}
+
+// ---------- Fragebogen-Vorlagen ----------
+
+function feinNorm(s: string): string {
+  return s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
+}
+
+/**
+ * Fragen aus einer Fragebogen-Vorlage (Tabelle vorlagen, Auszeichnung wie src/lib/vorlagenFuellen.ts): jedes Feld
+ * {{Name}} (ohne Felder mit Vorgabe {{Name=…}} und ohne Datum, Bearbeiter, Aktenzeichen, Unterschrift; „Quelle: X“,
+ * „Bemerkung: X“, „Antwort: X“ zählen als X) und jede Ankreuz-Zeile „☐ …“
+ * (in Tabellen die Spalte mit dem Text). Jede Frage einmal, in der Reihenfolge der Vorlage, höchstens FRAGEBOGEN_GRENZE.
+ */
+export function fragenAusVorlage(vorlage: string): string[] {
+  const aus: string[] = []
+  const gesehen = new Set<string>()
+  const dazu = (roh: string) => {
+    const t = text(roh.replace(/\*\*/g, '').replace(/\{\{[^{}]*\}\}/g, '').replace(/[:：]\s*$/, ''), 200).replace(/[:\s]+$/, '')
+    const s = feinNorm(t)
+    if (!t || s.length < 3 || gesehen.has(s) || aus.length >= FRAGEBOGEN_GRENZE) return
+    gesehen.add(s)
+    aus.push(t)
+  }
+  for (const roh of String(vorlage ?? '').split('\n')) {
+    const z = roh.trim()
+    if (!z || z.startsWith('#')) continue
+    const zellen = z.includes('|') ? z.split('|').map((c) => c.trim()) : null
+    if (z.includes('☐') || z.includes('☒')) {
+      if (zellen) {
+        // Tabellenzeile „☐ | Unterlage / Angabe | Erforderlich | {{Quelle: …}} | {{Bemerkung: …}}“: die Textspalte.
+        const textzelle = zellen.find((c) => c && !/^[☐☒]$/.test(c) && !c.includes('{{'))
+        if (textzelle) dazu(textzelle)
+      } else {
+        for (const teil of z.split(/[☐☒]/).slice(1)) dazu(teil.split('{{')[0])
+      }
+      if (zellen) continue
+    }
+    for (const m of z.matchAll(/\{\{\s*([^{}]+?)\s*\}\}/g)) {
+      if (m[1].includes('=')) continue
+      const name = m[1].replace(/^(quelle|bemerkung|antwort)\s*:\s*/i, '')
+      // Verwaltungsfelder füllt kein Gespräch.
+      if (/^(datum|ort,? datum|stand \/ datum|bearbeiter|aktenzeichen|unterschrift.*)$/i.test(name.trim())) continue
+      dazu(name)
+    }
+  }
+  return aus
+}
+
+/**
+ * Antworten des Modells auf die Fragenliste abbilden: über `nr` (1-basiert) oder den Fragetext (ohne Groß-/Kleinschreibung
+ * und Satzzeichen). Antworten auf Fragen, die nicht in der Liste stehen, entfallen; die Frage steht danach genau wie in
+ * der Vorlage.
+ */
+export function ordneFragebogenZu(roh: unknown, fragen: string[]): FragebogenAntwort[] {
+  const index = new Map(fragen.map((f, i) => [feinNorm(f), i]))
+  const zugeordnet: { i: number; antwort: unknown; sicher: unknown }[] = []
+  for (const e of liste(roh)) {
+    if (!e || typeof e !== 'object' || Array.isArray(e)) continue
+    const o = e as Record<string, unknown>
+    const nr = typeof o.nr === 'number' ? o.nr : typeof o.nr === 'string' && /^\d+$/.test(o.nr.trim()) ? Number(o.nr) : NaN
+    let i = Number.isInteger(nr) && nr >= 1 && nr <= fragen.length ? nr - 1 : -1
+    const ausText = typeof o.frage === 'string' ? index.get(feinNorm(o.frage)) : undefined
+    // Passt der Text zu einer anderen Frage als die Nummer, gilt der Text.
+    if (ausText !== undefined) i = ausText
+    if (i < 0) continue
+    zugeordnet.push({ i, antwort: o.antwort, sicher: o.sicher })
+  }
+  zugeordnet.sort((a, b) => a.i - b.i)
+  return normalisiereFragebogen(zugeordnet.map((z) => ({ frage: fragen[z.i], antwort: z.antwort, sicher: z.sicher })))
+}
+
+// ---------- Gesprächsnotiz an den Kunden ----------
+
+/**
+ * Vorschlag für die Gesprächsnotiz an den Kunden (Deutsch, Sie-Form): Zusammenfassung, Vereinbarungen und nächste
+ * Schritte — nur aus der Auswertung. Ohne Gruß-Namen, wenn eine Signatur angehängt wird.
+ */
+export function gespraechsnotizText(a: Pick<GespraechAnalyse, 'zusammenfassung' | 'vereinbarungen' | 'naechste_schritte' | 'unterlagen_fehlen'>, o: { anrede?: string; datum?: string; absender?: string; mitSignatur?: boolean }): { betreff: string; text: string } {
+  const datum = /^\d{4}-\d{2}-\d{2}$/.test(o.datum ?? '') ? o.datum!.split('-').reverse().join('.') : ''
+  const punkte = (titel: string, l: string[]) => (l.length ? `${titel}\n${l.map((x) => `- ${x}`).join('\n')}` : '')
+  const schritte = (a.naechste_schritte ?? []).map((s) => {
+    const zusatz = [s.wer ? text(s.wer, 80) : '', s.faellig && isoDatum(s.faellig) ? `bis ${isoDatum(s.faellig)!.split('-').reverse().join('.')}` : ''].filter(Boolean).join(', ')
+    return zusatz ? `${text(s.text)} (${zusatz})` : text(s.text)
+  }).filter(Boolean)
+  const teile = [
+    o.anrede?.trim() || 'Guten Tag,',
+    `vielen Dank für das Gespräch${datum ? ` am ${datum}` : ''}. Hier fassen wir die wichtigsten Punkte zusammen:`,
+    langtext(a.zusammenfassung, 3000),
+    punkte('Vereinbart:', textListe(a.vereinbarungen)),
+    punkte('Nächste Schritte:', schritte),
+    punkte('Bitte senden Sie uns noch:', textListe(a.unterlagen_fehlen)),
+    'Wenn etwas nicht stimmt oder fehlt, geben Sie uns bitte kurz Bescheid.',
+    o.mitSignatur || !o.absender?.trim() ? 'Mit freundlichen Grüßen' : `Mit freundlichen Grüßen\n${o.absender.trim()}`,
+  ]
+  return { betreff: `Gesprächsnotiz${datum ? ` vom ${datum}` : ''}`, text: teile.filter(Boolean).join('\n\n') }
 }
 
 /** Ist die Auswertung inhaltlich leer (z. B. nur Stille aufgenommen)? */

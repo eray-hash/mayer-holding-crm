@@ -14,6 +14,7 @@
 
 import { bereichName, darfAkte, darfBereich, istPrivat, SAMMELAKTEN, siehtAlleBereiche, type RechteMitarbeiter } from './rechte.ts'
 import { weitereVerweiseUmhaengen } from '../_shared/aktenVerweise.ts'
+import { alleZeilen } from '../_shared/alleZeilen.ts'
 
 // deno-lint-ignore no-explicit-any
 type Supa = any
@@ -188,7 +189,7 @@ async function bereichNachziehen(supabase: Supa, id: string, nach: string): Prom
 
 // Andere Akten, die mit dieser verknüpft sind ("in beiden Bereichen führen"), zeigen auf {id, bereich}.
 async function verknuepfungenUmschreiben(supabase: Supa, alteId: string, neu: { id: string; bereich: string }): Promise<string[]> {
-  const { data, error } = await supabase.from('kunden').select('id, verknuepfte_kunden').not('verknuepfte_kunden', 'is', null)
+  const { data, error } = await alleZeilen(() => supabase.from('kunden').select('id, verknuepfte_kunden').not('verknuepfte_kunden', 'is', null))
   if (error) return [`Verknüpfungen: ${error.message}`]
   const fehler: string[] = []
   for (const z of (data ?? []) as Zeile[]) {

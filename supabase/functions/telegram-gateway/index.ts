@@ -33,7 +33,10 @@ import { kollegenBenachrichtigen, type MitteilungsWege, schickeMitteilung, todoA
 import { fuehrePflegeWerkzeugAus, istPflegeWerkzeug, type PflegeAnfrage, PFLEGE_WERKZEUGE } from './pflegeWerkzeuge.ts'
 import { DOKUMENT_WERKZEUGE, fuehreDokumentWerkzeugAus, istDokumentWerkzeug } from './dokumentErstellen.ts'
 import { fuehreKvWerkzeugAus, istKvWerkzeug, KV_WERKZEUGE } from './kostenvoranschlagWerkzeuge.ts'
+import { kvAkteHinweisNachAnlegen } from './kvAkteVorschlag.ts'
 import { fuehreWvWerkzeugAus, istWvWerkzeug, WV_WERKZEUGE } from './wiedervorlageWerkzeuge.ts'
+import { fuehreTagesplanWerkzeugAus, istTagesplanWerkzeug, TAGESPLAN_WERKZEUGE } from './tagesplanWerkzeuge.ts'
+import { fuehreProfilWerkzeugAus, istProfilWerkzeug, nachfrageAnhaengen, PROFIL_WERKZEUGE, profilNachfrage } from './profilWerkzeuge.ts'
 import { DUBLETTEN_WERKZEUGE, fuehreDublettenWerkzeugAus, istDublettenWerkzeug } from './dublettenWerkzeug.ts'
 import { fuehrePrivatPostWerkzeugAus, istPrivatPostWerkzeug, PRIVAT_POST_WERKZEUGE } from './privatPostWerkzeug.ts'
 import { fuehreStammdatenWerkzeugAus, istStammdatenWerkzeug, STAMMDATEN_WERKZEUGE } from './stammdatenWerkzeug.ts'
@@ -42,6 +45,7 @@ import { fuehreUnterschriftWerkzeugAus, istUnterschriftWerkzeug, UNTERSCHRIFT_WE
 import { fuehreLinkWerkzeugAus, istLinkWerkzeug, LINK_WERKZEUGE } from './linkLesen.ts'
 import { BERICHT_WERKZEUGE, fuehreBerichtWerkzeugAus, istBerichtWerkzeug } from './kundenberichtWerkzeug.ts'
 import { BRIEFING_WERKZEUGE, fuehreBriefingWerkzeugAus, istBriefingWerkzeug } from './briefingWerkzeug.ts'
+import { akteVorschlagText, fuehreZuordnungWerkzeugAus, istZuordnungWerkzeug, ZUORDNUNG_WERKZEUGE } from './terminZuordnungWerkzeug.ts'
 import { fuehreNachTerminWerkzeugAus, istNachTerminWerkzeug, NACHTERMIN_WERKZEUGE } from './nachTerminWerkzeug.ts'
 import { fuehreKalenderZeitenWerkzeugAus, istKalenderZeitenWerkzeug, KALENDER_ZEITEN_WERKZEUGE } from './kalenderZeiten.ts'
 import { fuehreGesucheWerkzeugAus, GESUCHE_WERKZEUGE, istGesucheWerkzeug } from './gesucheWerkzeuge.ts'
@@ -57,18 +61,23 @@ import { fuehreRechnungZahlungWerkzeugAus, istRechnungZahlungWerkzeug, RECHNUNG_
 import { ABGLEICH_WERKZEUGE, fuehreAbgleichWerkzeugAus, istAbgleichWerkzeug } from './abgleichWerkzeug.ts'
 import { fuehreUmsatzWerkzeugAus, istUmsatzWerkzeug, UMSATZ_WERKZEUGE } from './umsatzWerkzeuge.ts'
 import { fuehreRechnungVorschlagWerkzeugAus, istRechnungVorschlagWerkzeug, RECHNUNG_VORSCHLAG_WERKZEUGE } from './rechnungVorschlagWerkzeug.ts'
+import { fuehreMahnVorschlagWerkzeugAus, istMahnVorschlagWerkzeug, MAHN_VORSCHLAG_WERKZEUGE } from './mahnVorschlagWerkzeug.ts'
 import { CHANCE_WERKZEUGE, fuehreChanceWerkzeugAus, istChanceWerkzeug } from './chanceWerkzeug.ts'
 import { DATEV_WERKZEUGE, fuehreDatevWerkzeugAus, istDatevWerkzeug } from './datevWerkzeug.ts'
+import { fuehreVerbindlichkeitenWerkzeugAus, istVerbindlichkeitenWerkzeug, VERBINDLICHKEITEN_WERKZEUGE } from './verbindlichkeitenWerkzeug.ts'
 import { fuehrePartnerWerkzeugAus, istPartnerWerkzeug, PARTNER_WERKZEUGE } from './partnerWerkzeuge.ts'
 import { fuehreSucheWerkzeugAus, istSucheWerkzeug, SUCHE_WERKZEUGE } from './sucheWerkzeug.ts'
 import { fuehreLueckenWerkzeugAus, istLueckenWerkzeug, LUECKEN_WERKZEUGE } from './objektLueckenWerkzeug.ts'
+import { fuehreNeuigkeitenWerkzeugAus, istNeuigkeitenWerkzeug, NEUIGKEITEN_WERKZEUGE } from './neuigkeitenWerkzeug.ts'
 import { fuehreRenditeWerkzeugAus, istRenditeWerkzeug, RENDITE_WERKZEUGE } from './renditeWerkzeuge.ts'
 import { fuehreGesendetWerkzeugAus, GESENDET_WERKZEUGE, istGesendetWerkzeug } from './gesendetWerkzeug.ts'
 import { BRIEF_WERKZEUGE, fuehrePrivatWerkzeugAus, istPrivatWerkzeug, msErlaubt, OBJEKT_WERKZEUGE, OUTLOOK_WERKZEUGE, PRIVAT_HINWEIS, privatFaehigkeiten } from './outlookWerkzeuge.ts'
 import { botToken, imPrivatBot, imPrivatBotErlaubt, mitBot, PRIVAT_BOT_HINWEIS, privatBotToken, privatWebhookGeheimnis, werkzeugeFuerPrivatBot } from './privatBot.ts'
+import { LADE_WERKZEUG_NAME, mitNachrichtenCache, starteAuswahl, type VerlaufNachricht } from './werkzeugGruppen.ts'
 import { gleichesGeheimnis, merkePrivatBotAktiv } from '../_shared/telegramPrivat.ts'
 import { vonBase64 } from '../_shared/geheim.ts'
 import { datumDeutsch, empfaengerVon, findeEmpfaenger, ladeAnhaengeFuerVersand, MAIL_SPALTEN, type MailZeile, volltextVon, VOLLTEXT_HOECHSTENS, type WeiterleitungEntwurf, weiterleitungsBetreff, weiterleitungsText } from './mailWerkzeuge.ts'
+import { alleZeilen } from '../_shared/alleZeilen.ts'
 
 const BOT_TOKEN = Deno.env.get('TELEGRAM_BOT_TOKEN')
 const WEBHOOK_SECRET = Deno.env.get('TELEGRAM_WEBHOOK_SECRET')
@@ -962,8 +971,8 @@ type ReferenzKunde = Pick<KundeRow, 'id' | 'bereich' | 'firma' | 'ansprechpartne
 type ReferenzObjekt = { privat_besitzer: string | null; dokumente: unknown }
 async function ladeReferenzen(supabase: Supa): Promise<{ text: string; objekte: ReferenzObjekt[]; kunden: ReferenzKunde[] }> {
   const [{ data: kunden }, { data: objekte }] = await Promise.all([
-    supabase.from('kunden').select('id, bereich, firma, ansprechpartner, dokumente, verantwortlich_email'),
-    supabase.from('objekte').select('privat_besitzer, dokumente'),
+    alleZeilen(() => supabase.from('kunden').select('id, bereich, firma, ansprechpartner, dokumente, verantwortlich_email')),
+    alleZeilen(() => supabase.from('objekte').select('privat_besitzer, dokumente')),
   ])
   return { text: JSON.stringify([kunden ?? [], objekte ?? []]), objekte: (objekte ?? []) as ReferenzObjekt[], kunden: (kunden ?? []) as ReferenzKunde[] }
 }
@@ -1585,6 +1594,8 @@ export const TOOLS = [
   ...DOKUMENT_WERKZEUGE,
   ...KV_WERKZEUGE,
   ...WV_WERKZEUGE,
+  ...TAGESPLAN_WERKZEUGE,
+  ...PROFIL_WERKZEUGE,
   ...DUBLETTEN_WERKZEUGE,
   ...PRIVAT_POST_WERKZEUGE,
   ...STAMMDATEN_WERKZEUGE,
@@ -1593,6 +1604,7 @@ export const TOOLS = [
   ...LINK_WERKZEUGE,
   ...BERICHT_WERKZEUGE,
   ...BRIEFING_WERKZEUGE,
+  ...ZUORDNUNG_WERKZEUGE,
   ...NACHTERMIN_WERKZEUGE,
   ...KALENDER_ZEITEN_WERKZEUGE,
   ...GESUCHE_WERKZEUGE,
@@ -1608,11 +1620,14 @@ export const TOOLS = [
   ...ABGLEICH_WERKZEUGE,
   ...UMSATZ_WERKZEUGE,
   ...RECHNUNG_VORSCHLAG_WERKZEUGE,
+  ...MAHN_VORSCHLAG_WERKZEUGE,
   ...CHANCE_WERKZEUGE,
   ...DATEV_WERKZEUGE,
+  ...VERBINDLICHKEITEN_WERKZEUGE,
   ...PARTNER_WERKZEUGE,
   ...SUCHE_WERKZEUGE,
   ...LUECKEN_WERKZEUGE,
+  ...NEUIGKEITEN_WERKZEUGE,
   ...RENDITE_WERKZEUGE,
   ...GESENDET_WERKZEUGE,
   {
@@ -1658,9 +1673,18 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
   // PDF (Merkblatt, Schreiben, Zusammenfassung) erstellen und in der Akte ablegen — dokumentErstellen.ts.
   if (istDokumentWerkzeug(name)) return await fuehreDokumentWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
   // Kostenvoranschläge anlegen, auflisten, ändern — kostenvoranschlagWerkzeuge.ts.
-  if (istKvWerkzeug(name)) return await fuehreKvWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
+  if (istKvWerkzeug(name)) {
+    const kvErgebnis = await fuehreKvWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
+    // Ohne Akte angelegt: passende Akten vorschlagen (kvAkteVorschlag.ts), der Assistent fragt dann nach.
+    if (name === 'kostenvoranschlag_anlegen') return kvErgebnis + (await kvAkteHinweisNachAnlegen(supabase, mitarbeiter, input ?? {}, kvErgebnis))
+    return kvErgebnis
+  }
   // Wiedervorlagen auflisten, anlegen, erledigen, verschieben — wiedervorlageWerkzeuge.ts.
   if (istWvWerkzeug(name)) return await fuehreWvWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
+  // Tagesablauf zeigen, vorschlagen, abhaken, ergänzen, streichen — tagesplanWerkzeuge.ts.
+  if (istTagesplanWerkzeug(name)) return await fuehreTagesplanWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
+  // Eigenes Profil (Telefon, Mobil, Funktion, Signatur) — profilWerkzeuge.ts.
+  if (istProfilWerkzeug(name)) return await fuehreProfilWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
   // Doppelte Akten finden (nur lesen; Zusammenführen weiter mit kunden_zusammenfuehren) — dublettenWerkzeug.ts.
   if (istDublettenWerkzeug(name)) return await fuehreDublettenWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
   // Vorschläge im eigenen privaten Postfach (Akte vermutet, Rundschreiben) — privatPostWerkzeug.ts.
@@ -1682,6 +1706,8 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
   if (istBerichtWerkzeug(name)) return await fuehreBerichtWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
   // Termin-Briefing auf Abruf (gleicher Text wie die Nachricht vor dem Termin, nur lesen) — briefingWerkzeug.ts.
   if (istBriefingWerkzeug(name)) return await fuehreBriefingWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
+  // Termin einer Akte zuordnen / Verknüpfung lösen / Vorschlag ablehnen — terminZuordnungWerkzeug.ts.
+  if (istZuordnungWerkzeug(name)) return await fuehreZuordnungWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
   // Gesprächsprotokoll nach einem Kundentermin (gegliedert, Nächste Schritte der Akte) — nachTerminWerkzeug.ts.
   if (istNachTerminWerkzeug(name)) return await fuehreNachTerminWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
   // Freie Zeiten (CRM-Termine, Outlook-Abgleich, eigener Kalender) — kalenderZeiten.ts.
@@ -1757,15 +1783,21 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
   if (istUmsatzWerkzeug(name)) return await fuehreUmsatzWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
   // Rechnungsvorschläge (was noch in Rechnung zu stellen ist) — rechnungVorschlagWerkzeug.ts; Anlegen bleibt im CRM.
   if (istRechnungVorschlagWerkzeug(name)) return await fuehreRechnungVorschlagWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
+  // Mahnvorschläge (welche überfälligen Rechnungen heute dran sind) — mahnVorschlagWerkzeug.ts; nur lesen, gesendet wird im CRM.
+  if (istMahnVorschlagWerkzeug(name)) return await fuehreMahnVorschlagWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
   if (istChanceWerkzeug(name)) return await fuehreChanceWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
   // Was fehlt noch für die Übergabe an den Steuerberater — datevWerkzeug.ts (Kern _shared/datevExport.ts, wie „Export für Steuerberater“ im CRM).
   if (istDatevWerkzeug(name)) return await fuehreDatevWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
+  // Unvollständige Eingangsrechnungen (fehlender Beleg, Betrag …) — verbindlichkeitenWerkzeug.ts.
+  if (istVerbindlichkeitenWerkzeug(name)) return await fuehreVerbindlichkeitenWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
   // Partner und Vermittler, Provisionen — partnerWerkzeuge.ts (Kern _shared/partnerKern.ts, wie Seite /partner).
   if (istPartnerWerkzeug(name)) return await fuehrePartnerWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
   // Volltextsuche über das ganze CRM (public.suche_alles, Rechte in sucheWerkzeug.ts nachgebildet).
   if (istSucheWerkzeug(name)) return await fuehreSucheWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
   // Was fehlt noch in Objektakten (Prozent, fehlende Punkte, Wochenhinweis an/aus) — objektLueckenWerkzeug.ts (Kern _shared/objektVollstaendigkeit.ts).
   if (istLueckenWerkzeug(name)) return await fuehreLueckenWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
+  // Was ist neu im CRM (wie Seite /neuigkeiten), Tipp der Woche an/aus — neuigkeitenWerkzeug.ts.
+  if (istNeuigkeitenWerkzeug(name)) return await fuehreNeuigkeitenWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
   // Rendite- und Kaufpreis-Check eines Objekts, Prüfsteine — renditeWerkzeuge.ts (Kern _shared/renditeKern.ts, wie Reiter „Rendite“).
   if (istRenditeWerkzeug(name)) {
     return await fuehreRenditeWerkzeugAus(name, input ?? {}, {
@@ -1861,7 +1893,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
       const bisTag = berlinZuZeitpunkt(String(input.bis || ''))
       if (!von) return 'Fehler: von muss das Format JJJJ-MM-TT haben.'
       const bis = bisTag ? new Date(bisTag.getTime() + 86400000) : new Date(von.getTime() + 8 * 86400000)
-      const { data } = await supabase.from('termine').select('id, titel, ort, beginn, ende, ganztags, besitzer_email, teilnehmer, kunde_id, kunde_bereich, kunde_name').lt('beginn', bis.toISOString()).gt('ende', von.toISOString()).order('beginn')
+      const { data } = await alleZeilen(() => supabase.from('termine').select('id, titel, ort, beginn, ende, ganztags, besitzer_email, teilnehmer, kunde_id, kunde_bereich, kunde_name, zuordnung_vorschlag').lt('beginn', bis.toISOString()).gt('ende', von.toISOString()).order('beginn'))
       // deno-lint-ignore no-explicit-any
       const alle = (data ?? []) as any[]
       // Die verknüpfte Akte nur nennen, wenn der Mitarbeiter sie sehen darf (Bereich freigegeben bzw.
@@ -1882,6 +1914,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
         wann: berlinText(t.beginn, t.ende, t.ganztags),
         ort: t.ort || undefined,
         kunde: kundeVon(t),
+        akte_vorschlag: akteVorschlagText(mitarbeiter, t),
         dabei: [String(t.besitzer_email).toLowerCase(), ...(t.teilnehmer ?? [])].map(nameVon),
         angelegt_von: nameVon(String(t.besitzer_email).toLowerCase()),
       })
@@ -2044,7 +2077,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
 
     if (name === 'privater_bereich') {
       if (input.was === 'kontakte') {
-        const { data } = await supabase.from('kunden').select(KUNDE_SPALTEN).eq('bereich', 'privat').eq('verantwortlich_email', ich)
+        const { data } = await alleZeilen(() => supabase.from('kunden').select(KUNDE_SPALTEN).eq('bereich', 'privat').eq('verantwortlich_email', ich))
         const liste = suche ? sucheKunden((data ?? []) as KundeRow[], suche) : ((data ?? []) as KundeRow[])
         if (liste.length === 0) return 'Keine privaten Kontakte gefunden.'
         return JSON.stringify(liste.slice(0, 40).map((k) => ({ kontakt_id: k.id, name: kundeName(k), email: k.email, telefon: k.telefon, dokumente: (k.dokumente ?? []).length })))
@@ -2353,7 +2386,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
   }
 
   if (name === 'kunden_suchen') {
-    const { data } = await supabase.from('kunden').select(KUNDE_SPALTEN)
+    const { data } = await alleZeilen(() => supabase.from('kunden').select(KUNDE_SPALTEN))
     // Erst nach Rechten filtern, dann suchen: Treffer aus anderen Bereichen und private Kontakte von
     // Kollegen tauchen weder auf noch verdrängen sie erlaubte Treffer, und ihre Zahl verrät nichts.
     const sichtbar = ((data ?? []) as KundeRow[]).filter((k) => darfAkte(mitarbeiter, k))
@@ -2549,7 +2582,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     }
     // Dubletten: alle Akten der Holding und die eigenen privaten Kontakte — private Kontakte von
     // Kollegen zählen nicht (es gibt sie für ihn nicht, und sie dürfen nicht erwähnt werden).
-    const { data: alleRoh } = await supabase.from('kunden').select(KUNDE_SPALTEN)
+    const { data: alleRoh } = await alleZeilen(() => supabase.from('kunden').select(KUNDE_SPALTEN))
     const alle = ((alleRoh ?? []) as KundeRow[]).filter((k) => !istFremdePrivatakte(mitarbeiter, k))
     const email = String(input.email ?? '').trim()
     const automatisch = input.automatisch === true
@@ -2656,7 +2689,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     if (eintraege.length > 40) return `Fehler: ${eintraege.length} Einträge sind zu viele auf einmal (höchstens 40). Teile die Liste auf.`
     const text = (v: unknown) => String(v ?? '').trim()
     if (input?.bestaetigt !== true) {
-      const { data: vorhanden } = await supabase.from('kunden').select('id, firma, ansprechpartner, email, bereich, verantwortlich_email')
+      const { data: vorhanden } = await alleZeilen(() => supabase.from('kunden').select('id, firma, ansprechpartner, email, bereich, verantwortlich_email'))
       const norm = (v: string) => v.toLowerCase().replace(/\s+/g, ' ').trim()
       const zeilen = eintraege.map((e, i) => {
         const hinweise: string[] = []
@@ -2979,7 +3012,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     if (!darfObjekt(mitarbeiter, obj)) return nichtFreigegeben('immobilien', mitarbeiter.name)
     const o = obj as unknown as ObjektRow
     const [{ data: eintraege }, inhalte] = await Promise.all([
-      supabase.from('abteilung_eintraege').select('id, art, daten').in('art', ['frage', 'weitergabe', 'treffer', 'zeit', 'abrechnung']),
+      alleZeilen(() => supabase.from('abteilung_eintraege').select('id, art, daten').in('art', ['frage', 'weitergabe', 'treffer', 'zeit', 'abrechnung'])),
       holeInhalte(alleObjektDokumente(o).filter((x) => lesenVonSelbst(x.ordner)).map((x) => leseRef(x.dok))),
     ])
     const zeilen = ((eintraege ?? []) as AbteilungZeile[]).filter((x) => x.daten && typeof x.daten === 'object')
@@ -2995,8 +3028,8 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
 
   if (name === 'firmenueberblick') {
     const [{ data: kunden }, { data: objekte }] = await Promise.all([
-      supabase.from('kunden').select('id, bereich, firma, ansprechpartner, status, verantwortlich, letzte_aktivitaet, follow_up, kaeuferprofil, verantwortlich_email, privat_art'),
-      supabase.from('objekte').select('bezeichnung, adresse, typ, status, verantwortlich, eigentuemer, privat_besitzer'),
+      alleZeilen(() => supabase.from('kunden').select('id, bereich, firma, ansprechpartner, status, verantwortlich, letzte_aktivitaet, follow_up, kaeuferprofil, verantwortlich_email, privat_art')),
+      alleZeilen(() => supabase.from('objekte').select('bezeichnung, adresse, typ, status, verantwortlich, eigentuemer, privat_besitzer')),
     ])
     // Akten der freigegebenen Bereiche und die eigenen privaten Kontakte; private Kontakte von Kollegen nie.
     // deno-lint-ignore no-explicit-any
@@ -3108,7 +3141,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     const gesperrteBereiche = bereiche.filter((b) => !darfBereich(mitarbeiter, b))
     if (gesperrteBereiche.length > 0) return nichtFreigegeben(gesperrteBereiche[0], mitarbeiter.name)
 
-    const { data } = await supabase.from('kunden').select('id, bereich, firma, ansprechpartner, email, status')
+    const { data } = await alleZeilen(() => supabase.from('kunden').select('id, bereich, firma, ansprechpartner, email, status'))
     // deno-lint-ignore no-explicit-any
     const alle = ((data ?? []) as any[]).filter((k) => NEUANLAGE_BEREICHE.includes(k.bereich) && k.id !== AKTE_INTERN && k.id !== AKTE_UNGEKLAERT)
     const gewaehlt = alle.filter((k) => {
@@ -3446,6 +3479,7 @@ So arbeitest du:
 - E-Mails: Du kannst E-Mails an einen Kunden, an mehrere oder an alle schicken. Nennt der Mitarbeiter nur den Inhalt, schreibst du daraus selbst die fertige Mail: passender Betreff, höflicher Text in der Sie-Form, klar und ohne Floskeln, ohne englische Begriffe, nichts dazuerfinden (keine Termine, Preise oder Zusagen, die er nicht genannt hat). Dann rufst du mail_vorbereiten auf. Ist nicht klar, an wen die Mail gehen soll, frag vorher nach. Zeige ihm danach den Betreff und den vollständigen Text so, wie das Werkzeug ihn liefert, nenne die Zahl der Empfänger und wer ausgelassen wird, und frag, ob du so senden sollst. Erst wenn er in seiner nächsten Nachricht klar zustimmt, rufst du mail_senden auf. Will er etwas ändern, bereitest du neu vor, zeigst die neue Fassung und fragst erneut. Ohne seine Zustimmung wird nie gesendet. Lehnt er ab oder will er doch nicht senden, ist die Fassung damit verworfen; bestätige das in einem Satz. Der Inhalt geht als normaler Mailtext hinaus, ohne Anhang. Briefe für den Postversand kannst du noch nicht erstellen, weil in den Akten keine Anschriften stehen.
 - Für Fragen quer über alle Kunden oder Objekte ("was steht heute an", "wer sucht ...") nutze firmenueberblick.
 - Aufgaben und Zuständigkeiten: Fragt jemand, wer was bis wann erledigen muss, was bei ihm oder einem Kollegen ansteht oder was überfällig ist, nutze aufgaben_uebersicht (nicht firmenueberblick). Antworte nach Person gegliedert, Überfälliges zuerst, mit Datum. Ist die Liste lang, nenne zuerst das Fällige und sag, wie viel ohne Datum dazukommt; die vollständige Liste steht im CRM unter „Aufgaben nach Mitarbeiter“ (Symbol mit Häkchenliste oben rechts).
+- Neu im CRM: Fragt jemand „Was ist neu?“, „Was kann das CRM inzwischen?“ oder „Gibt es was Neues für mich?“, nutze neuigkeiten_im_crm und erkläre die Neuerungen kurz in einfachen Worten (was bringt es, wo im CRM, Beispielsatz für Telegram). Als gelesen vermerken (als_gelesen=true) nur, wenn der Mitarbeiter das will. „Tipp der Woche aus/an“ → neuigkeiten_im_crm mit tipp_der_woche=false/true.
 - Volltextsuche: Mit alles_durchsuchen findest du Wörter, Namen, Beträge oder Aktenzeichen auch IN Texten — Verlauf und Sachverhalt der Akten, Inhalte gelesener Dokumente, Mails (gemeinsames und eigenes Postfach), Gesprächsprotokolle, Objekte samt Exposé, To-dos, Wiedervorlagen, Bücher und Partner. Nimm es bei Fragen wie „Wo stand nochmal …?“, „In welchem Dokument steht …?“, „Wer hat … erwähnt?“ oder wenn kunden_suchen bzw. objekte_suchen nichts finden. Die Fundstellen sind nur kurze Ausschnitte: Bevor du Einzelheiten nennst, lies mit den gelieferten Kennungen weiter (kundenakte_lesen, objektakte_lesen, dokument_inhalt, mail_lesen).
 - Immobilien-Objekte: Fragt jemand nach einem Ort, einer Adresse oder einer Immobilie ("was weißt du über Suppingen"), suchst du mit objekte_suchen und liest dann mit objektakte_lesen die ganze Objektakte. Antworte daraus vollständig, aber übersichtlich: Eckdaten, Preis, Eigentümer, Stand von Verkaufsdatenblatt, Kurzprüfung und Bewertung, welche Unterlagen da sind und was sie enthalten, offene Fragen, nächste Schritte. Ist ein Feld leer, sag kurz, dass es noch nicht eingetragen ist, statt es wegzulassen. Für den Inhalt einzelner Unterlagen nutzt du dokument_inhalt mit objekt_id.
 - Objektakten anlegen und befüllen: Will jemand ein Objekt, eine Immobilie oder eine Objektakte anlegen – auch wenn ein Makler oder Tippgeber es angeboten hat –, nimm objekt_anlegen und lege nie ersatzweise eine Kundenakte an. Den Makler oder Anbieter gibst du als anbieter mit; er wird im Verlauf der Objektakte vermerkt. Findet objekt_anlegen ein schon vorhandenes gleiches Objekt, nenne es dem Mitarbeiter und arbeite damit weiter; trotzdem=true nur, wenn er bestätigt, dass es ein anderes Objekt ist. Exposés, Prospekte, Grundbuchauszüge, Flächenaufstellungen, Pläne, Fotos und Mieterlisten zu einem Objekt gehören in die Objektakte (dateien_ins_objekt, Ordner nach Inhalt), nicht in eine Kundenakte – auch Dokumente, die bisher in einer Kundenakte geparkt sind (dann mit aus_kundenakte_entfernen=true). Eckdaten, Status, Kaufpreis, Verantwortlichen oder Follow-up eines Objekts änderst du mit objekt_aendern und gibst nur an, was sich ändert.
@@ -3465,17 +3499,22 @@ So arbeitest du:
 - Partner und Vermittler: Im CRM gibt es ein Verzeichnis aller Vermittler, Makler, Tippgeber, Notare, Steuerberater, Banken und Gutachter (Seite „Partner und Vermittler“) mit Kontakt, vereinbarter Provision und den Akten bzw. Objekten, die sie gebracht haben. Fragt jemand „Wer hat uns Kunde X vermittelt?“ oder „Von wem kam das Objekt Y?“, nimm partner_suchen mit kunde_id bzw. objekt_id; für einen Namen, eine Firma oder Telefonnummer partner_suchen mit suchbegriff, für alles zu einem Partner partner_suchen mit partner_id. Nennt jemand einen neuen Vermittler oder Makler (auch per Visitenkarte oder Mail-Signatur), leg ihn mit partner_anlegen an — meldet das Werkzeug einen ähnlichen Eintrag, nimm diesen oder frag nach, bevor du trotzdem=true setzt. „Akte X hat uns Azad vermittelt“ oder „das Objekt kam von Makler Dick“ → partner_zuordnen (kunde_id oder objekt_id; Rolle vermittelt, angeboten oder beraten). Mit demselben Werkzeug trägst du eine vereinbarte Provision, einen Betrag oder den Stand ein („Provision an Azad für die Bäckerei ist bezahlt“ → provision_status bezahlt). Provision und Betrag nur, wenn sie genannt werden; nichts erfinden. „Welche Provisionen schulden wir noch?“ → provisionen_offen. Partner löschen geht nur im CRM durch die Geschäftsführung.
 - Umsatzvorschau und Provisionen: Für „Was kommt diesen Monat rein?“, „Wie sieht das Quartal aus?“, „Welche Provisionen erwarten wir bis Jahresende?“ oder „Umsatz Immobilien dieses Jahr?“ nimm umsatz_vorschau (zeitraum monat, quartal oder jahr; optional bereich). Alle Beträge sind netto. Nenne zuerst den erwarteten Gesamtbetrag, dann wie er sich zusammensetzt (schon in Rechnung gestellt, Angebote nach Chance, Provision nach Stand) und die größten Posten mit Begründung. Erwähne die Lücken (Angebote ohne Chance, Objekte ohne Kaufpreis oder ohne hinterlegte Provision), denn sie machen die Vorschau ungenauer. Erfinde keine Zahlen und rechne nicht selbst nach. Für einzelne offene Rechnungen bleibt rechnungen_offen zuständig.
 - Rechnungsvorschläge: Für „Welche Rechnungen müssen noch raus?“, „Haben wir vergessen, etwas abzurechnen?“ oder „Was ist noch nicht in Rechnung gestellt?“ nimm rechnung_vorschlaege. Es nennt angenommene Kostenvoranschläge, erledigte Aufträge, Seminarteilnahmen und Provisionen beurkundeter Objekte ohne Rechnung, mit Betrag (netto), Grund und Link. Rechnungen legst du nicht selbst an: Nenne den Link ins CRM, dort wird die Rechnung vorausgefüllt erstellt oder der Vorschlag verworfen. „Wochenhinweis Rechnungen aus/an“ → rechnung_vorschlaege mit wochenhinweis=false/true. Für schon gestellte, offene Rechnungen bleibt rechnungen_offen zuständig.
+- Mahnwesen: Für „Wen müssen wir mahnen?“, „Welche Mahnungen stehen an?“ oder „Wie viele Rechnungen bekommen heute eine Zahlungserinnerung?“ nimm mahn_vorschlaege. Es nennt, wie viele überfällige Rechnungen heute einen Mahnvorschlag bekommen (Zahlungserinnerung, 1. oder 2. Mahnung nach den eingestellten Tagen), welche Vorschläge offen oder zurückgestellt sind und welche übersprungen werden (Zahlung gerade eingegangen, Kontoauszug noch nicht bestätigt). Du sendest nie selbst eine Mahnung: Nenne den Link ins CRM, dort wird das Schreiben geprüft und gesendet, eine Zahlung erfasst oder die Mahnung zurückgestellt (z. B. bei Ratenzahlung). Für die Liste aller offenen Rechnungen bleibt rechnungen_offen zuständig.
 - Chance und erwarteter Umsatz einer Akte: Für „Setz die Chance bei X auf 40 %“, „Bei X erwarten wir 5.000 € im Januar“ oder „Übernimm den Vorschlag für X“ nimm chance_setzen (kunde_id; chance, umsatz netto, monat; vorschlag_uebernehmen: true für den gespeicherten Vorschlag). Was du einträgst, gilt als vom Mitarbeiter bestätigt und zählt danach in der Umsatzvorschau — trag deshalb nur ein, was der Mitarbeiter wirklich sagt oder ausdrücklich übernehmen will. Für „Welche Vorschläge gibt es?“ oder „Welche Akten haben noch keine Chance?“ nimm chance_vorschlaege_zeigen (optional bereich, kunde_id; neu_berechnen: true rechnet nach festen Regeln neu). Vorschläge sind keine Zahlen der Holding, bis sie übernommen sind; sag das dazu. Erfinde keine Beträge.
 - Übergabe an den Steuerberater: Für „Was fehlt noch für den Steuerberater?“, „Können wir den Oktober abgeben?“ oder „Ist das 3. Quartal vollständig?“ nimm export_steuerberater_status (zeitraum z. B. "2026-10", "Oktober", "Q3 2026"; ohne Angabe der Vormonat). Nenne zuerst Anzahl und Summen, dann die Punkte „noch zu erledigen“ mit Rechnungsnummer bzw. Lieferant. Fehlende Belege und ungeprüfte Eingangsrechnungen sind am wichtigsten. Die Datei selbst kannst du nicht schicken: Sag, dass man sie im CRM unter Rechnungen mit dem Knopf „Export für Steuerberater“ herunterlädt. Konten oder steuerliche Einordnung beurteilst du nicht; das entscheidet der Steuerberater.
+- Unvollständige Eingangsrechnungen: Für „Welche Rechnungen sind unvollständig?“, „Wo fehlen Belege?“ oder „Was muss ich bei den Verbindlichkeiten nachtragen?“ nimm verbindlichkeiten_pruefen (mit_hinweisen: true nur, wenn ausdrücklich alles gewünscht ist). Nenne je Eintrag Lieferant, Datum und was fehlt. Belege aus den Original-Mails ergänzt das CRM von selbst; automatisch ergänzte Angaben muss ein Mensch in der Verbindlichkeit mit „Angaben stimmen – als geprüft markieren“ bestätigen — das kannst du nicht für ihn tun. Steht „wohl keine echte Rechnung“ dabei, empfiehl, die Mail zu prüfen und den Eintrag ggf. zu löschen, ohne ihn selbst zu löschen.
 - Kollegen Bescheid geben: Bittet der Mitarbeiter, einem Kollegen etwas auszurichten oder ihm kurz Bescheid zu geben ("sag Hasan, dass die Akte angelegt ist"), schickst du das mit kollegen_benachrichtigen. Dafür ist kein Termin nötig. Sag danach, wem du was geschickt hast und wer nicht mit Telegram verbunden ist.
 - To-dos ohne Kundenakte: Will der Mitarbeiter sich oder einem Bereich eine Aufgabe notieren, die zu keinem Kunden gehört ("schreib mir auf: Steuerunterlagen bis Freitag sortieren"), legst du sie mit todo_anlegen an, standardmäßig in seiner eigenen To-do-Liste. Gehört die Aufgabe zu einer Kundenakte, nimmst du aufgabe_setzen. Mehrere neue Kunden auf einmal (Liste, Foto einer Liste) legst du mit kunden_aus_liste an: erst Vorschau zeigen, nach Bestätigung mit bestaetigt=true, danach jede Zeile mit Ergebnis nennen — besonders die, die nicht angelegt wurden. Erledigtes hakst du mit todo_erledigen ab. Will er einem Kollegen eine Aufgabe schicken („schick Hasan ein To-do: Exposé prüfen“, „Quirin soll bis Freitag …“), nimm todo_anlegen mit fuer=<Kollege>: Das To-do landet in dessen eigener Liste, mit dem Absender in Klammern; danach bietest du an, ihn per kollegen_benachrichtigen sofort zu informieren. Eine Bereichsliste (bereich) nimmst du nur, wenn er ausdrücklich die gemeinsame Liste meint.
+- Tagesablauf: Jeder mit Immobilien-Recht hat auf der Seite „Tagesablauf & Woche“ einen Tagesplan nach Quirins Vorlage (Organisatorisch, Fristsachen, A ca. 2 Std., B ca. 1,5 Std., C ca. 1 Std., kurze Arbeiten, Unvorhergesehenes; „Fokus liegt auf Umsatz“). Fragen wie „Was steht heute an?“, „Zeig mir meinen Tag“ oder „Was hat Quirin heute vor?“ beantwortest du mit tag_zeigen (Kollegen nur lesen). „Plan mir meinen Tag“ / „Mach mir den Tag für morgen“ → tag_vorschlagen (baut aus der eigenen To-do-Liste, den Terminen, fälligen Wiedervorlagen und dem Offenen vom letzten Plan und speichert; Vorhandenes bleibt). „Setz mir X als B-Aufgabe heute“ → tag_eintrag_hinzufuegen (block frist/A/B/C/kurz/unvorhergesehen). „X ist erledigt“ bei einem Eintrag des Tages → tag_eintrag_erledigt (hakt das verknüpfte To-do mit ab; Minuten mitgeben, wenn er sie nennt). „Streich X aus meinem Tag“ → tag_eintrag_entfernen (das To-do bleibt). Antwortet jemand auf die Abendnachricht „Offen geblieben“ mit Wünschen zum nächsten Tag, nimm datum = nächster Werktag. Nimm die Kürzel (A1, F2 …) aus tag_zeigen; frag bei Mehrdeutigem kurz nach.
 - To-dos aufräumen: Sagt der Mitarbeiter „räum meine To-dos auf“, „was kann von meiner Liste weg?“ oder fragt nach doppelten oder uralten To-dos, nimm todos_aufraeumen. Zuerst ohne bestaetigt: Das zeigt nur Vorschläge (doppelt, lange unberührt, lange überfällig, sieht erledigt aus, Akte abgeschlossen) mit Zahlen und Gruppen-Codes. Nenn ihm die Zahlen kurz und frag, welche Gruppen er aufräumen will. Erst nach seinem klaren Ja in der nächsten Nachricht rufst du es mit bestaetigt=true und gruppe=<Code> (oder todo_ids) auf, mit demselben tage_alt wie in der Vorschau. Standard ist abhaken mit dem Vermerk „aufgeräumt“ im aktuellen Stand; abgehakte To-dos lassen sich im CRM unter „Erledigt“ wieder öffnen. Löschen (aktion=loeschen) nur, wenn er ausdrücklich „löschen“ sagt. Es betrifft nur seine eigene Liste; im CRM geht dasselbe in der To-Do-Liste über den Knopf „Aufräumen“.
 - Gesendete Mails: Was einem Kunden geschrieben oder geschickt wurde (auch Briefe und Mails, die aus Outlook oder Webmail über info@ oder das eigene Postfach rausgingen), findest du mit gesendete_mails (nach kunde_id, Suchbegriff, Zeitraum; mit mail_id ganz lesen). Sie werden alle paar Minuten automatisch aus dem Gesendet-Ordner ins CRM übernommen und der Akte des Empfängers zugeordnet.
-- Kostenvoranschläge: Das CRM hat eine Seite „Kostenvoranschläge“ und in jeder Akte einen Reiter dafür. Will jemand Kostenvoranschläge erfassen, oder schickt er ein Foto/Dokument mit einer Liste von Kostenvoranschlägen und will sie eingetragen haben, legst du jede Zeile mit kostenvoranschlag_anlegen an (Name, Beschreibung, Betrag, Status; „bez.“ = bezahlt; Summenzeilen nicht). Gehören sie eindeutig zu einer Akte, gib kunde_id an, sonst ohne; geht es um private Geschäfte des Mitarbeiters (Bereich Privat), setze privat=true, damit nur er sie sieht. Fragen nach Kostenvoranschlägen, Summen oder Status beantwortest du mit kostenvoranschlaege_auflisten, Änderungen (z. B. „Breh ist bezahlt“, „gehört zu Akte X“) mit kostenvoranschlag_aendern. Löschen geht nur im CRM.
+- Kostenvoranschläge: Das CRM hat eine Seite „Kostenvoranschläge“ und in jeder Akte einen Reiter dafür. Will jemand Kostenvoranschläge erfassen, oder schickt er ein Foto/Dokument mit einer Liste von Kostenvoranschlägen und will sie eingetragen haben, legst du jede Zeile mit kostenvoranschlag_anlegen an (Name, Beschreibung, Betrag, Status; „bez.“ = bezahlt; Summenzeilen nicht). Gehören sie eindeutig zu einer Akte, gib kunde_id an, sonst ohne; geht es um private Geschäfte des Mitarbeiters (Bereich Privat), setze privat=true, damit nur er sie sieht. Fragen nach Kostenvoranschlägen, Summen oder Status beantwortest du mit kostenvoranschlaege_auflisten, Änderungen (z. B. „Breh ist bezahlt“, „gehört zu Akte X“) mit kostenvoranschlag_aendern. Löschen geht nur im CRM. Legst du Kostenvoranschläge ohne kunde_id an und hängt das Ergebnis „Mögliche Akten“ an, frag den Mitarbeiter kurz, ob du zuordnen sollst (bei „sicher“: „Gehört X zur Akte Y? Soll ich zuordnen?“; bei mehreren Möglichkeiten nenne sie zur Auswahl), und ordne erst nach seinem Ja mit kostenvoranschlag_aendern (kv_id + kunde_id) zu. Ohne Akte fehlen Kostenvoranschläge in Umsatzvorschau, Rechnungsvorschlägen, Wiedervorlagen und im Reiter der Akte. Bei einem einzelnen Eintrag, dessen Name nach einem Kunden klingt, darfst du vorher kunden_suchen nutzen; bei Listen genügt der Hinweis im Ergebnis. Weiß er es nicht, bleiben die Einträge ohne Akte.
+- Eigenes Profil: Mit mein_profil_aendern änderst du nur die Angaben des Mitarbeiters, mit dem du schreibst (Telefon, Mobil, Funktion, Signatur) — nie die eines Kollegen; bittet er darum, sag ihm, dass das jeder selbst in „Mein Profil“ oder hier im Chat macht. Hast du ihn nach seiner Telefonnummer gefragt und schickt er eine Nummer (auch ohne weitere Worte), speicherst du sie sofort mit mein_profil_aendern (telefon) und bestätigst kurz. Will er sie nicht angeben, akzeptierst du das und fragst nicht noch einmal. Die Signatur ersetzt du nur, wenn er es ausdrücklich will.
 - Stammdaten aus E-Mail-Signaturen: Das CRM liest die Signaturen in den Mails der Kunden und trägt fehlende Telefonnummern, Anschriften und E-Mail-Adressen selbst in die Akte ein (Verlaufseintrag „… aus E-Mail-Signatur vom … ergänzt“). Vorhandene Angaben überschreibt es nie; nennt eine Signatur etwas anderes, entsteht ein Vorschlag. Mit stammdaten_vorschlaege (aktion „auflisten“) zeigst du die offenen Vorschläge, mit „uebernehmen“ trägst du den neuen Wert ein — nur, wenn der Mitarbeiter das ausdrücklich will, und nenne vorher neuen und bisherigen Wert —, mit „verwerfen“ lehnst du ihn ab.
 - Doppelte Akten: Fragt jemand, ob es Akten doppelt gibt oder einen Kunden zweimal, nimm dubletten_finden (nur lesen) und zeig die Gruppen mit Gründen. Zusammenführen weiterhin nur mit kunden_zusammenfuehren und erst nach ausdrücklicher Bestätigung. Liegen die Akten in verschiedenen Bereichen, frag zuerst, ob die Person bewusst in beiden Bereichen geführt wird; sonst erst kunde_bereich_wechseln. Nebeneinander vergleichen und „keine Dublette“ merken kann die Geschäftsführung auf der Seite Dubletten im CRM.
 - Wiedervorlagen: Jede Kundenakte hat im CRM einen Reiter „Wiedervorlagen“ (wann muss bei wem nachgefasst werden). Viele davon legt das CRM selbst an und hakt sie selbst ab, z. B. bei einem Statuswechsel der Akte, wenn ein Kostenvoranschlag erstellt oder angenommen wird, Unterlagen angefordert oder eingegangen sind, eine Rechnung verschickt oder bezahlt ist, ein Termin eingetragen oder etwas unterschrieben wurde — die musst du nicht anlegen. Fragt jemand „Was ist heute fällig?“, „Welche Wiedervorlagen habe ich diese Woche?“ oder „Was liegt bei Akte X noch an?“, nimm wiedervorlagen_auflisten (für „heute“ nur_faellig=true, für „ich“ zustaendig="ich"). Sagt er „Leg mir eine Wiedervorlage an …“ oder „erinnere mich, bei Kunde X am Freitag nachzufassen“, nimm wiedervorlage_anlegen mit kunde_id und Datum. Sagt er, eine Wiedervorlage ist „erledigt“, hak sie mit wiedervorlage_erledigen ab; will er sie auf später legen, nimm wiedervorlage_verschieben. Die id holst du vorher mit wiedervorlagen_auflisten; passen mehrere, frag nach. Private Kontakte haben keine Wiedervorlagen (dafür todo_anlegen). Für die Gesamtsicht über alle Aufgaben bleibt aufgaben_uebersicht; dort stehen die Wiedervorlagen mit drin.
 - Statusbericht an den Kunden: Mit statusbericht_entwurf (kunde_id, optional seit) zeigst du den Entwurf des Berichts „Stand Ihres Projekts“ — was seit dem letzten Bericht passiert ist, die nächsten Schritte, was wir noch vom Kunden brauchen, Ampel. Gib den Entwurf so wieder und nenne den Link aus der Antwort: Prüfen, ändern und senden (E-Mail mit PDF oder nur PDF) geht nur im CRM, du selbst sendest den Bericht nie. Hinweise „nur für den Mitarbeiter“ sind für ihn, nicht für den Kunden. Die wöchentliche Erinnerung stellt man im CRM im Fenster „Statusbericht an Kunden“ ein.
+- Termin ↔ Akte: Das CRM ordnet Termine selbst einer Akte zu, wenn die E-Mail-Adresse eines Gastes bei genau einer Akte steht. Steht nur ein Name im Titel, zeigt termine_zeigen einen Vorschlag (akte_vorschlag). Sagt der Mitarbeiter, zu welcher Akte ein Termin gehört, oder bestätigt er einen Vorschlag, ordne ihn mit termin_zuordnen zu (ohne kunde_id = Vorschlag übernehmen; sonst kunde_id vorher mit kunden_suchen ermitteln). loesen=true entfernt eine falsche Verknüpfung, vorschlag_ablehnen=true verwirft einen falschen Vorschlag — beides kommt für diesen Termin nicht wieder. gleiche_titel=true nur, wenn er ausdrücklich alle seine Termine mit diesem Titel meint (Serientermine). Weise auf offene Vorschläge höchstens einmal je Gespräch hin.
 - Termin-Briefing: Mit termin_briefing bereitest du den Mitarbeiter auf einen Termin vor — ohne Angabe für seinen nächsten Termin mit Bezug zu einer Akte, mit termin_id (aus termine_zeigen) für einen bestimmten Termin, mit kunde_id oder objekt_id für den nächsten Termin zu dieser Akte (gibt es keinen, kommt das Briefing zur Akte). Gib das Ergebnis so wieder, ohne etwas hinzuzufügen; die Gesprächspunkte sind nur Vorschläge. Dasselbe Briefing kommt automatisch per Telegram vor jedem Kundentermin (Standard 60 Minuten vorher). An- und abschalten, den Vorlauf und die Morgenübersicht um 7:30 Uhr stellt jeder im CRM unter Kalender → Einstellungen ein.
 - Nachfrage nach Kundenterminen: Nach einem Kundentermin fragt das CRM den Mitarbeiter über dich „Wie lief der Termin mit …?“. Im Verlauf steht davor eine Systemmeldung „Im Auftrag von Nachfrage nach Kundentermin (Akte k_…, TT.MM.JJJJ)“ — dort stehen die Akte (kunde_id) und der Tag des Termins. Antwortet der Mitarbeiter darauf (Sprachnachricht oder Text), legst du mit nachtermin_protokoll sofort das Gesprächsprotokoll in dieser Akte an, ohne vorher nachzufragen: Teilnehmer, Besprochen, Vereinbart, Nächste Schritte (je Punkt ein kurzer Satz, nur was er gesagt hat, nichts dazuerfinden), dazu eine Zusammenfassung in ein bis zwei Sätzen und seine Rückmeldung im Wortlaut; als Betreff den Titel des Termins aus der Frage. Das Werkzeug trägt die nächsten Schritte auch in „Nächste Schritte“ der Akte ein. Danach bestätigst du in einer Zeile, schlägst für die vereinbarten nächsten Schritte Wiedervorlagen bzw. To-dos mit Datum als kurze Liste vor und legst sie erst an, wenn er zustimmt — nie stillschweigend. Sagt er, es gab nichts zu besprechen oder der Termin fand nicht statt, legst du nichts an und bestätigst kurz; stellt er stattdessen eine ganz andere Frage, hilf ihm damit ganz normal. Erzählt er auch ohne Nachfrage, wie ein Kundentermin gelaufen ist, nimm ebenfalls nachtermin_protokoll. Abschalten kann jeder die Nachfrage im CRM unter Kalender → Einstellungen („Nach Kundenterminen nachfragen“).
 - Online-Unterschrift: Verträge und Vollmachten aus den Vorlagen (z. B. Beratungsvereinbarung, Allgemeine Vollmacht) schickt man im CRM beim Ausfüllen einer Vorlage mit „Zum Unterschreiben schicken“ an den Kunden. Er unterschreibt am Handy oder Computer; das unterschriebene PDF liegt danach von selbst in den Dokumenten der Akte, und Wiedervorlagen wie „Beratungsvereinbarung unterschrieben zurück?“ haken sich ab. Fragt jemand „Hat X schon unterschrieben?“ oder „Welche Unterschriften stehen noch aus?“, nimm unterschrift_status (mit kunde_id für eine Akte, ohne für alle offenen; alle=true zeigt auch Erledigtes der letzten 30 Tage). Verschicken oder zurückziehen kannst du nicht: Sag, dass das im CRM geht (Vorlage ausfüllen → „Zum Unterschreiben schicken“; zurückziehen in der Akte unter „Zum Unterschreiben verschickt“).
@@ -3507,7 +3546,8 @@ async function claude(system: unknown[], messages: unknown[], maxTokens = ANTWOR
     const res = await kiAufruf('telegram-gateway', 'https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({ model: AGENT_MODEL, max_tokens: maxTokens, system, tools: werkzeuge, messages }),
+      // Marke am letzten Nachrichtenblock: weitere Schritte eines Zugs lesen den Verlauf aus dem Zwischenspeicher (werkzeugGruppen.ts).
+      body: JSON.stringify({ model: AGENT_MODEL, max_tokens: maxTokens, system, tools: werkzeuge, messages: mitNachrichtenCache(messages as VerlaufNachricht[]) }),
     })
     const data = await res.json().catch(() => ({}))
     if (res.ok) return data
@@ -3564,6 +3604,13 @@ export async function agentAntwort(supabase: Supa, mitarbeiterRoh: Mitarbeiter, 
   // Bereich Privat (Hotmail, Briefe): nur für freigeschaltete Mitarbeiter (MS_ERLAUBT), Hotmail nur mit verbundenem Konto.
   const privat = await privatFaehigkeiten(supabase, mitarbeiter.email ?? '').catch(() => ({ briefe: false, outlook: false }))
   const werkzeuge = werkzeugListe(privat, privatBot)
+  // Werkzeug-Gruppen (werkzeugGruppen.ts): Grundwerkzeuge immer, Sachgebiete nur bei Bedarf.
+  const auswahl = starteAuswahl(werkzeuge, {
+    eingang,
+    verlauf: state.zuege.flatMap((zug) => zug.msgs),
+    privatBot,
+    offen: { mail: !!(ctx.vorherigeMailAnfrage || ctx.vorherigeWeiterleitung), pflege: !!ctx.vorherigePflegeAnfrage },
+  })
   const system = [
     { type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } },
     {
@@ -3597,13 +3644,15 @@ export async function agentAntwort(supabase: Supa, mitarbeiterRoh: Mitarbeiter, 
   const aktionenVorher = state.aktionen.length
   let gross = false
   for (let schritt = 0; schritt < 12; schritt++) {
-    let data = await claude(system, messages(), ANTWORT_TOKENS, werkzeuge)
+    // Hinweistext passend zu den geladenen Gruppen (ändert sich nur, wenn eine Gruppe dazukommt).
+    system[0] = { type: 'text', text: auswahl.hinweise(SYSTEM_PROMPT), cache_control: { type: 'ephemeral' } }
+    let data = await claude(system, messages(), ANTWORT_TOKENS, auswahl.werkzeuge())
     // Abgeschnittene Antwort (meist ein langer Notiztext im Werkzeug-Aufruf): denselben Schritt einmal
     // mit mehr Platz wiederholen — aber nur, wenn die Laufzeit des Servers dafür noch reicht.
     if (data.stop_reason === 'max_tokens' && !gross && restlaufzeitMs() > 150_000) {
       gross = true
       console.warn('Antwort abgeschnitten (max_tokens) — Schritt wird mit mehr Platz wiederholt.')
-      data = await claude(system, messages(), ANTWORT_TOKENS_GROSS, werkzeuge)
+      data = await claude(system, messages(), ANTWORT_TOKENS_GROSS, auswahl.werkzeuge())
     }
     // deno-lint-ignore no-explicit-any
     const bloecke: any[] = data.content ?? []
@@ -3614,11 +3663,15 @@ export async function agentAntwort(supabase: Supa, mitarbeiterRoh: Mitarbeiter, 
     neu.push({ role: 'assistant', content: bloecke })
     const ergebnisse = []
     for (const b of bloecke.filter((x) => x.type === 'tool_use')) {
+      auswahl.merke(b.name)
       let ergebnis: string | unknown[]
       try {
         ergebnis =
-          // Nur angebotene Werkzeuge ausführen — im privaten Assistenten nie eines der Holding.
-          !werkzeuge.some((w) => w.name === b.name)
+          b.name === LADE_WERKZEUG_NAME
+            ? auswahl.lade(b.input ?? {})
+          // Nur freigegebene Werkzeuge ausführen — im privaten Assistenten nie eines der Holding. Ein
+          // freigegebenes, aber gerade nicht geladenes Werkzeug läuft trotzdem (merke() lädt seine Gruppe).
+          : !werkzeuge.some((w) => w.name === b.name)
             ? `Fehler: Das Werkzeug ${b.name} gibt es hier nicht.`
             : privat.briefe && istPrivatWerkzeug(b.name)
               ? await fuehrePrivatWerkzeugAus(b.name, b.input ?? {}, { supabase, email: mitarbeiter.email ?? '', name: mitarbeiter.name, protokolliere: (text) => state.aktionen.push({ z: new Date().toISOString(), text }) })
@@ -4418,6 +4471,11 @@ async function verarbeiteNachricht(supabase: Supa, message: any, chatId: number,
   // jetzt aus dem Telegram-Chat löschen. Klappt das Löschen nicht, bleibt alles wie bisher.
   if (istDatei && sensibel && (await loescheTelegramNachricht(botToken(BOT_TOKEN), chatId, message.message_id))) {
     antwort = `${antwort}\n\n${sensibelHinweis(sensibel)}`
+  }
+  // Einmalige Nachfrage nach der Telefonnummer, wenn sie im Profil fehlt (profilWerkzeuge.ts) — nur bei Text, nicht im privaten Assistenten.
+  if (!privatBot && !istDatei) {
+    const frage = await profilNachfrage(supabase, mitarbeiter)
+    if (frage) antwort = nachfrageAnhaengen(state, antwort, frage)
   }
   const mailStart = await speichereZustand(supabase, mitarbeiter.id, state)
   await sendTelegramMessage(chatId, antwort)

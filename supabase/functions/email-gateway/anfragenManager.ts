@@ -29,6 +29,7 @@
 
 import { kiAufruf } from '../_shared/kiVerbrauch.ts'
 import { neuesToken } from './willkommen.ts'
+import { alleZeilen } from '../_shared/alleZeilen.ts'
 
 // deno-lint-ignore no-explicit-any
 type Admin = any
@@ -776,7 +777,7 @@ async function bearbeite(admin: Admin, h: AnfragenHelfer, k: VollerKontext, emai
   const bez = String(o.bezeichnung ?? o.id)
 
   // Bestehende Akte (nur Immobilien-Kunden, gleiche E-Mail-Adresse).
-  const { data: kunden, error: kFehler } = await admin.from('kunden').select('id, email, telefon').eq('bereich', 'immobilienkunden')
+  const { data: kunden, error: kFehler } = await alleZeilen(() => admin.from('kunden').select('id, email, telefon').eq('bereich', 'immobilienkunden'))
   if (kFehler) throw new Error(`Immobilien-Kunden nicht lesbar: ${kFehler.message}`)
   // deno-lint-ignore no-explicit-any
   const vorhanden = kontakt.email ? ((kunden ?? []) as any[]).find((x) => String(x.email ?? '').trim().toLowerCase() === kontakt.email) : null

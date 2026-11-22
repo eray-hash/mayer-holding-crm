@@ -16,6 +16,7 @@ import nodemailer from 'npm:nodemailer@6'
 import { pruefeNeueMail } from '../_shared/mailEingang.ts'
 import { uebernehmeEinladung } from '../_shared/einladung.ts'
 import { entschluessele, verschluessele } from '../_shared/geheim.ts'
+import { alleZeilen } from '../_shared/alleZeilen.ts'
 
 // deno-lint-ignore no-explicit-any
 type Db = any
@@ -1108,7 +1109,7 @@ export async function ordneOffeneMailsZu(admin: Db, tage = 3): Promise<{ zugeord
   const offene = ((mails ?? []) as { id: string; von: string | null; ignoriert: boolean | null }[]).filter((m) => !m.ignoriert && m.von)
   if (offene.length === 0) return { zugeordnet: 0, fehler: [] }
   const [{ data: kunden }, { data: team }] = await Promise.all([
-    admin.from('kunden').select('id, email').neq('bereich', 'privat'),
+    alleZeilen(() => admin.from('kunden').select('id, email').neq('bereich', 'privat')),
     admin.from('mitarbeiter').select('email'),
   ])
   const intern = new Set(((team ?? []) as { email: string | null }[]).map((m) => String(m.email ?? '').trim().toLowerCase()))

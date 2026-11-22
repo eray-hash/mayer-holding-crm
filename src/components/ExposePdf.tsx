@@ -12,6 +12,7 @@ import { ladeObjektDokumentHoch } from '../lib/objektDokumenteStorage'
 import { fmtDate, today, uid } from '../lib/dates'
 import type { Dokument, Objekt } from '../types'
 import type jsPDF from 'jspdf'
+import { useTelefonErsatz } from '../lib/meinProfilZusatz'
 
 /** Titelbild + bis zu sechs Bilder für die Bilderseite. */
 export const MAX_BILDER = 7
@@ -190,17 +191,18 @@ export function groesseText(bytes: number): string {
 export function useExposeKontext() {
   const { state } = useApp()
   const { mitarbeiter } = useAuth()
+  const telefonErsatz = useTelefonErsatz(mitarbeiter?.id)
   return useMemo(
     () => ({
       firma: briefkopfAus(state.vorlagenBeratung).name,
       kontakt: {
         name: [state.profil.name?.trim(), mitarbeiter?.name?.trim(), CURRENT_USER].find((n) => n && n !== DEMO_NUTZER) || '',
-        telefon: state.profil.telefon?.trim() || mitarbeiter?.telefon || '',
+        telefon: telefonErsatz(state.profil.telefon?.trim() || mitarbeiter?.telefon),
         email: state.profil.email?.trim() || mitarbeiter?.email || '',
       },
       logoVorlage: findeLogoVorlage(state.vorlagenImmobilien),
     }),
-    [state.vorlagenBeratung, state.vorlagenImmobilien, state.profil, mitarbeiter],
+    [state.vorlagenBeratung, state.vorlagenImmobilien, state.profil, mitarbeiter, telefonErsatz],
   )
 }
 

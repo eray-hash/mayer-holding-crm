@@ -33,6 +33,7 @@ import {
   type VorschlagZeile,
 } from '../_shared/rechnungVorschlagKern.ts'
 import { berlinZeit } from './tagesmeldung.ts'
+import { alleZeilen } from '../_shared/alleZeilen.ts'
 
 // deno-lint-ignore no-explicit-any
 type Db = any
@@ -83,7 +84,7 @@ export async function pruefeRechnungVorschlaege(admin: Db, jetzt: Date = new Dat
     const aktenStaende = [...new Set(Object.values(AKTE_RECHNUNG_STAENDE).flat())]
     const [kvRes, akteRes, anmRes, objRes, offenRes, preisRes] = await Promise.all([
       admin.from('kostenvoranschlaege').select('id, kunde_id, bereich, privat_besitzer, name, beschreibung, betrag, status, positionen, aufschlag_prozent, ust_satz').eq('status', 'angenommen'),
-      admin.from('kunden').select('id, bereich, firma, ansprechpartner, status, dienstleistungen, auftrag_chance').in('bereich', aktenBereiche).in('status', aktenStaende),
+      alleZeilen(() => admin.from('kunden').select('id, bereich, firma, ansprechpartner, status, dienstleistungen, auftrag_chance').in('bereich', aktenBereiche).in('status', aktenStaende)),
       admin.from('seminar_anmeldungen').select('id, termin_id, kunde_id, name, firma, status, rechnung_id').eq('status', 'teilgenommen').is('rechnung_id', null),
       admin.from('objekte').select('id, bezeichnung, adresse, kaufpreis, status, verkaufsdaten, kurzpruefung, privat_besitzer, zugewiesener_kunde').in('status', [...PROVISION_STAENDE]),
       admin.from(VORSCHLAG_TABELLE).select('*').eq('status', 'offen'),

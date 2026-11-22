@@ -8,6 +8,15 @@ import { Card, Field, inputClass, PrimaryButton, PasswortInput } from '../../com
 import { today, fmtDate, uid } from '../../lib/dates'
 import { CURRENT_USER } from '../../data/constants'
 import { updateMyProfilRemote } from '../../lib/profilSync'
+import { LEERER_ZUSATZ, ladeFirmenKontaktCrm, ladeProfilZusatz, speichereProfilZusatz, type ProfilZusatz } from '../../lib/meinProfilZusatz'
+import { FirmenTelefonEinstellung, ProfilLueckenKarte } from '../../components/ProfilVollstaendigkeit'
+import {
+  firmenKontaktAus,
+  profilLuecken,
+  pruefeTelefon,
+  telefonAusSignatur,
+  type FirmenKontakt,
+} from '../../../supabase/functions/_shared/profilKern.ts'
 
 // Vertretungs-Logik (Quirin, Entscheidung 2026-11-03): "offener Pool" ohne feste Vertreter-
 // Zuordnung — jeder trägt seine eigene Abwesenheit (von–bis) selbst ein, GF/Admin sehen während
@@ -404,7 +413,7 @@ function TelegramVerbinden() {
 
 export function MeinProfil() {
   const { state, dispatch } = useApp()
-  const { session } = useAuth()
+  const { session, mitarbeiter } = useAuth()
   const [name, setName] = useState(state.profil.name)
   const [telefon, setTelefon] = useState(state.profil.telefon)
   const [email, setEmail] = useState(state.profil.email)
@@ -412,8 +421,34 @@ export function MeinProfil() {
   const [buchungslink, setBuchungslink] = useState(state.profil.buchungslink ?? '')
   const [fotoDataUrl, setFotoDataUrl] = useState(state.profil.fotoDataUrl)
   const [gespeichert, setGespeichert] = useState(false)
+  const [fehler, setFehler] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
   const letzterSyncRef = useRef(state.profil)
+
+  // Zusatzangaben (Mobil, Funktion, Nachfrage-Einstellung) aus mitarbeiter_profil und die
+  // Firmen-Ersatznummer — für Formular und Vollständigkeits-Karte (Runde 5, 22.11.2026).
+  const [zusatzGespeichert, setZusatzGespeichert] = useState<ProfilZusatz | null>(null)
+  const [mobil, setMobil] = useState('')
+  const [position, setPosition] = useState('')
+  const [firma, setFirma] = useState<FirmenKontakt>(firmenKontaktAus(null))
+  useEffect(() => {
+    if (!isSupabaseConfigured || !mitarbeiter?.id) return
+    let aktiv = true
+    Promise.all([ladeProfilZusatz(mitarbeiter.id), ladeFirmenKontaktCrm()])
+      .then(([z, f]) => {
+        if (!aktiv) return
+        setZusatzGespeichert(z)
+        setMobil(z.mobil)
+        setPosition(z.position)
+        setFirma(f)
+      })
+      .catch(() => {
+        if (aktiv) setZusatzGespeichert(LEERER_ZUSATZ)
+      })
+    return () => {
+      aktiv = false
+    }
+  }, [mitarbeiter?.id])
 
   // telefon/signaturHtml/fotoDataUrl/buchungslink können jetzt serverseitig NACH dem Mounten dieser
   // Seite eintreffen (eigene mitarbeiter-Zeile lädt asynchron, siehe AppContext.tsx) — ohne diesen
@@ -448,13 +483,55 @@ export function MeinProfil() {
   }
 
   function speichern() {
-    dispatch({ type: 'UPDATE_PROFIL', patch: { name, telefon, email, signaturHtml, fotoDataUrl, buchungslink } })
-    updateMyProfilRemote(telefon, signaturHtml, fotoDataUrl, buchungslink).catch((err) =>
+    const tel = pruefeTelefon(telefon)
+    const mob = pruefeTelefon(mobil)
+    if (!tel.ok || !mob.ok) {
+      setFehler(!tel.ok ? `Telefon: ${tel.grund}` : `Mobil: ${!mob.ok ? mob.grund : ''}`)
+      return
+    }
+    setFehler('')
+    const telefonSauber = tel.wert
+    setTelefon(telefonSauber)
+    setMobil(mob.wert)
+    dispatch({ type: 'UPDATE_PROFIL', patch: { name, telefon: telefonSauber, email, signaturHtml, fotoDataUrl, buchungslink } })
+    updateMyProfilRemote(telefonSauber, signaturHtml, fotoDataUrl, buchungslink).catch((err) =>
       console.error('Profil konnte nicht geräteübergreifend gespeichert werden:', err),
     )
+    // Mobil/Funktion nur schreiben, wenn sie sich geändert haben (eigene Zeile in mitarbeiter_profil).
+    if (isSupabaseConfigured && mitarbeiter?.id && zusatzGespeichert) {
+      const patch: Partial<ProfilZusatz> = {}
+      if (mob.wert !== zusatzGespeichert.mobil) patch.mobil = mob.wert
+      if (position.trim() !== zusatzGespeichert.position) patch.position = position.trim()
+      if (Object.keys(patch).length) {
+        speichereProfilZusatz(mitarbeiter.id, patch)
+          .then(() => setZusatzGespeichert({ ...zusatzGespeichert, ...patch }))
+          .catch(() => setFehler('Mobil und Funktion konnten nicht gespeichert werden. Bitte später noch einmal versuchen.'))
+      }
+    }
     setGespeichert(true)
     setTimeout(() => setGespeichert(false), 2500)
   }
+
+  async function nachfrageUmschalten(an: boolean) {
+    if (!mitarbeiter?.id || !zusatzGespeichert) return
+    const vorher = zusatzGespeichert
+    setZusatzGespeichert({ ...vorher, profilNachfrage: an })
+    try {
+      await speichereProfilZusatz(mitarbeiter.id, { profilNachfrage: an })
+    } catch {
+      setZusatzGespeichert(vorher)
+      setFehler('Die Einstellung konnte nicht gespeichert werden.')
+    }
+  }
+
+  // Vollständigkeit nach dem gespeicherten Stand (nicht nach halb getippten Feldern).
+  const luecken = zusatzGespeichert
+    ? profilLuecken(
+        { telefon: state.profil.telefon, mobil: zusatzGespeichert.mobil, signatur: state.profil.signaturHtml, position: zusatzGespeichert.position },
+        firma,
+      )
+    : []
+  const signaturTelefon = !telefon.trim() && !mobil.trim() ? telefonAusSignatur(signaturHtml) : ''
 
   function buchungslinkInSignaturEinfuegen() {
     if (!buchungslink.trim()) return
@@ -465,6 +542,8 @@ export function MeinProfil() {
     <div className="mx-auto max-w-2xl">
       <h1 className="mb-1 text-xl font-semibold text-slate-800">Mein Profil</h1>
       <p className="mb-5 text-sm text-slate-500">Persönliche Daten und E-Mail-Signatur.</p>
+
+      <ProfilLueckenKarte luecken={luecken} signaturTelefon={signaturTelefon} onTelefonUebernehmen={(n) => setTelefon(n)} />
 
       <AbwesenheitVerwalten />
 
@@ -511,9 +590,19 @@ export function MeinProfil() {
         <Field label="Name">
           <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} />
         </Field>
-        <Field label="Telefon">
-          <input className={inputClass} value={telefon} onChange={(e) => setTelefon(e.target.value)} placeholder="+49 ..." />
+        <Field label="Telefon (erscheint in Mails an Interessenten, im Kundenbereich und im Exposé)">
+          <input className={inputClass} type="tel" value={telefon} onChange={(e) => setTelefon(e.target.value)} placeholder="+49 ..." />
         </Field>
+        {isSupabaseConfigured && zusatzGespeichert && (
+          <>
+            <Field label="Mobil (freiwillig; wird genommen, wenn kein Telefon eingetragen ist)">
+              <input className={inputClass} type="tel" value={mobil} onChange={(e) => setMobil(e.target.value)} placeholder="+49 176 ..." />
+            </Field>
+            <Field label="Funktion">
+              <input className={inputClass} value={position} onChange={(e) => setPosition(e.target.value)} placeholder="z. B. Immobilienberater" />
+            </Field>
+          </>
+        )}
         <Field label="E-Mail-Adresse">
           <input className={inputClass} type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@amayer-holding.com" />
         </Field>
@@ -529,6 +618,20 @@ export function MeinProfil() {
             </button>
           </div>
         </Field>
+        {isSupabaseConfigured && zusatzGespeichert && (
+          <label className="flex items-start gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={zusatzGespeichert.profilNachfrage}
+              onChange={(e) => nachfrageUmschalten(e.target.checked)}
+            />
+            <span>
+              Der Telegram-Assistent darf mich einmal nach meiner Telefonnummer fragen
+              <span className="block text-xs text-slate-500">Er fragt höchstens ein einziges Mal und nur, wenn Telefon und Mobil fehlen.</span>
+            </span>
+          </label>
+        )}
       </Card>
 
       <Card className="mt-5 p-5">
@@ -550,12 +653,19 @@ export function MeinProfil() {
 
       <div className="mt-5 flex items-center gap-3">
         <PrimaryButton onClick={speichern}>Speichern</PrimaryButton>
-        {gespeichert && (
+        {gespeichert && !fehler && (
           <span className="flex items-center gap-1.5 text-sm font-medium text-emerald-600">
             <CheckCircle2 size={15} /> Gespeichert
           </span>
         )}
+        {fehler && <span className="text-sm font-medium text-rose-600">{fehler}</span>}
       </div>
+
+      {isSupabaseConfigured && session && (
+        <div className="mt-5">
+          <FirmenTelefonEinstellung />
+        </div>
+      )}
 
       {isSupabaseConfigured && <MeinPostfachAbschnitt />}
     </div>

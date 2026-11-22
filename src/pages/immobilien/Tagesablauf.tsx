@@ -1,13 +1,41 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Check, ChevronLeft, ChevronRight, Plus, Trash2 } from 'lucide-react'
+import { Check, ChevronDown, ChevronLeft, ChevronRight, GripVertical, Plus, Trash2, Wand2 } from 'lucide-react'
 import { useApp, type AppData } from '../../context/AppContext'
 import { useAuth } from '../../context/AuthContext'
 import { isSupabaseConfigured } from '../../lib/supabaseClient'
 import { ladeTermine, type Termin } from '../../lib/kalenderDb'
+import { erledigeWiedervorlage, ladeOffeneWiedervorlagen, oeffneWiedervorlageWieder } from '../../lib/wiedervorlagen'
 import { Card, EmptyState, Field, inputClass, PrimaryButton, SecondaryButton } from '../../components/ui'
 import { CURRENT_USER, MITARBEITER } from '../../data/constants'
 import { addDays, fmtDate, fmtDateTime, today, uid } from '../../lib/dates'
-import type { Tagesplan, TagesplanBlock, TagesplanZeile, Wochenplan } from '../../types'
+import type { Tagesplan, Wochenplan } from '../../types'
+import {
+  BUDGET,
+  euro,
+  FESTE_AUFGABEN,
+  minutenZuUhr,
+  type PlanBlock,
+  type PlanTag,
+  type PlanZeile,
+  schlageTagVor,
+  STANDARD_START,
+  stoppe,
+  tageZwischen,
+  uebertrag,
+  VORTAG_HOECHSTENS_TAGE,
+  zeitplan,
+} from '../../../supabase/functions/_shared/tagesplanKern.ts'
+import { findeBezugImText } from '../../../supabase/functions/_shared/tagesplanBezug.ts'
+import { alsPlanTodo, bezugKandidaten, eigeneTodosFuerPlan, termineFuerPlan, useTodoBezuege, wiedervorlagenFuerPlan } from '../../components/tagesplan/planDaten'
+import { AnrufSpalte } from '../../components/tagesplan/AnrufSpalte'
+import { LoesungsKnopf } from '../../components/tagesplan/Loesungsvorschlaege'
+import { TelegramEinstellung } from '../../components/tagesplan/TelegramEinstellung'
+import { StoppuhrAnzeige, StoppuhrKnopf, Tagesbilanz, Zeitleiste, type ZeilenAktionen } from '../../components/tagesplan/Zeitleiste'
+
+// Die Zeilen eines Tages in der erweiterten Form des Planers (_shared/tagesplanKern.ts). Gespeichert wird dieselbe
+// Form wie bisher (Tagesplan in src/types) mit zusätzlichen, optionalen Feldern — ältere Pläne bleiben lesbar.
+type TagesplanBlock = PlanBlock
+type TagesplanZeile = PlanZeile
 
 // Die Blöcke der Vorlage „Tagesablauf klar definieren", in der Reihenfolge des Blatts.
 // leer = so viele Zeilen stehen mindestens da, auch wenn noch nichts eingetragen ist.
@@ -17,11 +45,9 @@ const BLOECKE: { id: TagesplanBlock; titel: string; hinweis: string; kuerzel: st
   { id: 'A', titel: 'A-Aufgaben', hinweis: 'Dauer ca. 2 Std.', kuerzel: 'A', leer: 3 },
   { id: 'B', titel: 'B-Aufgaben', hinweis: 'ca. 1,5 Std.', kuerzel: 'B', leer: 4 },
   { id: 'C', titel: 'C-Aufgaben', hinweis: 'ca. 1 Std., falls noch Zeit übrig ist', kuerzel: 'C', leer: 4 },
-  { id: 'kurz', titel: 'Kurze Arbeiten', hinweis: 'viele 3–7-Minuten-Arbeiten', kuerzel: '', leer: 2 },
+  { id: 'kurz', titel: 'Kurze Arbeiten', hinweis: 'viele 3–7-Minuten-Arbeiten, ca. 1 Std.', kuerzel: '', leer: 2 },
+  { id: 'unvorhergesehen', titel: 'Unvorhergesehenes', hinweis: 'ca. 2 Std. frei halten', kuerzel: '', leer: 0 },
 ]
-
-// Stehen in jedem neuen Tagesablauf schon drin.
-const FESTE_AUFGABEN = ['To-do-Liste überarbeiten', 'Objektliste aktualisieren', 'Tagesablauf festlegen']
 
 const WOCHENTAGE = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag']
 const STUNDEN = [9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
@@ -35,7 +61,7 @@ const feldSchmal = `${feldGrund} px-1.5 py-1.5`
 
 const pfeilKlasse = 'rounded-lg border border-slate-200 bg-white p-2 text-slate-500 hover:bg-slate-50 hover:text-slate-700'
 
-type TagEntwurf = { ort: string; zeilen: TagesplanZeile[]; anrufe: string }
+type TagEntwurf = { ort: string; zeilen: TagesplanZeile[]; anrufe: string; startUhr: string }
 
 // ── Datum ────────────────────────────────────────────────────────────────────────────────────────
 
@@ -66,8 +92,9 @@ function neuerTag(): TagEntwurf {
   return {
     ort: '',
     anrufe: '',
+    startUhr: STANDARD_START,
     zeilen: BLOECKE.flatMap((b) =>
-      b.id === 'organisation' ? FESTE_AUFGABEN.map((was) => ({ id: uid('tz'), block: b.id, was })) : Array.from({ length: b.leer }, () => leereZeile(b.id)),
+      b.id === 'organisation' ? FESTE_AUFGABEN.map((f) => ({ id: uid('tz'), block: b.id, was: f.was, dauerMin: f.dauerMin })) : Array.from({ length: b.leer }, () => leereZeile(b.id)),
     ),
   }
 }
@@ -92,13 +119,17 @@ function bereinigeZeilen(zeilen: TagesplanZeile[]): TagesplanZeile[] {
         if (z.ergebnis?.trim()) sauber.ergebnis = z.ergebnis.trim()
         if (z.stand?.trim()) sauber.stand = z.stand.trim()
         if (z.erledigt) sauber.erledigt = true
+        // Felder des Planers (Verknüpfungen, Termin, Stoppuhr) unverändert mitnehmen.
+        for (const k of ['todoId', 'wvId', 'terminId', 'festVon', 'festBis', 'bezug', 'umsatz', 'istMin', 'laeuftSeit', 'ausVortag', 'quelle'] as const) {
+          if (z[k] !== undefined && z[k] !== null && z[k] !== '') (sauber as Record<string, unknown>)[k] = z[k]
+        }
         return sauber
       }),
   )
 }
 
 function tagKern(e: TagEntwurf): string {
-  return JSON.stringify([e.ort.trim(), bereinigeZeilen(e.zeilen), e.anrufe.trim()])
+  return JSON.stringify([e.ort.trim(), bereinigeZeilen(e.zeilen), e.anrufe.trim(), e.startUhr || STANDARD_START])
 }
 
 function kennzahlen(zeilen: TagesplanZeile[]) {
@@ -145,13 +176,15 @@ type Vorschlag = {
   spaeter: string
   /** Nur bei Terminen aus dem Kalender: die feste Zeit, die beim Übernehmen in die Zeile kommt. */
   termin?: Zeitangabe
+  /** Bei To-dos: die Kennung (Abhaken im Plan hakt das To-do ab). */
+  todoId?: string
 }
 
 /** Zeitfelder einer Zeile im Tagesablauf („ca. Min.“ und „bis Uhrzeit“). */
 type Zeitangabe = { dauerMin?: number; bisUhr?: string }
 
 /** Ein Vorschlag, wie er in den Tagesablauf übernommen wird. */
-type Uebernahme = { text: string; block: VorschlagBlock; zeit?: Zeitangabe }
+type Uebernahme = { text: string; block: VorschlagBlock; zeit?: Zeitangabe; todoId?: string }
 
 type VorschlagDaten = Pick<AppData, 'todos' | 'objekte' | 'immobilienKunden' | 'projekte'>
 
@@ -233,6 +266,7 @@ function sammleVorschlaege(daten: VorschlagDaten, ich: string, email: string, da
       block: faellig ? 'frist' : prio === 'A' ? 'A' : prio === 'B' ? 'B' : 'C',
       rang: prio === 'A' ? 0 : prio === 'B' ? 1 : prio === 'C' ? 2 : 3,
       spaeter: bis || '9999-99-99',
+      todoId: t.id,
     })
   }
 
@@ -621,23 +655,36 @@ function MeinTagesablauf({ ich, datum, onUngespeichert }: { ich: string; datum: 
   const [vorlage] = useState(neuerTag)
   const [gespeichertMeldung, setGespeichertMeldung] = useState(false)
   const [uebernahmeMeldung, setUebernahmeMeldung] = useState('')
+  const [vorschlagLaeuft, setVorschlagLaeuft] = useState(false)
+  // Am Handy zuerst die Liste nach Uhrzeit (große Häkchen), am großen Bildschirm das Blatt.
+  const [ansicht, setAnsicht] = useState<'blatt' | 'zeit'>(() => (typeof window !== 'undefined' && window.innerWidth < 1024 ? 'zeit' : 'blatt'))
+  const [zieht, setZieht] = useState<string | null>(null)
+  const [einzelneOffen, setEinzelneOffen] = useState(false)
+  const istHeute = datum === today()
 
-  const gespeicherterPlan = state.tagesplaene.find((p) => p.mitarbeiter === ich && p.datum === datum)
+  const gespeicherterPlan = state.tagesplaene.find((p) => p.mitarbeiter === ich && p.datum === datum) as unknown as PlanTag | undefined
   const gespeicherterStand = useMemo<TagEntwurf>(
-    () => (gespeicherterPlan ? { ort: gespeicherterPlan.ort ?? '', zeilen: mitLeerzeilen(gespeicherterPlan.zeilen ?? []), anrufe: gespeicherterPlan.anrufe ?? '' } : vorlage),
+    () =>
+      gespeicherterPlan
+        ? { ort: gespeicherterPlan.ort ?? '', zeilen: mitLeerzeilen(gespeicherterPlan.zeilen ?? []), anrufe: gespeicherterPlan.anrufe ?? '', startUhr: gespeicherterPlan.startUhr || STANDARD_START }
+        : vorlage,
     [gespeicherterPlan, vorlage],
   )
   const { entwurf, geaendert, ueberholt, setze, uebernommen, verwerfen } = useEntwurf(gespeicherterStand, tagKern)
   useMeldeUngespeichert(onUngespeichert, geaendert)
 
-  // Der letzte frühere Tagesablauf — von dort kommen die offenen Aufgaben für „Vom letzten Tag übernehmen".
+  // Der letzte frühere Tagesablauf — von dort kommt das Offene (automatisch beim Vorschlag oder per Knopf).
   const letzterPlan = useMemo(
-    () => state.tagesplaene.filter((p) => p.mitarbeiter === ich && p.datum < datum).sort((a, b) => b.datum.localeCompare(a.datum))[0],
+    () => (state.tagesplaene.filter((p) => p.mitarbeiter === ich && p.datum < datum).sort((a, b) => b.datum.localeCompare(a.datum))[0] as unknown as PlanTag | undefined),
     [state.tagesplaene, ich, datum],
   )
   const offenVomLetzten = letzterPlan ? (letzterPlan.zeilen ?? []).filter((z) => z.was.trim() !== '' && !z.erledigt) : []
 
   const { todos, objekte, immobilienKunden, projekte } = state
+  const todoNachId = useMemo(() => new Map(todos.map((t) => [t.id, t])), [todos])
+  const bezugStand = useTodoBezuege(meineEmail, isSupabaseConfigured && meineEmail !== 'lokal')
+  const kandidaten = useMemo(() => bezugKandidaten(state), [state])
+
   // Termine aus dem Kalender: nur hier im eigenen Tagesablauf und nur mit Anmeldung (die Tagesabläufe
   // der Kollegen bekommen keine Terminvorschläge).
   const kalenderEmail = isSupabaseConfigured ? (session?.user?.email ?? '').trim().toLowerCase() : ''
@@ -654,7 +701,13 @@ function MeinTagesablauf({ ich, datum, onUngespeichert }: { ich: string; datum: 
     })
   }, [termine, kalenderEmail, todos, objekte, immobilienKunden, projekte, ich, meineEmail, datum])
 
+  const gefuellt = entwurf.zeilen.filter((z) => z.was.trim() !== '')
   const zahlen = kennzahlen(entwurf.zeilen)
+  const zeiten = useMemo(() => new Map(zeitplan(gefuellt, entwurf.startUhr).eintraege.map((e) => [e.id, e])), [gefuellt, entwurf.startUhr])
+
+  /** Aktueller Umsatz-Wert einer Zeile: der des verknüpften To-dos, sonst der beim Einplanen gemerkte. */
+  const umsatzVon = useCallback((z: TagesplanZeile) => (z.todoId ? (todoNachId.get(z.todoId)?.umsatzWert ?? z.umsatz) : z.umsatz), [todoNachId])
+  const fragenVon = useCallback((z: TagesplanZeile) => (z.todoId ? todoNachId.get(z.todoId)?.welcheFragen : undefined), [todoNachId])
 
   function aendere(neu: TagEntwurf) {
     setze(neu)
@@ -667,31 +720,182 @@ function MeinTagesablauf({ ich, datum, onUngespeichert }: { ich: string; datum: 
 
   function neueZeile(block: TagesplanBlock) {
     // Hinter der letzten Zeile des Blocks einfügen (die Reihenfolge beim Speichern richtet sich ohnehin nach den Blöcken).
-    aendere({ ...entwurf, zeilen: [...entwurf.zeilen, leereZeile(block)] })
+    aendere({ ...entwurf, zeilen: [...entwurf.zeilen, { ...leereZeile(block), quelle: 'hand' }] })
   }
 
   function entferneZeile(id: string) {
     aendere({ ...entwurf, zeilen: entwurf.zeilen.filter((z) => z.id !== id) })
   }
 
+  /** Zeile vor eine andere setzen (in deren Block) oder ans Ende eines Blocks — Ziehen mit der Maus oder Pfeile. */
+  function verschiebe(id: string, ziel: { vor?: string; block?: TagesplanBlock }) {
+    const zeile = entwurf.zeilen.find((z) => z.id === id)
+    if (!zeile || id === ziel.vor) return
+    const rest = entwurf.zeilen.filter((z) => z.id !== id)
+    const vor = ziel.vor ? rest.find((z) => z.id === ziel.vor) : undefined
+    const block = vor?.block ?? ziel.block ?? zeile.block
+    const neu = { ...zeile, block }
+    let zeilen: TagesplanZeile[]
+    if (vor) {
+      const i = rest.indexOf(vor)
+      zeilen = [...rest.slice(0, i), neu, ...rest.slice(i)]
+    } else {
+      // Ans Ende des Blocks, vor die leeren Zeilen.
+      const imBlock = rest.filter((z) => z.block === block && z.was.trim() !== '')
+      const letzte = imBlock[imBlock.length - 1]
+      const i = letzte ? rest.indexOf(letzte) + 1 : rest.findIndex((z) => z.block === block)
+      zeilen = i < 0 ? [...rest, neu] : [...rest.slice(0, i), neu, ...rest.slice(i)]
+    }
+    aendere({ ...entwurf, zeilen })
+  }
+
+  function schiebe(id: string, richtung: -1 | 1) {
+    const imBlock = entwurf.zeilen.filter((z) => z.block === entwurf.zeilen.find((x) => x.id === id)?.block && z.was.trim() !== '')
+    const i = imBlock.findIndex((z) => z.id === id)
+    const nachbar = imBlock[i + richtung]
+    if (!nachbar) return
+    if (richtung === -1) verschiebe(id, { vor: nachbar.id })
+    else verschiebe(nachbar.id, { vor: id })
+  }
+
+  function speichern(e: TagEntwurf = entwurf, zusatz: Partial<PlanTag> = {}) {
+    const ort = e.ort.trim()
+    const plan: PlanTag = {
+      id: `${ich}|${datum}`,
+      mitarbeiter: ich,
+      datum,
+      ...(ort ? { ort } : {}),
+      zeilen: bereinigeZeilen(e.zeilen),
+      anrufe: e.anrufe.trim(),
+      aktualisiertAm: new Date().toISOString(),
+      ...(e.startUhr && e.startUhr !== STANDARD_START ? { startUhr: e.startUhr } : {}),
+      ...(gespeicherterPlan?.vorgeschlagenAm ? { vorgeschlagenAm: gespeicherterPlan.vorgeschlagenAm } : {}),
+      ...zusatz,
+    }
+    dispatch({ type: 'SPEICHERE_TAGESPLAN', plan: plan as unknown as Tagesplan })
+    uebernommen(e)
+    setGespeichertMeldung(true)
+  }
+
+  /** Häkchen, Stoppuhr, Anruf: sofort speichern — auch am Handy geht nichts verloren. */
+  function sofort(neu: TagEntwurf, zusatz: Partial<PlanTag> = {}) {
+    setze(neu)
+    speichern(neu, zusatz)
+  }
+
+  /** Darf diese Seite das To-do ändern? Nur Aufgaben der eigenen Liste. */
+  function eigenesTodo(todoId: string | undefined) {
+    const t = todoId ? todoNachId.get(todoId) : undefined
+    return t && !t.bereich && (t.besitzerEmail ?? '').toLowerCase() === meineEmail ? t : undefined
+  }
+
+  function istZeitDazu(todoId: string | undefined, minuten: number) {
+    const t = eigenesTodo(todoId)
+    if (t && minuten > 0) dispatch({ type: 'UPDATE_TODO', id: t.id, patch: { istZeit: (t.istZeit ?? 0) + minuten } })
+  }
+
+  function abhaken(id: string, erledigt: boolean) {
+    const z = entwurf.zeilen.find((x) => x.id === id)
+    if (!z) return
+    let neu: TagesplanZeile = z
+    if (z.laeuftSeit) {
+      const r = stoppe(z, new Date())
+      neu = r.zeile
+      istZeitDazu(z.todoId, r.minuten)
+    }
+    neu = { ...neu, erledigt }
+    if (!erledigt) delete neu.erledigt
+    sofort({ ...entwurf, zeilen: entwurf.zeilen.map((x) => (x.id === id ? neu : x)) })
+    // Das verknüpfte To-do bzw. die Wiedervorlage mit abhaken.
+    const t = eigenesTodo(z.todoId)
+    if (t && !!(t.erledigtAm ?? '').trim() !== erledigt) dispatch({ type: 'UPDATE_TODO', id: t.id, patch: { erledigtAm: erledigt ? today() : undefined } })
+    if (z.wvId) {
+      ;(erledigt ? erledigeWiedervorlage(z.wvId, ich) : oeffneWiedervorlageWieder(z.wvId)).catch((err: unknown) =>
+        setUebernahmeMeldung(`Die Wiedervorlage in der Akte konnte nicht geändert werden: ${err instanceof Error ? err.message : String(err)}`),
+      )
+    }
+  }
+
+  function stoppuhr(id: string) {
+    const jetzt = new Date()
+    const zeilen = entwurf.zeilen.map((z) => {
+      if (z.laeuftSeit) {
+        const r = stoppe(z, jetzt)
+        istZeitDazu(z.todoId, r.minuten)
+        return r.zeile
+      }
+      return z.id === id ? { ...z, laeuftSeit: jetzt.toISOString() } : z
+    })
+    sofort({ ...entwurf, zeilen })
+  }
+
+  function anrufNotiert(zeile: string) {
+    sofort({ ...entwurf, anrufe: [entwurf.anrufe.trim(), zeile].filter(Boolean).join('\n') })
+  }
+
+  async function bezugUebernehmen(z: TagesplanZeile, bezug: NonNullable<TagesplanZeile['bezug']>) {
+    if (z.todoId && bezugStand.verfuegbar && eigenesTodo(z.todoId)) {
+      const f = await bezugStand.setze(z.todoId, bezug)
+      if (f) setUebernahmeMeldung(`Der Bezug konnte nicht am To-do gespeichert werden: ${f}`)
+    }
+    sofort({ ...entwurf, zeilen: entwurf.zeilen.map((x) => (x.id === z.id ? { ...x, bezug } : x)) })
+  }
+
+  /** „Tag vorschlagen“: Termine, Fristsachen, Offenes vom letzten Plan, dann A/B/C nach Prio und Umsatz in den Zeitbudgets.
+   *  Was schon im Plan steht, bleibt; gespeichert wird gleich. */
+  async function tagVorschlagen() {
+    setVorschlagLaeuft(true)
+    setUebernahmeMeldung('')
+    try {
+      let wv: ReturnType<typeof wiedervorlagenFuerPlan> = []
+      if (isSupabaseConfigured) {
+        try {
+          wv = wiedervorlagenFuerPlan(await ladeOffeneWiedervorlagen(), ich, datum, state)
+        } catch {
+          // Ohne Wiedervorlagen weiter — die übrigen Vorschläge gelten trotzdem.
+        }
+      }
+      const v = schlageTagVor({
+        datum,
+        todos: eigeneTodosFuerPlan(todos, meineEmail, ich, bezugStand.bezuege),
+        termine: kalenderEmail ? termineFuerPlan(termine, kalenderEmail, datum) : [],
+        wiedervorlagen: wv,
+        vortag: letzterPlan ? { datum: letzterPlan.datum, zeilen: letzterPlan.zeilen ?? [] } : null,
+        bestehend: gefuellt,
+        neueId: () => uid('tz'),
+      })
+      if (v.neu === 0) {
+        setUebernahmeMeldung('Nichts Neues: Alles, was ansteht und in die Zeitbudgets passt, steht schon im Plan.')
+        return
+      }
+      sofort({ ...entwurf, zeilen: mitLeerzeilen(v.zeilen) }, { vorgeschlagenAm: new Date().toISOString() })
+      setUebernahmeMeldung(
+        `${v.neu} ${v.neu === 1 ? 'Eintrag' : 'Einträge'} vorgeschlagen und gespeichert.${
+          v.nichtEingeplant.length === 1
+            ? ' Ein weiteres To-do passte nicht mehr in die Zeitbudgets (A 2 Std., B 1,5 Std., C 1 Std.).'
+            : v.nichtEingeplant.length > 1
+              ? ` ${v.nichtEingeplant.length} weitere To-dos passten nicht mehr in die Zeitbudgets (A 2 Std., B 1,5 Std., C 1 Std.).`
+              : ''
+        }`,
+      )
+    } finally {
+      setVorschlagLaeuft(false)
+    }
+  }
+
   function uebernehmeVomLetztenTag() {
     if (!letzterPlan) return
+    const kandidaten_ = uebertrag({ datum: letzterPlan.datum, zeilen: letzterPlan.zeilen ?? [] }, new Map(todos.map((t) => [t.id, alsPlanTodo(t, null)])), () => uid('tz'))
     let dazu = 0
     const zeilen = BLOECKE.flatMap((b) => {
-      const gefuellt = entwurf.zeilen.filter((z) => z.block === b.id && z.was.trim() !== '')
+      const gefuellteImBlock = entwurf.zeilen.filter((z) => z.block === b.id && z.was.trim() !== '')
       const leere = entwurf.zeilen.filter((z) => z.block === b.id && z.was.trim() === '')
-      const schonDa = new Set(gefuellt.map((z) => z.was.trim().toLowerCase()))
-      const neu: TagesplanZeile[] = []
-      for (const z of offenVomLetzten) {
-        const text = z.was.trim()
-        if (z.block !== b.id || schonDa.has(text.toLowerCase())) continue
-        schonDa.add(text.toLowerCase())
-        // Ohne Häkchen und ohne Ergebnis — beides gehört zum alten Tag.
-        neu.push({ id: uid('tz'), block: b.id, was: text, dauerMin: z.dauerMin, bisUhr: z.bisUhr, stand: z.stand })
-      }
+      const schonDa = new Set(entwurf.zeilen.map((z) => z.was.trim().toLowerCase()))
+      const schonTodo = new Set(entwurf.zeilen.map((z) => z.todoId).filter(Boolean))
+      const neu = kandidaten_.filter((z) => z.block === b.id && !schonDa.has(z.was.trim().toLowerCase()) && !(z.todoId && schonTodo.has(z.todoId)))
       dazu += neu.length
       // Die übernommenen Zeilen füllen zuerst die leeren Zeilen des Blocks.
-      return [...gefuellt, ...neu, ...leere.slice(0, Math.max(0, leere.length - neu.length))]
+      return [...gefuellteImBlock, ...neu, ...leere.slice(0, Math.max(0, leere.length - neu.length))]
     })
     if (dazu > 0) aendere({ ...entwurf, zeilen })
     setUebernahmeMeldung(
@@ -699,7 +903,7 @@ function MeinTagesablauf({ ich, datum, onUngespeichert }: { ich: string; datum: 
         ? `${dazu} offene ${dazu === 1 ? 'Aufgabe' : 'Aufgaben'} vom ${fmtDate(letzterPlan.datum)} übernommen.`
         : offenVomLetzten.length === 0
           ? `Am ${fmtDate(letzterPlan.datum)} ist nichts offen geblieben.`
-          : `Alles Offene vom ${fmtDate(letzterPlan.datum)} steht schon in deinem Tagesablauf.`,
+          : `Alles Offene vom ${fmtDate(letzterPlan.datum)} steht schon in deinem Tagesablauf (oder ist inzwischen erledigt).`,
     )
   }
 
@@ -710,15 +914,20 @@ function MeinTagesablauf({ ich, datum, onUngespeichert }: { ich: string; datum: 
   function uebernehmeVorschlaege(auswahl: Uebernahme[]) {
     let zeilen = entwurf.zeilen
     const schonDa = new Set(zeilen.map((z) => textSchluessel(z.was)).filter(Boolean))
-    for (const { text, block, zeit } of auswahl) {
+    for (const { text, block, zeit, todoId } of auswahl) {
       const schluessel = textSchluessel(text)
       if (!schluessel || schonDa.has(schluessel)) continue
       schonDa.add(schluessel)
+      const t = todoId ? todoNachId.get(todoId) : undefined
       const fuelle = (z: TagesplanZeile): TagesplanZeile => ({
         ...z,
         was: text,
+        quelle: 'hand',
         ...(zeit?.dauerMin && !z.dauerMin ? { dauerMin: zeit.dauerMin } : {}),
         ...(zeit?.bisUhr && !z.bisUhr ? { bisUhr: zeit.bisUhr } : {}),
+        ...(todoId ? { todoId } : {}),
+        ...(t?.umsatzWert ? { umsatz: t.umsatzWert } : {}),
+        ...(todoId && bezugStand.bezuege.get(todoId) ? { bezug: bezugStand.bezuege.get(todoId) } : {}),
       })
       const leer = zeilen.find((z) => z.block === block && z.was.trim() === '')
       zeilen = leer ? zeilen.map((z) => (z.id === leer.id ? fuelle(z) : z)) : [...zeilen, fuelle(leereZeile(block))]
@@ -726,54 +935,77 @@ function MeinTagesablauf({ ich, datum, onUngespeichert }: { ich: string; datum: 
     if (zeilen !== entwurf.zeilen) aendere({ ...entwurf, zeilen })
   }
 
-  function speichern() {
-    const ort = entwurf.ort.trim()
-    const plan: Tagesplan = {
-      id: `${ich}|${datum}`,
-      mitarbeiter: ich,
-      datum,
-      ...(ort ? { ort } : {}),
-      zeilen: bereinigeZeilen(entwurf.zeilen),
-      anrufe: entwurf.anrufe.trim(),
-      aktualisiertAm: new Date().toISOString(),
-    }
-    dispatch({ type: 'SPEICHERE_TAGESPLAN', plan })
-    uebernommen(entwurf)
-    setGespeichertMeldung(true)
-  }
-
-  const leiste = <SpeicherLeiste text="Tagesablauf speichern" geaendert={geaendert} gespeichert={gespeichertMeldung} aktiv={geaendert || !gespeicherterPlan} onSpeichern={speichern} />
+  const aktionen: ZeilenAktionen = { onAbhaken: abhaken, onStoppuhr: stoppuhr, onAnrufNotiert: anrufNotiert, umsatzVon, fragenVon }
+  const leiste = <SpeicherLeiste text="Tagesablauf speichern" geaendert={geaendert} gespeichert={gespeichertMeldung} aktiv={geaendert || !gespeicherterPlan} onSpeichern={() => speichern()} />
+  const ansichtKnopf = (id: 'blatt' | 'zeit', label: string) => (
+    <button
+      onClick={() => setAnsicht(id)}
+      className={`rounded-md px-3 py-1.5 text-xs font-medium ${ansicht === id ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+      aria-pressed={ansicht === id}
+    >
+      {label}
+    </button>
+  )
 
   return (
     <>
-      <VorschlaegeKarte
-        datum={datum}
-        vorschlaege={vorschlaege}
-        zeilen={entwurf.zeilen}
-        onUebernehmen={uebernehmeVorschlaege}
-        termine={kalenderEmail ? termineDesTags : undefined}
-      />
       <Card className="mb-5 p-4 sm:p-5">
         <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
           <div>
             <h3 className="text-sm font-semibold text-slate-700">Mein Tagesablauf</h3>
             <p className="text-xs text-slate-400">
-              {wochentag(datum)}, {fmtDate(datum)} · Bearbeiter: {ich}
+              {wochentag(datum)}, {fmtDate(datum)} · Bearbeiter: {ich} · Fokus liegt auf Umsatz
             </p>
           </div>
           {leiste}
         </div>
 
         {ueberholt && <UeberholtHinweis onLaden={verwerfen} />}
-        {!gespeicherterPlan && !geaendert && (
-          <p className="mb-4 text-xs text-slate-500">Für diesen Tag ist noch nichts gespeichert. Die Kollegen sehen deinen Tagesablauf erst, wenn du ihn gespeichert hast.</p>
+
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <PrimaryButton onClick={tagVorschlagen} disabled={vorschlagLaeuft}>
+            <span className="inline-flex items-center gap-1.5">
+              <Wand2 size={15} /> {vorschlagLaeuft ? 'Plant …' : 'Tag vorschlagen'}
+            </span>
+          </PrimaryButton>
+          <SecondaryButton onClick={uebernehmeVomLetztenTag} disabled={!letzterPlan}>
+            Vom letzten Tag übernehmen
+          </SecondaryButton>
+          <div className="ml-auto flex items-center gap-1 rounded-lg bg-slate-100 p-1" role="group" aria-label="Ansicht">
+            {ansichtKnopf('blatt', 'Blöcke')}
+            {ansichtKnopf('zeit', 'Zeitleiste')}
+          </div>
+        </div>
+        <p className="mb-4 text-xs text-slate-500">
+          {uebernahmeMeldung ||
+            (!gespeicherterPlan && !geaendert
+              ? '„Tag vorschlagen“ baut den Tag aus deiner To-do-Liste, deinen Terminen und dem, was beim letzten Mal offen blieb. Die Kollegen sehen deinen Tagesablauf, sobald er gespeichert ist.'
+              : letzterPlan
+                ? `Letzter Tagesablauf: ${fmtDate(letzterPlan.datum)} · ${offenVomLetzten.length} ${offenVomLetzten.length === 1 ? 'Aufgabe' : 'Aufgaben'} offen${
+                    offenVomLetzten.length === 0 ? '.' : tageZwischen(letzterPlan.datum, datum) <= VORTAG_HOECHSTENS_TAGE ? ' — kommt beim Vorschlag automatisch mit.' : ' — älter als 4 Tage, nur per „Vom letzten Tag übernehmen“.'
+                  }`
+                : 'Es gibt noch keinen früheren Tagesablauf von dir.')}
+        </p>
+
+        {/* Zeitleiste (am Handy die Startansicht) gleich oben, damit die Liste ohne Scrollen beginnt. */}
+        {ansicht === 'zeit' && (
+          <div className="mb-5">
+            <Zeitleiste zeilen={entwurf.zeilen} startUhr={entwurf.startUhr} istHeute={istHeute} aktionen={aktionen} />
+          </div>
         )}
 
-        <div className="mb-2 grid grid-cols-1 items-end gap-x-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="mb-4">
+          <Tagesbilanz zeilen={entwurf.zeilen} umsatzVon={umsatzVon} />
+        </div>
+
+        <div className="mb-2 grid grid-cols-1 items-end gap-x-4 sm:grid-cols-3">
           <Field label="Ort">
             <input className={inputClass} value={entwurf.ort} onChange={(e) => aendere({ ...entwurf, ort: e.target.value })} placeholder="z. B. Büro Ulm, unterwegs" />
           </Field>
-          <div className="mb-3 text-sm text-slate-600 lg:col-span-2">
+          <Field label="Arbeitsbeginn">
+            <input type="time" className={inputClass} value={entwurf.startUhr} onChange={(e) => aendere({ ...entwurf, startUhr: e.target.value || STANDARD_START })} />
+          </Field>
+          <div className="mb-3 text-sm text-slate-600">
             <span className="font-medium text-slate-700">{zahlen.minuten > 0 ? fmtDauer(zahlen.minuten) : 'Noch keine Zeiten'}</span> geplant ·{' '}
             <span className="font-medium text-slate-700">
               {zahlen.erledigt} von {zahlen.anzahl}
@@ -782,117 +1014,199 @@ function MeinTagesablauf({ ich, datum, onUngespeichert }: { ich: string; datum: 
           </div>
         </div>
 
-        <div className="mb-5 flex flex-wrap items-center gap-x-3 gap-y-1">
-          <SecondaryButton onClick={uebernehmeVomLetztenTag} disabled={!letzterPlan}>
-            Vom letzten Tag übernehmen
-          </SecondaryButton>
-          <span className="text-xs text-slate-500">
-            {uebernahmeMeldung ||
-              (letzterPlan
-                ? `Letzter Tagesablauf: ${fmtDate(letzterPlan.datum)} · ${offenVomLetzten.length} ${offenVomLetzten.length === 1 ? 'Aufgabe' : 'Aufgaben'} offen`
-                : 'Es gibt noch keinen früheren Tagesablauf von dir.')}
-          </span>
-        </div>
+        {ansicht === 'blatt' && (
+          <>
+            {/* Spaltenköpfe wie im Tabellenblatt — nur am großen Bildschirm, am Handy stehen die Angaben untereinander. */}
+            <div className="mb-1 hidden items-center gap-2 text-xs font-medium text-slate-400 lg:flex">
+              <span className="w-4 shrink-0" />
+              <span className="w-4 shrink-0" />
+              <span className="w-6 shrink-0" />
+              <span className="w-14 shrink-0">ca. Min.</span>
+              <span className="w-24 shrink-0">von – bis</span>
+              <span className="min-w-0 flex-[2_1_0%]">Was ist heute zu tun (in dieser Reihenfolge)</span>
+              <span className="min-w-0 flex-[1_1_0%]">Gewinn/Verlust</span>
+              <span className="min-w-0 flex-[1.5_1_0%]">Infos, Stand, Fragen, nächste Schritte</span>
+              <span className="w-[4.5rem] shrink-0" />
+            </div>
 
-        {/* Spaltenköpfe wie im Tabellenblatt — nur am großen Bildschirm, am Handy stehen die Angaben untereinander. */}
-        <div className="mb-1 hidden items-center gap-2 text-xs font-medium text-slate-400 lg:flex">
-          <span className="w-4 shrink-0" />
-          <span className="w-6 shrink-0" />
-          <span className="w-14 shrink-0">ca. Min.</span>
-          <span className="w-24 shrink-0">bis Uhrzeit</span>
-          <span className="min-w-0 flex-[2_1_0%]">Was ist heute zu tun (in dieser Reihenfolge)</span>
-          <span className="min-w-0 flex-[1_1_0%]">Gewinn/Verlust</span>
-          <span className="min-w-0 flex-[1.5_1_0%]">Infos, Stand, Fragen, nächste Schritte</span>
-          <span className="w-8 shrink-0" />
-        </div>
-
-        <div className="space-y-5">
-          {BLOECKE.map((b) => {
-            const zeilen = entwurf.zeilen.filter((z) => z.block === b.id)
-            const minuten = kennzahlen(zeilen).minuten
-            return (
-              <section key={b.id} aria-label={b.titel}>
-                <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 border-b border-slate-100 pb-1">
-                  <h4 className="text-sm font-semibold text-slate-700">
-                    {b.titel} <span className="text-xs font-normal text-slate-400">· {b.hinweis}</span>
-                  </h4>
-                  {minuten > 0 && <span className="text-xs text-slate-400">{fmtDauer(minuten)} geplant</span>}
-                </div>
-                <div className="space-y-3 lg:space-y-1.5">
-                  {zeilen.map((z, i) => {
-                    const nummer = zeilenNummer(b, i)
-                    const name = z.was.trim() || `Zeile ${nummer}`
-                    // Am Handy erscheinen Ergebnis und Stand erst, wenn die Zeile einen Text hat — sonst wird das Blatt zu lang.
-                    const nurMitText = z.was.trim() === '' ? 'hidden lg:block' : ''
-                    return (
-                      <div key={z.id} className="flex flex-wrap items-center gap-2 lg:flex-nowrap">
-                        <input type="checkbox" className="h-4 w-4 shrink-0" checked={!!z.erledigt} onChange={(e) => aendereZeile(z.id, { erledigt: e.target.checked })} aria-label={`${name} erledigt`} title="erledigt" />
-                        <span className="w-6 shrink-0 text-xs font-semibold text-slate-400">{nummer}</span>
-                        <input
-                          type="number"
-                          min={0}
-                          step={5}
-                          inputMode="numeric"
-                          className={`${feldSchmal} w-14 shrink-0`}
-                          value={z.dauerMin ?? ''}
-                          onChange={(e) => {
-                            const zahl = Math.round(Number(e.target.value))
-                            aendereZeile(z.id, { dauerMin: e.target.value === '' || !Number.isFinite(zahl) || zahl <= 0 ? undefined : zahl })
-                          }}
-                          placeholder="Min."
-                          aria-label={`${name}: ca. Minuten`}
-                          title="ca. Minuten"
-                        />
-                        <span className="text-xs text-slate-400 lg:hidden">bis</span>
-                        <input
-                          type="time"
-                          className={`${feldSchmal} w-24 shrink-0`}
-                          value={z.bisUhr ?? ''}
-                          onChange={(e) => aendereZeile(z.id, { bisUhr: e.target.value || undefined })}
-                          aria-label={`${name}: bis Uhrzeit`}
-                          title="bis Uhrzeit"
-                        />
-                        <button
-                          onClick={() => entferneZeile(z.id)}
-                          className="ml-auto flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-slate-300 hover:bg-rose-50 hover:text-rose-600 lg:order-last lg:ml-0"
-                          aria-label={`${name} entfernen`}
-                          title="Zeile entfernen"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                        <input
-                          className={`${feldKlasse} min-w-0 basis-full lg:flex-[2_1_0%] ${z.erledigt ? 'text-slate-400 line-through' : ''}`}
-                          value={z.was}
-                          onChange={(e) => aendereZeile(z.id, { was: e.target.value })}
-                          placeholder="Was ist zu tun?"
-                          aria-label={`${b.titel} ${nummer}: Was ist zu tun?`}
-                        />
-                        <input
-                          className={`${feldKlasse} min-w-0 basis-full lg:flex-[1_1_0%] ${nurMitText}`}
-                          value={z.ergebnis ?? ''}
-                          onChange={(e) => aendereZeile(z.id, { ergebnis: e.target.value })}
-                          placeholder="Gewinn/Verlust – was hat es gebracht?"
-                          aria-label={`${name}: Gewinn/Verlust`}
-                        />
-                        <textarea
-                          rows={1}
-                          className={`${feldKlasse} min-h-[2.125rem] min-w-0 basis-full lg:flex-[1.5_1_0%] ${nurMitText}`}
-                          value={z.stand ?? ''}
-                          onChange={(e) => aendereZeile(z.id, { stand: e.target.value })}
-                          placeholder="Infos, Stand, Fragen, nächste Schritte"
-                          aria-label={`${name}: Infos, aktueller Stand, Fragen, nächste Schritte`}
-                        />
-                      </div>
-                    )
-                  })}
-                </div>
-                <button onClick={() => neueZeile(b.id)} className="mt-2 inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-xs font-medium text-accent-600 hover:bg-accent-50">
-                  <Plus size={13} /> Zeile
-                </button>
-              </section>
-            )
-          })}
-        </div>
+            <div className="space-y-5">
+              {BLOECKE.map((b) => {
+                const zeilen = entwurf.zeilen.filter((z) => z.block === b.id)
+                const minuten = kennzahlen(zeilen).minuten
+                const budget = BUDGET[b.id]
+                const zuViel = budget !== null && minuten > budget
+                return (
+                  <section
+                    key={b.id}
+                    aria-label={b.titel}
+                    onDragOver={(e) => zieht && e.preventDefault()}
+                    onDrop={(e) => {
+                      e.preventDefault()
+                      if (zieht) verschiebe(zieht, { block: b.id })
+                      setZieht(null)
+                    }}
+                  >
+                    <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 border-b border-slate-100 pb-1">
+                      <h4 className="text-sm font-semibold text-slate-700">
+                        {b.titel} <span className="text-xs font-normal text-slate-400">· {b.hinweis}</span>
+                      </h4>
+                      {(minuten > 0 || budget) && (
+                        <span className={`text-xs ${zuViel ? 'font-medium text-amber-600' : 'text-slate-400'}`}>
+                          {minuten > 0 ? fmtDauer(minuten) : '0 Min.'}
+                          {budget ? ` von ca. ${fmtDauer(budget)}` : ''} geplant
+                        </span>
+                      )}
+                    </div>
+                    {b.id === 'unvorhergesehen' && zeilen.length === 0 && <p className="mb-1 text-xs text-slate-400">Bleibt frei für das, was dazwischenkommt.</p>}
+                    <div className="space-y-3 lg:space-y-1.5">
+                      {zeilen.map((z, i) => {
+                        const nummer = zeilenNummer(b, i)
+                        const name = z.was.trim() || `Zeile ${nummer}`
+                        const mitText = z.was.trim() !== ''
+                        // Am Handy erscheinen Ergebnis und Stand erst, wenn die Zeile einen Text hat — sonst wird das Blatt zu lang.
+                        const nurMitText = mitText ? '' : 'hidden lg:block'
+                        const zeit = zeiten.get(z.id)
+                        const umsatz = umsatzVon(z)
+                        const fragen = fragenVon(z)
+                        const vermutet = mitText && !z.bezug && !z.terminId ? findeBezugImText(z.was, kandidaten)?.bezug : undefined
+                        return (
+                          <div
+                            key={z.id}
+                            className={`rounded-lg ${zieht === z.id ? 'opacity-40' : ''}`}
+                            onDragOver={(e) => zieht && zieht !== z.id && e.preventDefault()}
+                            onDrop={(e) => {
+                              e.preventDefault()
+                              e.stopPropagation()
+                              if (zieht) verschiebe(zieht, { vor: z.id })
+                              setZieht(null)
+                            }}
+                          >
+                            <div className="flex flex-wrap items-center gap-2 lg:flex-nowrap">
+                              <span
+                                draggable={mitText}
+                                onDragStart={(e) => {
+                                  setZieht(z.id)
+                                  e.dataTransfer.effectAllowed = 'move'
+                                }}
+                                onDragEnd={() => setZieht(null)}
+                                className={`hidden w-4 shrink-0 lg:block ${mitText ? 'cursor-grab text-slate-300 hover:text-slate-500' : 'text-transparent'}`}
+                                title="Ziehen zum Verschieben"
+                                aria-hidden
+                              >
+                                <GripVertical size={15} />
+                              </span>
+                              <input
+                                type="checkbox"
+                                className="h-5 w-5 shrink-0 lg:h-4 lg:w-4"
+                                checked={!!z.erledigt}
+                                disabled={!mitText}
+                                onChange={(e) => abhaken(z.id, e.target.checked)}
+                                aria-label={`${name} erledigt`}
+                                title={z.todoId ? 'erledigt — hakt auch das To-do ab' : 'erledigt'}
+                              />
+                              <span className="w-6 shrink-0 text-xs font-semibold text-slate-400">{nummer}</span>
+                              <input
+                                type="number"
+                                min={0}
+                                step={5}
+                                inputMode="numeric"
+                                className={`${feldSchmal} w-14 shrink-0`}
+                                value={z.dauerMin ?? ''}
+                                onChange={(e) => {
+                                  const zahl = Math.round(Number(e.target.value))
+                                  aendereZeile(z.id, { dauerMin: e.target.value === '' || !Number.isFinite(zahl) || zahl <= 0 ? undefined : zahl })
+                                }}
+                                placeholder="Min."
+                                aria-label={`${name}: ca. Minuten`}
+                                title="ca. Minuten"
+                              />
+                              <span
+                                className={`w-24 shrink-0 text-xs tabular-nums ${z.festVon ? 'font-semibold text-accent-700' : 'text-slate-500'}`}
+                                title={z.festVon ? 'Termin (feste Zeit)' : z.bisUhr ? `im Blatt eingetragen: bis ${z.bisUhr} Uhr` : 'aus Arbeitsbeginn und Dauer gerechnet'}
+                              >
+                                {zeit ? `${minutenZuUhr(zeit.von)}–${minutenZuUhr(zeit.bis)}` : z.terminId ? 'ganztägig' : ''}
+                              </span>
+                              <div className="ml-auto flex shrink-0 items-center gap-1 lg:order-last lg:ml-0">
+                                {mitText && !z.erledigt && !z.festVon && <StoppuhrKnopf z={z} onStoppuhr={stoppuhr} />}
+                                <button
+                                  onClick={() => schiebe(z.id, -1)}
+                                  className="flex h-8 w-6 items-center justify-center rounded-md text-slate-300 hover:bg-slate-100 hover:text-slate-600 lg:hidden"
+                                  aria-label={`${name} nach oben`}
+                                  title="nach oben"
+                                  disabled={!mitText}
+                                >
+                                  <ChevronDown size={14} className="rotate-180" />
+                                </button>
+                                <button
+                                  onClick={() => schiebe(z.id, 1)}
+                                  className="flex h-8 w-6 items-center justify-center rounded-md text-slate-300 hover:bg-slate-100 hover:text-slate-600 lg:hidden"
+                                  aria-label={`${name} nach unten`}
+                                  title="nach unten"
+                                  disabled={!mitText}
+                                >
+                                  <ChevronDown size={14} />
+                                </button>
+                                <button
+                                  onClick={() => entferneZeile(z.id)}
+                                  className="flex h-8 w-8 items-center justify-center rounded-md text-slate-300 hover:bg-rose-50 hover:text-rose-600"
+                                  aria-label={`${name} entfernen`}
+                                  title="Zeile entfernen"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </div>
+                              <input
+                                className={`${feldKlasse} min-w-0 basis-full lg:flex-[2_1_0%] ${z.erledigt ? 'text-slate-400 line-through' : ''}`}
+                                value={z.was}
+                                onChange={(e) => aendereZeile(z.id, { was: e.target.value })}
+                                placeholder="Was ist zu tun?"
+                                aria-label={`${b.titel} ${nummer}: Was ist zu tun?`}
+                              />
+                              <input
+                                className={`${feldKlasse} min-w-0 basis-full lg:flex-[1_1_0%] ${nurMitText}`}
+                                value={z.ergebnis ?? ''}
+                                onChange={(e) => aendereZeile(z.id, { ergebnis: e.target.value })}
+                                placeholder={umsatz ? `Umsatz-Wert ${euro(umsatz)} – was hat es gebracht?` : 'Gewinn/Verlust – was hat es gebracht?'}
+                                aria-label={`${name}: Gewinn/Verlust`}
+                              />
+                              <textarea
+                                rows={1}
+                                className={`${feldKlasse} min-h-[2.125rem] min-w-0 basis-full lg:flex-[1.5_1_0%] ${nurMitText}`}
+                                value={z.stand ?? ''}
+                                onChange={(e) => aendereZeile(z.id, { stand: e.target.value })}
+                                placeholder="Infos, Stand, Fragen, nächste Schritte"
+                                aria-label={`${name}: Infos, aktueller Stand, Fragen, nächste Schritte`}
+                              />
+                            </div>
+                            {mitText && (umsatz || z.istMin || z.laeuftSeit || z.bezug || vermutet || (z.todoId && fragen?.trim()) || z.ausVortag || z.todoId) && (
+                              <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 pl-0 lg:pl-[4.75rem]">
+                                {umsatz ? <span className="rounded-md bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700">{euro(umsatz)}</span> : null}
+                                <StoppuhrAnzeige z={z} />
+                                {z.todoId && <span className="text-[11px] text-slate-400">{todoNachId.get(z.todoId) ? 'mit To-do verknüpft' : 'To-do nicht mehr in der Liste'}</span>}
+                                {z.ausVortag && <span className="text-[11px] text-slate-400">offen seit {fmtDate(z.ausVortag)}</span>}
+                                {z.todoId && fragen?.trim() && !z.erledigt && <LoesungsKnopf todoId={z.todoId} aufgabe={z.was} fragen={fragen} />}
+                                {z.bezug ? (
+                                  <AnrufSpalte bezug={z.bezug} onNotiert={anrufNotiert} />
+                                ) : vermutet ? (
+                                  <button onClick={() => bezugUebernehmen(z, vermutet)} className="text-xs text-slate-500 hover:text-accent-700" title="Akte bzw. Objekt mit dieser Zeile verknüpfen">
+                                    Gehört zu <span className="font-medium">{vermutet.name}</span>? <span className="text-accent-600 underline">verknüpfen</span>
+                                  </button>
+                                ) : null}
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                    <button onClick={() => neueZeile(b.id)} className="mt-2 inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-xs font-medium text-accent-600 hover:bg-accent-50">
+                      <Plus size={13} /> Zeile
+                    </button>
+                  </section>
+                )
+              })}
+            </div>
+          </>
+        )}
 
         <div className="mt-5">
           <Field label="Anrufe">
@@ -905,8 +1219,30 @@ function MeinTagesablauf({ ich, datum, onUngespeichert }: { ich: string; datum: 
           </Field>
         </div>
 
-        {leiste}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          {isSupabaseConfigured && meineEmail !== 'lokal' ? <TelegramEinstellung email={meineEmail} /> : <span />}
+          {leiste}
+        </div>
       </Card>
+
+      <div className="mb-5">
+        <button
+          onClick={() => setEinzelneOffen(!einzelneOffen)}
+          className="mb-2 inline-flex items-center gap-1 text-sm font-medium text-slate-600 hover:text-slate-800"
+          aria-expanded={einzelneOffen}
+        >
+          <ChevronDown size={15} className={einzelneOffen ? '' : '-rotate-90'} /> Einzelne Vorschläge (auch Follow-ups und Projektaufgaben)
+        </button>
+        {einzelneOffen && (
+          <VorschlaegeKarte
+            datum={datum}
+            vorschlaege={vorschlaege}
+            zeilen={entwurf.zeilen}
+            onUebernehmen={uebernehmeVorschlaege}
+            termine={kalenderEmail ? termineDesTags : undefined}
+          />
+        )}
+      </div>
     </>
   )
 }
@@ -955,7 +1291,7 @@ function VorschlaegeKarte({
           </p>
         </div>
         {offeneFristen.length > 0 && (
-          <SecondaryButton onClick={() => onUebernehmen(offeneFristen.map((v) => ({ text: v.text, block: 'frist' as const, zeit: v.termin })))}>
+          <SecondaryButton onClick={() => onUebernehmen(offeneFristen.map((v) => ({ text: v.text, block: 'frist' as const, zeit: v.termin, todoId: v.todoId })))}>
             Alle Fristen übernehmen ({offeneFristen.length})
           </SecondaryButton>
         )}
@@ -1010,7 +1346,7 @@ function VorschlaegeKarte({
                       return (
                         <button
                           key={b.id}
-                          onClick={() => onUebernehmen([{ text: v.text, block: b.id, zeit: v.termin }])}
+                          onClick={() => onUebernehmen([{ text: v.text, block: b.id, zeit: v.termin, todoId: v.todoId }])}
                           className={`min-w-9 rounded-md px-2.5 py-1.5 text-xs ${
                             vorgeschlagen ? 'bg-accent-600 font-semibold text-white hover:bg-accent-700' : 'border border-slate-200 bg-white font-medium text-slate-600 hover:bg-slate-100'
                           }`}

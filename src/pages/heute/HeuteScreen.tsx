@@ -16,6 +16,8 @@ import { Card } from '../../components/ui'
 import { fmtDate, addDays, today } from '../../lib/dates'
 import type { FollowUp } from '../../types'
 import { AKTE_UNGEKLAERT, PFAD_UNGEKLAERT } from '../../data/sammelakten'
+import { ProfilVollstaendigkeitHeute } from '../../components/ProfilVollstaendigkeit'
+import { NeuanfragenHinweis } from '../neuanfragen/NeuanfragenHinweis'
 
 function weekdayGerman(): string {
   return new Date().toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long' })
@@ -161,6 +163,8 @@ export function HeuteScreen() {
 
   return (
     <div className="mx-auto max-w-3xl">
+      <ProfilVollstaendigkeitHeute />
+      <NeuanfragenHinweis />
       {ungeklaertDokumente.length > 0 && (
         <Card className="mb-5 border-amber-200 bg-amber-50/40 p-5">
           <h2 className="mb-1 flex items-center gap-1.5 text-sm font-semibold text-amber-800">

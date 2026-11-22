@@ -28,6 +28,7 @@
 // Zuordnung bei exakt gleicher Adresse holt dann ordneOffeneMailsZu nach.
 
 import { ordneMailZu } from './postfach.ts'
+import { alleZeilen } from '../_shared/alleZeilen.ts'
 
 // deno-lint-ignore no-explicit-any
 type Admin = any
@@ -345,9 +346,10 @@ export function entscheide(m: MailZeile, k: Kontext, jetzt = new Date()): Entsch
 export async function ladeKontext(admin: Admin, mails: MailZeile[], jetzt = new Date()): Promise<Kontext> {
   const seit = new Date(jetzt.getTime() - GESENDET_FENSTER_TAGE * TAG_MS).toISOString()
   const [akten, team, gesendet] = await Promise.all([
-    admin.from('kunden').select('id, bereich, firma, ansprechpartner, email').neq('bereich', 'privat'),
+    // Seitenweise (die Datenbank liefert höchstens 1000 Zeilen je Abfrage; ein limit(3000) hilft nicht).
+    alleZeilen(() => admin.from('kunden').select('id, bereich, firma, ansprechpartner, email').neq('bereich', 'privat')),
     admin.from('mitarbeiter').select('name, email'),
-    admin.from('gesendete_emails').select('message_id, an, betreff, kunde_id, gesendet_am').is('besitzer_email', null).gte('gesendet_am', seit).limit(3000),
+    alleZeilen(() => admin.from('gesendete_emails').select('message_id, an, betreff, kunde_id, gesendet_am').is('besitzer_email', null).gte('gesendet_am', seit), { ordnung: ['gesendet_am', 'id'], aufsteigend: false, hoechstens: 3000 }),
   ])
   if (akten.error) throw new Error(`Akten nicht lesbar: ${akten.error.message}`)
   if (team.error) throw new Error(`Mitarbeiter nicht lesbar: ${team.error.message}`)

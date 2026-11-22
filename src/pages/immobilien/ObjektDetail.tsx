@@ -34,6 +34,7 @@ import { ObjektBilderVerwalten } from '../../components/ObjektBilderVerwalten'
 import { ObjektAnGesucheSenden } from '../../components/ObjektAnGesucheSenden'
 import { ObjektPassendeGesuche } from '../../components/ObjektPassendeGesuche'
 import { PartnerAuswahl } from '../../components/PartnerAuswahl'
+import { GespraechAufnahmenListe } from '../../components/GespraechAufnahmenListe'
 import { immoPfade, immoObjekte, privateGesuche } from './privatModus'
 import { ObjektWasFehlt } from '../../components/ObjektWasFehlt'
 
@@ -333,6 +334,7 @@ export function ObjektDetail({ privat }: { privat?: boolean } = {}) {
             </ul>
           </Card>
 
+          {!privat && <div className="lg:col-span-3"><GespraechAufnahmenListe objektId={objekt.id} /></div>}
           {!privat && (
             <Card className="p-5 lg:col-span-3">
               <PartnerAuswahl objektId={objekt.id} standardRolle="angeboten" titel="Angeboten von / Partner" />

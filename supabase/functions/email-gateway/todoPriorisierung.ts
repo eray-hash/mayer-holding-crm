@@ -26,6 +26,8 @@
 //
 // Keine Importe aus index.ts: Datenbank-Zugang und der KI-Aufruf kommen als Parameter.
 
+import { alleZeilen } from '../_shared/alleZeilen.ts'
+
 // deno-lint-ignore no-explicit-any
 type Db = any
 
@@ -335,20 +337,23 @@ async function aktiveMitarbeiter(admin: Db): Promise<string[]> {
 
 /** Alle Listen mit offenen Aufgaben: Bereichslisten und die privaten Listen der aktiven Mitarbeiter. */
 async function alleListen(admin: Db): Promise<Liste[]> {
-  const { data } = await admin.from('todos').select('bereich').is('erledigt_am', null).neq('bereich', '').limit(5000)
+  // Seitenweise: offene Aufgaben können mehr als 1000 sein (die Datenbank liefert höchstens 1000 je Abfrage).
+  const { data } = await alleZeilen(() => admin.from('todos').select('bereich').is('erledigt_am', null).neq('bereich', ''))
   const bereiche = [...new Set(((data ?? []) as { bereich?: string }[]).map((z) => z.bereich).filter((b): b is string => !!b))]
   return [...bereiche.sort().map((bereich) => ({ bereich })), ...(await aktiveMitarbeiter(admin)).map((besitzer) => ({ besitzer }))]
 }
 
 /** Listen mit neuen bzw. wieder automatisch gestellten Aufgaben (prio_quelle leer, in den letzten 3 Tagen geändert). */
 async function listenMitNeuen(admin: Db, jetzt: Date): Promise<Liste[]> {
-  const { data } = await admin
-    .from('todos')
-    .select('bereich, besitzer_email')
-    .is('erledigt_am', null)
-    .is('prio_quelle', null)
-    .gt('updated_at', new Date(jetzt.getTime() - 3 * TAG_MS).toISOString())
-    .limit(1000)
+  // Seitenweise: nach einem Microsoft-Abgleich sind das schnell über 1000 (Hasan: 2.600) — sonst fehlten Listen.
+  const { data } = await alleZeilen(() =>
+    admin
+      .from('todos')
+      .select('bereich, besitzer_email')
+      .is('erledigt_am', null)
+      .is('prio_quelle', null)
+      .gt('updated_at', new Date(jetzt.getTime() - 3 * TAG_MS).toISOString()),
+  )
   const zeilen = (data ?? []) as { bereich?: string | null; besitzer_email?: string | null }[]
   if (zeilen.length === 0) return []
   const mitarbeiter = new Set(await aktiveMitarbeiter(admin))

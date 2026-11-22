@@ -18,6 +18,7 @@
 //   bekommt eine Bestätigung mit Kalenderdatei (.ics).
 import { ERLAUBTE_ERINNERUNGEN, sendeTelegram, zeitraumText } from './kalender.ts'
 import { icsAnhang } from '../_shared/ics.ts'
+import { alleZeilen } from '../_shared/alleZeilen.ts'
 
 // Der Dienst-Zugang zur Datenbank — wie in kalender.ts/kalenderAbo.ts.
 // deno-lint-ignore no-explicit-any
@@ -230,8 +231,8 @@ const maske = (email: string) => email.replace(/[\\%_]/g, (z) => `\\${z}`)
 async function ladeBelegung(admin: Db, email: string, von: string, bis: string): Promise<Belegung[]> {
   const spalten = 'id, beginn, ende'
   const [eigene, dabei] = await Promise.all([
-    admin.from('termine').select(spalten).eq('ganztags', false).ilike('besitzer_email', maske(email)).lt('beginn', bis).gt('ende', von).limit(5000),
-    admin.from('termine').select(spalten).eq('ganztags', false).contains('teilnehmer', [email]).lt('beginn', bis).gt('ende', von).limit(5000),
+    alleZeilen(() => admin.from('termine').select(spalten).eq('ganztags', false).ilike('besitzer_email', maske(email)).lt('beginn', bis).gt('ende', von)),
+    alleZeilen(() => admin.from('termine').select(spalten).eq('ganztags', false).contains('teilnehmer', [email]).lt('beginn', bis).gt('ende', von)),
   ])
   if (eigene.error) throw new Error(eigene.error.message)
   if (dabei.error) throw new Error(dabei.error.message)

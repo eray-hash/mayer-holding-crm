@@ -310,3 +310,91 @@ Deno.test('Ohne Tabelle oder Spalten: nichts senden', async () => {
   assertEquals(o.gesendet.length, 0)
   assert(r.fehler.some((f) => f.includes('nicht gesendet')))
 })
+
+// ---------------------------------------------------------------------------------------------
+// Runde 5: Direkt-Link in die Gesprächs-App und Erinnerung zum Terminbeginn
+
+Deno.test('Briefing endet mit dem Direkt-Link zur Aufnahme (Termin und Akte)', async () => {
+  const d = db()
+  const o = optionen()
+  await sendeTerminBriefings(d, o)
+  const text = o.gesendet[0].text
+  assert(text.endsWith('🎙️ Gespräch aufnehmen: https://crm.test/gespraech/#/aufnehmen?termin=t1&kunde=k_lehle'), text.slice(-200))
+  assertStringIncludes(text, 'Akte öffnen: https://crm.test/#/erben/mandanten/k_lehle')
+})
+
+// Terminbeginn 14:00 Uhr Berlin = 13:00 UTC.
+const BEIM_BEGINN = new Date('2026-11-27T13:02:00Z')
+
+Deno.test('Erinnerung zum Terminbeginn: Standard aus — nichts', async () => {
+  const d = db()
+  const o = optionen({ jetzt: BEIM_BEGINN })
+  const r = await sendeTerminBriefings(d, o)
+  assertEquals(r.aufnahme, 0)
+  assertEquals(o.gesendet.length, 0)
+})
+
+Deno.test('Erinnerung zum Terminbeginn: eingeschaltet → einmal mit Link, nur mit Rechten, nicht doppelt', async () => {
+  const d = db({ einstellungen: [{ email: ANDREAS, gespraech_erinnerung: true }, { email: QUIRIN, gespraech_erinnerung: true }] })
+  const o = optionen({ jetzt: BEIM_BEGINN })
+  const r = await sendeTerminBriefings(d, o)
+  assertEquals(r.fehler, [])
+  assertEquals(r.aufnahme, 1)
+  // Quirin darf die Erben-Akte nicht sehen, Hasan hat es nicht eingeschaltet.
+  assertEquals(o.gesendet.map((g) => g.chat), [111])
+  assertEquals(
+    o.gesendet[0].text,
+    '🎙️ Dein Termin „Josef Lehle kommt nach Ulm“ (14:00 Uhr) mit Josef Lehle beginnt.\nGespräch aufnehmen: https://crm.test/gespraech/#/aufnehmen?termin=t1&kunde=k_lehle',
+  )
+  assertEquals(o.kiAufrufe.length, 0, 'ohne KI')
+  const vermerk = d.tabelle('termin_briefings').find((z) => z.art === 'aufnahme')
+  assertEquals(vermerk?.id, 'aufnahme|t1|andreas@mayer.test|2026-11-27T13:00:00.000Z')
+  assertEquals(vermerk?.zugestellt, true)
+  // Eine Minute später: nichts mehr.
+  const o2 = optionen({ jetzt: new Date(BEIM_BEGINN.getTime() + 60000) })
+  assertEquals((await sendeTerminBriefings(d, o2)).aufnahme, 0)
+  assertEquals(o2.gesendet.length, 0)
+})
+
+Deno.test('Erinnerung zum Terminbeginn: Fenster 1 Minute vor bis 5 Minuten nach Beginn', async () => {
+  const einst = [{ email: ANDREAS, gespraech_erinnerung: true }]
+  for (const [jetzt, erwartet] of [['2026-11-27T12:58:30Z', 0], ['2026-11-27T12:59:00Z', 1], ['2026-11-27T13:05:00Z', 1], ['2026-11-27T13:05:30Z', 0]] as const) {
+    const o = optionen({ jetzt: new Date(jetzt) })
+    assertEquals((await sendeTerminBriefings(db({ einstellungen: einst }), o)).aufnahme, erwartet, jetzt)
+  }
+})
+
+Deno.test('Erinnerung zum Terminbeginn: läuft schon eine Aufnahme zum Termin → keine Erinnerung (verworfene zählen nicht)', async () => {
+  const d = db({ einstellungen: [{ email: ANDREAS, gespraech_erinnerung: true }] })
+  d.tabelle('gespraech_aufnahmen').push({ id: 'g1', termin_id: 't1', mitarbeiter_email: HASAN, status: 'aufnahme' })
+  const o = optionen({ jetzt: BEIM_BEGINN })
+  assertEquals((await sendeTerminBriefings(d, o)).aufnahme, 0)
+  assertEquals(d.tabelle('termin_briefings').length, 0)
+  d.tabelle('gespraech_aufnahmen')[0].status = 'verworfen'
+  assertEquals((await sendeTerminBriefings(d, optionen({ jetzt: BEIM_BEGINN }))).aufnahme, 1)
+})
+
+Deno.test('Erinnerung zum Terminbeginn: ohne Akte keine Nachricht; private Akte über den privaten Assistenten', async () => {
+  const einst = [{ email: ANDREAS, gespraech_erinnerung: true }, { email: HASAN, gespraech_erinnerung: true }]
+  const ohne = db({ einstellungen: einst, termine: [termin({ id: 'a', kunde_id: null, titel: 'Blocker', teilnehmer: [] })] })
+  assertEquals((await sendeTerminBriefings(ohne, optionen({ jetzt: BEIM_BEGINN }))).aufnahme, 0)
+  const privat = db({ einstellungen: einst, termine: [termin({ id: 'tp', kunde_id: 'k_privat', kunde_bereich: 'privat', besitzer_email: HASAN, teilnehmer: [ANDREAS], titel: 'Huber' })] })
+  const o = optionen({ jetzt: BEIM_BEGINN, privatAktiv: [HASAN] })
+  assertEquals((await sendeTerminBriefings(privat, o)).aufnahme, 1)
+  assertEquals(o.gesendet.map((g) => [g.chat, g.bot]), [[222, 'privat']])
+  assertStringIncludes(o.gesendet[0].text, 'mit Max Huber beginnt.\nGespräch aufnehmen: https://crm.test/gespraech/#/aufnehmen?termin=tp&kunde=k_privat')
+})
+
+Deno.test('Erinnerung zum Terminbeginn: Objekt-Termin → „zu <Objekt>“ und objekt= im Link', async () => {
+  const d = db({
+    einstellungen: [{ email: QUIRIN, gespraech_erinnerung: true }],
+    termine: [termin({ id: 'to', kunde_id: null, kunde_bereich: null, kunde_name: null, besitzer_email: QUIRIN, teilnehmer: [], titel: 'Besichtigung Lagerhalle Neu-Ulm' })],
+  })
+  d.tabelle('besichtigungen').push({ id: 'b1', objekt_id: 'o_lager', kalender_termin_id: 'to' })
+  const o = optionen({ jetzt: BEIM_BEGINN })
+  const r = await sendeTerminBriefings(d, o)
+  assertEquals(r.aufnahme, 1)
+  assertEquals(o.gesendet[0].chat, 333)
+  assertStringIncludes(o.gesendet[0].text, 'zu Lagerhalle Neu-Ulm beginnt.')
+  assertStringIncludes(o.gesendet[0].text, 'aufnehmen?termin=to&objekt=o_lager')
+})

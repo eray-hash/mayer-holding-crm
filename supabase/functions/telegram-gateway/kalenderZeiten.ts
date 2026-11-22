@@ -16,6 +16,7 @@
 
 import { ortszeitZuUtc } from '../_shared/icsBelegt.ts'
 import type { RechteMitarbeiter } from './rechte.ts'
+import { alleZeilen } from '../_shared/alleZeilen.ts'
 
 // deno-lint-ignore no-explicit-any
 type Supa = any
@@ -203,13 +204,15 @@ export async function fuehreKalenderZeitenWerkzeugAus(name: string, input: any, 
   const belegungen: Belegung[] = []
 
   // CRM-Termine
-  const { data: terminZeilen, error: terminFehler } = await supabase
-    .from('termine')
-    .select('id, titel, beginn, ende, ganztags, besitzer_email, teilnehmer, ms_id, kunde_bereich')
-    .lt('beginn', new Date(abfrageBis).toISOString())
-    .gt('ende', new Date(abfrageVon).toISOString())
-    .order('beginn')
-    .limit(5000)
+  // Seitenweise (die Datenbank liefert höchstens 1000 Zeilen je Abfrage).
+  const { data: terminZeilen, error: terminFehler } = await alleZeilen(() =>
+    supabase
+      .from('termine')
+      .select('id, titel, beginn, ende, ganztags, besitzer_email, teilnehmer, ms_id, kunde_bereich')
+      .lt('beginn', new Date(abfrageBis).toISOString())
+      .gt('ende', new Date(abfrageVon).toISOString())
+      .order('beginn'),
+  )
   if (terminFehler) return `Fehler beim Laden der Termine: ${terminFehler.message}`
   for (const t of (terminZeilen ?? []) as TerminZeile[]) {
     const beteiligte = [String(t.besitzer_email ?? '').toLowerCase(), ...(t.teilnehmer ?? []).map((x) => String(x).toLowerCase())]

@@ -17,6 +17,11 @@
 //     · Audio (und wahlweise Fotos) als Dokumente der Akte (Kopie der Teilstücke, keine Zusammenführung;
 //       über HOECHSTENS_AUDIO_BYTES wird das Audio übersprungen und das gesagt),
 //     · den Mail-Entwurf als Verlaufseintrag — verschickt wird hier nichts.
+//     · seit Runde 5: Aktenfelder der Projekt-Checkliste (sachverhalt, branche, dienstleistungen) — nur leere Felder
+//       werden gefüllt, belegte nie überschrieben (Hinweis statt dessen) — und den aus dem Gespräch vorbefüllten
+//       Fragebogen als PDF unter Dokumente (Satz über erstellePdf aus telegram-gateway/dokumentErstellen.ts; geht
+//       das schief, steht er als gegliederte Notiz im Verlauf). auswahl.fragebogen: boolean,
+//       auswahl.aktenfelder: Liste der Feldnamen; bearbeitet.fragebogen / bearbeitet.aktenfelder = geänderte Fassung.
 //   Wiederholbar ohne Doppelte: Was angelegt wurde, steht in gespraech_aufnahmen.uebernommen (Schema
 //   GespraechUebernommen in src/gespraech/typen.ts, je Liste Index → id). Ein zweiter Aufruf legt nur an,
 //   was noch fehlt. Das Protokoll hat eine feste Kennung je Aufnahme; ein gleichzeitiger zweiter Aufruf
@@ -35,6 +40,8 @@ import { alsVorschlaege, gleicherWert, haengeAn, type StammdatenFeld, type Stamm
 import { istSichererPfad } from '../_shared/speicherPfad.ts'
 import { berlinZeitZuUtc, todoAnlegen } from '../telegram-gateway/teamWerkzeuge.ts'
 import { freierName, formatGroesse } from '../telegram-gateway/objektWerkzeuge.ts'
+import { erstellePdf } from '../telegram-gateway/dokumentErstellen.ts'
+import { AKTENFELDER, type Aktenfelder, type FragebogenAntwort, fragenAusVorlage, normalisiereAktenfelder, normalisiereFragebogen } from '../_shared/gespraechSchema.ts'
 import {
   akteText,
   type Bezug,
@@ -97,6 +104,9 @@ type Analyse = {
   unterlagen_fehlen?: string[]
   mail_entwurf?: { betreff?: string; text?: string }
   sprecher?: { label: string; name?: string; rolle?: string }[]
+  fragebogen?: FragebogenAntwort[]
+  fragebogen_vorlage?: { id: string; name: string }
+  aktenfelder?: Aktenfelder
 }
 
 export type Uebernommen = {
@@ -115,6 +125,10 @@ export type Uebernommen = {
   verlauf?: boolean
   objektVerlauf?: boolean
   hinweise?: string[]
+  /** Fragebogen: als Dokument (id) oder — falls das PDF nicht ging — als Notiz im Verlauf. */
+  fragebogen?: { dokumentId?: string; notiz?: boolean }
+  /** Feldname → 'ergaenzt' (war leer, jetzt gefüllt) | 'belegt' (stand schon etwas, nicht überschrieben). */
+  aktenfelder?: Record<string, string>
 }
 
 type Aufnahme = {
@@ -283,7 +297,37 @@ export function wirksameAnalyse(analyse: Analyse, bearbeitet: unknown): Analyse 
   }
   if (b.mail_entwurf && typeof b.mail_entwurf === 'object') aus.mail_entwurf = b.mail_entwurf as Analyse['mail_entwurf']
   if (typeof b.zusammenfassung === 'string' && b.zusammenfassung.trim()) aus.zusammenfassung = b.zusammenfassung
+  if (Array.isArray(b.fragebogen)) aus.fragebogen = normalisiereFragebogen(b.fragebogen)
+  if (b.aktenfelder && typeof b.aktenfelder === 'object') aus.aktenfelder = normalisiereAktenfelder(b.aktenfelder)
   return aus
+}
+
+function frageNorm(s: string): string {
+  return s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
+}
+
+/** Inhalt des vorbefüllten Fragebogens (Auszeichnung für erstellePdf): beantwortete Fragen als Tabelle, danach die offenen. */
+export function fragebogenInhalt(antworten: FragebogenAntwort[], offen: string[], gespraechDatum: string): string {
+  const zelle = (s: string) => s.replace(/\|/g, '/').replace(/\s+/g, ' ').trim()
+  const teile = [
+    `Vorbefüllt aus dem Gespräch vom ${deDatum(gespraechDatum)} — nur was im Gespräch gesagt wurde. Bitte mit dem Mandanten durchgehen und ergänzen; mit „(unsicher)“ markierte Antworten besonders prüfen.`,
+    '## Aus dem Gespräch',
+    ['| Frage | Antwort |', ...antworten.map((x) => `| ${zelle(x.frage)} | ${zelle(x.antwort)}${x.sicher ? '' : ' (unsicher)'} |`)].join('\n'),
+    offen.length ? `## Noch nicht besprochen\n${offen.map((f) => `- ${zelle(f)}`).join('\n')}` : '',
+  ]
+  return teile.filter(Boolean).join('\n\n')
+}
+
+/** Ersatz, wenn das PDF nicht entsteht: gegliederte Notiz für den Verlauf. */
+export function fragebogenNotiz(name: string, antworten: FragebogenAntwort[], gespraechDatum: string): string {
+  return `${name} — aus dem Gespräch vom ${deDatum(gespraechDatum)} vorbefüllt (nur Gesagtes, bitte prüfen):\n${antworten.map((x) => `- ${x.frage}: ${x.antwort}${x.sicher ? '' : ' (unsicher)'}`).join('\n')}`
+}
+
+const AKTENFELD_NAME: Record<string, string> = { sachverhalt: 'Sachverhalt', branche: 'Branche', dienstleistungen: 'Dienstleistungen' }
+
+function feldLeer(wert: unknown): boolean {
+  if (Array.isArray(wert)) return wert.filter((x) => String(x ?? '').trim()).length === 0
+  return String(wert ?? '').trim() === ''
 }
 
 function indizes(x: unknown, laenge: number): number[] {
@@ -354,6 +398,7 @@ export async function gespraechUebernehmen(k: GespraechKontext, body: any): Prom
     todos: { ...(bisher?.todos ?? {}) },
     termine: { ...(bisher?.termine ?? {}) },
     stammdaten: { ...(bisher?.stammdaten ?? {}) },
+    ...(bisher?.aktenfelder ? { aktenfelder: { ...bisher.aktenfelder } } : {}),
   }
   const zeilen: string[] = []
   const hinweise: string[] = []
@@ -510,7 +555,9 @@ export async function gespraechUebernehmen(k: GespraechKontext, body: any): Prom
   const ablegen = async (pfad: string, anzeige: string, mime: string): Promise<string | null> => {
     const { data: blob, error: ladeFehler } = await admin.storage.from(GESPRAECH_EIMER).download(pfad)
     if (ladeFehler || !blob) return `„${anzeige}“ ließ sich nicht laden: ${ladeFehler?.message ?? 'nicht gefunden'}`
-    const bytes = new Uint8Array(await blob.arrayBuffer())
+    return await ablegeBytes(new Uint8Array(await blob.arrayBuffer()), anzeige, mime)
+  }
+  const ablegeBytes = async (bytes: Uint8Array, anzeige: string, mime: string): Promise<string | null> => {
     const kennung = `dok_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`
     const ziel = `${kundeId}/${kennung}_${sicherName(anzeige)}`
     const { error: hochFehler } = await admin.storage.from(AKTEN_EIMER).upload(ziel, bytes, { contentType: mime || 'application/octet-stream', upsert: false })
@@ -560,9 +607,35 @@ export async function gespraechUebernehmen(k: GespraechKontext, body: any): Prom
     }
     if (fotos.length) fotoIds = neueDokumente.slice(vorher).map((d) => d.id)
   }
+  // Fragebogen: PDF in die Dokumente; geht das nicht, als gegliederte Notiz in den Verlauf.
+  let fragebogenDokId: string | null = null
+  let fragebogenAlsNotiz = ''
+  const fbAntworten = normalisiereFragebogen(a.fragebogen)
+  if (auswahl.fragebogen === true && !u.fragebogen && fbAntworten.length > 0 && !privat) {
+    const vorlageName = text(a.fragebogen_vorlage?.name, 200) || 'Fragebogen'
+    let offen: string[] = []
+    if (a.fragebogen_vorlage?.id) {
+      const { data: v } = await admin.from('vorlagen').select('text').eq('id', a.fragebogen_vorlage.id).maybeSingle()
+      if (v?.text) {
+        const beantwortet = new Set(fbAntworten.map((x) => frageNorm(x.frage)))
+        offen = fragenAusVorlage(String(v.text)).filter((f) => !beantwortet.has(frageNorm(f)))
+      }
+    }
+    try {
+      const { bytes } = await erstellePdf({ titel: `${vorlageName} (aus dem Gespräch)`, inhalt: fragebogenInhalt(fbAntworten, offen, datum), art: 'zusammenfassung', fuer: name, datum: heute })
+      const vorher = neueDokumente.length
+      const f = await ablegeBytes(bytes, `${vorlageName.replace(/[\\/:*?"<>|]/g, '-')} – Gespräch ${deDatum(datum)}.pdf`, 'application/pdf')
+      if (f) throw new Error(f)
+      fragebogenDokId = neueDokumente[vorher]?.id ?? null
+    } catch (err) {
+      console.error('Gespräch: Fragebogen-PDF nicht erstellt:', err)
+      fragebogenAlsNotiz = fragebogenNotiz(vorlageName, fbAntworten, datum)
+      hinweise.push('Der Fragebogen ließ sich nicht als PDF ablegen — er steht stattdessen als Notiz im Verlauf der Akte.')
+    }
+  }
 
   // 6. Akte: frisch lesen, nur geänderte Felder schreiben.
-  const { data: frisch, error: frischFehler } = await admin.from('kunden').select('activities, naechste_schritte, telefon, email, anschrift, stammdaten_vorschlaege, dokumente').eq('id', kundeId).maybeSingle()
+  const { data: frisch, error: frischFehler } = await admin.from('kunden').select('activities, naechste_schritte, telefon, email, anschrift, stammdaten_vorschlaege, dokumente, sachverhalt, branche, dienstleistungen').eq('id', kundeId).maybeSingle()
   const aenderung: Record<string, unknown> = {}
   let akteGeschrieben = false
   if (frischFehler || !frisch) {
@@ -621,6 +694,26 @@ export async function gespraechUebernehmen(k: GespraechKontext, body: any): Prom
       }
     }
     if (vorschlaegeGeaendert) aenderung.stammdaten_vorschlaege = vorschlaege
+    // Aktenfelder der Projekt-Checkliste: nur leere Felder füllen, nie überschreiben.
+    const felder = normalisiereAktenfelder(a.aktenfelder)
+    const feldWahl = Array.isArray(auswahl.aktenfelder) ? auswahl.aktenfelder.map(String) : []
+    const feldErledigt: Record<string, string> = {}
+    if (!privat) {
+      for (const f of AKTENFELDER) {
+        if (!feldWahl.includes(f) || u.aktenfelder?.[f]) continue
+        const wert = felder[f]
+        if (wert === undefined || feldLeer(wert)) continue
+        if (feldLeer(frisch[f])) {
+          aenderung[f] = wert
+          feldErledigt[f] = 'ergaenzt'
+          verlauf.push({ text: `${AKTENFELD_NAME[f]} aus der Gesprächsaufnahme vom ${deDatum(datum)} ergänzt: ${Array.isArray(wert) ? wert.join(', ') : wert.replace(/\n/g, ' ')}` })
+        } else {
+          feldErledigt[f] = 'belegt'
+          hinweise.push(`${AKTENFELD_NAME[f]} nicht übernommen: In der Akte steht schon etwas (nichts überschrieben).`)
+        }
+      }
+    }
+    if (fragebogenAlsNotiz) verlauf.push({ text: fragebogenAlsNotiz })
     if (sonstige.length) verlauf.push({ text: `Im Gespräch genannt (nicht in die Stammdaten übernommen): ${sonstige.join('; ')}` })
     // Mail-Entwurf: nur als Notiz, verschickt wird nichts.
     const betreffMail = text(a.mail_entwurf?.betreff, 200)
@@ -674,6 +767,18 @@ export async function gespraechUebernehmen(k: GespraechKontext, body: any): Prom
       if (fotoIds) {
         u.fotos = { dokumentIds: fotoIds }
         if (fotoIds.length) zeilen.push(`${fotoIds.length} Foto${fotoIds.length === 1 ? '' : 's'} in der Akte abgelegt.`)
+      }
+      if (Object.keys(feldErledigt).length) {
+        u.aktenfelder = { ...(u.aktenfelder ?? {}), ...feldErledigt }
+        const erg = Object.entries(feldErledigt).filter(([, w]) => w === 'ergaenzt').map(([f]) => AKTENFELD_NAME[f])
+        if (erg.length) zeilen.push(`In der Akte ergänzt: ${erg.join(', ')}.`)
+      }
+      if (fragebogenDokId) {
+        u.fragebogen = { dokumentId: fragebogenDokId }
+        zeilen.push('Vorbefüllter Fragebogen als PDF unter Dokumente abgelegt.')
+      } else if (fragebogenAlsNotiz) {
+        u.fragebogen = { notiz: true }
+        zeilen.push('Vorbefüllter Fragebogen als Notiz im Verlauf der Akte.')
       }
     }
   }

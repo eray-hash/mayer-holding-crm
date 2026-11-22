@@ -9,6 +9,7 @@ import { MAHNSTUFEN, mahnstufeLabel, nextMahnstufe } from '../../data/constants'
 import { akteName, findeAkte, useKvNutzer } from '../../components/KostenvoranschlaegeSection'
 import { RechnungDetail } from '../../components/rechnungen/RechnungDetail'
 import { MahnungModal } from '../../components/rechnungen/RechnungDialoge'
+import { MahnVorschlaege } from '../../components/rechnungen/MahnVorschlaege'
 import { mahnstufeName } from '../../lib/rechnungPdf'
 import type { Rechnung } from '../../types'
 
@@ -17,6 +18,8 @@ import type { Rechnung } from '../../types'
 // Seit 21.11.2026: Je Rechnung den nächsten Schritt (Zahlungserinnerung, 1. und 2. Mahnung) als PDF auf
 // dem Briefbogen erstellen oder per E-Mail senden; jeder Schritt wird an der Rechnung und in der Akte
 // vermerkt. Antippen einer Zeile öffnet die Rechnung.
+// Seit 22.11.2026 oben der Block „Vorschläge“ (MahnVorschlaege): jeden Morgen vorbereitete Mahnschritte mit „erstellen
+// und senden“ (derselbe Mahn-Dialog), „Zahlung ist eingegangen“ und „zurückstellen bis …“.
 export function Mahnwesen() {
   const { state } = useApp()
   const nutzer = useKvNutzer()
@@ -71,6 +74,8 @@ export function Mahnwesen() {
     <div>
       <h1 className="mb-1 text-xl font-semibold text-slate-800">Mahnwesen</h1>
       <p className="mb-5 text-sm text-slate-500">Überfällige Rechnungen aller Kunden — das Zahlungsziel ist verstrichen und es ist noch nicht (vollständig) bezahlt.</p>
+
+      <MahnVorschlaege />
 
       <div className="mb-5 flex flex-wrap gap-2">
         <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500">

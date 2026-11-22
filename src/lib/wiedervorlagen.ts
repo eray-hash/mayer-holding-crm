@@ -9,6 +9,7 @@
 // Zugriff: wie die Akte (Bereichsrechte in der Datenbank); private Kontakte haben keine Wiedervorlagen.
 import { supabase } from './supabaseClient'
 import type { KundeBereich } from '../types'
+import { alleZeilen } from './alleZeilen'
 
 export type Wiedervorlage = {
   id: string
@@ -73,7 +74,8 @@ function fehler(e: { message?: string } | null): Error {
 
 /** Alle offenen Wiedervorlagen, die der Nutzer sehen darf (Datenbank filtert nach Bereichsrechten). */
 export async function ladeOffeneWiedervorlagen(): Promise<Wiedervorlage[]> {
-  const { data, error } = await client().from('wiedervorlagen').select('*').is('erledigt_am', null).order('faellig', { ascending: true }).limit(5000)
+  // Seitenweise (die Datenbank liefert höchstens 1000 Zeilen je Abfrage; ein limit(5000) hilft nicht).
+  const { data, error } = await alleZeilen(() => client().from('wiedervorlagen').select('*').is('erledigt_am', null).order('faellig', { ascending: true }))
   if (error) throw fehler(error)
   return (data ?? []).map(ausZeile)
 }

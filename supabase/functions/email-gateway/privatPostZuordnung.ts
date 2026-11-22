@@ -21,6 +21,7 @@
 
 import { akteName, entscheide, type AkteZeile, type GesendetZeile, type Kandidat, type Kontext, ladeKontext, type MailZeile, normText, rundschreibenHinweise } from './mailZuordnung.ts'
 import { darfAkte, ohneNurPrivat, type RechteMitarbeiter, SAMMELAKTEN } from '../telegram-gateway/rechte.ts'
+import { alleZeilen } from '../_shared/alleZeilen.ts'
 
 // deno-lint-ignore no-explicit-any
 type Admin = any
@@ -343,8 +344,8 @@ export async function pruefePrivatePost(admin: Admin, opts: PrivatLaufOptionen =
     const besitzerDerMails = [...new Set(mails.map((m) => String(m.besitzer_email).toLowerCase()))]
     const gesendetSeit = new Date(jetzt.getTime() - 180 * TAG_MS).toISOString()
     const [privatAkten, privatGesendet, faecher] = await Promise.all([
-      admin.from('kunden').select('id, bereich, firma, ansprechpartner, email, verantwortlich_email').eq('bereich', 'privat'),
-      admin.from('gesendete_emails').select('message_id, an, betreff, kunde_id, gesendet_am, besitzer_email').in('besitzer_email', besitzerDerMails).gte('gesendet_am', gesendetSeit).limit(1000),
+      alleZeilen(() => admin.from('kunden').select('id, bereich, firma, ansprechpartner, email, verantwortlich_email').eq('bereich', 'privat')),
+      alleZeilen(() => admin.from('gesendete_emails').select('message_id, an, betreff, kunde_id, gesendet_am, besitzer_email').in('besitzer_email', besitzerDerMails).gte('gesendet_am', gesendetSeit), { ordnung: ['gesendet_am', 'id'], aufsteigend: false, hoechstens: 3000 }),
       admin.from('postfaecher').select('adresse, besitzer_email').in('besitzer_email', besitzerDerMails),
     ])
     if (privatAkten.error) throw new Error(`Private Kontakte nicht lesbar: ${privatAkten.error.message}`)

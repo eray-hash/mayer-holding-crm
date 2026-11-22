@@ -4,6 +4,7 @@
 // für den Hintergrund (vorher über öffentlichen Publishable Key ohne Login lesbar).
 import { supabase, isSupabaseConfigured } from './supabaseClient'
 import type { GesendeteEmail, KundeBereich } from '../types'
+import { alleZeilen } from './alleZeilen'
 
 export const isSentEmailsDbConfigured = isSupabaseConfigured
 const client = supabase
@@ -59,12 +60,11 @@ export async function fetchSentEmails(limit = 20): Promise<GesendeteEmail[]> {
 // Postausgang-Verlauf für die Kommunikation-Ansicht einer Kundenakte.
 export async function fetchSentEmailsForKunde(kundeId: string): Promise<GesendeteEmail[]> {
   if (!client) throw new Error('E-Mail-Datenbank ist noch nicht konfiguriert (VITE_SUPABASE_EMAIL_URL fehlt).')
-  const { data, error } = await client
-    .from('gesendete_emails')
-    .select(SPALTEN)
-    .eq('kunde_id', kundeId)
-    .is('besitzer_email', null)
-    .order('gesendet_am', { ascending: false })
+  const db = client
+  // Seitenweise (die Datenbank liefert höchstens 1000 Zeilen je Abfrage).
+  const { data, error } = await alleZeilen<Row>(() =>
+    db.from('gesendete_emails').select(SPALTEN).eq('kunde_id', kundeId).is('besitzer_email', null).order('gesendet_am', { ascending: false }),
+  )
   if (error) throw new Error(error.message)
   return (data ?? []).map(toMail)
 }

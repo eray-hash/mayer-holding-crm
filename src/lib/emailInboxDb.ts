@@ -9,6 +9,7 @@
 import { supabase, isSupabaseConfigured } from './supabaseClient'
 import type { EingegangeneMail } from './emailGateway'
 import type { KundeBereich } from '../types'
+import { alleZeilen } from './alleZeilen'
 
 export const isEmailInboxDbConfigured = isSupabaseConfigured
 const client = supabase
@@ -117,12 +118,11 @@ export async function ignoreMail(messageId: string): Promise<void> {
 // Posteingang-Verlauf für die Kommunikation-Ansicht einer Kundenakte.
 export async function fetchEmailsForKunde(kundeId: string): Promise<EingegangeneMail[]> {
   if (!client) throw new Error('E-Mail-Datenbank ist noch nicht konfiguriert (VITE_SUPABASE_EMAIL_URL fehlt).')
-  const { data, error } = await client
-    .from('eingegangene_emails')
-    .select(SELECT_SPALTEN)
-    .eq('zugewiesener_kunde_id', kundeId)
-    .is('besitzer_email', null)
-    .order('mail_datum', { ascending: false })
+  const db = client
+  // Seitenweise (die Datenbank liefert höchstens 1000 Zeilen je Abfrage).
+  const { data, error } = await alleZeilen<Row>(() =>
+    db.from('eingegangene_emails').select(SELECT_SPALTEN).eq('zugewiesener_kunde_id', kundeId).is('besitzer_email', null).order('mail_datum', { ascending: false }),
+  )
   if (error) throw new Error(error.message)
   return (data ?? []).map(toMail)
 }

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ChevronLeft, ChevronRight, Plus, Lock, Settings, AlertTriangle, Users, MapPin, Trash2, Check, CalendarPlus, Copy, Globe, Mail, Phone } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Plus, Lock, Settings, AlertTriangle, Users, MapPin, Trash2, Check, CalendarPlus, Copy, Globe, Mail, Phone, FolderOpen } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { useAuth } from '../../context/AuthContext'
 import {
@@ -34,7 +34,10 @@ import { Modal, Field, inputClass, PrimaryButton, SecondaryButton } from '../../
 import { EigenerKalenderVerbinden } from '../../components/kalender/EigenerKalenderVerbinden'
 import { BriefingEinstellungen } from '../../components/kalender/BriefingEinstellungen'
 import { ladeFremdBelegt, type FremdBelegt } from '../../components/kalender/fremdKalender'
+import { ladeZuordnungen, ordneTerminZu, loeseTerminZuordnung, lehneZuordnungsVorschlagAb, type ZuordnungVorschlag } from '../../lib/terminZuordnung'
 import type { KundeBereich } from '../../types'
+import { GespraechAufnehmenKnopf } from '../../components/GespraechAufnehmenKnopf'
+import { AufnahmeErinnerungEinstellung } from '../../components/kalender/AufnahmeErinnerungEinstellung'
 
 type Ansicht = 'tag' | 'woche' | 'monat'
 
@@ -81,6 +84,8 @@ type Formular = {
   gastEinladen?: boolean
   /** Beim Öffnen schon eingeladen — Abhaken zieht die Einladung dann zurück (Absage an den Kunden). */
   warEingeladen?: boolean
+  /** Offener Vorschlag der automatischen Zuordnung (Name im Titel), nur wenn die Akte sichtbar ist. */
+  vorschlag?: { id: string; bereich: string; name: string } | null
 }
 
 /**
@@ -110,6 +115,8 @@ export function Kalender({ privat = false }: { privat?: boolean }) {
   const [buchungOffen, setBuchungOffen] = useState(false)
   // quelle/gast je Termin (Online-Buchung), getrennt nachgeladen — siehe lib/terminBuchung.ts.
   const [zusatz, setZusatz] = useState<Map<string, BuchungsZusatz>>(new Map())
+  // Zuordnung Termin → Akte (Vorschläge, Herkunft) je Termin, getrennt nachgeladen — siehe lib/terminZuordnung.ts.
+  const [zuordnungen, setZuordnungen] = useState<Map<string, ZuordnungVorschlag>>(new Map())
   const rasterRef = useRef<HTMLDivElement>(null)
 
   const { von, bis, tage } = useMemo(() => {
@@ -127,16 +134,18 @@ export function Kalender({ privat = false }: { privat?: boolean }) {
     setLaedt(true)
     setFehler('')
     try {
-      const [t, b, z, f] = await Promise.all([
+      const [t, b, z, f, zu] = await Promise.all([
         ladeTermine(von, bis),
         privat ? Promise.resolve([] as Belegt[]) : ladeBelegt(von, bis),
         ladeBuchungsZusatz(von, bis).catch(() => new Map<string, BuchungsZusatz>()),
         ladeFremdBelegt(von, bis).catch(() => [] as FremdBelegt[]),
+        ladeZuordnungen(von, bis).catch(() => new Map<string, ZuordnungVorschlag>()),
       ])
       setTermine(t)
       setBelegt(b)
       setZusatz(z)
       setFremd(f)
+      setZuordnungen(zu)
     } catch (err) {
       setFehler(err instanceof Error ? err.message : 'Kalender konnte nicht geladen werden.')
     } finally {
@@ -213,6 +222,15 @@ export function Kalender({ privat = false }: { privat?: boolean }) {
     return proTag
   }, [state, mitarbeiter?.name, ich])
 
+  // Offener Vorschlag zu einem Termin — nur wenn die Akte in den eigenen (sichtbaren) Akten steht.
+  function sichtbarerVorschlag(t: Termin): { id: string; bereich: string; name: string } | null {
+    const v = zuordnungen.get(t.id)
+    if (t.kundeId || v?.stand !== 'vorschlag' || !v.kunde_id) return null
+    const bereich = KUNDEN_BEREICHE.find((b) => b.id === v.bereich)
+    const akte = bereich?.get(state).find((k) => k.id === v.kunde_id)
+    return akte && bereich ? { id: akte.id, bereich: bereich.id, name: akte.firma || v.name || akte.id } : null
+  }
+
   function neuesFormular(start: Date, ganztags = false): Formular {
     const ende = new Date(start.getTime() + 3600000)
     return { titel: '', datum: tagKey(start), von: uhr(start), bis: uhr(ende), ganztags, ort: '', beschreibung: '', teilnehmer: [], kunde: null }
@@ -222,7 +240,7 @@ export function Kalender({ privat = false }: { privat?: boolean }) {
     const v = new Date(t.beginn)
     const b = new Date(t.ende)
     setDetail(null)
-    setFormular({ id: t.id, titel: t.titel, datum: tagKey(v), von: uhr(v), bis: uhr(b), ganztags: t.ganztags, ort: t.ort, beschreibung: t.beschreibung, teilnehmer: t.teilnehmer, kunde: t.kundeId ? { id: t.kundeId, bereich: t.kundeBereich ?? '', name: t.kundeName ?? '' } : null, gastEinladen: zusatz.get(t.id)?.gast?.eingeladen === true, warEingeladen: zusatz.get(t.id)?.gast?.eingeladen === true })
+    setFormular({ id: t.id, titel: t.titel, datum: tagKey(v), von: uhr(v), bis: uhr(b), ganztags: t.ganztags, ort: t.ort, beschreibung: t.beschreibung, teilnehmer: t.teilnehmer, kunde: t.kundeId ? { id: t.kundeId, bereich: t.kundeBereich ?? '', name: t.kundeName ?? '' } : null, gastEinladen: zusatz.get(t.id)?.gast?.eingeladen === true, warEingeladen: zusatz.get(t.id)?.gast?.eingeladen === true, vorschlag: sichtbarerVorschlag(t) })
   }
 
   function blaettern(richtung: number) {
@@ -316,6 +334,7 @@ export function Kalender({ privat = false }: { privat?: boolean }) {
                 {amTag.slice(0, 3).map((e) => (
                   <div key={e.key} className="truncate rounded px-1 py-px text-[11px] text-white" style={{ background: e.privat ? '#94a3b8' : farbe(e.person) }}>
                     {!e.privat && onlineGebucht(e.termin?.id) && <Globe size={10} className="mr-0.5 inline-block align-[-1px]" aria-label="Online gebucht" />}
+                    {!e.privat && e.termin?.kundeId && <FolderOpen size={10} className="mr-0.5 inline-block align-[-1px]" aria-label={`Akte: ${e.termin.kundeName ?? ''}`} />}
                     {e.privat ? belegtText(e) : `${e.ganztags ? '' : uhr(e.von) + ' '}${e.termin?.titel}`}
                   </div>
                 ))}
@@ -342,6 +361,7 @@ export function Kalender({ privat = false }: { privat?: boolean }) {
                   </div>
                   {ganz.map((e) => (
                     <button key={e.key} onClick={() => e.termin && setDetail(e.termin)} className="mt-0.5 block w-full truncate rounded px-1 py-px text-left text-[11px] text-white" style={{ background: e.privat ? '#94a3b8' : farbe(e.person) }}>
+                      {!e.privat && e.termin?.kundeId && <FolderOpen size={10} className="mr-0.5 inline-block align-[-1px]" aria-label={`Akte: ${e.termin.kundeName ?? ''}`} />}
                       {e.privat ? belegtText(e) : e.termin?.titel}
                     </button>
                   ))}
@@ -401,8 +421,17 @@ export function Kalender({ privat = false }: { privat?: boolean }) {
         <TerminDetail
           termin={detail}
           zusatz={zusatz.get(detail.id)}
+          zuordnung={zuordnungen.get(detail.id)}
+          vorschlag={sichtbarerVorschlag(detail)}
+          privat={privat}
           ich={ich}
           namen={namen}
+          onZugeordnet={(neu, v) => {
+            setDetail(neu)
+            setTermine((alt) => alt.map((x) => (x.id === neu.id ? neu : x)))
+            setZuordnungen((alt) => { const m = new Map(alt); if (v) m.set(neu.id, v); else m.delete(neu.id); return m })
+          }}
+          onMehrereZugeordnet={lade}
           onSchliessen={() => setDetail(null)}
           onBearbeiten={() => bearbeiten(detail)}
           onGeloescht={() => { setDetail(null); lade() }}
@@ -494,8 +523,11 @@ function TagesSpalte({
           const gemeinsam = t.teilnehmer.length > 0
           const online = onlineGebucht(t.id)
           return (
-            <button key={e.key} onClick={() => onOeffnen(t)} className="absolute overflow-hidden rounded-md px-1 py-0.5 text-left text-[11px] leading-tight text-white shadow-sm" style={{ ...stil, background: farbe(t.besitzerEmail) }}>
-              <div className="truncate font-semibold">{t.titel}</div>
+            <button key={e.key} onClick={() => onOeffnen(t)} className="absolute overflow-hidden rounded-md px-1 py-0.5 text-left text-[11px] leading-tight text-white shadow-sm" style={{ ...stil, background: farbe(t.besitzerEmail) }} title={t.kundeId ? `${t.titel} · Akte: ${t.kundeName ?? ''}` : t.titel}>
+              <div className="truncate font-semibold">
+                {t.kundeId && <FolderOpen size={10} className="mr-0.5 inline-block align-[-1px]" aria-label="Mit Akte verknüpft" />}
+                {t.titel}
+              </div>
               <div className="truncate opacity-90">
                 {uhr(e.von)}–{uhr(e.bis)}
                 {gemeinsam && ` · ${[t.besitzerEmail, ...t.teilnehmer].map((p) => (p === ich ? 'ich' : (namen.get(p) ?? p).split(' ')[0])).join(', ')}`}
@@ -680,6 +712,14 @@ function TerminFormular({
           </div>
         ) : (
           <div>
+            {f.vorschlag && (
+              <p className="mb-1.5 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                Gehört wahrscheinlich zu Akte <span className="font-medium">{f.vorschlag.name}</span> ({kundeBereichLabel(f.vorschlag.bereich as KundeBereich)}) —{' '}
+                <button type="button" onClick={() => setF({ ...f, kunde: { id: f.vorschlag!.id, bereich: f.vorschlag!.bereich, name: f.vorschlag!.name } })} className="font-medium text-accent-700 hover:underline">
+                  zuordnen
+                </button>
+              </p>
+            )}
             <input className={inputClass} value={kundenSuche} onChange={(e) => setKundenSuche(e.target.value)} placeholder="Name suchen …" />
             {kundenTreffer.length > 0 && (
               <ul className="mt-1 rounded-lg border border-slate-200">
@@ -732,16 +772,26 @@ function TerminFormular({
 function TerminDetail({
   termin,
   zusatz,
+  zuordnung,
+  vorschlag,
+  privat,
   ich,
   namen,
+  onZugeordnet,
+  onMehrereZugeordnet,
   onSchliessen,
   onBearbeiten,
   onGeloescht,
 }: {
   termin: Termin
   zusatz?: BuchungsZusatz
+  zuordnung?: ZuordnungVorschlag
+  vorschlag: { id: string; bereich: string; name: string } | null
+  privat: boolean
   ich: string
   namen: Map<string, string>
+  onZugeordnet: (t: Termin, v: ZuordnungVorschlag | null) => void
+  onMehrereZugeordnet: () => void
   onSchliessen: () => void
   onBearbeiten: () => void
   onGeloescht: () => void
@@ -797,11 +847,12 @@ function TerminDetail({
       {/* Die Akte kann für diesen Teilnehmer unsichtbar sein (anderer Bereich ohne Freigabe) — dann
           nur den Namen zeigen statt eines Links, der ins Leere führt. */}
       {termin.kundeId && aktenPfad && (
-        <button onClick={() => navigate(aktenPfad)} className="mt-2 text-sm text-accent-600 hover:underline">
-          Zur Akte: {termin.kundeName}
+        <button onClick={() => navigate(aktenPfad)} className="mt-2 inline-flex items-center gap-1 text-sm text-accent-600 hover:underline">
+          <FolderOpen size={14} /> Zur Akte: {termin.kundeName}
         </button>
       )}
       {termin.kundeId && !aktenPfad && termin.kundeName && <p className="mt-2 text-sm text-slate-500">Kunde: {termin.kundeName}</p>}
+      <AkteImTermin termin={termin} zuordnung={zuordnung} vorschlag={vorschlag} privat={privat} ich={ich} sichtbar={!!aktenPfad} onZugeordnet={onZugeordnet} onMehrereZugeordnet={onMehrereZugeordnet} />
       {zusatz?.gast && (zusatz.gast.name || zusatz.gast.email || zusatz.gast.telefon) && (
         <div className="mt-3 rounded-lg border border-slate-200 p-3 text-sm text-slate-700">
           <p className="mb-1 text-xs font-medium text-slate-500">{zusatz.quelle === 'buchung' ? 'Gebucht von' : 'Gast'}</p>
@@ -820,6 +871,7 @@ function TerminDetail({
         </div>
       )}
       {termin.beschreibung && <p className="mt-3 whitespace-pre-wrap rounded-lg bg-slate-50 p-3 text-sm text-slate-700">{termin.beschreibung}</p>}
+      {!termin.ganztags && <div className="mt-3"><GespraechAufnehmenKnopf termin={termin.id} kunde={aktenPfad ? termin.kundeId : undefined} /></div>}
       {fehler && <p className="mt-3 text-xs text-rose-600">{fehler}</p>}
       <div className="mt-5 flex justify-end gap-2">
         <SecondaryButton onClick={loeschen} disabled={laeuft} className="text-xs">
@@ -828,6 +880,147 @@ function TerminDetail({
         {meiner && <PrimaryButton onClick={onBearbeiten} className="text-xs">Bearbeiten</PrimaryButton>}
       </div>
     </Modal>
+  )
+}
+
+/**
+ * Akte des Termins: Vorschlag der automatischen Zuordnung bestätigen oder ablehnen, eine Akte von Hand wählen,
+ * eine Verknüpfung lösen. Geschrieben wird über den Server (lib/terminZuordnung.ts) — er prüft Rechte und merkt sich
+ * gelöste bzw. abgelehnte Akten, damit sie für diesen Termin nicht wieder vorgeschlagen werden.
+ */
+function AkteImTermin({
+  termin,
+  zuordnung,
+  vorschlag,
+  privat,
+  ich,
+  sichtbar,
+  onZugeordnet,
+  onMehrereZugeordnet,
+}: {
+  termin: Termin
+  zuordnung?: ZuordnungVorschlag
+  vorschlag: { id: string; bereich: string; name: string } | null
+  privat: boolean
+  ich: string
+  /** Ist die verknüpfte Akte für mich sichtbar? (sonst kein Lösen) */
+  sichtbar: boolean
+  onZugeordnet: (t: Termin, v: ZuordnungVorschlag | null) => void
+  onMehrereZugeordnet: () => void
+}) {
+  const { state } = useApp()
+  const [suche, setSuche] = useState('')
+  const [waehlen, setWaehlen] = useState(false)
+  const [gleicheTitel, setGleicheTitel] = useState(false)
+  const [laeuft, setLaeuft] = useState(false)
+  const [fehler, setFehler] = useState('')
+  const [hinweis, setHinweis] = useState('')
+  const meiner = termin.besitzerEmail === ich
+  // Private Kontakte nur an eigenen Terminen ohne Kollegen (sonst sähen die Kollegen den Namen).
+  const privatErlaubt = meiner && termin.teilnehmer.length === 0
+
+  const treffer = useMemo(() => {
+    const s = suche.trim().toLowerCase()
+    if (s.length < 2) return []
+    const liste: { id: string; bereich: KundeBereich; name: string }[] = []
+    // Im privaten Kalender zuerst die eigenen privaten Kontakte.
+    const bereiche = privat ? [...KUNDEN_BEREICHE].sort((a, b) => (a.id === 'privat' ? -1 : b.id === 'privat' ? 1 : 0)) : KUNDEN_BEREICHE
+    for (const b of bereiche) {
+      if (b.id === 'privat' && !privatErlaubt) continue
+      for (const k of b.get(state)) {
+        if (`${k.firma} ${k.ansprechpartner}`.toLowerCase().includes(s)) liste.push({ id: k.id, bereich: b.id, name: k.firma || k.ansprechpartner })
+        if (liste.length >= 8) return liste
+      }
+    }
+    return liste
+  }, [suche, state, privat, privatErlaubt])
+
+  async function ausfuehren(aufruf: () => Promise<{ termin: { kunde_id: string | null; kunde_bereich: string | null; kunde_name: string | null; zuordnung_vorschlag: ZuordnungVorschlag | null }; weitere: number }>, mehrere = false) {
+    setLaeuft(true)
+    setFehler('')
+    setHinweis('')
+    try {
+      const r = await aufruf()
+      onZugeordnet(
+        { ...termin, kundeId: r.termin.kunde_id ?? undefined, kundeBereich: r.termin.kunde_bereich ?? undefined, kundeName: r.termin.kunde_name ?? undefined },
+        r.termin.zuordnung_vorschlag,
+      )
+      setWaehlen(false)
+      setSuche('')
+      if (mehrere && r.weitere > 0) {
+        setHinweis(`Dazu ${r.weitere} weitere Termin${r.weitere === 1 ? '' : 'e'} mit demselben Titel zugeordnet.`)
+        onMehrereZugeordnet()
+      }
+    } catch (err) {
+      setFehler(err instanceof Error ? err.message : 'Das hat nicht geklappt.')
+    } finally {
+      setLaeuft(false)
+    }
+  }
+
+  if (termin.kundeId) {
+    return (
+      <div className="mt-1 text-xs text-slate-400">
+        {zuordnung?.stand === 'automatisch' && <span>Automatisch zugeordnet (E-Mail-Adresse eines Gastes). </span>}
+        {sichtbar && (
+          <button onClick={() => ausfuehren(() => loeseTerminZuordnung(termin.id))} disabled={laeuft} className="hover:text-rose-600 hover:underline">
+            {laeuft ? 'Wird gelöst …' : 'Verknüpfung lösen'}
+          </button>
+        )}
+        {fehler && <p className="mt-1 text-rose-600">{fehler}</p>}
+      </div>
+    )
+  }
+
+  return (
+    <div className="mt-3">
+      {vorschlag && (
+        <div className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
+          <p>
+            Gehört wahrscheinlich zu Akte <span className="font-medium">{vorschlag.name}</span>{' '}
+            <span className="text-xs text-amber-700">({kundeBereichLabel(vorschlag.bereich as KundeBereich)})</span>
+          </p>
+          {meiner && (
+            <label className="mt-1.5 flex items-center gap-1.5 text-xs text-amber-800">
+              <input type="checkbox" checked={gleicheTitel} onChange={(e) => setGleicheTitel(e.target.checked)} />
+              auch für meine anderen Termine „{termin.titel}“
+            </label>
+          )}
+          <div className="mt-2 flex flex-wrap gap-2">
+            <PrimaryButton onClick={() => ausfuehren(() => ordneTerminZu(termin.id, vorschlag.id, meiner && gleicheTitel), meiner && gleicheTitel)} disabled={laeuft} className="text-xs">
+              <Check size={13} /> Zuordnen
+            </PrimaryButton>
+            <SecondaryButton onClick={() => ausfuehren(() => lehneZuordnungsVorschlagAb(termin.id))} disabled={laeuft} className="text-xs">
+              Passt nicht
+            </SecondaryButton>
+          </div>
+        </div>
+      )}
+      {hinweis && <p className="mt-2 text-xs text-emerald-700">{hinweis}</p>}
+      {!waehlen ? (
+        <button onClick={() => setWaehlen(true)} className="mt-2 inline-flex items-center gap-1 text-sm text-accent-600 hover:underline">
+          <FolderOpen size={14} /> {vorschlag ? 'Andere Akte zuordnen …' : 'Akte zuordnen …'}
+        </button>
+      ) : (
+        <div className="mt-2">
+          <input className={inputClass} value={suche} onChange={(e) => setSuche(e.target.value)} placeholder="Akte suchen (Name) …" autoFocus />
+          {treffer.length > 0 && (
+            <ul className="mt-1 rounded-lg border border-slate-200">
+              {treffer.map((k) => (
+                <li key={`${k.bereich}:${k.id}`}>
+                  <button type="button" disabled={laeuft} onClick={() => ausfuehren(() => ordneTerminZu(termin.id, k.id))} className="block w-full px-3 py-1.5 text-left text-sm text-slate-700 hover:bg-slate-50">
+                    {k.name} <span className="text-xs text-slate-400">({kundeBereichLabel(k.bereich)})</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {suche.trim().length >= 2 && treffer.length === 0 && <p className="mt-1 text-xs text-slate-400">Keine passende Akte.</p>}
+          <button onClick={() => { setWaehlen(false); setSuche('') }} className="mt-1 text-xs text-slate-400 hover:underline">Abbrechen</button>
+        </div>
+      )}
+      {fehler && <p className="mt-2 text-xs text-rose-600">{fehler}</p>}
+    </div>
   )
 }
 
@@ -881,6 +1074,7 @@ function EinstellungenFenster({ ich, onSchliessen, onAbo, onBuchung }: { ich: st
             </p>
           )}
           <BriefingEinstellungen ich={ich} />
+          <AufnahmeErinnerungEinstellung ich={ich} />
           <p className="mb-2 mt-5 text-sm font-medium text-slate-700">Sichtbarkeit</p>
           <label className="flex items-start gap-2 text-sm text-slate-700">
             <input type="checkbox" className="mt-0.5" checked={e.sichtbar} onChange={(ev) => speichern({ ...e, sichtbar: ev.target.checked })} />
