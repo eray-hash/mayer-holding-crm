@@ -5,7 +5,7 @@ import { Field, Modal, PrimaryButton, SecondaryButton, inputClass } from './ui'
 import { bilderVon, ExposeEinstellungenFelder, groesseText, MAX_BILDER, useExposeEinstellungen, useExposeKontext, type ExposeEinstellungen, type ExposeKontext } from './ExposePdf'
 import { erzeugeExposePdf, type ExposeBild } from '../lib/exposePdf'
 import { adresseVon, exposeFakten, objektartVon, preisText, standardTitel } from '../lib/exposeDaten'
-import { ladeExposeBild, ladeLogo } from '../lib/exposeBilder'
+import { bildDrehung, ladeExposeBild, ladeLogo } from '../lib/exposeBilder'
 import { ladeObjektDokumentHoch } from '../lib/objektDokumenteStorage'
 import { ladeInteressentenDokumente, setzeInteressentenDokumente } from '../lib/objektPortal'
 import { fmtDate, today, uid } from '../lib/dates'
@@ -41,7 +41,7 @@ async function erstelle(objekt: Objekt, e: ExposeEinstellungen, k: ExposeKontext
   const ohneBilder: string[] = []
   const geladen = await Promise.all(
     gewaehlt.map((d, i) =>
-      ladeExposeBild(d, i === 0 ? 'titel' : 'galerie').catch(() => {
+      ladeExposeBild(d, i === 0 ? 'titel' : 'galerie', bildDrehung(objekt, d.id)).catch(() => {
         ohneBilder.push(d.name)
         return null
       }),

@@ -24,11 +24,13 @@ import { ObjektWeitergabenSection } from '../../components/ObjektWeitergabenSect
 import { ObjektAbrechnungSection } from '../../components/ObjektAbrechnungSection'
 import { ObjektUnterlagenAnfordern } from '../../components/ObjektUnterlagenAnfordern'
 import { ObjektBewertungSection } from '../../components/ObjektBewertungSection'
+import { ObjektRenditeCheck } from '../../components/ObjektRenditeCheck'
 import { ObjektFreigaben } from '../../components/ObjektFreigaben'
 import { ObjektBesichtigungenSection } from '../../components/ObjektBesichtigungenSection'
 import { ObjektAutoNachrichten } from '../../components/AutoNachrichtenListe'
 import { ObjektEigentuemerbericht } from '../../components/ObjektEigentuemerbericht'
 import { ObjektExposeErstellen } from '../../components/ObjektExposeErstellen'
+import { ObjektBilderVerwalten } from '../../components/ObjektBilderVerwalten'
 import { ObjektAnGesucheSenden } from '../../components/ObjektAnGesucheSenden'
 import { ObjektPassendeGesuche } from '../../components/ObjektPassendeGesuche'
 import { immoPfade, immoObjekte, privateGesuche } from './privatModus'
@@ -38,6 +40,7 @@ const TABS = [
   { id: 'verkaufsdaten', label: 'Verkaufsdatenblatt' },
   { id: 'kurzpruefung', label: 'Kurzprüfung' },
   { id: 'bewertung', label: 'Bewertung' },
+  { id: 'rendite', label: 'Rendite' },
   { id: 'fragen', label: 'Fragen' },
   { id: 'weitergaben', label: 'Weitergaben' },
   { id: 'besichtigungen', label: 'Besichtigungen' },
@@ -369,6 +372,8 @@ export function ObjektDetail({ privat }: { privat?: boolean } = {}) {
             </button>
           </div>
           {oeffneFehler && <p className="mb-3 text-sm font-medium text-rose-600">{oeffneFehler}</p>}
+          {/* Fotos: Reihenfolge, Titelbild, Drehen, Beschriftung, „im Exposé“, mehrere hochladen. */}
+          {ordner === 'Bilder' && <ObjektBilderVerwalten key={objekt.id} objekt={objekt} />}
           <Card className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -439,6 +444,7 @@ export function ObjektDetail({ privat }: { privat?: boolean } = {}) {
 
       {tab === 'abrechnung' && !privat && <ObjektAbrechnungSection key={objekt.id} objekt={objekt} />}
       {tab === 'bewertung' && <ObjektBewertungSection key={objekt.id} objekt={objekt} />}
+      {tab === 'rendite' && <ObjektRenditeCheck key={objekt.id} objekt={objekt} />}
       {tab === 'interessenten' && !privat && <ObjektFreigaben key={objekt.id} objekt={objekt} />}
       {tab === 'interessenten' && !privat && <ObjektAutoNachrichten key={`an-${objekt.id}`} objektId={objekt.id} art="portal" />}
 

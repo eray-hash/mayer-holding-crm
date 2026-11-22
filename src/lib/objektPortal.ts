@@ -4,6 +4,8 @@
 import { supabase } from './supabaseClient'
 import { call } from './emailGateway'
 import { shareableUrl } from '../components/FormularLink'
+import { ladeBelegt, ladeTermine } from './kalenderDb'
+import { belegtVon, type BelegtBlock, type FremdZeile, type TerminZeile } from '../../supabase/functions/_shared/besichtigungZeiten.ts'
 
 export type ObjektFreigabe = {
   id: string
@@ -136,7 +138,15 @@ export type PortalSeite =
       zugestimmtAm: string
       objekt: { bezeichnung: string; adresse: string; typ: string; kaufpreis: number | null; beschreibung: string }
       dokumente: { id: string; name: string; typ: string; groesse: string }[]
+      besichtigung: PortalBesichtigung
+      hinweis?: string
     }
+
+export type PortalBesichtigung = {
+  zeiten: { id: string; beginn: string; ende: string; treffpunkt: string; makler: string; freiePlaetze: number }[]
+  meine: { id: string; beginn: string; ende: string; treffpunkt: string; makler: string } | null
+  rueckrufAm: string | null
+}
 
 export async function holePortal(token: string): Promise<PortalSeite> {
   return (await call({ action: 'public_objekt_portal', token })) as PortalSeite
@@ -150,4 +160,104 @@ export async function holePortalDokument(token: string, dokumentId: string): Pro
   const r = await call({ action: 'public_objekt_portal_dokument', token, dokumentId })
   if (!r?.url) throw new Error(r?.fehler ?? 'Das Dokument lässt sich gerade nicht öffnen.')
   return r.url as string
+}
+
+/** Besichtigung im Portal: Termin buchen, absagen oder um Rückruf bitten. */
+export async function portalBesichtigen(
+  token: string,
+  e: { art: 'buchen'; zeitId: string; telefon?: string } | { art: 'absagen'; besichtigungId: string } | { art: 'rueckruf'; telefon?: string; nachricht?: string },
+): Promise<PortalSeite> {
+  return (await call({ action: 'public_objekt_portal_besichtigung', token, ...e })) as PortalSeite
+}
+
+// ---------- Besichtigungszeiten für Interessenten (Objektakte) ----------
+
+export type BesichtigungsZeit = {
+  id: string
+  objektId: string
+  beginn: string
+  ende: string
+  plaetze: number
+  makler: string
+  treffpunkt: string
+  status: 'offen' | 'abgesagt'
+  erstelltVon: string
+  /** Gebuchte (geplante) Besichtigungen zu dieser Zeit. */
+  gebucht: { id: string; interessent: string }[]
+}
+
+/** Freigegebene Zeiten eines Objekts mit den Buchungen dazu, nach Beginn sortiert. */
+export async function ladeBesichtigungsZeiten(objektId: string): Promise<BesichtigungsZeit[]> {
+  const [zeiten, buchungen] = await Promise.all([
+    client().from('besichtigung_zeiten').select('*').eq('objekt_id', objektId).order('beginn'),
+    client().from('besichtigungen').select('id, interessent, besichtigung_zeit_id').eq('objekt_id', objektId).eq('status', 'geplant').not('besichtigung_zeit_id', 'is', null),
+  ])
+  if (zeiten.error) throw fehler(zeiten.error)
+  const je = new Map<string, { id: string; interessent: string }[]>()
+  for (const b of (buchungen.data ?? []) as { id: string; interessent: string; besichtigung_zeit_id: string }[]) {
+    je.set(b.besichtigung_zeit_id, [...(je.get(b.besichtigung_zeit_id) ?? []), { id: b.id, interessent: b.interessent }])
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (zeiten.data ?? []).map((z: any) => ({
+    id: z.id,
+    objektId: z.objekt_id,
+    beginn: z.beginn,
+    ende: z.ende,
+    plaetze: Number(z.plaetze ?? 1),
+    makler: z.makler ?? '',
+    treffpunkt: z.treffpunkt ?? '',
+    status: z.status,
+    erstelltVon: z.erstellt_von ?? '',
+    gebucht: je.get(z.id) ?? [],
+  }))
+}
+
+export async function legeBesichtigungsZeitenAn(
+  objektId: string,
+  zeiten: { beginn: string; ende: string }[],
+  e: { makler: string; treffpunkt: string; plaetze: number; von: string },
+): Promise<void> {
+  if (zeiten.length === 0) return
+  const { error } = await client()
+    .from('besichtigung_zeiten')
+    .insert(zeiten.map((z) => ({ objekt_id: objektId, beginn: z.beginn, ende: z.ende, plaetze: e.plaetze, makler: e.makler.trim(), treffpunkt: e.treffpunkt.trim(), erstellt_von: e.von })))
+  if (error) {
+    if (/duplicate|unique/i.test(error.message)) throw new Error('Mindestens eine dieser Zeiten ist schon freigegeben. Bitte die Liste neu laden.')
+    throw fehler(error)
+  }
+}
+
+export async function sageBesichtigungsZeitAb(id: string): Promise<void> {
+  const { error } = await client().from('besichtigung_zeiten').update({ status: 'abgesagt' }).eq('id', id)
+  if (error) throw fehler(error)
+}
+
+export async function loescheBesichtigungsZeit(id: string): Promise<void> {
+  const { error } = await client().from('besichtigung_zeiten').delete().eq('id', id)
+  if (error) throw fehler(error)
+}
+
+/** Belegte Zeiten eines Mitarbeiters: eigene und sichtbare CRM-Termine sowie sein eigener Kalender.
+ *  `unvollstaendig`, wenn eine der Quellen nicht lesbar war. */
+export async function ladeMaklerBelegt(email: string, von: string, bis: string): Promise<{ belegt: BelegtBlock[]; unvollstaendig: boolean }> {
+  const a = new Date(von)
+  const b = new Date(bis)
+  let unvollstaendig = false
+  const termine: TerminZeile[] = []
+  const fremd: FremdZeile[] = []
+  const [eigene, sichtbar, eigenerKalender] = await Promise.allSettled([
+    ladeTermine(a, b),
+    ladeBelegt(a, b),
+    client().rpc('kalender_fremd_belegt', { von, bis }),
+  ])
+  if (eigene.status === 'fulfilled') for (const t of eigene.value) termine.push({ id: t.id, beginn: t.beginn, ende: t.ende, ganztags: t.ganztags, besitzer_email: t.besitzerEmail, teilnehmer: t.teilnehmer })
+  else unvollstaendig = true
+  if (sichtbar.status === 'fulfilled') for (const t of sichtbar.value) termine.push({ beginn: t.beginn, ende: t.ende, ganztags: t.ganztags, besitzer_email: t.person })
+  else unvollstaendig = true
+  if (eigenerKalender.status === 'fulfilled' && !eigenerKalender.value.error) {
+    for (const x of (eigenerKalender.value.data ?? []) as { person: string; beginn: string; ende: string; ganztags: boolean; sperrt: boolean }[]) {
+      fremd.push({ email: x.person, belegt: [{ b: x.beginn, e: x.ende, g: x.ganztags, a: x.sperrt }] })
+    }
+  } else unvollstaendig = true
+  return { belegt: belegtVon(email, termine, fremd), unvollstaendig }
 }

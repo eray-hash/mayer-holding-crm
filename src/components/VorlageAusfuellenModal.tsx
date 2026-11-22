@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Download, FolderInput, Copy, Check, Search, X } from 'lucide-react'
+import { Download, FolderInput, Copy, Check, PenLine, Search, X } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { useAuth } from '../context/AuthContext'
 import { KUNDEN_BEREICHE } from '../data/kundenBereiche'
@@ -21,6 +21,7 @@ import {
 import { fmtDate, today, uid } from '../lib/dates'
 import { Modal, PrimaryButton, SecondaryButton, inputClass } from './ui'
 import { AufBriefbogen } from './AufBriefbogen'
+import { UnterschriftAnfordern } from './UnterschriftAnfordern'
 import type { Dokument, Kunde, KundeBereich, Vorlage } from '../types'
 
 type Auswahl = { bereich: KundeBereich; kunde: Kunde }
@@ -52,6 +53,8 @@ export function VorlageAusfuellenModal({
   const [kopiert, setKopiert] = useState(false)
   const [ablegen, setAblegen] = useState<'idle' | 'laeuft' | 'fertig'>('idle')
   const [fehler, setFehler] = useState('')
+  // Fenster „Zum Unterschreiben schicken“ (UnterschriftAnfordern.tsx); solange es offen ist, ist dieses ausgeblendet.
+  const [unterschreiben, setUnterschreiben] = useState(false)
 
   const felder = useMemo(() => felderAus(vorlage.text), [vorlage.text])
   // In der linken Spalte nur die Hauptangaben; Tabellenzellen füllt man direkt in der Vorschau aus.
@@ -191,7 +194,8 @@ export function VorlageAusfuellenModal({
     })
 
   return (
-    <Modal open onClose={onClose} title={`Ausfüllen: ${vorlage.name}`} width="max-w-6xl">
+    <>
+    <Modal open={!unterschreiben} onClose={onClose} title={`Ausfüllen: ${vorlage.name}`} width="max-w-6xl">
       <div className="grid gap-5 lg:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]">
         <div className="space-y-4">
           <div>
@@ -260,6 +264,9 @@ export function VorlageAusfuellenModal({
               <SecondaryButton onClick={alsPdf}>
                 <Download size={14} /> PDF herunterladen
               </SecondaryButton>
+              <SecondaryButton onClick={() => setUnterschreiben(true)} disabled={!auswahl}>
+                <PenLine size={14} /> Zum Unterschreiben schicken
+              </SecondaryButton>
               <PrimaryButton onClick={inAkte} disabled={!auswahl || ablegen !== 'idle'}>
                 {ablegen === 'fertig' ? <Check size={14} /> : <FolderInput size={14} />}
                 {ablegen === 'laeuft' ? 'Legt ab …' : ablegen === 'fertig' ? 'In der Akte abgelegt' : 'Als PDF in die Akte'}
@@ -302,5 +309,9 @@ export function VorlageAusfuellenModal({
         </div>
       </div>
     </Modal>
+    {unterschreiben && auswahl && (
+      <UnterschriftAnfordern vorlage={vorlage} werte={werte} angekreuzt={angekreuzt} auswahl={auswahl} onClose={() => setUnterschreiben(false)} />
+    )}
+    </>
   )
 }

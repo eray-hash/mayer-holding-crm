@@ -9,6 +9,7 @@ import { istUnbezahlt, istUeberfaellig, angezeigterStatus, offenerBetrag, faelli
 import { akteName, findeAkte, useKvNutzer } from '../../components/KostenvoranschlaegeSection'
 import { RechnungDetail } from '../../components/rechnungen/RechnungDetail'
 import { RechnungFormular } from '../../components/rechnungen/RechnungFormular'
+import { KontoauszugAbgleichKnopf } from '../../components/rechnungen/KontoauszugAbgleich'
 import type { Rechnung } from '../../types'
 
 type FilterId = 'alle' | 'offen' | 'ueberfaellig' | 'bezahlt' | 'entwurf'
@@ -83,9 +84,12 @@ export function Rechnungen() {
           <h1 className="text-xl font-semibold text-slate-800">Rechnungen</h1>
           <p className="text-sm text-slate-500">Alle Rechnungen an Kunden, über alle Bereiche — zum Öffnen antippen</p>
         </div>
-        <PrimaryButton onClick={() => setNeuOffen(true)} disabled={nutzer.nurLesen}>
-          <Plus size={15} /> Neue Rechnung
-        </PrimaryButton>
+        <div className="flex flex-wrap gap-2">
+          <KontoauszugAbgleichKnopf />
+          <PrimaryButton onClick={() => setNeuOffen(true)} disabled={nutzer.nurLesen}>
+            <Plus size={15} /> Neue Rechnung
+          </PrimaryButton>
+        </div>
       </div>
 
       <div className="mb-5 grid grid-cols-3 gap-2 sm:gap-3">

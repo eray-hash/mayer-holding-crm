@@ -8,6 +8,7 @@ import { useKvNutzer } from '../../components/KostenvoranschlaegeSection'
 import { supabase } from '../../lib/supabaseClient'
 import { brauchtDateiLink, holeAnhangUrl } from '../../lib/emailGateway'
 import { ladeKundenDokumentHoch, erzeugeKundenDownloadUrl } from '../../lib/kundenDokumenteStorage'
+import { KontoauszugAbgleichKnopf } from '../../components/rechnungen/KontoauszugAbgleich'
 import type { Verbindlichkeit, VerbindlichkeitStatus } from '../../types'
 
 // Gegenstück zur Rechnungen-Seite: Geld, das Mayer Holding selbst schuldet (Lieferanten-/
@@ -124,7 +125,10 @@ export function Verbindlichkeiten() {
           <h1 className="text-xl font-semibold text-slate-800">Verbindlichkeiten</h1>
           <p className="text-sm text-slate-500">Eingehende Rechnungen, die Mayer Holding selbst bezahlen muss — zum Öffnen antippen</p>
         </div>
-        {!nutzer.nurLesen && <PrimaryButton onClick={() => setNeu(true)}><Plus size={15} /> Neue Verbindlichkeit</PrimaryButton>}
+        <div className="flex flex-wrap gap-2">
+          <KontoauszugAbgleichKnopf />
+          {!nutzer.nurLesen && <PrimaryButton onClick={() => setNeu(true)}><Plus size={15} /> Neue Verbindlichkeit</PrimaryButton>}
+        </div>
       </div>
 
       <div className="mb-5 grid grid-cols-3 gap-2 sm:gap-3">

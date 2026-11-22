@@ -8,13 +8,21 @@
 // Bilder kommen als JPEG oder PNG an; pdf-lib übernimmt JPEG unverändert (kein Entpacken, kaum
 // Rechenzeit). Zugeschnitten wird über einen Ausschnitt (clip), gedreht nach der Ausrichtungs-Angabe
 // des Fotos — die Pixel bleiben unangetastet (siehe bildDrehung.ts, warum keine Pixel-Drehung).
+// Reihenfolge, Titelbild, „nicht ins Exposé“ und eine zusätzliche Drehung je Foto kommen aus
+// objekte.bilder_reihenfolge (Kern: _shared/bilderReihenfolge.ts); die Auswahl trifft der Aufrufer,
+// hier wird nur die Drehung (`drehung`) auf die Ausrichtung des Fotos aufgeschlagen.
 
 import { clip, degrees, endPath, type PDFFont, type PDFImage, PDFDocument, type PDFPage, popGraphicsState, pushGraphicsState, rectangle, rgb, StandardFonts } from 'npm:pdf-lib@1.17.1'
 import { laeufe, type Lauf, zerlege } from './auszeichnung.ts'
+import { ausrichtungAusGrad, kombiniereAusrichtung } from '../_shared/bilderReihenfolge.ts'
 import { istJpeg, jpegAusrichtung } from './bildDrehung.ts'
 import { type Schriften, textBreite, umbrechen, zeichenFilter, zeichneText, type Zeile } from './dokumentErstellen.ts'
 
-export type ExposeBildDaten = { bytes: Uint8Array }
+export type ExposeBildDaten = {
+  bytes: Uint8Array
+  /** Zusätzliche Drehung im Uhrzeigersinn (0/90/180/270) aus objekte.bilder_reihenfolge — auf die Kamera-Angabe aufgeschlagen. */
+  drehung?: number
+}
 
 export type ExposeKontakt = {
   /** Überschrift des Kastens, z. B. „Ihr Ansprechpartner“ oder „Vermittler“. */
@@ -63,12 +71,21 @@ const WARNUNG = farbe(146, 64, 14)
 
 type Bild = { bild: PDFImage; ausrichtung: number }
 
+function istPng(b: Uint8Array): boolean {
+  return b.length > 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47
+}
+
+/** Ausrichtung, mit der ein Foto gezeichnet wird: Kamera-Angabe (nur JPEG) plus die Drehung aus bilder_reihenfolge (1/3/6/8). */
+export function zeichenAusrichtung(b: ExposeBildDaten): number {
+  return istJpeg(b.bytes) ? kombiniereAusrichtung(jpegAusrichtung(b.bytes) ?? 1, b.drehung ?? 0) : ausrichtungAusGrad(b.drehung ?? 0)
+}
+
 /** Bild einbetten; kaputte oder unbekannte Dateien → null (das Exposé entsteht dann ohne dieses Bild). */
 async function betteEin(doc: PDFDocument, b: ExposeBildDaten | undefined): Promise<Bild | null> {
   if (!b?.bytes?.length) return null
   try {
-    if (istJpeg(b.bytes)) return { bild: await doc.embedJpg(b.bytes), ausrichtung: jpegAusrichtung(b.bytes) ?? 1 }
-    if (b.bytes[0] === 0x89 && b.bytes[1] === 0x50 && b.bytes[2] === 0x4e && b.bytes[3] === 0x47) return { bild: await doc.embedPng(b.bytes), ausrichtung: 1 }
+    if (istJpeg(b.bytes)) return { bild: await doc.embedJpg(b.bytes), ausrichtung: zeichenAusrichtung(b) }
+    if (istPng(b.bytes)) return { bild: await doc.embedPng(b.bytes), ausrichtung: zeichenAusrichtung(b) }
   } catch {
     // unten: null
   }

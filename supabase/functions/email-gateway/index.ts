@@ -262,13 +262,18 @@ import { pruefeNeueTreffer } from './gesuchTreffer.ts'
 import { istDienstSchluessel, sendeTagesmeldungen, tagesmeldungTest } from './tagesmeldung.ts'
 import { pruefeBonitaet } from './bonitaet.ts'
 import { lieseKontoauszug } from './kontoauszug.ts'
+import { lieseAuszugFuerAbgleich } from './abgleichAuslesen.ts'
 import { erstelleChecklisteVorschlag } from './checklisteVorschlag.ts'
 import { priorisiereListe, pruefeTodoPriorisierung, type Liste as TodoListe } from './todoPriorisierung.ts'
 import { versendeWillkommen } from './willkommen.ts'
 import { pruefeKundenberichte } from './kundenbericht.ts'
+import { sendeTerminBriefings } from './terminBriefing.ts'
 import { versendeAutoNachrichten } from './autoNachrichten.ts'
 import { kiEntscheidung, pruefeNeueAnfragen } from './anfragenManager.ts'
-import { portalDokument, portalLaden, portalZustimmen } from './objektPortal.ts'
+import { akteZuObjektAktion, haikuOrdner, setzeHaengendeUmzuegeFort, stosseUmzugAn } from './akteZuObjekt.ts'
+import { portalBesichtigung, portalDokument, portalLaden, portalZustimmen } from './objektPortal.ts'
+import { starteRenditeMarktvergleich } from './renditeMarkt.ts'
+import { beantworteUnterschrift } from './unterschrift.ts'
 import { seminarAnmelden, seminarTerminLaden } from './seminarAnmeldung.ts'
 import { beantworteKundenUnterlagen } from './kundenUnterlagen.ts'
 import { pruefeWunschAnalyse, wunschAnalyseTest } from './wunschAnalyse.ts'
@@ -3343,6 +3348,17 @@ Deno.serve((req: Request) => mitAnlass(async () => {
         return { gesendet: 0 }
       })
       if (todoErinnerung.gesendet > 0) console.log(`To-do-Erinnerungen: ${todoErinnerung.gesendet} gesendet.`)
+      // Termin-Briefing vor Kundenterminen und wahlweise Morgenübersicht ab 7:30 (terminBriefing.ts) — nur Telegram an
+      // Mitarbeiter, einmal je Termin und Empfänger. Im Hintergrund (Gesprächspunkte per KI), eigener Rahmen für die
+      // Kostenzuordnung; wirft nie.
+      const briefingLauf = mitAnlass(() => {
+        setzeAnlass('termin_briefing')
+        return sendeTerminBriefings(admin, { sende: sendeTelegram })
+      }).then((r) => {
+        if (r.gesendet > 0 || r.morgen > 0) console.log(`Termin-Briefing: ${r.gesendet} vor Terminen, ${r.morgen} Morgenübersicht(en).`)
+      })
+      // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
+      EdgeRuntime.waitUntil(briefingLauf)
       // Fällige automatische Willkommensnachrichten (willkommen.ts) — nur bei eingeschaltetem Schalter; wirft nie.
       const willkommen = await versendeWillkommen(admin, (to, subject, text, html) => sendMail(to, subject, text, html)).catch((err) => {
         console.error('Willkommensnachrichten fehlgeschlagen:', err)
@@ -3373,6 +3389,9 @@ Deno.serve((req: Request) => mitAnlass(async () => {
         // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
         EdgeRuntime.waitUntil(anfragenLauf)
       }
+      // Hängengebliebene Umzüge Kundenakte → Objektakte fortsetzen (akteZuObjekt.ts), ohne offenes Browserfenster.
+      // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
+      EdgeRuntime.waitUntil(setzeHaengendeUmzuegeFort(admin))
       // Im selben Takt (die Funktion bremst sich selbst auf alle fünf Minuten): neue Treffer zwischen
       // Gesuchen und Objekten erkennen und den Zuständigen per Telegram melden.
       const treffer = body.ohneTreffer === true ? { gelaufen: false, neu: 0, benachrichtigt: 0 } : await pruefeNeueTreffer(admin, sendeTelegram)
@@ -4269,11 +4288,13 @@ Deno.serve((req: Request) => mitAnlass(async () => {
     }
 
     // Interessenten-Portal (objektPortal.ts): ohne Login, nur mit dem geheimen Link. Mengengrenze je Gerät.
-    if (body.action === 'public_objekt_portal' || body.action === 'public_objekt_portal_zustimmen' || body.action === 'public_objekt_portal_dokument') {
+    if (body.action === 'public_objekt_portal' || body.action === 'public_objekt_portal_zustimmen' || body.action === 'public_objekt_portal_dokument' || body.action === 'public_objekt_portal_besichtigung') {
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
       const ip = (req.headers.get('x-forwarded-for') ?? '').split(',')[0].trim() || 'unbekannt'
       const zustimmen = body.action === 'public_objekt_portal_zustimmen'
-      if (await grenzeErreicht(admin, [{ schluessel: `portal:${zustimmen ? 'zust' : 'lesen'}:${ip}`, hoechstens: zustimmen ? 20 : 300 }])) {
+      const besichtigung = body.action === 'public_objekt_portal_besichtigung'
+      const grenze = besichtigung ? { schluessel: `portal:termin:${ip}`, hoechstens: 20 } : { schluessel: `portal:${zustimmen ? 'zust' : 'lesen'}:${ip}`, hoechstens: zustimmen ? 20 : 300 }
+      if (await grenzeErreicht(admin, [grenze])) {
         return new Response(JSON.stringify({ error: 'Zu viele Aufrufe. Bitte versuchen Sie es in einer Stunde erneut.' }), { status: 429, headers })
       }
       try {
@@ -4282,6 +4303,10 @@ Deno.serve((req: Request) => mitAnlass(async () => {
         const melde = async (verantwortlich: string, text: string) => {
           const { data: m } = await admin.from('mitarbeiter').select('telegram_chat_id').eq('aktiv', true).eq('name', verantwortlich).maybeSingle()
           if (m?.telegram_chat_id) await sendeTelegram(m.telegram_chat_id, text)
+        }
+        if (besichtigung) {
+          const e = { art: body.art, zeitId: body.zeitId, besichtigungId: body.besichtigungId, telefon: body.telefon, nachricht: body.nachricht }
+          return new Response(JSON.stringify(await portalBesichtigung(admin, body.token, e, melde)), { headers })
         }
         const ergebnis = await portalZustimmen(
           admin,
@@ -4296,6 +4321,39 @@ Deno.serve((req: Request) => mitAnlass(async () => {
         return new Response(JSON.stringify({ error: 'Das hat nicht geklappt. Bitte versuchen Sie es später erneut.' }), { status: 500, headers })
       }
     }
+
+    // Online-Unterschrift (unterschrift.ts): ohne Login, nur mit dem geheimen Link. Mengengrenze je Gerät.
+    if (body.action === 'public_unterschrift_laden' || body.action === 'public_unterschrift_absenden') {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const ip = (req.headers.get('x-forwarded-for') ?? '').split(',')[0].trim() || 'unbekannt'
+      const absenden = body.action === 'public_unterschrift_absenden'
+      if (await grenzeErreicht(admin, [{ schluessel: `unterschrift:${absenden ? 'absenden' : 'lesen'}:${ip}`, hoechstens: absenden ? 20 : 300 }])) {
+        return new Response(JSON.stringify({ error: 'Zu viele Aufrufe. Bitte versuchen Sie es in einer Stunde erneut.' }), { status: 429, headers })
+      }
+      const antwort = await beantworteUnterschrift(admin, body.action, body, { ip, geraet: req.headers.get('user-agent') ?? '' }, {
+        melde: async (an, text) => {
+          let chat: string | null = null
+          if (an.email) {
+            const muster = String(an.email).toLowerCase().replace(/[\\%_]/g, (z: string) => `\\${z}`)
+            const { data: m } = await admin.from('mitarbeiter').select('telegram_chat_id').eq('aktiv', true).ilike('email', muster).maybeSingle()
+            chat = m?.telegram_chat_id ?? null
+          }
+          if (!chat && an.name) {
+            const { data: m } = await admin.from('mitarbeiter').select('telegram_chat_id').eq('aktiv', true).eq('name', an.name).maybeSingle()
+            chat = m?.telegram_chat_id ?? null
+          }
+          if (chat) await sendeTelegram(chat, text)
+        },
+        // Nur wenn unterschrift_einstellung.kopie_an_kunde an ist (prüft unterschrift.ts).
+        sendeKopie: async (an, betreff, text, anhang, k) => {
+          await sendMail(an, betreff, text, undefined, [anhang])
+          const { error: logFehler } = await admin.from('gesendete_emails').insert({ an, an_name: k.anName || an, betreff, text, kunde_bereich: k.bereich, kunde_id: k.kundeId, kunde_name: k.kundeName || null })
+          if (logFehler) console.error('Konnte gesendete Mail nicht protokollieren:', logFehler.message)
+        },
+      })
+      return new Response(JSON.stringify(antwort.body), { status: antwort.status, headers })
+    }
+
 
     if (body.action === 'public_seminar_termin' || body.action === 'public_seminar_anmelden') {
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
@@ -4533,6 +4591,33 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       return new Response(JSON.stringify(ergebnis), { headers })
     }
 
+    if (body.action === 'akte_zu_objekt') {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const aufrufer = await ermittleAufrufer(req, admin, body)
+      if (!aufrufer) {
+        return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
+      }
+      if (!(await darfBereichServer(admin, aufrufer.email, 'immobilien'))) return keinRecht(headers)
+      const kiSchluessel = Deno.env.get('ANTHROPIC_API_KEY')
+      const ergebnis = await akteZuObjektAktion(
+        {
+          admin,
+          aufrufer: { email: aufrufer.email, name: aufrufer.name },
+          heute: new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Berlin' }).format(new Date()),
+          ki: kiSchluessel ? haikuOrdner(kiSchluessel) : null,
+          darfKunde: (kundeId) => darfKundeServer(admin, aufrufer.email, kundeId),
+          sendeTelegram,
+        },
+        body,
+        {
+          // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
+          imHintergrund: (arbeit) => EdgeRuntime.waitUntil(arbeit),
+          stosseAn: (umzugId) => stosseUmzugAn(umzugId, aufrufer.email),
+        },
+      )
+      return new Response(JSON.stringify(ergebnis.daten), { status: ergebnis.status, headers })
+    }
+
     // Anfragenmanager von Hand (anfragenManager.ts) — mit Login und Recht auf Immobilien. Ohne emailId: die nächsten
     // ungeprüften Mails wie im Minutentakt. Mit emailId: nur diese; mit erneut: true auch eine schon als „unklar“,
     // „keine Anfrage“ oder „Fehler“ geprüfte Mail noch einmal (z. B. nachdem die Inserat-Nummer am Objekt eingetragen ist).
@@ -4583,6 +4668,24 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       const ergebnis = await lieseKontoauszug(admin, { kundeId: body.kundeId, bereich: body.bereich, datei: body.datei }, {
         callClaudeResearch,
         ladeDokumentBytes,
+        restMs: () => WORKER_LEBENSDAUER_MS - (Date.now() - WORKER_GEBOOTET),
+        hoechstensMs: SCHRITT_HOECHSTENS_MS,
+      })
+      if (!ergebnis.ok) return new Response(JSON.stringify({ error: ergebnis.fehler }), { status: ergebnis.status, headers })
+      return new Response(JSON.stringify({ ok: true, buchungen: ergebnis.buchungen, datei: ergebnis.datei }), { headers })
+    }
+
+    // Kontoauszug der Holding für den Zahlungsabgleich auslesen (siehe abgleichAuslesen.ts) — eigener Login
+    // oder Dienstschlüssel mit imAuftragVon (Telegram-Werkzeug kontoauszug_abgleichen), Bereich Unternehmensberatung.
+    if (body.action === 'kontoauszug_abgleich_auslesen') {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const aufrufer = await ermittleAufrufer(req, admin, body)
+      if (!aufrufer) {
+        return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
+      }
+      if (!(await darfBereichServer(admin, aufrufer.email, 'beratung'))) return keinRecht(headers)
+      const ergebnis = await lieseAuszugFuerAbgleich(admin, { datei: body.datei }, {
+        callClaudeResearch,
         restMs: () => WORKER_LEBENSDAUER_MS - (Date.now() - WORKER_GEBOOTET),
         hoechstensMs: SCHRITT_HOECHSTENS_MS,
       })
@@ -4750,6 +4853,35 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       return new Response(JSON.stringify({ ok: true }), { headers })
     }
 
+    // Rendite-Check: „Vergleich vor Ort prüfen“ (renditeMarkt.ts) — Webrecherche zu Preis je m² und Miete/Pacht am
+    // Standort, Ergebnis in objekte.rendite.markt. Eigener Login oder der Assistent (imAuftragVon); imHintergrund
+    // = sofort antworten und im Hintergrund weiterarbeiten (Telegram).
+    if (body.action === 'rendite_marktvergleich') {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const aufrufer = await ermittleAufrufer(req, admin, body)
+      if (!aufrufer) {
+        return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
+      }
+      const objektId = typeof body.objektId === 'string' ? body.objektId.trim() : ''
+      if (!objektId) return new Response(JSON.stringify({ error: 'objektId fehlt.' }), { status: 400, headers })
+      if (!(await darfObjektServer(admin, aufrufer.email, objektId))) return keinRecht(headers)
+      const start = await starteRenditeMarktvergleich(admin, { objektId, wer: aufrufer.name || aufrufer.email }, {
+        callClaudeResearch,
+        restMs: () => WORKER_LEBENSDAUER_MS - (Date.now() - WORKER_GEBOOTET),
+        hoechstensMs: SCHRITT_HOECHSTENS_MS,
+        setzePrivat,
+      })
+      if (!start.ok) return new Response(JSON.stringify({ error: start.fehler }), { status: start.status, headers })
+      if (body.imHintergrund === true) {
+        // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
+        EdgeRuntime.waitUntil(start.arbeit)
+        return new Response(JSON.stringify({ ok: true, laeuft: true }), { headers })
+      }
+      const ergebnis = await start.arbeit
+      if (!ergebnis.ok) return new Response(JSON.stringify({ error: ergebnis.fehler }), { status: ergebnis.status, headers })
+      return new Response(JSON.stringify({ ok: true, markt: ergebnis.markt }), { headers })
+    }
+
     if (body.action === 'dokument_lesen') {
       const { url, name, typ } = body
       if (!url || !name) return new Response(JSON.stringify({ error: 'url und name sind Pflichtfelder' }), { status: 400, headers })
@@ -4836,7 +4968,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       return new Response(JSON.stringify({ ok: true }), { headers })
     }
 
-    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "public_objekt_portal", "public_objekt_portal_zustimmen", "public_objekt_portal_dokument", "bewertung_recherche_start", "bewertung_recherche_schritt", "kunden_umfeld_recherche", "steuer_analyse_start", "steuer_analyse_schritt", "dokument_lesen", "dokument_inhalte", "postfaecher_liste", "postfach_verbinden", "postfach_trennen", "postfach_abruf", "postfach_ordner", "mail_zuordnen", "mail_freigeben", "mail_anhang_url", "termin_speichern", "termin_loeschen", "termin_erinnerungen", "tagesmeldung_test", "kontoauszug_auslesen", "checkliste_vorschlag", "todos_priorisieren", "willkommen_jetzt", "auto_nachricht_jetzt", "anfrage_pruefen_jetzt", "public_seminar_termin", "public_seminar_anmelden", "gesendet_abruf" oder "firmenwissen_answer"' }), { status: 400, headers })
+    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "public_objekt_portal", "public_objekt_portal_zustimmen", "public_objekt_portal_dokument", "public_objekt_portal_besichtigung", "bewertung_recherche_start", "bewertung_recherche_schritt", "kunden_umfeld_recherche", "steuer_analyse_start", "steuer_analyse_schritt", "dokument_lesen", "dokument_inhalte", "postfaecher_liste", "postfach_verbinden", "postfach_trennen", "postfach_abruf", "postfach_ordner", "mail_zuordnen", "mail_freigeben", "mail_anhang_url", "termin_speichern", "termin_loeschen", "termin_erinnerungen", "tagesmeldung_test", "kontoauszug_auslesen", "kontoauszug_abgleich_auslesen", "rendite_marktvergleich", "checkliste_vorschlag", "todos_priorisieren", "willkommen_jetzt", "auto_nachricht_jetzt", "anfrage_pruefen_jetzt", "akte_zu_objekt", "public_seminar_termin", "public_seminar_anmelden", "public_unterschrift_laden", "public_unterschrift_absenden", "gesendet_abruf" oder "firmenwissen_answer"' }), { status: 400, headers })
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }

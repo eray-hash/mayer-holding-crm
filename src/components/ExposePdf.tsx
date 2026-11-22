@@ -7,7 +7,7 @@ import { CURRENT_USER, DEMO_NUTZER } from '../data/constants'
 import { briefkopfAus } from '../data/briefkopf'
 import { erzeugeExposePdf, type ExposeBild } from '../lib/exposePdf'
 import { adresseVon, exposeFakten, interneAngabenIn, objektartVon, ortVon, preisText, standardTitel } from '../lib/exposeDaten'
-import { findeLogoVorlage, istBild, ladeExposeBild, ladeLogo, objektDateiUrl } from '../lib/exposeBilder'
+import { bildDrehung, bilderInReihenfolge, exposeStandardBilder, findeLogoVorlage, ladeExposeBild, ladeLogo, objektDateiUrl } from '../lib/exposeBilder'
 import { ladeObjektDokumentHoch } from '../lib/objektDokumenteStorage'
 import { fmtDate, today, uid } from '../lib/dates'
 import type { Dokument, Objekt } from '../types'
@@ -28,7 +28,8 @@ export type ExposeEinstellungen = {
 }
 
 export function bilderVon(objekt: Objekt): Dokument[] {
-  return (objekt.dokumente.Bilder ?? []).filter(istBild)
+  // Reihenfolge und Titelbild wie unter „Fotos“ festgelegt (objekte.bilder_reihenfolge).
+  return bilderInReihenfolge(objekt)
 }
 
 export function useExposeEinstellungen(objekt: Objekt, startText?: string) {
@@ -39,9 +40,8 @@ export function useExposeEinstellungen(objekt: Objekt, startText?: string) {
       ort,
       adresseZeigen: false,
       beschreibung: startText ?? objekt.exposeText ?? '',
-      bilder: bilderVon(objekt)
-        .slice(0, MAX_BILDER)
-        .map((d) => d.id),
+      // Vorauswahl: festgelegte Reihenfolge ohne die Fotos, die nicht ins Exposé sollen.
+      bilder: exposeStandardBilder(objekt, MAX_BILDER).map((d) => d.id),
     }
   })
   const aendere = (patch: Partial<ExposeEinstellungen>) => setE((alt) => ({ ...alt, ...patch }))
@@ -212,7 +212,7 @@ export async function erstelleExpose(objekt: Objekt, e: ExposeEinstellungen, k: 
   const ohneBilder: string[] = []
   const geladen = await Promise.all(
     gewaehlt.map((d, i) =>
-      ladeExposeBild(d, i === 0 ? 'titel' : 'galerie').catch(() => {
+      ladeExposeBild(d, i === 0 ? 'titel' : 'galerie', bildDrehung(objekt, d.id)).catch(() => {
         ohneBilder.push(d.name)
         return null
       }),

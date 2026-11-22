@@ -25,6 +25,7 @@ import { KostenvoranschlaegeSection, useKvNutzer } from '../../components/Kosten
 import { WiedervorlagenListe } from '../../components/WiedervorlagenListe'
 import { WillkommenHinweis } from '../../components/WillkommenHinweis'
 import { KundenberichtModal } from '../../components/KundenberichtModal'
+import { UnterschriftAnfragen } from '../../components/UnterschriftAnfragen'
 import { KommunikationSection } from '../../components/KommunikationSection'
 import { LoeschenKundeButton } from '../../components/LoeschenKundeButton'
 import { AktenReiter } from '../../components/AktenReiter'
@@ -144,6 +145,7 @@ export function ErbenDetail() {
             <div className="mt-4 border-t border-slate-100 pt-4">
               <div className="mb-3"><WillkommenHinweis kundeId={mandant.id} nutzerName={nutzer.name} nurLesen={nutzer.nurLesen} /></div>
               <div className="mb-3"><KundenberichtModal bereich="erben" kunde={mandant} nutzerName={nutzer.name} nurLesen={nutzer.nurLesen} /></div>
+              <div className="mb-3"><UnterschriftAnfragen bereich="erben" kunde={mandant} nutzerName={nutzer.name} nurLesen={nutzer.nurLesen} /></div>
               <h3 className="mb-3 text-sm font-semibold text-slate-700">Wiedervorlagen</h3>
               <WiedervorlagenListe kundeId={mandant.id} bereich="erben" verantwortlich={mandant.verantwortlich} nutzerName={nutzer.name} nurLesen={nutzer.nurLesen} />
             </div>

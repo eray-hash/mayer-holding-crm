@@ -2,7 +2,12 @@
 // drehen (Handyfotos tragen die Ausrichtung nur als Zusatzangabe), auf das gewünschte Seitenverhältnis
 // zuschneiden, verkleinern und als JPEG pressen — damit das PDF auch mit sieben Fotos klein bleibt
 // (Ziel: deutlich unter 5 MB, auch als Mailanhang).
-import type { Dokument, Vorlage } from '../types'
+//
+// Reihenfolge, Titelbild, „nicht ins Exposé“ und eine zusätzliche Drehung je Foto stehen in
+// objekte.bilder_reihenfolge (gepflegt in ObjektBilderVerwalten.tsx und vom Assistenten); die Regeln
+// teilt sich das CRM mit dem Server (supabase/functions/_shared/bilderReihenfolge.ts).
+import type { Dokument, Objekt, Vorlage } from '../types'
+import { type Drehung, exposeBilderAuswahl, normaleDrehung, ordneBilder } from '../../supabase/functions/_shared/bilderReihenfolge.ts'
 import type { ExposeBild } from './exposePdf'
 import { erzeugeDownloadUrl } from './objektDokumenteStorage'
 import { erzeugeKundenDownloadUrl } from './kundenDokumenteStorage'
@@ -13,6 +18,27 @@ const BILD_ENDUNG = /\.(jpe?g|png|webp|gif|bmp|heic|heif|avif)$/i
 /** Ist dieses Dokument (vermutlich) ein Foto? */
 export function istBild(d: Dokument): boolean {
   return !!d.url && (d.typ.toLowerCase().startsWith('image/') || BILD_ENDUNG.test(d.name) || BILD_ENDUNG.test(d.url))
+}
+
+/** Die gespeicherte Reihenfolge eines Objekts (Spalte bilder_reihenfolge; fehlt sie im geladenen Stand: keine). */
+export function reihenfolgeVon(objekt: Objekt): unknown {
+  return (objekt as unknown as { bilderReihenfolge?: unknown }).bilderReihenfolge
+}
+
+/** Alle Fotos des Ordners „Bilder“ in der festgelegten Reihenfolge (das erste ist das Titelbild). */
+export function bilderInReihenfolge(objekt: Objekt): Dokument[] {
+  return ordneBilder((objekt.dokumente.Bilder ?? []).filter(istBild), reihenfolgeVon(objekt)).map((g) => g.dok)
+}
+
+/** Fotos, die standardmäßig ins Exposé kommen: Reihenfolge wie festgelegt, ohne „nicht ins Exposé“, höchstens `max`. */
+export function exposeStandardBilder(objekt: Objekt, max: number): Dokument[] {
+  return exposeBilderAuswahl((objekt.dokumente.Bilder ?? []).filter(istBild), reihenfolgeVon(objekt), max).map((a) => a.dok)
+}
+
+/** Zusätzliche Drehung eines Fotos (0/90/180/270) laut Reihenfolge. */
+export function bildDrehung(objekt: Objekt, dokId: string): Drehung {
+  const g = ordneBilder((objekt.dokumente.Bilder ?? []).filter(istBild), reihenfolgeVon(objekt)).find((x) => x.dok.id === dokId)
+  return normaleDrehung(g?.eintrag.drehung)
 }
 
 /** Kurz gültiger Link auf eine Datei eines Objekts (eigene Ablage oder gemeinsame Ablage). */
@@ -27,10 +53,10 @@ async function ladeBlob(url: string): Promise<Blob> {
   return res.blob()
 }
 
-type Quelle = { bild: CanvasImageSource; breite: number; hoehe: number; schliessen: () => void }
+export type Quelle = { bild: CanvasImageSource; breite: number; hoehe: number; schliessen: () => void }
 
 /** Dekodiert ein Bild mit der richtigen Ausrichtung (EXIF). Erst createImageBitmap, sonst ein <img>. */
-async function dekodiere(blob: Blob): Promise<Quelle> {
+export async function dekodiere(blob: Blob): Promise<Quelle> {
   try {
     const bitmap = await createImageBitmap(blob, { imageOrientation: 'from-image' })
     return { bild: bitmap, breite: bitmap.width, hoehe: bitmap.height, schliessen: () => bitmap.close() }
@@ -91,13 +117,31 @@ function alsJpeg(q: Quelle, verhaeltnis: number | null, maxBreite: number, maxBy
   return { dataUrl: canvas.toDataURL('image/jpeg', 0.5), breite: canvas.width, hoehe: canvas.height }
 }
 
+/** Dreht ein dekodiertes Bild um 90/180/270 Grad im Uhrzeigersinn (neue Zeichenfläche); 0 → unverändert. */
+export function gedreht(q: Quelle, drehung: number): Quelle {
+  const d = normaleDrehung(drehung)
+  if (d === 0) return q
+  const quer = d === 90 || d === 270
+  const canvas = document.createElement('canvas')
+  canvas.width = quer ? q.hoehe : q.breite
+  canvas.height = quer ? q.breite : q.hoehe
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('Bild konnte nicht verarbeitet werden.')
+  ctx.translate(canvas.width / 2, canvas.height / 2)
+  ctx.rotate((d * Math.PI) / 180)
+  ctx.drawImage(q.bild, -q.breite / 2, -q.hoehe / 2, q.breite, q.hoehe)
+  q.schliessen()
+  return { bild: canvas, breite: canvas.width, hoehe: canvas.height, schliessen: () => { canvas.width = 0; canvas.height = 0 } }
+}
+
 export type BildArt = 'titel' | 'galerie'
 
 /** Holt ein Foto des Objekts und bereitet es für das PDF auf: Titelbild 3:2 bis 1600 Pixel breit
- *  (höchstens etwa 450 KB), Bilderseite 4:3 bis 1000 Pixel (höchstens etwa 230 KB). */
-export async function ladeExposeBild(d: Dokument, art: BildArt): Promise<ExposeBild> {
+ *  (höchstens etwa 450 KB), Bilderseite 4:3 bis 1000 Pixel (höchstens etwa 230 KB). `drehung` dreht
+ *  zusätzlich im Uhrzeigersinn (aus bilder_reihenfolge, siehe bildDrehung). */
+export async function ladeExposeBild(d: Dokument, art: BildArt, drehung = 0): Promise<ExposeBild> {
   const blob = await ladeBlob(await objektDateiUrl(d))
-  const q = await dekodiere(blob)
+  const q = gedreht(await dekodiere(blob), drehung)
   try {
     return art === 'titel' ? alsJpeg(q, 1.5, 1600, 450_000) : alsJpeg(q, 4 / 3, 1000, 230_000)
   } finally {

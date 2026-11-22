@@ -22,8 +22,10 @@ import { KostenvoranschlaegeSection, useKvNutzer } from '../../components/Kosten
 import { WiedervorlagenListe } from '../../components/WiedervorlagenListe'
 import { WillkommenHinweis } from '../../components/WillkommenHinweis'
 import { KundenberichtModal } from '../../components/KundenberichtModal'
+import { UnterschriftAnfragen } from '../../components/UnterschriftAnfragen'
 import { KommunikationSection } from '../../components/KommunikationSection'
 import { LoeschenKundeButton } from '../../components/LoeschenKundeButton'
+import { AkteZuObjektKnopf } from '../../components/AkteZuObjektKnopf'
 import { AktenReiter } from '../../components/AktenReiter'
 import { ImmoStammdatenblatt } from '../../components/ImmoStammdatenblatt'
 import type { Prioritaet } from '../../types'
@@ -102,6 +104,7 @@ export function ImmobilienKundenDetail({ privat }: { privat?: boolean } = {}) {
             >
               {PRIORITAETEN.map((p) => <option key={p} value={p}>{p}</option>)}
             </select>
+            {!privat && <AkteZuObjektKnopf kundeId={kunde.id} nurLesen={nutzer.nurLesen} />}
             <LoeschenKundeButton bereich={bereich} kundeId={kunde.id} kundeName={kunde.firma} listePfad={pfade.kundenListe} />
           </div>
         </div>
@@ -144,6 +147,7 @@ export function ImmobilienKundenDetail({ privat }: { privat?: boolean } = {}) {
               <div className="mt-4 border-t border-slate-100 pt-4">
                 <div className="mb-3"><WillkommenHinweis kundeId={kunde.id} nutzerName={nutzer.name} nurLesen={nutzer.nurLesen} /></div>
                 <div className="mb-3"><KundenberichtModal bereich={bereich} kunde={kunde} nutzerName={nutzer.name} nurLesen={nutzer.nurLesen} /></div>
+                <div className="mb-3"><UnterschriftAnfragen bereich={bereich} kunde={kunde} nutzerName={nutzer.name} nurLesen={nutzer.nurLesen} /></div>
                 <h3 className="mb-3 text-sm font-semibold text-slate-700">Wiedervorlagen</h3>
                 <WiedervorlagenListe kundeId={kunde.id} bereich={bereich} verantwortlich={kunde.verantwortlich} nutzerName={nutzer.name} nurLesen={nutzer.nurLesen} />
               </div>

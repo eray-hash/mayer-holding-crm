@@ -19,6 +19,7 @@
 //
 // Der Assistent arbeitet mit vollen Datenbankrechten; die Rechte prüft objektAblage.ts (rechte.ts).
 
+import { exposeBilderAuswahl } from '../_shared/bilderReihenfolge.ts'
 import { speicherOrt } from './dateiSenden.ts'
 import { deDatum, FIRMA, heuteBerlin } from './dokumentErstellen.ts'
 import { type ExposeBildDaten, type ExposeKontakt, erstelleExposePdf } from './exposePdf.ts'
@@ -41,7 +42,7 @@ const MAX_ORIGINAL_PNG = 1.5 * 1024 * 1024
 /** Obergrenze aller Bilder zusammen, damit das PDF als Anhang und im Portal handlich bleibt. */
 const MAX_BILDER_BYTES = 12 * 1024 * 1024
 
-const SPALTEN = 'id, bezeichnung, adresse, typ, kaufpreis, expose_text, verkaufsdaten, dokumente, off_market, privat_besitzer, eigentuemer'
+const SPALTEN = 'id, bezeichnung, adresse, typ, kaufpreis, expose_text, verkaufsdaten, dokumente, bilder_reihenfolge, off_market, privat_besitzer, eigentuemer'
 
 export const EXPOSE_WERKZEUGE = [
   {
@@ -344,21 +345,27 @@ async function exposeErstellen(input: any, k: ExposeKontext): Promise<string> {
   const fakten = exposeFakten(o, eckdaten, text(input.provision))
   const warnungen = interneAngabenIn(o, [titel, beschreibung, ...eckdaten.map((e) => e.wert)].join('\n'), adresseZeigen)
 
-  // Bilder aus dem Ordner „Bilder“ (Reihenfolge wie in der Akte; das erste wird Titelbild).
+  // Bilder aus dem Ordner „Bilder“ in der festgelegten Reihenfolge (objekte.bilder_reihenfolge, _shared/bilderReihenfolge.ts):
+  // das erste wird Titelbild, „nicht im Exposé“ bleibt draußen, die eingestellte Drehung kommt dazu.
   const anzahl = Number.isFinite(Number(input.max_bilder)) ? Math.max(0, Math.min(MAX_BILDER, Math.floor(Number(input.max_bilder)))) : MAX_BILDER
   const imOrdner = ((o.dokumente?.Bilder ?? []) as ObjektDokument[]).filter(istBild)
-  const gewaehlt = imOrdner.slice(0, anzahl)
+  const auswahl = exposeBilderAuswahl(imOrdner, o.bilder_reihenfolge, anzahl)
+  const gewaehlt = auswahl.map((a) => a.dok)
   const geladen: (ExposeBildDaten | null)[] = []
   let summe = 0
   for (let i = 0; i < gewaehlt.length; i++) {
     const ort = objektSpeicherOrt(gewaehlt[i].url)
-    const bild = ort ? await ladeBild(supabase, ort.eimer, ort.pfad, i === 0 ? TITEL : GALERIE, 'cover') : null
+    const drehung = auswahl[i].drehung
+    // Hochkant gedreht: hochkant zuschneiden lassen, damit das Foto nach dem Drehen das Feld füllt.
+    const masse = i === 0 ? TITEL : GALERIE
+    const zuschnitt = drehung === 90 || drehung === 270 ? { width: masse.height, height: masse.width } : masse
+    const bild = ort ? await ladeBild(supabase, ort.eimer, ort.pfad, zuschnitt, 'cover') : null
     if (bild && summe + bild.bytes.length > MAX_BILDER_BYTES) {
       geladen.push(null)
       continue
     }
     if (bild) summe += bild.bytes.length
-    geladen.push(bild)
+    geladen.push(bild ? { ...bild, drehung } : null)
   }
   const nichtGeladen = gewaehlt.filter((_, i) => !geladen[i]).map((d) => d.name)
   const logo = privat ? undefined : await ladeLogo(supabase)

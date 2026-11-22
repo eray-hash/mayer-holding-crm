@@ -97,7 +97,7 @@ export type Rechnung = {
 
 export type RechnungPosition = { id: string; bezeichnung: string; menge: number; einheit: string; einzelpreis: number; leistungId?: string }
 
-export type RechnungZahlung = { id: string; datum: string; betrag: number; notiz?: string; erfasstVon?: string }
+export type RechnungZahlung = { id: string; datum: string; betrag: number; notiz?: string; erfasstVon?: string; quelle?: string }
 
 /** Ein Schritt im Mahnwesen: Zahlungserinnerung, 1./2. Mahnung oder Übergabe ans Inkasso. */
 export type RechnungMahnung = {
@@ -630,6 +630,8 @@ export type Objekt = {
   // Automatisch per KI erstelltes 1-Seiten-Exposé (Whitelabel) direkt bei Objektanlage, siehe
   // ObjektListe.tsx. undefined solange die Generierung noch läuft oder fehlgeschlagen ist.
   exposeText?: string
+  /** Fotos im Ordner „Bilder“ in Anzeigereihenfolge (erstes = Titelbild) mit Angaben je Foto — Spalte bilder_reihenfolge, nur lesen (schreiben: ObjektBilderVerwalten.tsx und der Assistent). */
+  bilderReihenfolge?: { id: string; drehung?: 0 | 90 | 180 | 270; im_expose?: boolean; beschriftung?: string }[]
   // Bewertung per Knopf: läuft auf dem Server in mehreren Schritten und wird NUR vom Server geschrieben
   // (das Fenster liest sie, speichert sie aber nie zurück — siehe objektToRow in crmSync.ts).
   bewertung?: ObjektBewertung

@@ -89,6 +89,7 @@ import { PublicVollmachtErben } from './pages/formulare/PublicVollmachtErben'
 import { PublicExpose } from './pages/formulare/PublicExpose'
 import { PublicObjektPortal } from './pages/formulare/PublicObjektPortal'
 import { PublicSeminarAnmeldung } from './pages/formulare/PublicSeminarAnmeldung'
+import { PublicUnterschrift } from './pages/formulare/PublicUnterschrift'
 import { PublicMandantenfragebogenErben } from './pages/formulare/PublicMandantenfragebogenErben'
 import { PublicVollmachtBeratung } from './pages/formulare/PublicVollmachtBeratung'
 import { PublicSelbstauskunft } from './pages/formulare/PublicSelbstauskunft'
@@ -378,6 +379,7 @@ function AppRoutes() {
         <Route path="/formular/expose/:vorschlagId" element={<PublicExpose />} />
         <Route path="/formular/objekt/:token" element={<PublicObjektPortal />} />
         <Route path="/formular/seminar/:terminId" element={<PublicSeminarAnmeldung />} />
+        <Route path="/formular/unterschrift/:token" element={<PublicUnterschrift />} />
         <Route path="/formular/mandantenfragebogen/erben/:mandantId" element={<PublicMandantenfragebogenErben />} />
         <Route path="/formular/vollmacht/beratung/:typ/:kundeId" element={<PublicVollmachtBeratung />} />
         <Route path="/formular/vollmacht/privat/:mandantId" element={<PublicVollmachtErben bereich="privat" />} />

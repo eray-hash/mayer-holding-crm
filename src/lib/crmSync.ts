@@ -227,6 +227,8 @@ function rowToObjekt(row: any): Objekt {
     kurzpruefung: row.kurzpruefung ?? undefined,
     eigentuemer: row.eigentuemer ?? undefined,
     exposeText: row.expose_text ?? undefined,
+    // Nur lesen: bilder_reihenfolge fehlt in objektToRow mit Absicht (eigene Schreibwege, siehe ObjektBilderVerwalten.tsx).
+    bilderReihenfolge: Array.isArray(row.bilder_reihenfolge) ? row.bilder_reihenfolge : undefined,
     bewertung: row.bewertung ?? undefined,
     unterlagenAnforderungen: row.unterlagen_anforderungen ?? undefined,
     // Nur lesen: `eigentuemer_token` fehlt in objektToRow mit Absicht (die Datenbank vergibt es).

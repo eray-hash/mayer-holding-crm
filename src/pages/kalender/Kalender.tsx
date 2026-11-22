@@ -32,6 +32,7 @@ import {
 import { KUNDEN_BEREICHE, kundeDetailPfad, kundeBereichLabel } from '../../data/kundenBereiche'
 import { Modal, Field, inputClass, PrimaryButton, SecondaryButton } from '../../components/ui'
 import { EigenerKalenderVerbinden } from '../../components/kalender/EigenerKalenderVerbinden'
+import { BriefingEinstellungen } from '../../components/kalender/BriefingEinstellungen'
 import { ladeFremdBelegt, type FremdBelegt } from '../../components/kalender/fremdKalender'
 import type { KundeBereich } from '../../types'
 
@@ -879,6 +880,7 @@ function EinstellungenFenster({ ich, onSchliessen, onAbo, onBuchung }: { ich: st
               Telegram ist bei dir noch nicht verbunden — Erinnerungen und Termin-Nachrichten kommen erst an, wenn du es unter „Mein Profil“ verknüpft hast.
             </p>
           )}
+          <BriefingEinstellungen ich={ich} />
           <p className="mb-2 mt-5 text-sm font-medium text-slate-700">Sichtbarkeit</p>
           <label className="flex items-start gap-2 text-sm text-slate-700">
             <input type="checkbox" className="mt-0.5" checked={e.sichtbar} onChange={(ev) => speichern({ ...e, sichtbar: ev.target.checked })} />
