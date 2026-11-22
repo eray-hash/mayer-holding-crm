@@ -43,6 +43,8 @@ export const PRIVAT_BOT_WERKZEUGE: readonly string[] = [
   'kunde_anlegen',
   'kunde_aendern',
   'dateien_ablegen',
+  'kunde_loeschen',
+  'kunden_aus_liste',
   'datei_lesen',
   'gespraechsprotokoll_anlegen',
   'dokument_erstellen',
@@ -94,6 +96,11 @@ export function werkzeugeFuerPrivatBot<T extends Werkzeug>(alle: readonly T[], p
         props.bereich = { type: 'string', enum: ['privat'], description: 'Immer privat: Im privaten Assistenten entstehen nur private Kontakte (nur er sieht sie).' }
         kopie.description =
           'Legt einen neuen PRIVATEN Kontakt des Mitarbeiters an (nur er sieht ihn). Vorher mit kunden_suchen prüfen, dass es ihn noch nicht gibt. privat_art wählt optional den Ablauf (Status) eines Bereichs. Legst du ihn an, weil eine geschickte Datei zu jemandem gehört, den es noch nicht gibt, setz automatisch=true mit Begründung.'
+      }
+      if (kopie.name === 'kunden_aus_liste' && props) {
+        // deno-lint-ignore no-explicit-any
+        const zeile = (props.eintraege as any)?.items?.properties
+        if (zeile) zeile.bereich = { type: 'string', enum: ['privat'], description: 'Immer privat: Im privaten Assistenten entstehen nur private Kontakte.' }
       }
       if (kopie.name === 'termin_anlegen' && props) delete props.teilnehmer
       if (kopie.name === 'termine_zeigen' && props) delete props.person

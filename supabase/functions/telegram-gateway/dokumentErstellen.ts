@@ -82,7 +82,7 @@ export const DOKUMENT_WERKZEUGE = [
             'Der vollständige Text in einfacher Auszeichnung: "## " für Zwischenüberschriften ("### " für kleinere), "- " für Aufzählungspunkte (zwei Leerzeichen davor für eine Ebene tiefer), "1. " für nummerierte Punkte, **fett**, *kursiv*, Leerzeile zwischen Absätzen, einzelner Zeilenumbruch bleibt erhalten (z. B. Anschrift, Grußformel), "---" für eine Trennlinie, einfache Tabellen mit "| a | b |" (erste Zeile = Kopfzeile). Den Titel nicht noch einmal als Überschrift wiederholen. Alles auf Deutsch.',
         },
         art: { type: 'string', enum: [...ARTEN], description: 'handout = Merkblatt (Vorgabe), brief = Schreiben, zusammenfassung = Zusammenfassung.' },
-        format: { type: 'string', enum: ['pdf', 'word'], description: 'pdf (Vorgabe) oder word = bearbeitbare Word-Datei (.docx). Word nur, wenn der Mitarbeiter Word, .docx oder eine Datei zum Weiterbearbeiten möchte.' },
+        format: { type: 'string', enum: ['pdf', 'word', 'beides'], description: 'pdf (Vorgabe), word = bearbeitbare Word-Datei (.docx) oder beides = PDF und Word. Word nur, wenn der Mitarbeiter Word, .docx oder eine Datei zum Weiterbearbeiten möchte; beides, wenn er beide Fassungen will oder „wie bei Kunde X“ sagt und es dort beide gibt.' },
       },
       required: ['titel', 'inhalt'],
     },
@@ -182,6 +182,13 @@ export async function fuehreDokumentWerkzeugAus(name: string, input: any, k: Dok
   if (name === 'tabelle_erstellen') return await tabelleErstellen(input, k)
   if (name === 'datei_senden') return await fuehreDateiSendenAus(input, k)
   if (name !== 'dokument_erstellen') return `Fehler: unbekanntes Werkzeug ${name}.`
+  // PDF und Word auf einmal (Wunsch vom 22.11.2026: „gleich wie beim anderen Kunden“ hieß beide Fassungen).
+  if (/^(beides|beide|pdf\+word|pdf und word)$/i.test(String(input?.format ?? '').trim())) {
+    const pdf = await fuehreDokumentWerkzeugAus(name, { ...input, format: 'pdf' }, k)
+    if (pdf.startsWith('Fehler')) return pdf
+    const word = await fuehreDokumentWerkzeugAus(name, { ...input, format: 'word' }, k)
+    return `${pdf}\n${word}`
+  }
   const { supabase, mitarbeiter, protokolliere } = k
   const heute = k.heute ?? heuteBerlin()
 

@@ -102,10 +102,10 @@ Deno.test('Werkzeuge: privater Assistent bekommt nur seine Liste, Mayer-Werkzeug
   const namen = privat.map((w) => w.name)
   // Jeder Name der Liste gibt es wirklich (kein Tippfehler, der still ein Werkzeug verschwinden ließe).
   for (const n of PRIVAT_BOT_WERKZEUGE) assert(voll.some((w) => w.name === n), `Werkzeug ${n} gibt es nicht`)
-  for (const n of ['kunden_suchen', 'in_oeffentlich_holen', 'objekt_ins_mayer_crm', 'outlook_suche', 'outlook_mail_vorbereiten', 'brief_erstellen', 'todo_anlegen', 'termine_zeigen']) {
+  for (const n of ['kunden_suchen', 'in_oeffentlich_holen', 'objekt_ins_mayer_crm', 'outlook_suche', 'outlook_mail_vorbereiten', 'brief_erstellen', 'todo_anlegen', 'termine_zeigen', 'kunde_loeschen', 'kunden_aus_liste']) {
     assert(namen.includes(n), `${n} fehlt im privaten Assistenten`)
   }
-  for (const n of ['gemeinsames_postfach', 'mail_lesen', 'mail_vorbereiten', 'mail_senden', 'kollegen_benachrichtigen', 'firmenueberblick', 'rechnung_erfassen', 'kunde_loeschen', 'unzugeordnete_dateien', 'kunde_bereich_wechseln', 'kunden_zusammenfuehren', 'gesendete_mails', 'mail_zuordnen']) {
+  for (const n of ['gemeinsames_postfach', 'mail_lesen', 'mail_vorbereiten', 'mail_senden', 'kollegen_benachrichtigen', 'firmenueberblick', 'rechnung_erfassen', 'unzugeordnete_dateien', 'kunde_bereich_wechseln', 'kunden_zusammenfuehren', 'gesendete_mails', 'mail_zuordnen']) {
     assert(!namen.includes(n), `${n} darf der private Assistent nicht haben`)
     assert(!imPrivatBotErlaubt(n, istPrivatWerkzeug), `${n} darf im privaten Assistenten nicht ausgeführt werden`)
   }

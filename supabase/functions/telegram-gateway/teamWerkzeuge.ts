@@ -11,7 +11,7 @@
 // Aufrufer als Funktionen herein.
 
 import { alsIso, ordneZu, personenNamen } from '../_shared/aufgabenKern.ts'
-import { BEREICH_IDS, bereichName, darfBereich, siehtAlleBereiche, type RechteMitarbeiter } from './rechte.ts'
+import { BEREICH_IDS, bereichName, darfBereich, type RechteMitarbeiter } from './rechte.ts'
 import { imPrivatBot } from './privatBot.ts'
 
 // deno-lint-ignore no-explicit-any
@@ -217,6 +217,7 @@ export async function todoAnlegen(
 
   const gewuenschterBereich = String(input?.bereich ?? '').trim()
   const fuer = String(input?.fuer ?? '').trim()
+  let vonKollege: string | null = null
   if (gewuenschterBereich) {
     const b = gewuenschterBereich === 'immobilienkunden' ? 'immobilien' : gewuenschterBereich
     if (!BEREICH_IDS.includes(b)) return `Fehler: ungültiger Bereich. Erlaubt: ${BEREICH_IDS.join(', ')}.`
@@ -230,11 +231,13 @@ export async function todoAnlegen(
     if (personen.length !== 1) return `Nicht angelegt: „${fuer}" ist kein eindeutiger Kollege. Im Team sind: ${personenNamen(team.map((m) => m.name)).join(', ')}.`
     const ziel = team.find((m) => m.name === personen[0])
     if (ziel && ziel.email && ziel.email.toLowerCase() !== eigeneEmail) {
-      if (!siehtAlleBereiche(fragender)) {
-        return `Nicht angelegt: In die eigene Liste eines Kollegen darf nur die Geschäftsführung eintragen. Leg die Aufgabe stattdessen in eine Bereichsliste mit Zuständig ${personen[0]} oder in die eigene Liste von ${fragender.name}.`
-      }
+      // Seit 22.11.2026 (Wunsch Quirin) darf jeder einem Kollegen ein To-do in dessen Liste schicken; damit
+      // klar ist, woher es kommt, steht der Absender in der Aufgabe. Private Listen bleiben privat.
+      if (imPrivatBot()) return 'Nicht angelegt: Im privaten Assistenten gehen To-dos nur in die eigene private Liste.'
       besitzer = ziel.email.toLowerCase()
       liste = `der eigenen To-do-Liste von ${ziel.name}`
+      zustaendig = ziel.name
+      vonKollege = fragender.name
     } else if (!ziel?.email) return `Nicht angelegt: Für ${personen[0]} ist keine E-Mail-Adresse hinterlegt.`
   }
 
@@ -249,7 +252,7 @@ export async function todoAnlegen(
     besitzer_email: besitzer,
     bereich,
     reihenfolge,
-    aufgabe: aufgabe.slice(0, 500),
+    aufgabe: (vonKollege ? `${aufgabe} (von ${vonKollege})` : aufgabe).slice(0, 500),
     kunde_projekt: String(input?.kunde_projekt ?? '').trim() || null,
     zustaendig,
     prio: prio || null,
@@ -266,7 +269,8 @@ export async function todoAnlegen(
   const wo = imPrivatBot() && !bereich
     ? ' Sie ist privat (nur für ihn sichtbar), die Erinnerung kommt hier im privaten Chat, und sie erscheint beim nächsten Abgleich in seinem Microsoft To Do.'
     : ' Sie steht jetzt auch im CRM unter „Aufgaben nach Mitarbeiter".'
-  return `Angelegt in ${imPrivatBot() && !bereich ? 'seiner privaten To-do-Liste' : liste}: „${aufgabe}"${faellig ? `, erledigen bis ${deDatum(faellig)}` : ', ohne Fälligkeit'}${zustaendig ? `, zuständig ${zustaendig}` : ''}${erinnerungText}.${wo} todo_id=${id}`
+  const hinweisKollege = vonKollege ? ` Sag dazu, dass ${zustaendig} das To-do in seiner Liste sieht; soll er sofort Bescheid bekommen, biete kollegen_benachrichtigen an.` : ''
+  return `Angelegt in ${imPrivatBot() && !bereich ? 'seiner privaten To-do-Liste' : liste}: „${aufgabe}"${faellig ? `, erledigen bis ${deDatum(faellig)}` : ', ohne Fälligkeit'}${zustaendig ? `, zuständig ${zustaendig}` : ''}${erinnerungText}.${wo}${hinweisKollege} todo_id=${id}`
 }
 
 type TodoZeile = {

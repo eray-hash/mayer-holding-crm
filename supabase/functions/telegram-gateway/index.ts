@@ -24,7 +24,7 @@ import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2.1
 import { PDFDocument, degrees } from 'npm:pdf-lib@1.17.1'
 import { aktuellePerson, kiAufruf, mitAnlass, setzeAnlass, setzePerson, setzePrivat } from '../_shared/kiVerbrauch.ts'
 import { entschaerfe, kuerze as kuerzeWunsch, merkeWunsch } from '../_shared/wuensche.ts'
-import { type AkteFuerRechte, bereichName, darfAkte, darfBereich, darfObjekt, darfObjekte, freigegebeneBereiche, istEingeschraenkt, istFremdePrivatakte, istPrivat, istUnsichtbaresObjekt, nichtFreigegeben, ohneNurPrivat, siehtAlleBereiche } from './rechte.ts'
+import { type AkteFuerRechte, bereichName, darfAkte, darfBereich, darfObjekt, darfObjekte, freigegebeneBereiche, istEingeschraenkt, istEigene, istFremdePrivatakte, istPrivat, istUnsichtbaresObjekt, nichtFreigegeben, ohneNurPrivat, SAMMELAKTEN, siehtAlleBereiche } from './rechte.ts'
 import { aufgabenUebersicht } from './aufgaben.ts'
 import { type AbteilungZeile, alleObjektDokumente, lesenVonSelbst, leseRef, OBJEKT_SPALTEN, objektakteText, objektStatus, type ObjektRow, sucheObjekte } from './objektakte.ts'
 import { richteFotoAus } from './bildDrehung.ts'
@@ -1189,6 +1189,34 @@ export const TOOLS = [
     },
   },
   {
+    name: 'kunden_aus_liste',
+    description: 'Legt mehrere Kundenakten auf einmal an, z. B. aus einer geschickten Liste oder einem Foto einer Liste, auf Wunsch je Akte mit Follow-up (Aufgabe mit Fälligkeit). Der erste Aufruf legt NICHTS an, sondern liefert eine nummerierte Vorschau mit Hinweisen (schon vorhanden, Bereich fehlt, unvollständig) — zeig sie dem Mitarbeiter. Erst nach seiner Bestätigung rufst du es mit denselben Einträgen und bestaetigt=true auf; das Ergebnis nennt für JEDE Zeile, ob sie angelegt wurde oder warum nicht. Ab zwei Kunden immer dieses Werkzeug statt einzelner kunde_anlegen-Aufrufe.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        eintraege: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              bereich: { type: 'string', enum: [...NEUANLAGE_BEREICHE, 'privat'] },
+              name: { type: 'string', description: 'Firmenname, bei Privatpersonen der volle Name.' },
+              ansprechpartner: { type: 'string' },
+              email: { type: 'string' },
+              telefon: { type: 'string' },
+              aufgabe: { type: 'string', description: 'Optional: Follow-up für diese Akte, z. B. "Unterlagen anfordern".' },
+              aufgabe_bis: { type: 'string', description: 'Optional: Fälligkeit des Follow-ups als JJJJ-MM-TT.' },
+              notiz: { type: 'string', description: 'Optional: Notiz für den Verlauf der Akte (z. B. Anlass aus der Liste).' },
+            },
+            required: ['bereich', 'name'],
+          },
+        },
+        bestaetigt: { type: 'boolean', description: 'true erst, nachdem der Mitarbeiter die Vorschau bestätigt hat.' },
+      },
+      required: ['eintraege'],
+    },
+  },
+  {
     name: 'kunde_aendern',
     description: `Ändert Stammdaten, Status, Priorität oder Zuständigkeit eines Kunden. Nur die Felder angeben, die sich ändern. Gültige Status-Werte je Bereich (ein privater Kontakt mit Ablauf eines Bereichs nimmt dessen Status, sonst die von privat):\n${STATUS_HINWEIS}`,
     input_schema: {
@@ -1209,7 +1237,7 @@ export const TOOLS = [
   },
   {
     name: 'kunde_loeschen',
-    description: 'Löscht eine Kundenakte unwiderruflich. Der erste Aufruf löscht nie, sondern verlangt eine ausdrückliche Bestätigung des Mitarbeiters in seiner nächsten Nachricht; erst der Aufruf danach löscht.',
+    description: 'Löscht eine Kundenakte unwiderruflich — eigene private Kontakte darf jeder löschen, Akten der Holding nur Geschäftsführung/Admin. Der erste Aufruf löscht nie, sondern verlangt eine ausdrückliche Bestätigung des Mitarbeiters in seiner nächsten Nachricht; erst der Aufruf danach löscht.',
     input_schema: { type: 'object', properties: { kunde_id: { type: 'string' } }, required: ['kunde_id'] },
   },
   {
@@ -1531,7 +1559,7 @@ export const TOOLS = [
         zustaendig: { type: 'string', description: 'Optional: wer es erledigt, falls nicht der Mitarbeiter selbst.' },
         prio: { type: 'string', enum: ['A', 'B', 'C'], description: 'Optional: A = dringend, B = normal, C = wenn Zeit ist.' },
         bereich: { type: 'string', enum: ['beratung', 'immobilien', 'erben', 'betriebsuebergabe', 'betriebsformen', 'akademie', 'finanzierungen', 'buecher'], description: 'Optional: in die gemeinsame To-do-Liste dieses Bereichs statt in die eigene.' },
-        fuer: { type: 'string', description: 'Optional, nur Geschäftsführung: Name eines Kollegen, in dessen eigene Liste es soll.' },
+        fuer: { type: 'string', description: 'Optional: Name eines Kollegen, dem das To-do geschickt wird — es kommt in seine eigene Liste, mit deinem Namen als Absender („schick Hasan ein To-do …“, „Aufgabe für Quirin …“).' },
       },
       required: ['aufgabe'],
     },
@@ -2536,10 +2564,71 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     return `Bei ${kundeName(k)} geändert — ${geaendert.join('; ')}.`
   }
 
+  // Mehrere Akten aus einer Liste (Wunsch Andreas, 22.11.2026: bei einer Liste ging ein Eintrag schief und
+  // fiel nicht auf). Erst Vorschau ohne Schreiben, dann je Zeile über kunde_anlegen/aufgabe_setzen/notiz_speichern
+  // — dieselben Regeln wie einzeln — und ein Ergebnis für JEDE Zeile, damit nichts still verloren geht.
+  if (name === 'kunden_aus_liste') {
+    const eintraege: Record<string, unknown>[] = Array.isArray(input?.eintraege) ? input.eintraege.filter((e: unknown) => e && typeof e === 'object') : []
+    if (eintraege.length === 0) return 'Fehler: Die Liste ist leer.'
+    if (eintraege.length > 40) return `Fehler: ${eintraege.length} Einträge sind zu viele auf einmal (höchstens 40). Teile die Liste auf.`
+    const text = (v: unknown) => String(v ?? '').trim()
+    if (input?.bestaetigt !== true) {
+      const { data: vorhanden } = await supabase.from('kunden').select('id, firma, ansprechpartner, email, bereich, verantwortlich_email')
+      const norm = (v: string) => v.toLowerCase().replace(/\s+/g, ' ').trim()
+      const zeilen = eintraege.map((e, i) => {
+        const hinweise: string[] = []
+        const n = text(e.name)
+        if (!n) hinweise.push('Name fehlt')
+        if (!text(e.bereich)) hinweise.push('Bereich fehlt')
+        const gleich = ((vorhanden ?? []) as { id: string; firma: string; email: string | null; bereich: string; verantwortlich_email: string | null }[]).find((k) =>
+          (n && norm(k.firma ?? '') === norm(n)) || (text(e.email) && norm(k.email ?? '') === norm(text(e.email))))
+        if (gleich) hinweise.push(darfAkte(mitarbeiter, gleich as AkteFuerRechte) ? `gibt es schon (kunde_id=${gleich.id}) — wird nicht doppelt angelegt` : 'gibt es schon in einem nicht freigegebenen Bereich — wird nicht angelegt')
+        if (text(e.aufgabe_bis) && !/^\d{4}-\d{2}-\d{2}$/.test(text(e.aufgabe_bis))) hinweise.push('Fälligkeit nicht als JJJJ-MM-TT')
+        const teile = [n || '(ohne Namen)', BEREICH_LABEL[text(e.bereich)] ?? text(e.bereich), text(e.ansprechpartner), text(e.email), text(e.telefon), text(e.aufgabe) && `Aufgabe: ${text(e.aufgabe)}${text(e.aufgabe_bis) ? ` bis ${text(e.aufgabe_bis)}` : ''}`].filter(Boolean)
+        return `${i + 1}. ${teile.join(' · ')}${hinweise.length ? ` — ⚠ ${hinweise.join('; ')}` : ''}`
+      })
+      return `NOCH NICHTS ANGELEGT. Vorschau (${eintraege.length} Einträge):\n${zeilen.join('\n')}\n\nZeig dem Mitarbeiter diese Liste (mit den Hinweisen) und frag, ob alles stimmt. Erst nach seiner Bestätigung rufst du kunden_aus_liste mit denselben, ggf. korrigierten Einträgen und bestaetigt=true auf.`
+    }
+    const ergebnisse: string[] = []
+    let angelegt = 0
+    for (const [i, e] of eintraege.entries()) {
+      const nr = `${i + 1}. ${text(e.name) || '(ohne Namen)'}`
+      try {
+        const r = await fuehreWerkzeugAus('kunde_anlegen', { bereich: e.bereich, name: e.name, ansprechpartner: e.ansprechpartner, email: e.email, telefon: e.telefon }, ctx)
+        const id = /kunde_id=([A-Za-z0-9_-]+)/.exec(r)?.[1]
+        if (!r.startsWith('Angelegt') || !id) {
+          ergebnisse.push(`${nr}: NICHT angelegt — ${r.replace(/^Nicht angelegt:\s*/, '').slice(0, 220)}`)
+          continue
+        }
+        angelegt++
+        const extra: string[] = []
+        if (text(e.aufgabe)) {
+          const a = await fuehreWerkzeugAus('aufgabe_setzen', { kunde_id: id, titel: e.aufgabe, faellig_am: text(e.aufgabe_bis) || undefined }, ctx)
+          extra.push(a.startsWith('Fehler') ? `Aufgabe NICHT gesetzt (${a.slice(0, 120)})` : `Aufgabe „${text(e.aufgabe)}“${text(e.aufgabe_bis) ? ` bis ${text(e.aufgabe_bis)}` : ''}`)
+        }
+        if (text(e.notiz)) {
+          const no = await fuehreWerkzeugAus('notiz_speichern', { kunde_id: id, text: e.notiz }, ctx)
+          extra.push(no.startsWith('Fehler') ? `Notiz NICHT gespeichert (${no.slice(0, 120)})` : 'Notiz gespeichert')
+        }
+        ergebnisse.push(`${nr}: angelegt (kunde_id=${id})${extra.length ? ` · ${extra.join(' · ')}` : ''}`)
+      } catch (err) {
+        ergebnisse.push(`${nr}: NICHT angelegt — Fehler: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+    const fehlend = eintraege.length - angelegt
+    return `${angelegt} von ${eintraege.length} angelegt.${fehlend ? ` ${fehlend} NICHT — nenne dem Mitarbeiter jede dieser Zeilen mit Grund.` : ''}\n${ergebnisse.join('\n')}`
+  }
+
   if (name === 'kunde_loeschen') {
-    if (!(mitarbeiter.rolle === 'geschaeftsfuehrung' || mitarbeiter.ist_admin)) return 'Nicht erlaubt: Kunden löschen darf nur Geschäftsführung/Admin.'
     const k = await ladeErlaubteAkte(supabase, mitarbeiter, { kunde_id: input.kunde_id })
     if (typeof k === 'string') return k
+    // Eigene private Kontakte darf jeder selbst löschen (Wunsch Hasan, 22.11.2026), alles andere nur
+    // Geschäftsführung/Admin — und im privaten Assistenten ausschließlich eigene private Akten.
+    const eigenerPrivater = istPrivat(k) && istEigene(mitarbeiter, k.verantwortlich_email)
+    if (SAMMELAKTEN.includes(k.id)) return 'Nicht erlaubt: Die Sammelakten lassen sich nicht löschen.'
+    if (!eigenerPrivater && (mitarbeiter.nurPrivat === true || !(mitarbeiter.rolle === 'geschaeftsfuehrung' || mitarbeiter.ist_admin))) {
+      return 'Nicht erlaubt: Kundenakten der Holding darf nur Geschäftsführung/Admin löschen; eigene private Kontakte darf jeder löschen.'
+    }
     const anfrage = ctx.vorherigeLoeschAnfrage
     const bestaetigbar = anfrage?.kunde_id === k.id && Date.now() - new Date(anfrage.z).getTime() < 10 * 60 * 1000
     if (!bestaetigbar) {
@@ -3285,12 +3374,12 @@ So arbeitest du:
 - Zahlungen auf Rechnungen: Nennt ein Mitarbeiter einen Zahlungseingang auf eine Ausgangsrechnung („Bäckerei Brot hat 500 € überwiesen“), nimm rechnung_zahlung_erfassen, nicht rechnung_status_setzen. Es rechnet Teilzahlungen wie das CRM, setzt die Rechnung bei vollem Betrag auf Bezahlt und vermerkt die Zahlung in der Akte. Ohne Betrag wird der ganze offene Rest gebucht; das nur, wenn der Mitarbeiter „voll bezahlt“ o. ä. sagt. Lehnt das Werkzeug wegen Überzahlung ab, frag nach und rufe es nur nach Bestätigung mit ueberzahlung_bestaetigt=true erneut auf. Für „Welche Rechnungen sind offen?“, „Wer ist im Verzug?“ oder „Was schuldet uns X noch?“ nimm rechnungen_offen; es nennt offenen Betrag, Frist, Verzug und Mahnstufe.
 - Umsatzvorschau und Provisionen: Für „Was kommt diesen Monat rein?“, „Wie sieht das Quartal aus?“, „Welche Provisionen erwarten wir bis Jahresende?“ oder „Umsatz Immobilien dieses Jahr?“ nimm umsatz_vorschau (zeitraum monat, quartal oder jahr; optional bereich). Alle Beträge sind netto. Nenne zuerst den erwarteten Gesamtbetrag, dann wie er sich zusammensetzt (schon in Rechnung gestellt, Angebote nach Chance, Provision nach Stand) und die größten Posten mit Begründung. Erwähne die Lücken (Angebote ohne Chance, Objekte ohne Kaufpreis oder ohne hinterlegte Provision), denn sie machen die Vorschau ungenauer. Erfinde keine Zahlen und rechne nicht selbst nach. Für einzelne offene Rechnungen bleibt rechnungen_offen zuständig.
 - Kollegen Bescheid geben: Bittet der Mitarbeiter, einem Kollegen etwas auszurichten oder ihm kurz Bescheid zu geben ("sag Hasan, dass die Akte angelegt ist"), schickst du das mit kollegen_benachrichtigen. Dafür ist kein Termin nötig. Sag danach, wem du was geschickt hast und wer nicht mit Telegram verbunden ist.
-- To-dos ohne Kundenakte: Will der Mitarbeiter sich oder einem Bereich eine Aufgabe notieren, die zu keinem Kunden gehört ("schreib mir auf: Steuerunterlagen bis Freitag sortieren"), legst du sie mit todo_anlegen an, standardmäßig in seiner eigenen To-do-Liste. Gehört die Aufgabe zu einer Kundenakte, nimmst du aufgabe_setzen. Erledigtes hakst du mit todo_erledigen ab.
+- To-dos ohne Kundenakte: Will der Mitarbeiter sich oder einem Bereich eine Aufgabe notieren, die zu keinem Kunden gehört ("schreib mir auf: Steuerunterlagen bis Freitag sortieren"), legst du sie mit todo_anlegen an, standardmäßig in seiner eigenen To-do-Liste. Gehört die Aufgabe zu einer Kundenakte, nimmst du aufgabe_setzen. Mehrere neue Kunden auf einmal (Liste, Foto einer Liste) legst du mit kunden_aus_liste an: erst Vorschau zeigen, nach Bestätigung mit bestaetigt=true, danach jede Zeile mit Ergebnis nennen — besonders die, die nicht angelegt wurden. Erledigtes hakst du mit todo_erledigen ab. Will er einem Kollegen eine Aufgabe schicken („schick Hasan ein To-do: Exposé prüfen“, „Quirin soll bis Freitag …“), nimm todo_anlegen mit fuer=<Kollege>: Das To-do landet in dessen eigener Liste, mit dem Absender in Klammern; danach bietest du an, ihn per kollegen_benachrichtigen sofort zu informieren. Eine Bereichsliste (bereich) nimmst du nur, wenn er ausdrücklich die gemeinsame Liste meint.
 - Gesendete Mails: Was einem Kunden geschrieben oder geschickt wurde (auch Briefe und Mails, die aus Outlook oder Webmail über info@ oder das eigene Postfach rausgingen), findest du mit gesendete_mails (nach kunde_id, Suchbegriff, Zeitraum; mit mail_id ganz lesen). Sie werden alle paar Minuten automatisch aus dem Gesendet-Ordner ins CRM übernommen und der Akte des Empfängers zugeordnet.
 - Kostenvoranschläge: Das CRM hat eine Seite „Kostenvoranschläge“ und in jeder Akte einen Reiter dafür. Will jemand Kostenvoranschläge erfassen, oder schickt er ein Foto/Dokument mit einer Liste von Kostenvoranschlägen und will sie eingetragen haben, legst du jede Zeile mit kostenvoranschlag_anlegen an (Name, Beschreibung, Betrag, Status; „bez.“ = bezahlt; Summenzeilen nicht). Gehören sie eindeutig zu einer Akte, gib kunde_id an, sonst ohne; geht es um private Geschäfte des Mitarbeiters (Bereich Privat), setze privat=true, damit nur er sie sieht. Fragen nach Kostenvoranschlägen, Summen oder Status beantwortest du mit kostenvoranschlaege_auflisten, Änderungen (z. B. „Breh ist bezahlt“, „gehört zu Akte X“) mit kostenvoranschlag_aendern. Löschen geht nur im CRM.
 - Wiedervorlagen: Jede Kundenakte hat im CRM einen Reiter „Wiedervorlagen“ (wann muss bei wem nachgefasst werden). Viele davon legt das CRM selbst an und hakt sie selbst ab, z. B. bei einem Statuswechsel der Akte, wenn ein Kostenvoranschlag erstellt oder angenommen wird, Unterlagen angefordert oder eingegangen sind, eine Rechnung verschickt oder bezahlt ist, ein Termin eingetragen oder etwas unterschrieben wurde — die musst du nicht anlegen. Fragt jemand „Was ist heute fällig?“, „Welche Wiedervorlagen habe ich diese Woche?“ oder „Was liegt bei Akte X noch an?“, nimm wiedervorlagen_auflisten (für „heute“ nur_faellig=true, für „ich“ zustaendig="ich"). Sagt er „Leg mir eine Wiedervorlage an …“ oder „erinnere mich, bei Kunde X am Freitag nachzufassen“, nimm wiedervorlage_anlegen mit kunde_id und Datum. Sagt er, eine Wiedervorlage ist „erledigt“, hak sie mit wiedervorlage_erledigen ab; will er sie auf später legen, nimm wiedervorlage_verschieben. Die id holst du vorher mit wiedervorlagen_auflisten; passen mehrere, frag nach. Private Kontakte haben keine Wiedervorlagen (dafür todo_anlegen). Für die Gesamtsicht über alle Aufgaben bleibt aufgaben_uebersicht; dort stehen die Wiedervorlagen mit drin.
 - Statusbericht an den Kunden: Mit statusbericht_entwurf (kunde_id, optional seit) zeigst du den Entwurf des Berichts „Stand Ihres Projekts“ — was seit dem letzten Bericht passiert ist, die nächsten Schritte, was wir noch vom Kunden brauchen, Ampel. Gib den Entwurf so wieder und nenne den Link aus der Antwort: Prüfen, ändern und senden (E-Mail mit PDF oder nur PDF) geht nur im CRM, du selbst sendest den Bericht nie. Hinweise „nur für den Mitarbeiter“ sind für ihn, nicht für den Kunden. Die wöchentliche Erinnerung stellt man im CRM im Fenster „Statusbericht an Kunden“ ein.
-- Dokumente als Datei: Bittet jemand um ein Merkblatt, ein Schreiben, eine Zusammenfassung oder eine Übersicht „als Datei“, „als PDF“, „zum Ausdrucken“ oder „zum Mitgeben“, schreib den Text vollständig selbst (Inhalte vorher mit kundenakte_lesen, dokument_inhalt oder den Gesprächsprotokollen holen) und erstelle daraus mit dokument_erstellen eine PDF in der Akte des Kunden, statt nur Text zum Kopieren zu liefern; will er eine Word-Datei, dasselbe mit format=word. Will er eine Excel-Datei oder Tabelle (z. B. eine Liste von einem Foto: Namen links, Zahlen rechts), schreib die Zeilen selbst aus und erstelle sie mit tabelle_erstellen (Zahlen als Zahlen). Ohne passende Kundenakte und ohne Objektbezug legst du solche Dateien in den Ungeklärten Eingängen (k_eingang_ungeklaert) ab bzw. bei eigenen Unterlagen des Hauses in k_intern_holding. Will er die Datei „hier“, „in Telegram“ oder „schick sie mir“, schick sie danach mit datei_senden direkt in den Chat; das geht auch mit jeder anderen Datei aus einer Akte. Titel und Text nur auf Deutsch (z. B. „Merkblatt“ statt „Handout“); bestätige danach in einer Zeile, wie die Datei heißt und in welcher Akte sie liegt.
+- Dokumente als Datei: Bittet jemand um ein Merkblatt, ein Schreiben, eine Zusammenfassung oder eine Übersicht „als Datei“, „als PDF“, „zum Ausdrucken“ oder „zum Mitgeben“, schreib den Text vollständig selbst (Inhalte vorher mit kundenakte_lesen, dokument_inhalt oder den Gesprächsprotokollen holen) und erstelle daraus mit dokument_erstellen eine PDF in der Akte des Kunden, statt nur Text zum Kopieren zu liefern; will er eine Word-Datei, dasselbe mit format=word, will er beide Fassungen, format=beides. Sagt er „wie bei Kunde X“ oder „wie letztes Mal“, sieh zuerst in dieser Akte nach (kundenakte_lesen), in welcher Form das frühere Dokument dort liegt (Titel, Aufbau, PDF und/oder Word), und mach es genauso — liegen dort PDF und Word, nimm format=beides. Will er eine Excel-Datei oder Tabelle (z. B. eine Liste von einem Foto: Namen links, Zahlen rechts), schreib die Zeilen selbst aus und erstelle sie mit tabelle_erstellen (Zahlen als Zahlen). Ohne passende Kundenakte und ohne Objektbezug legst du solche Dateien in den Ungeklärten Eingängen (k_eingang_ungeklaert) ab bzw. bei eigenen Unterlagen des Hauses in k_intern_holding. Will er die Datei „hier“, „in Telegram“ oder „schick sie mir“, schick sie danach mit datei_senden direkt in den Chat; das geht auch mit jeder anderen Datei aus einer Akte. Titel und Text nur auf Deutsch (z. B. „Merkblatt“ statt „Handout“); bestätige danach in einer Zeile, wie die Datei heißt und in welcher Akte sie liegt.
 - Wünsche an das CRM: Kannst du etwas, worum der Mitarbeiter bittet, nicht tun, weil dir dafür die Möglichkeit fehlt (nicht, weil ein Kunde oder eine Angabe fehlt oder ein Bereich nicht freigegeben ist), oder sagt er "wäre gut, wenn …", "Wunsch: …" oder "könnte das CRM …", hältst du das mit wunsch_notieren fest: Titel und Beschreibung auf Ebene der Funktion, ohne Kundennamen, Beträge oder Inhalte aus Unterlagen. Sag ihm danach offen in einem kurzen Satz, dass du es als Wunsch für die Geschäftsführung notiert hast.
 - Internet: Bittet dich der Mitarbeiter ausdrücklich, etwas im Internet nachzusehen oder zu recherchieren ("recherchier den Laden", "was findest du online über die Firma X"), nutzt du internet_recherche. Gib dabei alle Anhaltspunkte aus dem Gespräch oder der Akte mit (Firmenname, Ort, Webseite), damit keine gleichnamige Firma erwischt wird. Recherchiere nur Geschäftliches und Öffentliches: Firmen, Geschäftsführer und Inhaber in ihrer beruflichen Rolle, Webseite, Handelsregister, Bewertungen, Presse. Zum Privatleben von Personen (Gesundheit, Familie, Beziehungen, Privatanschrift) recherchierst du nie; sag das in einem Satz. Ohne ausdrückliche Bitte recherchierst du nicht, auch nicht beim Ablegen von Dateien. Sag beim Weitergeben, dass es aus dem Internet stammt und veraltet oder falsch sein kann, und nenne die Quellenadressen. Ins CRM übernimmst du davon nur etwas, wenn der Mitarbeiter es ausdrücklich verlangt.
 
