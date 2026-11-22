@@ -174,8 +174,9 @@ Deno.serve((req: Request) => mitAnlass(async () => {
     }
   }
 
-  const ausschnitt = text.slice(0, 500)
-  const relevanz = await klassifiziereRelevanz(vonName, von, betreff, ausschnitt)
+  // Voller Text (bis 20.000 Zeichen) wie beim Postfach-Abruf — vorher 500, dadurch fehlten Signaturen (22.11.2026).
+  const ausschnitt = text.slice(0, 20000)
+  const relevanz = await klassifiziereRelevanz(vonName, von, betreff, ausschnitt.slice(0, 500))
   const zuordnung = relevanz === 'kunde' ? await versucheAutomatischeZuordnung(supabase, von, vonName, betreff, text, anhaenge) : null
 
   // Läuft bewusst unabhängig von relevanz oben — eine Lieferantenrechnung ist für den Posteingang

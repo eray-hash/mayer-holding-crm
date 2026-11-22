@@ -1,10 +1,21 @@
 import { useEffect, useRef, useState } from 'react'
-import { Inbox, Send, RefreshCw, Plus, Reply, Search, AlertTriangle, Lock, Check, X, UserPlus, ArrowRightLeft, ArrowLeft } from 'lucide-react'
+import { Inbox, Send, RefreshCw, Plus, Reply, Search, AlertTriangle, Lock, Check, X, UserPlus, ArrowRightLeft, ArrowLeft, Lightbulb, Newspaper, EyeOff } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { useAuth } from '../../context/AuthContext'
-import { fetchPrivateEmails, ignoreMail } from '../../lib/emailInboxDb'
+import { ignoreMail } from '../../lib/emailInboxDb'
 import { fetchPrivateSentEmails } from '../../lib/sentEmailsDb'
-import { holeMailInOeffentlich, rufePostfachAb, type EingegangeneMail } from '../../lib/emailGateway'
+import { holeMailInOeffentlich, rufePostfachAb } from '../../lib/emailGateway'
+import {
+  alsRundschreiben,
+  keinRundschreiben,
+  ladePrivateMails,
+  legeBeiPrivatKontaktAb,
+  uebergibInsCrm,
+  verwirfPrivatVorschlag,
+  zaehlePrivatVorschlaege,
+  type PrivatKandidat,
+  type PrivatMail,
+} from '../../lib/privatPostVorschlaege'
 import { usePostfaecher, ladePostfaecherNeu } from '../../lib/postfaecher'
 import { matchKundeByEmail } from '../../lib/matchKunde'
 import { KUNDEN_BEREICHE, kundeBereichLabel } from '../../data/kundenBereiche'
@@ -14,9 +25,10 @@ import { SendEmailModal } from '../../components/SendEmailModal'
 import { PostfachVerbinden } from '../../components/PostfachVerbinden'
 import { MailAnhangLink } from '../../components/MailAnhangLink'
 import { PrimaryButton, SecondaryButton, EmptyState, inputClass } from '../../components/ui'
-import type { GesendeteEmail, KundeBereich } from '../../types'
+import type { GesendeteEmail, Kunde, KundeBereich } from '../../types'
 
-type Ordner = 'posteingang' | 'gesendet'
+// Posteingang ohne Rundschreiben, offene Vorschläge, ausgeblendete Rundschreiben, Gesendet.
+type Ordner = 'posteingang' | 'vorschlaege' | 'rundschreiben' | 'gesendet'
 const OEFFENTLICHE_BEREICHE = KUNDEN_BEREICHE.filter((b) => b.id !== 'privat')
 
 /**
@@ -53,8 +65,9 @@ function PrivatPostfachInhalt() {
   const [ordner, setOrdner] = useState<Ordner>('posteingang')
   // Ordner des eigenen Postfachs: 'alle', '' (nur Posteingang) oder der Name eines eigenen Ordners.
   const [mailOrdner, setMailOrdner] = useState('alle')
-  const [mails, setMails] = useState<EingegangeneMail[]>([])
+  const [mails, setMails] = useState<PrivatMail[]>([])
   const [gesendet, setGesendet] = useState<GesendeteEmail[]>([])
+  const [anzahl, setAnzahl] = useState({ vorschlaege: 0, rundschreiben: 0 })
   const [limit, setLimit] = useState(40)
   const [query, setQuery] = useState('')
   const [laedt, setLaedt] = useState(false)
@@ -62,15 +75,22 @@ function PrivatPostfachInhalt() {
   const [hinweis, setHinweis] = useState('')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [compose, setCompose] = useState<{ to?: string; subject?: string } | null>(null)
+  const wer = mitarbeiter?.name ?? state.profil.name
 
-  async function lade(l = limit, suche = query, aus = mailOrdner) {
+  async function lade(l = limit, suche = query, aus = mailOrdner, ansicht: Ordner = ordner) {
     if (!ich) return
     setLaedt(true)
     setFehler('')
     try {
-      const [ein, gesendete] = await Promise.all([fetchPrivateEmails(ich, l, suche, aus === 'alle' ? undefined : aus), fetchPrivateSentEmails(ich, l, suche)])
+      const mailAnsicht = ansicht === 'vorschlaege' ? 'vorschlaege' : ansicht === 'rundschreiben' ? 'rundschreiben' : 'alle'
+      const [ein, gesendete, zahlen] = await Promise.all([
+        ladePrivateMails(ich, mailAnsicht, l, suche, aus === 'alle' ? undefined : aus),
+        fetchPrivateSentEmails(ich, l, suche),
+        zaehlePrivatVorschlaege(ich).catch(() => null),
+      ])
       setMails(ein)
       setGesendet(gesendete)
+      if (zahlen) setAnzahl(zahlen)
     } catch (err) {
       setFehler(err instanceof Error ? err.message : 'Postfach konnte nicht geladen werden.')
     } finally {
@@ -115,10 +135,25 @@ function PrivatPostfachInhalt() {
     await lade()
   }
 
-  const selectedMail = ordner === 'posteingang' ? mails.find((m) => m.messageId === selectedId) : undefined
+  const selectedMail = ordner !== 'gesendet' ? mails.find((m) => m.messageId === selectedId) : undefined
   const selectedGesendet = ordner === 'gesendet' ? gesendet.find((m) => m.id === selectedId) : undefined
 
-  function alsPrivatenKontakt(mail: EingegangeneMail) {
+  function wechsleOrdner(neu: Ordner) {
+    setOrdner(neu)
+    setSelectedId(null)
+    if (neu !== 'gesendet') lade(limit, query, mailOrdner, neu)
+  }
+
+  // Nach einer Aktion an einer Mail: aus Vorschlags-/Rundschreiben-Liste nehmen bzw. in der Liste ersetzen, Zahlen neu holen.
+  function nachAktion(mail: PrivatMail, ersatz: PrivatMail | null, text: string) {
+    const bleibtInListe = ersatz && (ordner === 'posteingang' ? ersatz.vorschlag?.status !== 'privat_rundschreiben' : ordner === 'rundschreiben' ? ersatz.vorschlag?.status === 'privat_rundschreiben' : ersatz.vorschlag?.status === 'privat_offen' && !ersatz.zugewiesen)
+    setMails((ms) => (bleibtInListe ? ms.map((m) => (m.id === mail.id ? ersatz! : m)) : ms.filter((m) => m.id !== mail.id)))
+    if (!bleibtInListe) setSelectedId(null)
+    setHinweis(text)
+    zaehlePrivatVorschlaege(ich).then(setAnzahl).catch(() => {})
+  }
+
+  function alsPrivatenKontakt(mail: PrivatMail) {
     dispatch({
       type: 'ADD_KUNDE_IN_BEREICH',
       bereich: 'privat',
@@ -140,7 +175,7 @@ function PrivatPostfachInhalt() {
     setHinweis(`${mail.vonName} ist jetzt in „Meine Kontakte“.`)
   }
 
-  async function ausblenden(mail: EingegangeneMail) {
+  async function ausblenden(mail: PrivatMail) {
     setMails((ms) => ms.filter((m) => m.messageId !== mail.messageId))
     setSelectedId(null)
     await ignoreMail(mail.messageId).catch((err) => setFehler(err instanceof Error ? err.message : 'Konnte nicht ausgeblendet werden.'))
@@ -159,17 +194,20 @@ function PrivatPostfachInhalt() {
         <nav className="flex gap-1 xl:block xl:space-y-1">
           {(
             [
-              ['posteingang', 'Posteingang', <Inbox size={15} key="i" />, mails.length],
+              ['posteingang', 'Posteingang', <Inbox size={15} key="i" />, ordner === 'posteingang' ? mails.length : null],
+              ['vorschlaege', 'Vorschläge', <Lightbulb size={15} key="v" />, anzahl.vorschlaege],
+              ['rundschreiben', 'Rundschreiben', <Newspaper size={15} key="r" />, anzahl.rundschreiben],
               ['gesendet', 'Gesendet', <Send size={15} key="s" />, gesendet.length],
             ] as const
-          ).map(([id, label, icon, anzahl]) => (
+          ).map(([id, label, icon, zahl]) => (
             <button
               key={id}
-              onClick={() => { setOrdner(id); setSelectedId(null) }}
+              onClick={() => wechsleOrdner(id)}
               className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium ${ordner === id ? 'bg-accent-50 text-accent-700' : 'text-slate-600 hover:bg-slate-50'}`}
+              title={id === 'vorschlaege' ? 'Mails, bei denen das CRM vermutet, zu welcher Akte sie gehören' : id === 'rundschreiben' ? 'Rundschreiben und automatische Meldungen — im Posteingang ausgeblendet' : undefined}
             >
               {icon} {label}
-              <span className="ml-auto text-xs text-slate-400">{anzahl}</span>
+              {zahl !== null && <span className={`ml-auto text-xs ${id === 'vorschlaege' && zahl > 0 ? 'font-semibold text-accent-700' : 'text-slate-400'}`}>{zahl}</span>}
             </button>
           ))}
         </nav>
@@ -217,7 +255,7 @@ function PrivatPostfachInhalt() {
         <div className="flex min-h-0 flex-1 flex-col gap-4 xl:flex-row">
           <div className={`${selectedId ? 'hidden xl:flex' : 'flex'} flex-shrink-0 flex-col rounded-xl border border-slate-200 bg-white xl:w-80`}>
             <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2">
-              <span className="text-xs font-medium text-slate-500">{ordner === 'posteingang' ? 'Posteingang' : 'Gesendet'}</span>
+              <span className="text-xs font-medium text-slate-500">{{ posteingang: 'Posteingang', vorschlaege: 'Vorschläge', rundschreiben: 'Rundschreiben', gesendet: 'Gesendet' }[ordner]}</span>
               <button onClick={aktualisieren} disabled={laedt} className="rounded-md p-1 text-slate-400 hover:bg-slate-50 hover:text-slate-600" title="Jetzt abholen">
                 <RefreshCw size={13} className={laedt ? 'animate-spin' : ''} />
               </button>
@@ -226,7 +264,7 @@ function PrivatPostfachInhalt() {
               <Search size={13} className="pointer-events-none absolute left-5 top-1/2 -translate-y-1/2 text-slate-400" />
               <input className={`${inputClass} py-1.5 pl-7 text-xs`} placeholder="Durchsuchen …" value={query} onChange={(e) => setQuery(e.target.value)} />
             </div>
-            {ordner === 'posteingang' && (eigenes?.ordner?.length ?? 0) > 0 && (
+            {ordner !== 'gesendet' && (eigenes?.ordner?.length ?? 0) > 0 && (
               <div className="border-b border-slate-100 p-2">
                 <select
                   className={`${inputClass} py-1.5 text-xs`}
@@ -234,7 +272,7 @@ function PrivatPostfachInhalt() {
                   onChange={(e) => {
                     setMailOrdner(e.target.value)
                     setSelectedId(null)
-                    lade(limit, query, e.target.value)
+                    lade(limit, query, e.target.value, ordner)
                   }}
                   title="Ordner des Postfachs"
                 >
@@ -247,9 +285,23 @@ function PrivatPostfachInhalt() {
               </div>
             )}
             <div className="min-h-0 flex-1 overflow-y-auto">
-              {ordner === 'posteingang' &&
+              {ordner !== 'gesendet' &&
                 (mails.length === 0 ? (
-                  <EmptyState text={query.trim() ? 'Keine Treffer.' : mailOrdner !== 'alle' ? 'In diesem Ordner liegt nichts.' : eigenes ? 'Noch keine Mails abgeholt.' : 'Noch kein Postfach verbunden.'} />
+                  <EmptyState
+                    text={
+                      query.trim()
+                        ? 'Keine Treffer.'
+                        : ordner === 'vorschlaege'
+                          ? 'Gerade keine offenen Vorschläge. Neue Mails prüft das CRM innerhalb weniger Minuten.'
+                          : ordner === 'rundschreiben'
+                            ? 'Keine Rundschreiben ausgeblendet.'
+                            : mailOrdner !== 'alle'
+                              ? 'In diesem Ordner liegt nichts.'
+                              : eigenes
+                                ? 'Noch keine Mails abgeholt.'
+                                : 'Noch kein Postfach verbunden.'
+                    }
+                  />
                 ) : (
                   mails.map((mail) => (
                     <button
@@ -262,6 +314,20 @@ function PrivatPostfachInhalt() {
                         <span className="flex-shrink-0 text-[11px] text-slate-400">{fmtDateTime(mail.datum).split(',')[0]}</span>
                       </div>
                       <div className="truncate text-xs text-slate-600">{mail.betreff}</div>
+                      {!mail.zugewiesen && mail.vorschlag?.status === 'privat_offen' && ordner !== 'vorschlaege' && (
+                        <span className="mr-1 mt-1 inline-flex items-center gap-1 rounded bg-accent-50 px-1.5 py-0.5 text-[10px] font-medium text-accent-700">
+                          <Lightbulb size={10} /> Vorschlag
+                        </span>
+                      )}
+                      {ordner === 'vorschlaege' && mail.vorschlag?.kandidaten?.[0] && (
+                        <span className="mr-1 mt-1 inline-block max-w-full truncate rounded bg-accent-50 px-1.5 py-0.5 text-[10px] font-medium text-accent-700">
+                          {mail.vorschlag.kandidaten[0].sicher ? 'sehr wahrscheinlich: ' : 'vielleicht: '}
+                          {mail.vorschlag.kandidaten[0].name}
+                        </span>
+                      )}
+                      {mail.zugewiesen?.bereich === 'privat' && (
+                        <span className="mr-1 mt-1 inline-block max-w-full truncate rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-700">bei {mail.zugewiesen.kundeName}</span>
+                      )}
                       {mailOrdner === 'alle' && mail.ordner && (
                         <span className="mt-1 inline-block max-w-full truncate rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">{ordnerAnzeige(mail.ordner)}</span>
                       )}
@@ -287,9 +353,9 @@ function PrivatPostfachInhalt() {
                   ))
                 ))}
             </div>
-            {!query.trim() && (ordner === 'posteingang' ? mails.length : gesendet.length) >= limit && (
+            {!query.trim() && (ordner !== 'gesendet' ? mails.length : gesendet.length) >= limit && (
               <div className="border-t border-slate-100 p-2">
-                <SecondaryButton onClick={() => { const n = limit + 40; setLimit(n); lade(n) }} disabled={laedt} className="w-full justify-center text-xs">
+                <SecondaryButton onClick={() => { const n = limit + 40; setLimit(n); lade(n, query, mailOrdner, ordner) }} disabled={laedt} className="w-full justify-center text-xs">
                   Mehr laden
                 </SecondaryButton>
               </div>
@@ -319,17 +385,23 @@ function PrivatPostfachInhalt() {
                   </div>
                 </div>
 
+                <VorschlagKasten key={`v-${selectedMail.messageId}`} mail={selectedMail} ich={ich} wer={wer} onFertig={nachAktion} />
+
                 <RueberholenKasten
                   key={selectedMail.messageId}
                   absenderEmail={selectedMail.von}
                   absenderName={selectedMail.vonName}
                   betreff={selectedMail.betreff}
                   onHolen={async (kunde, vorher) => {
+                    // Neuer Kunde (vorher legt ihn an): Die Akte entsteht gerade erst im Browser, deshalb wird die Mail beim
+                    // Übergeben direkt vermerkt. Bestehende Akte: übergeben und über den Server zuordnen (Rechteprüfung,
+                    // Verlauf, Anhänge in der Akte).
                     vorher?.()
-                    await holeMailInOeffentlich('eingang', selectedMail.messageId, kunde)
+                    await uebergibInsCrm(ich, selectedMail, wer, kunde ? { ...kunde, neu: !!vorher } : undefined)
                     setMails((ms) => ms.filter((m) => m.messageId !== selectedMail.messageId))
                     setSelectedId(null)
                     setHinweis(kunde ? `Mail liegt jetzt im öffentlichen Bereich bei ${kunde.name}.` : 'Mail liegt jetzt im gemeinsamen Postfach.')
+                    zaehlePrivatVorschlaege(ich).then(setAnzahl).catch(() => {})
                   }}
                   onPrivaterKontakt={matchKundeByEmail(state, selectedMail.von) ? undefined : () => alsPrivatenKontakt(selectedMail)}
                 />
@@ -530,6 +602,178 @@ function RueberholenKasten({
         </PrimaryButton>
         <SecondaryButton onClick={() => setOffen(false)} className="text-xs">Abbrechen</SecondaryButton>
       </div>
+    </div>
+  )
+}
+
+/** Alle Akten, die im Browser geladen sind (die Datenbank liefert nur, was der Mitarbeiter sehen darf), nach Kennung. */
+function aktenNachId(state: ReturnType<typeof useApp>['state']): Map<string, { kunde: Kunde; bereich: KundeBereich }> {
+  const map = new Map<string, { kunde: Kunde; bereich: KundeBereich }>()
+  for (const b of KUNDEN_BEREICHE) for (const k of b.get(state)) map.set(k.id, { kunde: k, bereich: b.id })
+  return map
+}
+
+function kundenName(k: Kunde): string {
+  return k.ansprechpartner && k.ansprechpartner !== k.firma ? `${k.firma} (${k.ansprechpartner})` : k.firma || k.ansprechpartner
+}
+
+/**
+ * Vorschlag des CRM zu einer privaten Mail (supabase/functions/email-gateway/privatPostZuordnung.ts): wahrscheinliche
+ * Akte(n) mit Grund. Ein Klick legt die Mail beim eigenen privaten Kontakt ab (bleibt privat) oder übergibt sie ins
+ * CRM und ordnet sie der Akte zu. Rundschreiben: Hinweis und „Kein Rundschreiben“.
+ */
+function VorschlagKasten({
+  mail,
+  ich,
+  wer,
+  onFertig,
+}: {
+  mail: PrivatMail
+  ich: string
+  wer: string
+  onFertig: (mail: PrivatMail, ersatz: PrivatMail | null, text: string) => void
+}) {
+  const { state, dispatch } = useApp()
+  const [laeuft, setLaeuft] = useState('')
+  const [fehler, setFehler] = useState('')
+  const v = mail.vorschlag
+
+  async function ausfuehren(schluessel: string, arbeit: () => Promise<void>) {
+    setLaeuft(schluessel)
+    setFehler('')
+    try {
+      await arbeit()
+    } catch (err) {
+      setFehler(err instanceof Error ? err.message : 'Das hat nicht geklappt.')
+    } finally {
+      setLaeuft('')
+    }
+  }
+
+  if (mail.zugewiesen?.bereich === 'privat') {
+    return (
+      <div className="mb-3 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+        <Check size={13} /> Liegt beim privaten Kontakt {mail.zugewiesen.kundeName} — bleibt privat.
+      </div>
+    )
+  }
+  if (mail.zugewiesen) return null
+
+  if (v?.status === 'privat_rundschreiben') {
+    return (
+      <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+        <Newspaper size={13} /> Als Rundschreiben ausgeblendet{v.grund ? ` (${v.grund})` : ''}.
+        <SecondaryButton
+          className="ml-auto text-xs"
+          disabled={!!laeuft}
+          onClick={() =>
+            ausfuehren('kein', async () => {
+              await keinRundschreiben(ich, mail, wer)
+              onFertig(mail, { ...mail, vorschlag: { art: 'privat', status: 'privat_keiner' } }, 'Die Mail steht wieder im Posteingang.')
+            })
+          }
+        >
+          Kein Rundschreiben
+        </SecondaryButton>
+        {fehler && <p className="w-full text-rose-600">{fehler}</p>}
+      </div>
+    )
+  }
+
+  const akten = aktenNachId(state)
+  // Nur Kandidaten, deren Akte der Mitarbeiter (noch) sehen darf.
+  const kandidaten = v?.status === 'privat_offen' ? (v.kandidaten ?? []).filter((x) => akten.has(x.kundeId)) : []
+
+  if (kandidaten.length === 0) {
+    return (
+      <div className="mb-3 flex justify-end">
+        <button
+          type="button"
+          disabled={!!laeuft}
+          className="flex items-center gap-1 text-[11px] text-slate-400 hover:text-slate-600"
+          onClick={() =>
+            ausfuehren('rund', async () => {
+              await alsRundschreiben(ich, mail, wer)
+              onFertig(mail, { ...mail, vorschlag: { art: 'privat', status: 'privat_rundschreiben', grund: 'von Hand als Rundschreiben markiert' } }, 'Als Rundschreiben ausgeblendet.')
+            })
+          }
+        >
+          <EyeOff size={11} /> Als Rundschreiben ausblenden
+        </button>
+        {fehler && <p className="ml-2 text-[11px] text-rose-600">{fehler}</p>}
+      </div>
+    )
+  }
+
+  async function annehmen(x: PrivatKandidat) {
+    const treffer = akten.get(x.kundeId)
+    if (!treffer) throw new Error('Diese Akte ist nicht mehr sichtbar.')
+    const name = kundenName(treffer.kunde)
+    if (treffer.bereich === 'privat') {
+      await legeBeiPrivatKontaktAb(ich, mail, { id: treffer.kunde.id, name }, wer)
+      dispatch({
+        type: 'UPDATE_KUNDE_IN_BEREICH',
+        bereich: 'privat',
+        id: treffer.kunde.id,
+        patch: {
+          letzteAktivitaet: today(),
+          activities: [{ id: uid('act'), date: today(), text: `Private E-Mail abgelegt: „${mail.betreff}" von ${mail.vonName}`, user: wer }, ...(treffer.kunde.activities ?? [])],
+        },
+      })
+      onFertig(mail, { ...mail, zugewiesen: { bereich: 'privat', kundeId: treffer.kunde.id, kundeName: name }, vorschlag: { art: 'privat', status: 'privat_uebernommen' } }, `Mail liegt jetzt beim privaten Kontakt ${name} und bleibt privat.`)
+      return
+    }
+    const r = await uebergibInsCrm(ich, mail, wer, { id: treffer.kunde.id, name })
+    onFertig(mail, null, `Mail ist ins CRM übergeben und liegt bei ${name}${r.abgelegt > 0 ? ` (${r.abgelegt === 1 ? '1 Anhang' : `${r.abgelegt} Anhänge`} in den Dokumenten)` : ''}.`)
+  }
+
+  return (
+    <div className="mb-3 rounded-lg border border-accent-200 bg-accent-50/40 p-3">
+      <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-slate-700">
+        <Lightbulb size={13} className="text-accent-600" /> Gehört wahrscheinlich zu:
+      </p>
+      <div className="space-y-2">
+        {kandidaten.map((x) => {
+          const treffer = akten.get(x.kundeId)!
+          const privat = treffer.bereich === 'privat'
+          return (
+            <div key={x.kundeId} className="flex flex-wrap items-center gap-2 rounded-md bg-white px-2.5 py-2">
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-medium text-slate-800">
+                  {kundenName(treffer.kunde)}
+                  <span className="ml-1.5 text-[11px] font-normal text-slate-400">{privat ? 'privater Kontakt' : kundeBereichLabel(treffer.bereich)}</span>
+                  {x.sicher && <span className="ml-1.5 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">sehr wahrscheinlich</span>}
+                </div>
+                <div className="text-[11px] text-slate-500">{x.grund}</div>
+              </div>
+              <PrimaryButton className="text-xs" disabled={!!laeuft} onClick={() => ausfuehren(x.kundeId, () => annehmen(x))}>
+                {laeuft === x.kundeId ? 'Einen Moment …' : privat ? (
+                  <><Lock size={12} /> Beim Kontakt ablegen</>
+                ) : (
+                  <><ArrowRightLeft size={12} /> Ins CRM übergeben</>
+                )}
+              </PrimaryButton>
+            </div>
+          )
+        })}
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-3 text-[11px] text-slate-500">
+        <span>„Ins CRM übergeben“: Die Mail kommt zur Akte, die Kollegen dieses Bereichs sehen sie dann.</span>
+        <button
+          type="button"
+          disabled={!!laeuft}
+          className="ml-auto font-medium text-slate-500 hover:text-slate-700"
+          onClick={() =>
+            ausfuehren('weg', async () => {
+              await verwirfPrivatVorschlag(ich, mail, wer)
+              onFertig(mail, { ...mail, vorschlag: { art: 'privat', status: 'privat_verworfen' } }, 'Vorschlag verworfen.')
+            })
+          }
+        >
+          Passt nicht
+        </button>
+      </div>
+      {fehler && <p className="mt-2 text-xs text-rose-600">{fehler}</p>}
     </div>
   )
 }

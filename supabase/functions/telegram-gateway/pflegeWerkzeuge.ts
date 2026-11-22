@@ -13,6 +13,7 @@
 // Aufrufer herein.
 
 import { bereichName, darfAkte, darfBereich, istPrivat, SAMMELAKTEN, siehtAlleBereiche, type RechteMitarbeiter } from './rechte.ts'
+import { weitereVerweiseUmhaengen } from '../_shared/aktenVerweise.ts'
 
 // deno-lint-ignore no-explicit-any
 type Supa = any
@@ -342,5 +343,8 @@ async function verweiseUmhaengen(supabase: Supa, alteId: string, b: Zeile): Prom
     if (error) fehler.push(`${tabelle}: ${error.message}`)
   }
   fehler.push(...(await verknuepfungenUmschreiben(supabase, alteId, { id: b.id, bereich: b.bereich })))
+  // Neuere Tabellen (Wiedervorlagen, Unterschriften, Partner, Kostenvoranschläge, Besichtigungen …) — ohne das gingen sie beim
+  // Löschen der alten Akte verloren oder verwaisten (gefunden 22.11.2026, _shared/aktenVerweise.ts).
+  fehler.push(...(await weitereVerweiseUmhaengen(supabase, alteId, b.id)).fehler)
   return fehler
 }

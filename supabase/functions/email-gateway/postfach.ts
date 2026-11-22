@@ -1159,6 +1159,8 @@ export async function holeInOeffentlich(admin: Db, a: Aufrufer, eingabe: Freigab
       besitzer_email: null,
       ignoriert: false,
       anhaenge,
+      // Private Zuordnungsvorschläge (Namen privater Kontakte) dürfen nicht mit in den öffentlichen Bereich (22.11.2026).
+      zuordnung_vorschlag: null,
       ...(kunde ? { zugewiesener_bereich: kunde.bereich, zugewiesener_kunde_id: kunde.id, zugewiesener_kunde_name: kunde.name ?? null } : {}),
     })
     .eq('id', data.id)

@@ -4,6 +4,7 @@ import { useApp } from '../context/AppContext'
 import { KUNDEN_BEREICHE } from '../data/kundenBereiche'
 import { Card, EmptyState } from './ui'
 import { KundeUnterlagenAnfordern } from './KundeUnterlagenAnfordern'
+import { DokumentFreigabeKnopf } from './KundenPortalKarte'
 import { erzeugeKundenDownloadUrl, ladeKundenDokumentHoch } from '../lib/kundenDokumenteStorage'
 import { brauchtDateiLink, holeAnhangUrl } from '../lib/emailGateway'
 import { uid, today } from '../lib/dates'
@@ -82,16 +83,18 @@ export function DokumenteSection({ bereich, kundeId }: { bereich: KundeBereich; 
       ) : (
         <Card className="divide-y divide-slate-100 overflow-hidden">
           {dokumente.map((d) => (
-            <button
-              key={d.id}
-              onClick={() => dokumentOeffnen(d)}
-              className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm hover:bg-slate-50"
-            >
-              <FileText size={16} className="flex-shrink-0 text-slate-400" />
-              <span className="flex-1 truncate font-medium text-slate-700">{d.name}</span>
-              <span className="flex-shrink-0 text-xs text-slate-400">{d.groesse}</span>
-              <span className="flex-shrink-0 text-xs text-slate-400">{d.datum}</span>
-            </button>
+            <div key={d.id} className="flex items-center pr-2 hover:bg-slate-50">
+              <button
+                onClick={() => dokumentOeffnen(d)}
+                className="flex min-w-0 flex-1 items-center gap-3 px-4 py-3 text-left text-sm"
+              >
+                <FileText size={16} className="flex-shrink-0 text-slate-400" />
+                <span className="flex-1 truncate font-medium text-slate-700">{d.name}</span>
+                <span className="flex-shrink-0 text-xs text-slate-400">{d.groesse}</span>
+                <span className="flex-shrink-0 text-xs text-slate-400">{d.datum}</span>
+              </button>
+              <DokumentFreigabeKnopf bereich={bereich} kundeId={kundeId} dokument={d} />
+            </div>
           ))}
         </Card>
       )}

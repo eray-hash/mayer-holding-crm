@@ -12,6 +12,8 @@
 //   stattdessen als eigene kurze „Privat-Übersicht“ über diesen Bot; die Mayer-Nachricht bleibt sonst gleich.
 //   Klappt das Senden dort nicht, geht die Privat-Übersicht als eigene Nachricht über den Mayer-Bot.
 // - Wochenbericht: freitags ab 16 Uhr (bis 19 Uhr), nur Geschäftsführung und Admins. Nur Zahlen.
+//   Nicht an Empfänger des Wochenrückblicks (wochenrueckblick.ts, Einstellung berichtAn): die bekommen nur den
+//   Rückblick (seit 22.11.2026 — vorher kamen freitags drei Berichte).
 // - Abschalten kann jeder für sich (`kalender_einstellungen.morgen_uebersicht` / `.wochenbericht`;
 //   keine Zeile oder kein Wert = an).
 // - Höchstens einmal je Person und Tag: Eine Buchhaltungszeile in `abteilung_eintraege`
@@ -28,6 +30,7 @@
 import { hotmailAbschnitte } from './hotmailBriefing.ts'
 import { privatBotAktiv, sendePrivat } from '../_shared/telegramPrivat.ts'
 import { darfObjekt, istPrivatesObjekt, nurMayerObjekte, normalisiereAdresse } from '../_shared/privatZugriff.ts'
+import { wochenrueckblickAdressen } from './wochenrueckblickEmpfaenger.ts'
 
 // Der Dienst-Zugang zur Datenbank — wie in gesuchTreffer.ts.
 // deno-lint-ignore no-explicit-any
@@ -759,12 +762,19 @@ async function lauf(admin: Db, sende: SendeFunktion, jetzt: Date, art: 'morgen' 
 
   // ---- Wer ist heute noch dran? ----
   const [team, einstellungen] = await Promise.all([ladeTeam(admin), ladeEinstellungen(admin)])
-  const offen = team.filter((p) => {
+  let offen = team.filter((p) => {
     if (p.chat == null || schon[p.email] === heute) return false
     const e = einstellungen.get(p.email)
     if (art === 'woche') return p.gf && e?.woche !== false
     return e?.morgen !== false
   })
+  // Wer den Wochenrückblick bekommt (wochenrueckblick.ts), bekommt diesen Wochenbericht nicht zusätzlich.
+  // Erst hier gelesen, also nur solange noch jemand offen ist; ist die Einstellung nicht lesbar, bricht der Lauf ab
+  // und der nächste Takt versucht es erneut (lieber später als doppelt).
+  if (art === 'woche' && offen.length > 0) {
+    const rueckblick = await wochenrueckblickAdressen(admin)
+    offen = offen.filter((p) => !rueckblick.has(p.email))
+  }
   if (offen.length === 0) return 0
 
   // ---- Alles lesen, bevor die Zeile weitergestellt wird: Schlägt ein Abruf fehl, versucht es der
@@ -865,6 +875,7 @@ export async function tagesmeldungTest(admin: Db, sende: SendeFunktion, eingabe:
       const { data } = await admin.from(TABELLE).select('daten').eq('id', STAND_ID).maybeSingle()
       nachricht = wochenText(await ladeWochenDaten(admin), jetzt, (alsObjekt(data?.daten) as Stand | null)?.bezahlt)
       if (!p.gf) hinweis = 'Diese Person ist weder Geschäftsführung noch Admin — im echten Lauf bekäme sie keinen Wochenbericht.'
+      else if ((await wochenrueckblickAdressen(admin)).has(p.email)) hinweis = 'Diese Person bekommt den Wochenrückblick — im echten Lauf bekäme sie diesen Wochenbericht nicht.'
     }
     let gesendet = false
     let privatGesendet = false

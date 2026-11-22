@@ -10,7 +10,9 @@
 //                              Antwortzeit auf erste Mails, überfällige Wiedervorlagen, Objekte nach Status.
 // D Technik & Kosten          — KI-Kosten (nur hier, Mitarbeiter sehen nie Beträge), Fehler, Postfächer,
 //                              Sprachnachrichten von heute gegen die Groq-Tagesgrenze.
-// F Wochenbericht             — freitags ab 16 Uhr einmal per Telegram an alle Superuser.
+// F Wochenbericht             — freitags ab 16 Uhr einmal per Telegram an alle Superuser, AUSSER an die
+//                              Empfänger des Wochenrückblicks (wochenrueckblick.ts): die bekommen den
+//                              Superuser-Teil als Zusatz im Wochenrückblick (superuserAnhang, seit 22.11.2026).
 //
 // Grenzen der Daten: `ki_verbrauch` kennt die Person erst seit 19.11.2026 (ältere Aufrufe und Zeitplan-
 // Aufträge zählen als "automatisch"); der
@@ -22,6 +24,7 @@ import { ermittleAufrufer } from './postfach.ts'
 import { berlinZeit, plusTage, istDienstSchluessel } from './tagesmeldung.ts'
 import { ordneAufgabenZu, ordneZu, personenNamen, OBJEKT_ABGESCHLOSSEN, type RohAufgabe } from '../_shared/aufgabenKern.ts'
 import { nurMayerObjekte } from '../_shared/privatZugriff.ts'
+import { wochenrueckblickAdressen } from './wochenrueckblickEmpfaenger.ts'
 
 // deno-lint-ignore no-explicit-any
 type Db = any
@@ -555,7 +558,7 @@ export async function superuserAuswertung(req: Request, admin: Db, body: Record<
 }
 
 // ---------------------------------------------------------------------------------------------
-// F Wochenbericht (freitags ab 16 Uhr, einmal, an alle Superuser mit Telegram)
+// F Wochenbericht (freitags ab 16 Uhr, einmal, an alle Superuser mit Telegram außer Wochenrückblick-Empfängern)
 // ---------------------------------------------------------------------------------------------
 
 const BERICHT_ID = 'superuser_wochenbericht'
@@ -567,28 +570,55 @@ function minutenText(n: number): string {
   return m ? `${h} Std. ${m} Min.` : `${h} Std.`
 }
 
-export async function wochenberichtText(admin: Db, jetzt: Date): Promise<string> {
+/** Die Zeilen, die nur Superuser sehen: Nutzung je Person, Antwortzeit, offene Wünsche, KI-Kosten.
+ *  Neue Akten und Anfragen stehen getrennt (die hat der Wochenrückblick schon selbst). */
+async function wochenTeile(admin: Db, jetzt: Date): Promise<{ g: Grunddaten; nurSuperuser: string[]; akten: string[] }> {
   const g = await ladeGrunddaten(admin, 7, jetzt)
   const [n, z, t] = [await nutzung(admin, g), await zahlen(admin, g, jetzt), await technik(admin, g, jetzt)]
-  const datum = (d: string) => d.split('-').reverse().slice(0, 2).join('.') + '.'
-  const zeilen: string[] = [`Superuser-Wochenbericht ${datum(g.von)}–${datum(g.bis)}`, '', 'Nutzung (Fakten, CRM-Minuten seit ' + MESSUNG_SEIT + ' gemessen):']
+  const nurSuperuser: string[] = ['Nutzung (Fakten, CRM-Minuten seit ' + MESSUNG_SEIT + ' gemessen):']
   for (const p of n.zeilen) {
     const aktionen = p.verlaufseintraege + p.mailsGesendet + p.termineAngelegt + p.todosErledigt
-    zeilen.push(`- ${p.name}: ${p.aktiveTage} aktive Tage, ${minutenText(p.aktiveMinuten)} im CRM, ${aktionen} Aktionen (${p.verlaufseintraege} Einträge, ${p.mailsGesendet} Mails, ${p.termineAngelegt} Termine, ${p.todosErledigt} erledigte Aufgaben), ${p.assistentZuege} Gespräche mit dem Assistenten${p.sprachnachrichten ? `, davon ${p.sprachnachrichten} gesprochen` : ''}`)
+    nurSuperuser.push(`- ${p.name}: ${p.aktiveTage} aktive Tage, ${minutenText(p.aktiveMinuten)} im CRM, ${aktionen} Aktionen (${p.verlaufseintraege} Einträge, ${p.mailsGesendet} Mails, ${p.termineAngelegt} Termine, ${p.todosErledigt} erledigte Aufgaben), ${p.assistentZuege} Gespräche mit dem Assistenten${p.sprachnachrichten ? `, davon ${p.sprachnachrichten} gesprochen` : ''}`)
   }
   const neu: Record<string, number> = {}
   for (const w of Object.values(z.neueAkten)) for (const [b, k] of Object.entries(w)) neu[b] = (neu[b] ?? 0) + k
   const neuSumme = Object.values(neu).reduce((s, k) => s + k, 0)
-  zeilen.push('', `Neue Akten: ${neuSumme}${neuSumme ? ` (${Object.entries(neu).sort(([a], [b]) => a.localeCompare(b, 'de')).map(([b, k]) => `${b} ${k}`).join(', ')})` : ''}`)
+  const akten = [`Neue Akten: ${neuSumme}${neuSumme ? ` (${Object.entries(neu).sort(([a], [b]) => a.localeCompare(b, 'de')).map(([b, k]) => `${b} ${k}`).join(', ')})` : ''}`]
   const anfr = Object.values(z.anfragen).reduce((s, a) => ({ e: s.e + a.erkannt, u: s.u + a.uebernommen }), { e: 0, u: 0 })
-  zeilen.push(`Anfragen: ${anfr.e} neue Absender geprüft, ${anfr.u} als Akte übernommen`)
-  if (z.antwortzeit.medianStunden != null) zeilen.push(`Antwortzeit auf erste Mails (Mitte): ${z.antwortzeit.medianStunden < 24 ? `${Math.round(z.antwortzeit.medianStunden)} Std.` : `${(z.antwortzeit.medianStunden / 24).toFixed(1).replace('.', ',')} Tage`}`)
-  zeilen.push(`Offene Wünsche: ${t.fehler.offeneWuensche}`)
-  zeilen.push(`KI-Kosten der Woche: ${t.kosten.summeEuro.toFixed(2).replace('.', ',')} € (${t.kosten.aufrufe} Aufrufe)`)
+  akten.push(`Anfragen: ${anfr.e} neue Absender geprüft, ${anfr.u} als Akte übernommen`)
+  nurSuperuser.push('')
+  if (z.antwortzeit.medianStunden != null) nurSuperuser.push(`Antwortzeit auf erste Mails (Mitte): ${z.antwortzeit.medianStunden < 24 ? `${Math.round(z.antwortzeit.medianStunden)} Std.` : `${(z.antwortzeit.medianStunden / 24).toFixed(1).replace('.', ',')} Tage`}`)
+  nurSuperuser.push(`Offene Wünsche: ${t.fehler.offeneWuensche}`)
+  nurSuperuser.push(`KI-Kosten der Woche: ${t.kosten.summeEuro.toFixed(2).replace('.', ',')} € (${t.kosten.aufrufe} Aufrufe)`)
   const personen = Object.entries(t.kosten.jePerson).sort(([, a], [, b]) => b - a).slice(0, 5)
-  for (const [name, betrag] of personen) zeilen.push(`  ${name}: ${betrag.toFixed(2).replace('.', ',')} €`)
-  zeilen.push('', 'Alles im CRM unter Superuser.')
-  return zeilen.join('\n')
+  for (const [name, betrag] of personen) nurSuperuser.push(`  ${name}: ${betrag.toFixed(2).replace('.', ',')} €`)
+  return { g, nurSuperuser, akten }
+}
+
+export async function wochenberichtText(admin: Db, jetzt: Date): Promise<string> {
+  const { g, nurSuperuser, akten } = await wochenTeile(admin, jetzt)
+  const datum = (d: string) => d.split('-').reverse().slice(0, 2).join('.') + '.'
+  const leer = nurSuperuser.indexOf('')
+  // Reihenfolge wie bisher: Nutzung, Akten und Anfragen, dann Antwortzeit/Wünsche/Kosten.
+  return [`Superuser-Wochenbericht ${datum(g.von)}–${datum(g.bis)}`, '', ...nurSuperuser.slice(0, leer), '', ...akten, ...nurSuperuser.slice(leer + 1), '', 'Alles im CRM unter Superuser.'].join('\n')
+}
+
+/** Zusatz zum Wochenrückblick (wochenrueckblick.ts) für Superuser, die ihn bekommen: nur der Superuser-Teil. */
+export async function superuserAnhang(admin: Db, jetzt: Date): Promise<string> {
+  const { nurSuperuser } = await wochenTeile(admin, jetzt)
+  return ['Zusatz für Superuser:', '', ...nurSuperuser, '', 'Alles im CRM unter Superuser.'].join('\n')
+}
+
+/** Adressen (klein) aller aktiven Superuser. */
+export async function istSuperuserAdressen(admin: Db): Promise<Set<string>> {
+  return new Set((await ladeTeam(admin)).filter((m) => m.ist_superuser).map((m) => m.email))
+}
+
+/** Superuser mit Telegram, die den Bericht bekommen: ohne die Empfänger des Wochenrückblicks — die finden den
+ *  Superuser-Teil als Zusatz dort (sonst kamen freitags drei Berichte). */
+async function berichtEmpfaenger(admin: Db): Promise<TeamMitglied[]> {
+  const [team, rueckblick] = await Promise.all([ladeTeam(admin), wochenrueckblickAdressen(admin)])
+  return team.filter((x) => x.ist_superuser && x.telegram_chat_id && !rueckblick.has(x.email))
 }
 
 /** Vom Minutentakt gerufen; außerhalb von Freitag ab 16 Uhr ohne Datenbankzugriff. Wirft nie. */
@@ -599,7 +629,9 @@ export async function pruefeSuperuserWochenbericht(admin: Db, sende: SendeFunkti
     const { data: zeile } = await admin.from('abteilung_eintraege').select('daten').eq('id', BERICHT_ID).maybeSingle()
     const stand = alsObjekt(zeile?.daten) ?? {}
     if (stand.woche === b.datum) return 0
-    const neu = { woche: b.datum, version: crypto.randomUUID() }
+    // Empfänger VOR dem Beanspruchen: Ist die Einstellung des Wochenrückblicks nicht lesbar, versucht es der nächste Takt.
+    const empfaenger = await berichtEmpfaenger(admin)
+    const neu = { woche: b.datum, version: crypto.randomUUID(), ...(empfaenger.length ? {} : { ohneEmpfaenger: true }) }
     if (!zeile) {
       const { error } = await admin.from('abteilung_eintraege').insert({ id: BERICHT_ID, art: BERICHT_ID, daten: neu, updated_at: jetzt.toISOString() })
       if (error) return 0
@@ -609,10 +641,11 @@ export async function pruefeSuperuserWochenbericht(admin: Db, sende: SendeFunkti
       const { data: beansprucht } = await q.select('id')
       if (!Array.isArray(beansprucht) || beansprucht.length === 0) return 0
     }
+    // Niemand mehr übrig (alle Superuser bekommen den Wochenrückblick): Woche trotzdem vermerkt, damit der Takt ruht.
+    if (empfaenger.length === 0) return 0
     const text = await wochenberichtText(admin, jetzt)
-    const team = await ladeTeam(admin)
     let gesendet = 0
-    for (const m of team.filter((x) => x.ist_superuser && x.telegram_chat_id)) if (await sende(m.telegram_chat_id!, text)) gesendet++
+    for (const m of empfaenger) if (await sende(m.telegram_chat_id!, text)) gesendet++
     return gesendet
   } catch (err) {
     console.error('Superuser-Wochenbericht fehlgeschlagen:', err instanceof Error ? err.message : err)
@@ -620,15 +653,15 @@ export async function pruefeSuperuserWochenbericht(admin: Db, sende: SendeFunkti
   }
 }
 
-/** Probelauf nur mit Dienstschlüssel: gibt den Text zurück, sendet nur mit `senden: true` (an Superuser). */
+/** Probelauf nur mit Dienstschlüssel: gibt den Text zurück, sendet nur mit `senden: true` (an dieselben Superuser
+ *  wie der echte Lauf, also ohne Empfänger des Wochenrückblicks). */
 export async function superuserWochenberichtTest(req: Request, admin: Db, body: Record<string, unknown>, sende: SendeFunktion): Promise<{ status: number; daten: unknown }> {
   const token = (req.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '').trim()
   if (!istDienstSchluessel(token)) return { status: 401, daten: { error: 'Nur mit Dienstschlüssel.' } }
   const text = await wochenberichtText(admin, new Date())
   let gesendet = 0
   if (body.senden === true) {
-    const team = await ladeTeam(admin)
-    for (const m of team.filter((x) => x.ist_superuser && x.telegram_chat_id)) if (await sende(m.telegram_chat_id!, text)) gesendet++
+    for (const m of await berichtEmpfaenger(admin)) if (await sende(m.telegram_chat_id!, text)) gesendet++
   }
   return { status: 200, daten: { ok: true, text, gesendet } }
 }

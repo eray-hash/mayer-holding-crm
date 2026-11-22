@@ -9,6 +9,12 @@
 // - Abgeglichen werden Titel, Ort, Beginn, Ende, ganztägig (Prüfsumme ms_hash). Die Notiz geht nur beim Anlegen mit.
 // - Ändern/Löschen eines Outlook-Termins MIT Teilnehmern würde Microsoft an alle melden → nur über eine Vormerkung
 //   (Bestätigung durch den Besitzer, siehe vormerkungen.ts). Gelöscht in Outlook → im CRM gelöscht, wenn dort unverändert.
+// - Seiten (22.11.2026): Reicht die Zeit eines Laufs nicht für alle Seiten einer Runde (@odata.nextLink), merkt sich der
+//   Lauf die nächste Seite (ms_konten.stand.kalenderWeiter) und macht beim nächsten Lauf dort weiter — vorher begann
+//   er die Runde wieder von vorn und kam bei einem großen Kalender nie bis zum @odata.deltaLink (so am 20.11. beim
+//   ersten Abgleich, der dann von Hand angestoßen werden musste).
+// - Die eigenen CRM-Termine werden seitenweise gelesen (die Datenbank liefert höchstens 1000 Zeilen je Abfrage; ohne
+//   das fehlten ab dem 1001. Termin die Zuordnungen: Änderungen und Löschungen aus Outlook kamen nicht mehr an).
 import { berlinZuUtc, graph, isoZuMsZeit, MsFehler, msZeitZuIso } from '../_shared/microsoft.ts'
 import { ERLAUBTE_ERINNERUNGEN } from './kalender.ts'
 import { AUSFUEHRER, merkeVor } from './vormerkungen.ts'
@@ -60,6 +66,33 @@ const FENSTER_VORAUS_TAGE = 548
 const NEUSTART_TAGE = 30 // danach wird das Fenster neu gesetzt (sonst würde es nie weiterwandern)
 
 const iso = (d: string) => new Date(d).toISOString()
+const zeitpunkt = (d: string) => Date.parse(d)
+
+/** Angefangene Runde der Änderungsabfrage: nächste Seite, Beginn der Runde, volle Runde (neues Fenster) oder Änderungen. */
+export type KalenderWeiter = { link: string; seit: string; voll: boolean }
+
+/** Alle eigenen CRM-Termine, seitenweise nach id (die Datenbank liefert höchstens 1000 Zeilen je Abfrage). */
+export async function ladeEigeneTermine(admin: Db, ich: string): Promise<CrmTermin[]> {
+  const alle: CrmTermin[] = []
+  for (let letzte = '', seite = 0; seite < 100; seite++) {
+    let q = admin.from('termine').select(SPALTEN).eq('besitzer_email', ich).order('id', { ascending: true }).limit(1000)
+    if (letzte) q = q.gt('id', letzte)
+    const { data, error } = await q
+    if (error) throw new Error(`Termine nicht lesbar: ${error.message}`)
+    const teil = (data ?? []) as CrmTermin[]
+    alle.push(...teil)
+    if (teil.length < 1000) break
+    letzte = teil[teil.length - 1].id
+  }
+  return alle
+}
+
+/** Erste Adresse einer vollen Runde: Fenster 60 Tage zurück bis 18 Monate voraus. */
+export function fensterAdresse(jetzt: number): { url: string; vonTag: string; bisTag: string } {
+  const vonTag = new Date(jetzt - FENSTER_ZURUECK_TAGE * 86400000).toISOString()
+  const bisTag = new Date(jetzt + FENSTER_VORAUS_TAGE * 86400000).toISOString()
+  return { url: `/me/calendarView/delta?startDateTime=${vonTag}&endDateTime=${bisTag}`, vonTag, bisTag }
+}
 
 /** Outlook-Termin → CRM-Felder (Zeiten als UTC-Zeitpunkte; ganztägig = Mitternacht deutscher Zeit). */
 export function ausOutlook(t: MsTermin) {
@@ -131,14 +164,31 @@ export async function gleicheKalenderAb(admin: Db, ich: string, budgetMs = 60_00
   const stand = (konto?.stand ?? {}) as Record<string, unknown>
   let delta = stand.kalenderDelta as { link: string; seit: string } | undefined
   if (delta && Date.now() - Date.parse(delta.seit) > NEUSTART_TAGE * 86400000) delta = undefined
+  let weiter = (stand.kalenderWeiter ?? undefined) as KalenderWeiter | undefined
+  // Angefangene Runde verwerfen, wenn sie zu alt ist oder (als Änderungsrunde) zu einem abgelaufenen Fenster gehört.
+  if (weiter && (!weiter.link || !(Date.now() - Date.parse(weiter.seit) <= NEUSTART_TAGE * 86400000) || (!weiter.voll && !delta))) weiter = undefined
 
-  const { data: zeilen } = await admin.from('termine').select(SPALTEN).eq('besitzer_email', ich)
-  const crm = (zeilen ?? []) as CrmTermin[]
+  let crm: CrmTermin[]
+  try {
+    crm = await ladeEigeneTermine(admin, ich)
+  } catch (e) {
+    // Ohne vollständige Liste lieber gar nicht abgleichen (sonst fehlen Zuordnungen).
+    b.fehler.push(e instanceof Error ? e.message : String(e))
+    const { data: jetzt } = await admin.from('ms_konten').select('stand').eq('login_email', ich).maybeSingle()
+    await admin.from('ms_konten').update({ stand: { ...((jetzt?.stand ?? {}) as Record<string, unknown>), kalenderLauf: { am: new Date().toISOString(), ...b } } }).eq('login_email', ich)
+    return b
+  }
   const nachMsId = new Map(crm.filter((a) => a.ms_id).map((a) => [a.ms_id!, a]))
   const behandelt = new Set<string>()
-  const vonTag = new Date(Date.now() - FENSTER_ZURUECK_TAGE * 86400000).toISOString()
-  const bisTag = new Date(Date.now() + FENSTER_VORAUS_TAGE * 86400000).toISOString()
-  const erster = !delta
+  const fenster = fensterAdresse(Date.now())
+  const { vonTag, bisTag } = fenster
+  // Volle Runde (neues Fenster) ODER Fortsetzung einer vollen Runde; „erster“ = volle Runde, die in DIESEM Lauf beginnt —
+  // nur dann sind am Ende alle Outlook-Termine des Fensters gesehen (für das Lösen verwaister Verknüpfungen unten).
+  const voll = weiter ? weiter.voll : !delta
+  const erster = !delta && !weiter
+  const rundeSeit = weiter?.seit ?? (voll ? new Date().toISOString() : delta!.seit)
+  let fertig = false
+  let abgelaufen = false
 
   // ---- 1) Outlook → CRM ----
   const gesehen = new Set<string>()
@@ -156,8 +206,9 @@ export async function gleicheKalenderAb(admin: Db, ich: string, budgetMs = 60_00
     }
     return serienKoepfe.get(id)!
   }
+  let url = ''
   try {
-    let url = delta?.link ?? `/me/calendarView/delta?startDateTime=${vonTag}&endDateTime=${bisTag}`
+    url = weiter?.link ?? delta?.link ?? fenster.url
     for (let seite = 0; seite < 60 && url && Date.now() - start < budgetMs; seite++) {
       const d = await graph<{ value?: MsTermin[]; '@odata.nextLink'?: string; '@odata.deltaLink'?: string }>(admin, ich, url, {
         kopf: { prefer: 'outlook.timezone="W. Europe Standard Time", odata.maxpagesize=100' },
@@ -227,18 +278,28 @@ export async function gleicheKalenderAb(admin: Db, ich: string, budgetMs = 60_00
           Object.assign(vorhanden, felder, { ms_hash: await terminHash(felder) })
         }
       }
-      if (d['@odata.deltaLink']) delta = { link: d['@odata.deltaLink'], seit: delta?.seit ?? new Date().toISOString() }
+      if (d['@odata.deltaLink']) {
+        delta = { link: d['@odata.deltaLink'], seit: voll ? rundeSeit : (delta?.seit ?? rundeSeit) }
+        fertig = true
+      }
       url = d['@odata.nextLink'] ?? ''
     }
   } catch (e) {
-    if (e instanceof MsFehler && e.status === 410) delta = undefined
+    if (e instanceof MsFehler && e.status === 410) abgelaufen = true
     b.fehler.push(`Outlook-Kalender: ${e instanceof Error ? e.message : e}`)
   }
+  // Stand der Runde: fertig → nichts offen; Zeit oder Seiten aufgebraucht bzw. Fehler mitten in der Runde → nächste
+  // Seite merken (beim ersten Seitenabruf einer neuen Runde einfach neu beginnen); abgelaufen (410) → alles neu.
+  if (abgelaufen) {
+    delta = undefined
+    weiter = undefined
+  } else if (fertig || !url) weiter = undefined
+  else if (url !== delta?.link && url !== fenster.url) weiter = { link: url, seit: rundeSeit, voll }
   // Erster voller Lauf: CRM-Termine mit Outlook-Kennung im Fenster, die Outlook nicht mehr kennt, waren in Outlook gelöscht.
-  if (erster && delta) {
+  if (erster && fertig) {
     for (const a of crm) {
       if (!a.ms_id || gesehen.has(a.ms_id) || a.ms_id && behandelt.has(a.ms_id)) continue
-      if (a.beginn < vonTag || a.beginn > bisTag) continue
+      if (zeitpunkt(a.beginn) < zeitpunkt(vonTag) || zeitpunkt(a.beginn) > zeitpunkt(bisTag)) continue
       await admin.from('termine').update({ ms_id: null, ms_hash: null, ms_geaendert: null }).eq('id', a.id)
       a.ms_id = null
     }
@@ -268,7 +329,7 @@ export async function gleicheKalenderAb(admin: Db, ich: string, budgetMs = 60_00
   for (const a of crm) {
     if (Date.now() - start > budgetMs) break
     if (a.ms_id && behandelt.has(a.ms_id)) continue
-    if (a.ende < vonTag || a.beginn > bisTag) continue
+    if (zeitpunkt(a.ende) < zeitpunkt(vonTag) || zeitpunkt(a.beginn) > zeitpunkt(bisTag)) continue
     try {
       const hash = await terminHash(a)
       if (!a.ms_id) {
@@ -304,7 +365,7 @@ export async function gleicheKalenderAb(admin: Db, ich: string, budgetMs = 60_00
   const { data: jetzt } = await admin.from('ms_konten').select('stand').eq('login_email', ich).maybeSingle()
   await admin
     .from('ms_konten')
-    .update({ stand: { ...((jetzt?.stand ?? {}) as Record<string, unknown>), kalenderDelta: delta ?? null, kalenderLauf: { am: new Date().toISOString(), ...b, fehler: b.fehler.slice(0, 5) } } })
+    .update({ stand: { ...((jetzt?.stand ?? {}) as Record<string, unknown>), kalenderDelta: delta ?? null, kalenderWeiter: weiter ?? null, kalenderLauf: { am: new Date().toISOString(), ...b, fehler: b.fehler.slice(0, 5) } } })
     .eq('login_email', ich)
   return b
 }

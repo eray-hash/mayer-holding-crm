@@ -592,6 +592,8 @@ export type Dokument = {
   datum: string
   groesse: string
   url?: string
+  /** Im Kundenbereich sichtbar (/formular/kunde/:token), nur nach ausdrücklicher Freigabe in der Akte. */
+  fuerKunde?: boolean
 }
 
 export type FinanzierungStatus = 'Angefragt' | 'In Prüfung' | 'Zugesagt' | 'Abgelehnt' | 'Ausgezahlt'

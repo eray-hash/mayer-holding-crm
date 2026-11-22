@@ -22,9 +22,12 @@ import { DokumenteSection } from '../../components/DokumenteSection'
 import { KostenvoranschlaegeSection, useKvNutzer } from '../../components/KostenvoranschlaegeSection'
 import { WiedervorlagenListe } from '../../components/WiedervorlagenListe'
 import { WillkommenHinweis } from '../../components/WillkommenHinweis'
+import { RechnungVorschlagHinweis } from '../../components/rechnungen/RechnungVorschlaege'
 import { KundenberichtModal } from '../../components/KundenberichtModal'
+import { GespraechAufnahmenListe } from '../../components/GespraechAufnahmenListe'
 import { StammdatenVorschlaege } from '../../components/StammdatenVorschlaege'
 import { UnterschriftAnfragen } from '../../components/UnterschriftAnfragen'
+import { KundenPortalKarte } from '../../components/KundenPortalKarte'
 import { KommunikationSection } from '../../components/KommunikationSection'
 import { LoeschenKundeButton } from '../../components/LoeschenKundeButton'
 import { AktenReiter, type Reiter } from '../../components/AktenReiter'
@@ -129,9 +132,12 @@ export function FinanzierungenDetail() {
               <div className={`text-sm ${overdue ? 'font-medium text-rose-600' : 'text-slate-700'}`}>{fmtDate(mandant.followUp.date)} — {mandant.followUp.note}</div>
             </div>
             <div className="mt-4 border-t border-slate-100 pt-4">
+              <div className="mb-3 empty:hidden"><RechnungVorschlagHinweis kundeId={mandant.id} /></div>
               <div className="mb-3"><WillkommenHinweis kundeId={mandant.id} nutzerName={nutzer.name} nurLesen={nutzer.nurLesen} /></div>
               <div className="mb-3"><KundenberichtModal bereich="finanzierungen" kunde={mandant} nutzerName={nutzer.name} nurLesen={nutzer.nurLesen} /></div>
+              <div className="mb-3"><GespraechAufnahmenListe kundeId={mandant.id} /></div>
               <div className="mb-3"><UnterschriftAnfragen bereich="finanzierungen" kunde={mandant} nutzerName={nutzer.name} nurLesen={nutzer.nurLesen} /></div>
+              <div className="mb-3"><KundenPortalKarte bereich="finanzierungen" kunde={mandant} nutzerName={nutzer.name} nurLesen={nutzer.nurLesen} /></div>
               <h3 className="mb-3 text-sm font-semibold text-slate-700">Wiedervorlagen</h3>
               <WiedervorlagenListe kundeId={mandant.id} bereich="finanzierungen" verantwortlich={mandant.verantwortlich} nutzerName={nutzer.name} nurLesen={nutzer.nurLesen} />
             </div>

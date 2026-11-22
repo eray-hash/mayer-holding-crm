@@ -69,6 +69,7 @@ import { Kampagnen } from './pages/kampagnen/Kampagnen'
 import { MeinProfil } from './pages/profil/MeinProfil'
 import { MitarbeiterVerwalten } from './pages/admin/MitarbeiterVerwalten'
 import { Wuensche } from './pages/admin/Wuensche'
+import { Dubletten } from './pages/admin/Dubletten'
 import { AufgabenUebersicht } from './pages/aufgaben/AufgabenUebersicht'
 import { Kostenvoranschlaege } from './pages/kostenvoranschlaege/Kostenvoranschlaege'
 import { Checkliste } from './pages/checkliste/Checkliste'
@@ -99,6 +100,7 @@ import { PublicEigentuemerPortal } from './pages/formulare/PublicEigentuemerPort
 import { PublicTerminBuchen } from './pages/formulare/PublicTerminBuchen'
 import { PublicNda } from './pages/formulare/PublicNda'
 import { PublicKundenUnterlagen } from './pages/formulare/PublicKundenUnterlagen'
+import { PublicKundenPortal } from './pages/formulare/PublicKundenPortal'
 import { PublicDatenschutz } from './pages/formulare/PublicDatenschutz'
 import type { Bereich } from './types'
 
@@ -131,6 +133,7 @@ function AdminRoutesContent() {
         <Route path="/profil" element={<MeinProfil />} />
         <Route path="/mitarbeiter" element={<RequireAdmin><MitarbeiterVerwalten /></RequireAdmin>} />
         <Route path="/wuensche" element={<Wuensche />} />
+        <Route path="/dubletten" element={<Dubletten />} />
 
         {/* Privat: bewusst NICHT per RequireBereich beschränkt — jeder Mitarbeiter hat seinen
             eigenen, persönlichen Bereich, das ist keine von der GF zuteilbare Berechtigung.
@@ -398,6 +401,7 @@ function AppRoutes() {
         <Route path="/formular/termin/:kennung" element={<PublicTerminBuchen />} />
         <Route path="/formular/nda/:bereich/:kundeId" element={<PublicNda />} />
         <Route path="/formular/unterlagen/:token" element={<PublicKundenUnterlagen />} />
+        <Route path="/formular/kunde/:token" element={<PublicKundenPortal />} />
       </Routes>
     )
   }

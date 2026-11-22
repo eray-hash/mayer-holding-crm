@@ -23,7 +23,7 @@ import {
   ChevronDown,
   Phone,
   Lock,
-  BookUser, Search, CalendarDays, BarChart3, Lightbulb, ListChecks, Eye, ShieldCheck, Calculator, ClipboardList, Presentation, Library } from 'lucide-react'
+  BookUser, Mic, Search, CalendarDays, BarChart3, Lightbulb, ListChecks, Eye, ShieldCheck, Calculator, ClipboardList, Presentation, Library } from 'lucide-react'
 import type { Bereich } from '../types'
 import { useApp } from '../context/AppContext'
 import { useAuth } from '../context/AuthContext'
@@ -182,7 +182,7 @@ export function Layout({ children }: { children: ReactNode }) {
           <button
             onClick={() => setSucheOpen(true)}
             className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
-            title="Suche (Kunde, Mandant, Immobilie) — ⌘K"
+            title="Suche in Akten, Dokumenten, Mails und mehr — ⌘K / Strg+K"
           >
             <Search size={16} />
           </button>
@@ -454,6 +454,17 @@ export function Layout({ children }: { children: ReactNode }) {
                 <aktuellerBereich.Sidebar collapsed={false} onToggle={() => setDrawerOpen(false)} />
               </div>
 
+              {/* Gesprächs-App „Mayer Gespräch“ (eigene installierbare App unter ./gespraech/) */}
+              <a
+                href="./gespraech/"
+                target="_blank"
+                rel="noopener"
+                onClick={() => setDrawerOpen(false)}
+                className="mb-1 flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm font-medium text-slate-700 hover:bg-slate-50"
+              >
+                <Mic size={17} className="text-slate-400" />
+                <span>Gesprächs-App öffnen<span className="block text-xs font-normal text-slate-400">iPhone: in Safari „Teilen“ → „Zum Home-Bildschirm“</span></span>
+              </a>
               {/* Datei vom Handy ablegen (Kamera oder Datei wählen) — vor allem fürs iPhone, das kein „Teilen“ an Web-Apps kennt. */}
               <button
                 onClick={() => { setDrawerOpen(false); navigate('/ablegen') }}

@@ -30,6 +30,12 @@
 // Zeitraum: Tage mit Datum (Verlauf, Rechnungsdatum …) = heute und die sechs Tage davor; Zeitstempel = die
 // letzten 7 × 24 Stunden bis jetzt.
 //
+// Doppelte Berichte (22.11.2026): Wer den Rückblick bekommt, bekommt den Wochenbericht aus tagesmeldung.ts und
+// den Superuser-Wochenbericht aus superuser.ts nicht mehr. Superuser unter den Empfängern finden ihren Teil
+// (Nutzung je Person, Antwortzeit, offene Wünsche, KI-Kosten) als „Zusatz für Superuser“ unten im Rückblick — in
+// derselben Nachricht, wenn sie zusammen unter die Telegram-Grenze passen, sonst gleich danach. Die Zusammenfassung
+// des Modells sieht den Zusatz nie. Einstellung und Empfänger: wochenrueckblickEmpfaenger.ts.
+//
 // Wirft nie im Minutentakt: Fehler stehen im Protokoll.
 
 import { alsDatum, berlinTagesbeginn, berlinZeit, plusTage } from './tagesmeldung.ts'
@@ -38,6 +44,12 @@ import { ordneAufgabenZu, personenNamen, OBJEKT_ABGESCHLOSSEN, type RohAufgabe }
 import { nurMayerObjekte } from '../_shared/privatZugriff.ts'
 import { findeBezug, istAbgesagterTitel, istPrivaterBezug, kandidatenLader, SAMMELAKTEN, standName, TERMIN_SPALTEN, type BriefingTermin } from '../_shared/terminBriefingKern.ts'
 import { kiAufruf } from '../_shared/kiVerbrauch.ts'
+import { EINSTELLUNG_ID, empfaengerAus, ladeEinstellung, moeglicheEmpfaenger, normalisiereEinstellung, type Einstellung } from './wochenrueckblickEmpfaenger.ts'
+import { istSuperuserAdressen, superuserAnhang } from './superuser.ts'
+
+// Einstellung und Empfänger stehen in wochenrueckblickEmpfaenger.ts (dort lesen sie auch tagesmeldung.ts und superuser.ts).
+export { EINSTELLUNG_ID, empfaengerAus, ladeEinstellung, moeglicheEmpfaenger, normalisiereEinstellung, VORGABE, wochenrueckblickAdressen } from './wochenrueckblickEmpfaenger.ts'
+export type { Einstellung, Empfaenger } from './wochenrueckblickEmpfaenger.ts'
 
 // deno-lint-ignore no-explicit-any
 type Db = any
@@ -46,7 +58,6 @@ export type SendeFunktion = (chatId: number | string, text: string) => Promise<b
 export type KiText = (prompt: string) => Promise<string>
 
 const TABELLE = 'abteilung_eintraege'
-export const EINSTELLUNG_ID = 'wochenrueckblick_einstellung'
 export const STAND_ID = 'wochenrueckblick_stand'
 const MODELL = 'claude-haiku-5-5'
 const HOECHSTENS_ZEICHEN = 3900 // Telegram nimmt höchstens 4096 Zeichen je Nachricht
@@ -54,8 +65,6 @@ const NEUER_VERSUCH_NACH_MS = 10 * 60_000
 const HOECHSTENS_VERSUCHE = 3
 const EINSTELLUNG_CACHE_MS = 10 * 60_000
 
-export type Einstellung = { an: boolean; berichtAn: string[]; wochentag: number; stunde: number; zusammenfassung: boolean; geaendertVon?: string; geaendertAm?: string }
-export const VORGABE: Einstellung = { an: true, berichtAn: [], wochentag: 5, stunde: 16, zusammenfassung: true }
 
 const BEREICH_NAME: Record<string, string> = {
   beratung: 'Unternehmensberatung',
@@ -174,27 +183,6 @@ async function ladeAlle(admin: Db, tabelle: string, spalten: string, filter?: (q
 // Einstellung
 // ---------------------------------------------------------------------------------------------
 
-export function normalisiereEinstellung(roh: unknown): Einstellung {
-  const o = alsObjekt(roh) ?? {}
-  const wt = Number(o.wochentag)
-  const st = Number(o.stunde)
-  return {
-    an: o.an !== false,
-    berichtAn: Array.isArray(o.berichtAn) ? [...new Set(o.berichtAn.map(adresse).filter((a) => a.includes('@')))] : [],
-    wochentag: Number.isInteger(wt) && wt >= 0 && wt <= 6 ? wt : VORGABE.wochentag,
-    stunde: Number.isInteger(st) && st >= 0 && st <= 23 ? st : VORGABE.stunde,
-    zusammenfassung: o.zusammenfassung !== false,
-    ...(typeof o.geaendertVon === 'string' ? { geaendertVon: o.geaendertVon } : {}),
-    ...(typeof o.geaendertAm === 'string' ? { geaendertAm: o.geaendertAm } : {}),
-  }
-}
-
-export async function ladeEinstellung(admin: Db): Promise<Einstellung> {
-  const { data, error } = await admin.from(TABELLE).select('daten').eq('id', EINSTELLUNG_ID).maybeSingle()
-  if (error) throw new Error(`Einstellung nicht lesbar: ${error.message}`)
-  return data ? normalisiereEinstellung(data.daten) : { ...VORGABE }
-}
-
 // Der Minutentakt liest die Einstellung höchstens alle zehn Minuten (je Datenbank-Zugang, also je Worker).
 const cache = new WeakMap<object, { bis: number; e: Einstellung }>()
 async function einstellungImTakt(admin: Db, jetzt: Date): Promise<Einstellung> {
@@ -203,24 +191,6 @@ async function einstellungImTakt(admin: Db, jetzt: Date): Promise<Einstellung> {
   const e = await ladeEinstellung(admin)
   cache.set(admin, { bis: jetzt.getTime() + EINSTELLUNG_CACHE_MS, e })
   return e
-}
-
-export type Empfaenger = { name: string; email: string; chat: number | string | null; erlaubt: boolean }
-
-/** Alle aktiven Mitarbeiter mit Geschäftsführung- oder Admin-Recht (erlaubt = mit Telegram). */
-export async function moeglicheEmpfaenger(admin: Db): Promise<Empfaenger[]> {
-  const { data, error } = await admin.from('mitarbeiter').select('name, email, aktiv, rolle, ist_admin, telegram_chat_id').eq('aktiv', true)
-  if (error) throw new Error(`Mitarbeiter nicht lesbar: ${error.message}`)
-  const echte = new Set(personenNamen(((data ?? []) as { name: string }[]).map((m) => text(m.name))))
-  return ((data ?? []) as { name: string; email: string; aktiv: boolean; rolle: string; ist_admin: boolean; telegram_chat_id: number | string | null }[])
-    .filter((m) => m.aktiv === true && (m.rolle === 'geschaeftsfuehrung' || m.ist_admin === true) && echte.has(text(m.name).trim()))
-    .map((m) => ({ name: m.name, email: adresse(m.email), chat: m.telegram_chat_id ?? null, erlaubt: !!m.telegram_chat_id }))
-    .sort((a, b) => a.name.localeCompare(b.name, 'de'))
-}
-
-async function empfaengerAus(admin: Db, e: Einstellung): Promise<Empfaenger[]> {
-  if (e.berichtAn.length === 0) return []
-  return (await moeglicheEmpfaenger(admin)).filter((m) => m.erlaubt && e.berichtAn.includes(m.email))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -714,8 +684,34 @@ export function imFenster(e: Einstellung, jetzt: Date): boolean {
 
 export type LaufErgebnis = { gesendet: number; grund?: string }
 
+/** Baut den Superuser-Zusatz (in Tests ersetzt). */
+export type AnhangBauer = (admin: Db, jetzt: Date) => Promise<string>
+
+/** Zusatz je Empfänger-Adresse — nur für Superuser, einmal gebaut. Schlägt das fehl, geht der Rückblick ohne raus. */
+async function superuserAnhaenge(admin: Db, empfaenger: { email: string }[], jetzt: Date, bauer: AnhangBauer): Promise<Map<string, string>> {
+  const m = new Map<string, string>()
+  try {
+    const superuser = await istSuperuserAdressen(admin)
+    const betroffen = empfaenger.filter((e) => superuser.has(e.email))
+    if (betroffen.length === 0) return m
+    const anhang = (await bauer(admin, jetzt)).trim()
+    if (anhang) for (const e of betroffen) m.set(e.email, anhang)
+  } catch (err) {
+    console.error('Wochenrückblick: Superuser-Zusatz fehlgeschlagen:', err instanceof Error ? err.message : err)
+  }
+  return m
+}
+
+/** Rückblick und Zusatz in einer Nachricht, wenn beides zusammen unter die Telegram-Grenze passt, sonst in zwei. */
+export function mitAnhang(nachricht: string, anhang: string | null): string[] {
+  if (!anhang) return [nachricht]
+  const zusammen = `${nachricht}\n\n—\n\n${anhang}`
+  if (zusammen.length <= HOECHSTENS_ZEICHEN) return [zusammen]
+  return [nachricht, anhang.length > HOECHSTENS_ZEICHEN ? `${anhang.slice(0, HOECHSTENS_ZEICHEN - 1)}…` : anhang]
+}
+
 /** Vom Minutentakt gerufen. Außerhalb des Fensters liest sie höchstens alle zehn Minuten die Einstellung. Wirft nie. */
-export async function pruefeWochenrueckblick(admin: Db, sende: SendeFunktion, o: { ki?: KiText } = {}, jetzt = new Date()): Promise<LaufErgebnis> {
+export async function pruefeWochenrueckblick(admin: Db, sende: SendeFunktion, o: { ki?: KiText; anhang?: AnhangBauer } = {}, jetzt = new Date()): Promise<LaufErgebnis> {
   try {
     const e = await einstellungImTakt(admin, jetzt)
     if (!imFenster(e, jetzt)) return { gesendet: 0, grund: 'ausserhalb' }
@@ -732,14 +728,18 @@ export async function pruefeWochenrueckblick(admin: Db, sende: SendeFunktion, o:
       await vermerke(admin, { woche, zustand: 'fehler', versuche, am: jetzt.toISOString(), fehler: fehler.slice(0, 300) }, jetzt)
       throw err
     }
+    // Superuser unter den Empfängern bekommen den Superuser-Teil als Zusatz (statt eines eigenen Wochenberichts).
+    const anhaenge = await superuserAnhaenge(admin, empfaenger, jetzt, o.anhang ?? superuserAnhang)
     let gesendet = 0
     const an: string[] = []
     for (const m of empfaenger) {
       try {
-        if (m.chat != null && (await sende(m.chat, nachricht)) === true) {
-          gesendet++
-          an.push(m.name)
-        }
+        if (m.chat == null) continue
+        const teile = mitAnhang(nachricht, anhaenge.get(m.email) ?? null)
+        if ((await sende(m.chat, teile[0])) !== true) continue
+        gesendet++
+        an.push(m.name)
+        for (const weiterer of teile.slice(1)) await sende(m.chat, weiterer)
       } catch (err) {
         console.error('Wochenrückblick nicht zustellbar:', err instanceof Error ? err.message : err)
       }
@@ -760,22 +760,29 @@ export type AktionErgebnis = { status: number; daten: unknown }
 
 /** `wochenrueckblick_test`: gibt den Text zurück, ohne zu senden; mit `senden: true` nur an den Aufrufer selbst.
  *  `ohneZusammenfassung: true` spart den Modellaufruf. Fasst Buchhaltung und Empfängerliste nicht an. */
-export async function wochenrueckblickTest(admin: Db, aufrufer: Aufrufer | null, body: Record<string, unknown>, sende: SendeFunktion, o: { ki?: KiText; jetzt?: Date } = {}): Promise<AktionErgebnis> {
+export async function wochenrueckblickTest(admin: Db, aufrufer: Aufrufer | null, body: Record<string, unknown>, sende: SendeFunktion, o: { ki?: KiText; jetzt?: Date; anhang?: AnhangBauer } = {}): Promise<AktionErgebnis> {
   if (!aufrufer) return { status: 401, daten: { error: 'Bitte neu anmelden.' } }
   if (!aufrufer.istGf) return { status: 403, daten: { error: 'Nur für die Geschäftsführung.' } }
   try {
     const e = await ladeEinstellung(admin)
     const jetzt = o.jetzt ?? new Date()
     const n = await baueNachricht(admin, jetzt, { mitZusammenfassung: e.zusammenfassung && body.ohneZusammenfassung !== true, ki: o.ki })
+    // Superuser sehen (und bekommen) den Rückblick mit ihrem Zusatz, wie im echten Lauf.
+    const ichAdresse = aufrufer.email.trim().toLowerCase()
+    const anhang = (await superuserAnhaenge(admin, [{ email: ichAdresse }], jetzt, o.anhang ?? superuserAnhang)).get(ichAdresse) ?? null
+    const teile = mitAnhang(n.text, anhang)
     let gesendet = false
     let hinweis: string | undefined
     if (body.senden === true) {
       const { data: ich } = await admin.from('mitarbeiter').select('telegram_chat_id').ilike('email', aufrufer.email.replace(/[\\%_]/g, (z) => `\\${z}`)).maybeSingle()
       if (!ich?.telegram_chat_id) hinweis = 'Nicht gesendet: Du hast Telegram nicht verbunden.'
-      else gesendet = (await sende(ich.telegram_chat_id, n.text)) === true
+      else {
+        gesendet = (await sende(ich.telegram_chat_id, teile[0])) === true
+        if (gesendet) for (const weiterer of teile.slice(1)) await sende(ich.telegram_chat_id, weiterer)
+      }
     }
     const empfaenger = (await empfaengerAus(admin, e)).map((m) => m.name)
-    return { status: 200, daten: { ok: true, text: n.text, zusammenfassung: n.zusammenfassung, empfaenger, gesendet, ...(hinweis ? { hinweis } : {}) } }
+    return { status: 200, daten: { ok: true, text: n.text, zusammenfassung: n.zusammenfassung, ...(anhang ? { superuserZusatz: anhang } : {}), empfaenger, gesendet, ...(hinweis ? { hinweis } : {}) } }
   } catch (err) {
     return { status: 500, daten: { error: err instanceof Error ? err.message : String(err) } }
   }

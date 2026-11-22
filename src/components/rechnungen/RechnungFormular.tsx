@@ -16,23 +16,25 @@ import type { Rechnung, RechnungStatus } from '../../types'
 
 const alsText = (n: number) => (Number.isFinite(n) ? rundeCent(n).toFixed(2).replace('.', ',') : '')
 
-export function RechnungFormular({ rechnung, vorKundeId, onClose, onGespeichert }: { rechnung?: Rechnung; vorKundeId?: string; onClose: () => void; onGespeichert?: (id: string) => void }) {
+// vorlage (22.11.2026, Rechnungsvorschläge): Werte für eine NEUE Rechnung vorausfüllen (Kunde, Positionen, Steuersatz,
+// Bezeichnung, Kostenvoranschlag, Notiz …); gilt nur ohne `rechnung`.
+export function RechnungFormular({ rechnung, vorKundeId, vorlage, onClose, onGespeichert }: { rechnung?: Rechnung; vorKundeId?: string; vorlage?: Partial<Rechnung>; onClose: () => void; onGespeichert?: (id: string) => void }) {
   const { state, dispatch } = useApp()
   const nutzer = useKvNutzer()
   const bereicheMitKunden = useMemo(() => KUNDEN_BEREICHE.map((b) => ({ ...b, kunden: b.get(state) })).filter((b) => b.kunden.length > 0), [state])
 
-  const [kundeId, setKundeId] = useState(rechnung?.kundeId ?? vorKundeId ?? '')
+  const [kundeId, setKundeId] = useState(rechnung?.kundeId ?? vorKundeId ?? vorlage?.kundeId ?? '')
   const [nummer, setNummer] = useState(rechnung?.nummer ?? naechsteRechnungsnummer(state.rechnungen))
   const [datum, setDatum] = useState(rechnung?.datum ?? today())
-  const [leistungszeitraum, setLeistungszeitraum] = useState(rechnung?.leistungszeitraum ?? '')
+  const [leistungszeitraum, setLeistungszeitraum] = useState(rechnung?.leistungszeitraum ?? vorlage?.leistungszeitraum ?? '')
   const [status, setStatus] = useState<RechnungStatus>(rechnung?.status ?? 'Entwurf')
   const [zahlungsziel, setZahlungsziel] = useState(rechnung?.zahlungsziel ?? addDays(today(), 14))
   const [zielVonHand, setZielVonHand] = useState(!!rechnung && rechnung.zahlungsziel !== addDays(rechnung.datum, 14))
 
   const [pos, setPos] = useState<KvPositionenWert>({
-    positionen: rechnung?.positionen?.map((p) => ({ ...p })) ?? [],
+    positionen: rechnung?.positionen?.map((p) => ({ ...p })) ?? vorlage?.positionen?.map((p) => ({ ...p })) ?? [],
     aufschlagProzent: 0,
-    ustSatz: rechnung ? ustSatzVon(rechnung) : 19,
+    ustSatz: rechnung ? ustSatzVon(rechnung) : (vorlage?.ustSatz ?? 19),
   })
   const [editorSchluessel, setEditorSchluessel] = useState(0)
   // Positionen oder (wie bei älteren Rechnungen) nur ein Betrag von Hand.
@@ -41,14 +43,14 @@ export function RechnungFormular({ rechnung, vorKundeId, onClose, onGespeichert 
   const [netto, setNetto] = useState(rechnung && !rechnung.positionen?.length ? alsText(rechnung.betragNetto) : '')
   const [brutto, setBrutto] = useState(rechnung && !rechnung.positionen?.length ? alsText(rechnung.betragBrutto) : '')
   const [bruttoVonHand, setBruttoVonHand] = useState(!!rechnung && !rechnung.positionen?.length && Math.abs(rundeCent(rechnung.betragNetto * (1 + ustSatzVon(rechnung) / 100)) - rechnung.betragBrutto) > 0.011)
-  const [bezeichnung, setBezeichnung] = useState(rechnung?.leistungBezeichnung ?? '')
+  const [bezeichnung, setBezeichnung] = useState(rechnung?.leistungBezeichnung ?? vorlage?.leistungBezeichnung ?? '')
 
   const akte = findeAkte(state, kundeId)
-  const [anschrift, setAnschrift] = useState(() => (rechnung ? anschriftFuer(rechnung, findeAkte(state, rechnung.kundeId)) : anschriftFuer({}, findeAkte(state, vorKundeId))))
+  const [anschrift, setAnschrift] = useState(() => (rechnung ? anschriftFuer(rechnung, findeAkte(state, rechnung.kundeId)) : anschriftFuer({}, findeAkte(state, vorKundeId ?? vorlage?.kundeId))))
   const [anschriftSpeichern, setAnschriftSpeichern] = useState(true)
-  const [hinweis, setHinweis] = useState(rechnung?.hinweis ?? '')
-  const [notiz, setNotiz] = useState(rechnung?.notiz ?? '')
-  const [kvId, setKvId] = useState(rechnung?.kvId)
+  const [hinweis, setHinweis] = useState(rechnung?.hinweis ?? vorlage?.hinweis ?? '')
+  const [notiz, setNotiz] = useState(rechnung?.notiz ?? vorlage?.notiz ?? '')
+  const [kvId, setKvId] = useState(rechnung?.kvId ?? vorlage?.kvId)
 
   const [kvListe, setKvListe] = useState<Kostenvoranschlag[] | null>(null)
   const [kvLaedt, setKvLaedt] = useState(false)

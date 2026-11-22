@@ -63,6 +63,8 @@ export const PRIVAT_BOT_WERKZEUGE: readonly string[] = [
   'todos_aufraeumen',
   'privater_bereich',
   'in_oeffentlich_holen',
+  'meine_post_vorschlaege',
+  'alles_durchsuchen',
   'internet_recherche',
   'wunsch_notieren',
   'objekt_ins_mayer_crm',

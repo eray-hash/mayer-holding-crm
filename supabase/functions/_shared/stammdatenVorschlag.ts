@@ -12,6 +12,8 @@ import { anschriftEinzeilig, gleicheAnschrift, gleicheNummer } from './signaturD
 export type StammdatenFeld = 'telefon' | 'anschrift' | 'email'
 
 export type StammdatenVorschlag = {
+  /** Herkunft: Mail-Signatur (Standard) oder Gesprächs-App. */
+  quelle?: 'mail' | 'gespraech'
   id: string
   feld: StammdatenFeld
   wert: string
@@ -86,7 +88,7 @@ export function vorschlagText(v: StammdatenVorschlag): string {
   const was = v.feld === 'telefon' ? 'Neue Telefonnummer' : v.feld === 'anschrift' ? 'Neue Anschrift' : 'Neue E-Mail-Adresse'
   const bisher = v.bisher ? ` (bisher: ${wertAnzeige(v.feld, v.bisher)})` : ''
   const weitere = v.weitere ? ` — außerdem genannt: ${v.weitere}` : ''
-  return `${was} aus Mail vom ${deDatum(v.mailDatum)}: ${wertAnzeige(v.feld, v.wert)}${bisher}${weitere}`
+  return `${was} ${v.quelle === 'gespraech' ? 'aus Gespräch' : 'aus Mail'} vom ${deDatum(v.mailDatum)}: ${wertAnzeige(v.feld, v.wert)}${bisher}${weitere}`
 }
 
 /** Verlaufseintrag beim automatischen Ergänzen eines leeren Feldes. */
@@ -99,7 +101,7 @@ export function ergaenztText(feld: StammdatenFeld, wert: string, mailDatum: stri
 /** Verlaufseintrag beim Übernehmen eines Vorschlags. */
 export function uebernommenText(v: StammdatenVorschlag, wer: string): string {
   const bisher = v.bisher ? ` (bisher: ${wertAnzeige(v.feld, v.bisher)})` : ''
-  return `${FELD_NAME[v.feld]} aus Mail vom ${deDatum(v.mailDatum)} übernommen von ${wer}: ${wertAnzeige(v.feld, v.wert)}${bisher}`
+  return `${FELD_NAME[v.feld]} ${v.quelle === 'gespraech' ? 'aus Gespräch' : 'aus Mail'} vom ${deDatum(v.mailDatum)} übernommen von ${wer}: ${wertAnzeige(v.feld, v.wert)}${bisher}`
 }
 
 /** Vorschlag als erledigt markieren (gibt eine neue Liste zurück; unbekannte id → null). */

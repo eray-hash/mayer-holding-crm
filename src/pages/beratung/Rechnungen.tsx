@@ -11,6 +11,7 @@ import { RechnungDetail } from '../../components/rechnungen/RechnungDetail'
 import { RechnungFormular } from '../../components/rechnungen/RechnungFormular'
 import { KontoauszugAbgleichKnopf } from '../../components/rechnungen/KontoauszugAbgleich'
 import { SteuerberaterExportKnopf } from '../../components/rechnungen/SteuerberaterExport'
+import { RechnungVorschlaege } from '../../components/rechnungen/RechnungVorschlaege'
 import type { Rechnung } from '../../types'
 
 type FilterId = 'alle' | 'offen' | 'ueberfaellig' | 'bezahlt' | 'entwurf'
@@ -99,6 +100,9 @@ export function Rechnungen() {
         <Kpi label="Davon überfällig" value={fmtEURCent(kpis.ueberfaellig)} accent="text-rose-600" onClick={() => setFilter('ueberfaellig')} />
         <Kpi label="Bezahlt dieses Quartal" value={fmtEURCent(kpis.bezahltQ)} accent="text-emerald-600" onClick={() => setFilter('bezahlt')} />
       </div>
+
+      {/* Rechnungsvorschläge: was noch in Rechnung zu stellen ist (RechnungVorschlaege.tsx) */}
+      <RechnungVorschlaege onRechnungAngelegt={(id) => setTimeout(() => detailOeffnen(id), 0)} />
 
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap gap-1.5">

@@ -7,6 +7,7 @@ import { ALLE_BEREICHE, bereichLabel } from '../../data/bereiche'
 import { Card, Field, inputClass, PrimaryButton, EmptyState } from '../../components/ui'
 import type { Bereich } from '../../types'
 import { StammdatenNachtrag } from '../../components/StammdatenVorschlaege'
+import { Link } from 'react-router-dom'
 
 type MitarbeiterRow = {
   id: string
@@ -251,6 +252,13 @@ export function MitarbeiterVerwalten() {
       <p className="mb-4 text-sm text-slate-500">Neue Mitarbeiter anlegen, Bereiche zuweisen, Zugänge sperren/entsperren.</p>
 
       <WerSiehtWas />
+      <Card className="mb-6 flex flex-wrap items-center justify-between gap-2 p-4">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-700">Doppelte Akten</h3>
+          <p className="text-xs text-slate-500">Doppelte Kundenakten und Objekte finden, nebeneinander vergleichen und zusammenführen.</p>
+        </div>
+        <Link to="/dubletten" className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"><Copy size={14} /> Dubletten öffnen</Link>
+      </Card>
 
       <PostfaecherVerwaltung />
       <div className="mb-6"><StammdatenNachtrag /></div>
