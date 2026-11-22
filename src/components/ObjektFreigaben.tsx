@@ -8,16 +8,20 @@ import { useKvNutzer } from './KostenvoranschlaegeSection'
 import { sendEmail } from '../lib/emailGateway'
 import { supabase } from '../lib/supabaseClient'
 import {
-  beendeFreigabe, ladeFreigaben, ladeInteressentenDokumente, legeFreigabeAn, portalLink, setzeInteressentenDokumente, type ObjektFreigabe,
+  beendeFreigabe, ladeAnfrageKennungen, ladeFreigaben, ladeInteressentenDokumente, legeFreigabeAn, portalLink, setzeAnfrageKennungen, setzeInteressentenDokumente,
+  type ObjektFreigabe,
 } from '../lib/objektPortal'
 import type { Objekt } from '../types'
 
+// Gleich wie PROVISION_VORSCHLAG in supabase/functions/email-gateway/anfragenManager.ts — bei Änderung beide anpassen.
 const PROVISION_VORSCHLAG = '3 % des beurkundeten Kaufpreises zzgl. gesetzlicher Umsatzsteuer'
 const STATUS: Record<ObjektFreigabe['status'], { label: string; farbe: string }> = {
   eingeladen: { label: 'Link verschickt, noch nicht zugestimmt', farbe: 'bg-amber-50 text-amber-700' },
   zugestimmt: { label: 'Zugestimmt', farbe: 'bg-emerald-50 text-emerald-700' },
   widerrufen: { label: 'Zugang beendet', farbe: 'bg-slate-100 text-slate-500' },
 }
+/** Vom Anfragenmanager angelegt: ob der Link schon verschickt ist, weiß die Liste nicht — darum neutral. */
+const statusVon = (f: ObjektFreigabe) => (f.quelle === 'anfrage' && f.status === 'eingeladen' ? { label: 'Noch nicht zugestimmt', farbe: STATUS.eingeladen.farbe } : STATUS[f.status])
 const zeit = (iso?: string) => (iso ? new Date(iso).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '–')
 
 export function ObjektFreigaben({ objekt }: { objekt: Objekt }) {
@@ -75,6 +79,8 @@ export function ObjektFreigaben({ objekt }: { objekt: Objekt }) {
         </p>
       </Card>
 
+      <AnfrageKennungen objektId={objekt.id} nurLesen={nutzer.nurLesen} />
+
       <Card className="p-5">
         <h3 className="mb-3 text-sm font-semibold text-slate-700">Unterlagen für Interessenten</h3>
         {ordner.length === 0 ? (
@@ -116,8 +122,11 @@ export function ObjektFreigaben({ objekt }: { objekt: Objekt }) {
                     Provision: {f.provision} · erstellt {zeit(f.erstelltAm)}{f.erstelltVon ? ` von ${f.erstelltVon}` : ''} · {f.zugriffe}× geöffnet
                     {f.zustimmung ? ` · zugestimmt ${zeit(f.zustimmung.am)}` : ''}
                   </p>
+                  {f.quelle === 'anfrage' && (
+                    <p className="text-xs text-sky-700">Automatisch angelegt aus einer Anfrage vom {zeit(f.erstelltAm)}</p>
+                  )}
                 </div>
-                <span className={`rounded px-2 py-0.5 text-xs font-medium ${STATUS[f.status].farbe}`}>{STATUS[f.status].label}</span>
+                <span className={`rounded px-2 py-0.5 text-xs font-medium ${statusVon(f).farbe}`}>{statusVon(f).label}</span>
                 {f.status !== 'widerrufen' && (
                   <div className="flex gap-2 text-xs">
                     <button onClick={() => kopiere(f)} className="inline-flex items-center gap-1 text-slate-600 hover:underline">{kopiert === f.id ? <Check size={13} /> : <Copy size={13} />} Link</button>
@@ -149,6 +158,68 @@ export function ObjektFreigaben({ objekt }: { objekt: Objekt }) {
         </Modal>
       )}
     </div>
+  )
+}
+
+/** Nummern des Inserats auf Portalen: daran erkennt der Anfragenmanager Anfragen zu diesem Objekt. */
+function AnfrageKennungen({ objektId, nurLesen }: { objektId: string; nurLesen: boolean }) {
+  const [text, setText] = useState('')
+  const [gespeichert, setGespeichert] = useState('')
+  const [stand, setStand] = useState<'laedt' | 'bereit' | 'speichert' | 'fehlt'>('laedt')
+  const [fehler, setFehler] = useState('')
+
+  useEffect(() => {
+    setStand('laedt')
+    ladeAnfrageKennungen(objektId)
+      .then((k) => {
+        setText(k.join(', '))
+        setGespeichert(k.join(', '))
+        setStand('bereit')
+      })
+      // Vor dem Einspielen der Datenbank-Änderung gibt es die Spalte noch nicht: dann den Abschnitt nicht zeigen.
+      .catch(() => setStand('fehlt'))
+  }, [objektId])
+
+  if (stand === 'fehlt') return null
+
+  async function speichern() {
+    setStand('speichert')
+    setFehler('')
+    try {
+      const liste = text.split(/[,;\n]/).map((k) => k.trim()).filter((k) => k.length >= 3)
+      await setzeAnfrageKennungen(objektId, liste)
+      setText(liste.join(', '))
+      setGespeichert(liste.join(', '))
+    } catch (e) {
+      setFehler(e instanceof Error ? e.message : String(e))
+    }
+    setStand('bereit')
+  }
+
+  return (
+    <Card className="p-5">
+      <h3 className="mb-1 text-sm font-semibold text-slate-700">Nummern des Inserats auf Portalen</h3>
+      <p className="mb-3 text-sm text-slate-500">
+        Hier die Nummern eintragen, unter denen das Objekt auf Portalen steht (Scout-ID bei ImmoScout24, Online-ID bei Immowelt, Anzeigennummer bei Kleinanzeigen) oder die eigene Objektnummer. Kommt dazu eine Anfrage ins Postfach, legt das CRM die Akte des Interessenten und seinen Link zum Portal von selbst an und gibt dem Verantwortlichen per Telegram Bescheid.
+      </p>
+      {fehler && <p className="mb-2 rounded-lg bg-rose-50 p-2 text-sm text-rose-600">{fehler}</p>}
+      <div className="flex flex-wrap gap-2">
+        <input
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          disabled={nurLesen || stand !== 'bereit'}
+          placeholder="z. B. 151234567, MH-2026-07"
+          className={`${inputClass} min-w-0 flex-1`}
+          aria-label="Nummern des Inserats"
+        />
+        {!nurLesen && (
+          <SecondaryButton onClick={speichern} disabled={stand !== 'bereit' || text === gespeichert}>
+            {stand === 'speichert' ? 'Speichert …' : 'Speichern'}
+          </SecondaryButton>
+        )}
+      </div>
+      <p className="mt-2 text-xs text-slate-400">Mehrere Nummern mit Komma trennen. Ohne Nummer erkennt das CRM das Objekt nur an Straße mit Hausnummer oder an der Bezeichnung.</p>
+    </Card>
   )
 }
 

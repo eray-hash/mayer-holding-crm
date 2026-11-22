@@ -2,7 +2,8 @@
 // Nachrichten nach bestimmten Ereignissen“).
 //
 // Die Datenbank merkt Nachrichten in `auto_nachrichten` vor (Auslöser an_besichtigungen und an_freigaben,
-// nur wenn die Regel in `auto_nachricht_regeln` an ist, nie für private Objekte). Der Text wird dabei schon
+// nur wenn die Regel in `auto_nachricht_regeln` an ist, nie für private Objekte; dazu seit 22.11.2026 der
+// Anfragenmanager, anfragenManager.ts, für die Regel immo_portal_anfrage). Der Text wird dabei schon
 // zusammengesetzt (Vorschau) und direkt vor dem Senden noch einmal frisch (Funktion auto_nachricht_bauen),
 // damit ein verschobener Termin oder eine geänderte Vorlage stimmt. Diese Datei verschickt fällige Nachrichten:
 //  - im Minutentakt (termin_erinnerungen) alle fälligen, deren Regel an ist;
@@ -57,6 +58,16 @@ export async function pruefeAnlass(admin: Admin, zeile: any, jetzt = Date.now())
     if (!f) return 'Zugang zum Portal gibt es nicht mehr'
     if (f.status === 'widerrufen' || f.widerrufen_am) return 'Zugang zum Portal wurde beendet'
     if (f.status !== 'zugestimmt') return 'Zustimmung liegt nicht mehr vor'
+    return null
+  }
+  // Portal-Link nach einer Anfrage (anfragenManager.ts): nur solange der Zugang offen und noch nicht zugestimmt ist.
+  if (zeile.regel === 'immo_portal_anfrage') {
+    if (!zeile.freigabe_id) return 'Zugang zum Portal gibt es nicht mehr'
+    const { data: f } = await admin.from('objekt_freigaben').select('id, status, widerrufen_am, gueltig_bis').eq('id', zeile.freigabe_id).maybeSingle()
+    if (!f) return 'Zugang zum Portal gibt es nicht mehr'
+    if (f.status === 'widerrufen' || f.widerrufen_am) return 'Zugang zum Portal wurde beendet'
+    if (f.status === 'zugestimmt') return 'Interessent hat schon zugestimmt'
+    if (f.gueltig_bis && new Date(f.gueltig_bis).getTime() <= jetzt) return 'Link ist abgelaufen'
     return null
   }
   return 'Unbekannte Regel'

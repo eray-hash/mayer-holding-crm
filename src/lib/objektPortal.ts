@@ -21,6 +21,9 @@ export type ObjektFreigabe = {
   letzterZugriff?: string
   erstelltVon?: string
   erstelltAm: string
+  /** 'anfrage' = vom Anfragenmanager aus einer eingegangenen Anfrage angelegt (email-gateway/anfragenManager.ts). */
+  quelle?: string
+  anfrageEmailId?: string
 }
 
 function client() {
@@ -52,6 +55,8 @@ function ausZeile(z: any): ObjektFreigabe {
     letzterZugriff: z.letzter_zugriff ?? undefined,
     erstelltVon: z.erstellt_von ?? undefined,
     erstelltAm: z.erstellt_am,
+    quelle: z.quelle ?? undefined,
+    anfrageEmailId: z.anfrage_email_id ?? undefined,
   }
 }
 
@@ -102,6 +107,20 @@ export async function ladeInteressentenDokumente(objektId: string): Promise<stri
 
 export async function setzeInteressentenDokumente(objektId: string, ids: string[]): Promise<void> {
   const { error } = await client().from('objekte').update({ interessenten_dokumente: ids }).eq('id', objektId)
+  if (error) throw fehler(error)
+}
+
+/** Nummern des Inserats auf Portalen (Scout-ID, Online-ID, Anzeigennummer, eigene Objektnummer) — daran erkennt
+ *  der Anfragenmanager auf dem Server Anfragen zu diesem Objekt. */
+export async function ladeAnfrageKennungen(objektId: string): Promise<string[]> {
+  const { data, error } = await client().from('objekte').select('anfrage_kennungen').eq('id', objektId).maybeSingle()
+  if (error) throw fehler(error)
+  return Array.isArray(data?.anfrage_kennungen) ? (data!.anfrage_kennungen as string[]) : []
+}
+
+export async function setzeAnfrageKennungen(objektId: string, kennungen: string[]): Promise<void> {
+  const sauber = Array.from(new Set(kennungen.map((k) => k.trim()).filter((k) => k.length >= 3)))
+  const { error } = await client().from('objekte').update({ anfrage_kennungen: sauber }).eq('id', objektId)
   if (error) throw fehler(error)
 }
 

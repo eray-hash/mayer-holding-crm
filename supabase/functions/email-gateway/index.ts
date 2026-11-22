@@ -265,6 +265,7 @@ import { erstelleChecklisteVorschlag } from './checklisteVorschlag.ts'
 import { priorisiereListe, pruefeTodoPriorisierung, type Liste as TodoListe } from './todoPriorisierung.ts'
 import { versendeWillkommen } from './willkommen.ts'
 import { versendeAutoNachrichten } from './autoNachrichten.ts'
+import { kiEntscheidung, pruefeNeueAnfragen } from './anfragenManager.ts'
 import { portalDokument, portalLaden, portalZustimmen } from './objektPortal.ts'
 import { beantworteKundenUnterlagen } from './kundenUnterlagen.ts'
 import { pruefeWunschAnalyse, wunschAnalyseTest } from './wunschAnalyse.ts'
@@ -3351,6 +3352,20 @@ Deno.serve((req: Request) => mitAnlass(async () => {
         return { gesendet: 0, fehler: 0 }
       })
       if (autoNachrichten.gesendet > 0 || autoNachrichten.fehler > 0) console.log(`Automatische Nachrichten: ${autoNachrichten.gesendet} gesendet, ${autoNachrichten.fehler} Fehler.`)
+      // Anfragenmanager (anfragenManager.ts): neue Mails im gemeinsamen Postfach auf Objektanfragen prüfen —
+      // Akte, Zugang zum Interessenten-Portal und Telegram-Hinweis an den Verantwortlichen. Höchstens fünf Mails
+      // je Lauf, keine neue Mail nach 50 Sekunden; jede Mail wird vorher beansprucht (nie doppelt). Im Hintergrund
+      // (der KI-Aufruf dauert), in eigenem Rahmen für die Kostenzuordnung; wirft nie.
+      if (body.ohneAnfragen !== true) {
+        const anfragenLauf = mitAnlass(() => {
+          setzeAnlass('anfragen_manager')
+          return pruefeNeueAnfragen(admin, { sendeTelegram, ki: Deno.env.get('ANTHROPIC_API_KEY') ? kiEntscheidung : null }, { hoechstens: 5, zeitBudgetMs: 50_000 })
+        }).then((r) => {
+          if (r.geprueft > 0) console.log(`Anfragenmanager: ${r.geprueft} geprüft, ${r.angelegt} angelegt, ${r.unklar} unklar, ${r.fehler} Fehler.`)
+        }).catch((err) => console.error('Anfragenmanager fehlgeschlagen:', err))
+        // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
+        EdgeRuntime.waitUntil(anfragenLauf)
+      }
       // Im selben Takt (die Funktion bremst sich selbst auf alle fünf Minuten): neue Treffer zwischen
       // Gesuchen und Objekten erkennen und den Zuständigen per Telegram melden.
       const treffer = body.ohneTreffer === true ? { gelaufen: false, neu: 0, benachrichtigt: 0 } : await pruefeNeueTreffer(admin, sendeTelegram)
@@ -4467,6 +4482,25 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       return new Response(JSON.stringify(ergebnis), { headers })
     }
 
+    // Anfragenmanager von Hand (anfragenManager.ts) — mit Login und Recht auf Immobilien. Ohne emailId: die nächsten
+    // ungeprüften Mails wie im Minutentakt. Mit emailId: nur diese; mit erneut: true auch eine schon als „unklar“,
+    // „keine Anfrage“ oder „Fehler“ geprüfte Mail noch einmal (z. B. nachdem die Inserat-Nummer am Objekt eingetragen ist).
+    if (body.action === 'anfrage_pruefen_jetzt') {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const aufrufer = await ermittleAufrufer(req, admin, body)
+      if (!aufrufer) {
+        return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
+      }
+      if (!(await darfBereichServer(admin, aufrufer.email, 'immobilien'))) return keinRecht(headers)
+      const emailId = typeof body.emailId === 'string' && body.emailId.trim() ? body.emailId.trim() : undefined
+      const ergebnis = await pruefeNeueAnfragen(
+        admin,
+        { sendeTelegram, ki: Deno.env.get('ANTHROPIC_API_KEY') ? kiEntscheidung : null },
+        { emailId, erneut: body.erneut === true, hoechstens: 10, zeitBudgetMs: 90_000 },
+      )
+      return new Response(JSON.stringify(ergebnis), { headers })
+    }
+
     if (body.action === 'bonitaet_pruefen') {
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
       const aufrufer = await ermittleAufrufer(req, admin, body)
@@ -4751,7 +4785,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       return new Response(JSON.stringify({ ok: true }), { headers })
     }
 
-    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "public_objekt_portal", "public_objekt_portal_zustimmen", "public_objekt_portal_dokument", "bewertung_recherche_start", "bewertung_recherche_schritt", "kunden_umfeld_recherche", "steuer_analyse_start", "steuer_analyse_schritt", "dokument_lesen", "dokument_inhalte", "postfaecher_liste", "postfach_verbinden", "postfach_trennen", "postfach_abruf", "postfach_ordner", "mail_zuordnen", "mail_freigeben", "mail_anhang_url", "termin_speichern", "termin_loeschen", "termin_erinnerungen", "tagesmeldung_test", "kontoauszug_auslesen", "checkliste_vorschlag", "todos_priorisieren", "willkommen_jetzt", "auto_nachricht_jetzt", "gesendet_abruf" oder "firmenwissen_answer"' }), { status: 400, headers })
+    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "public_objekt_portal", "public_objekt_portal_zustimmen", "public_objekt_portal_dokument", "bewertung_recherche_start", "bewertung_recherche_schritt", "kunden_umfeld_recherche", "steuer_analyse_start", "steuer_analyse_schritt", "dokument_lesen", "dokument_inhalte", "postfaecher_liste", "postfach_verbinden", "postfach_trennen", "postfach_abruf", "postfach_ordner", "mail_zuordnen", "mail_freigeben", "mail_anhang_url", "termin_speichern", "termin_loeschen", "termin_erinnerungen", "tagesmeldung_test", "kontoauszug_auslesen", "checkliste_vorschlag", "todos_priorisieren", "willkommen_jetzt", "auto_nachricht_jetzt", "anfrage_pruefen_jetzt", "gesendet_abruf" oder "firmenwissen_answer"' }), { status: 400, headers })
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }
