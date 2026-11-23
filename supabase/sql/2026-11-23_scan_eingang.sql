@@ -17,6 +17,6 @@ alter table eingegangene_emails add column if not exists scan_beansprucht_am tim
 alter table eingegangene_emails add column if not exists scan_versuche integer not null default 0;
 alter table eingegangene_emails add column if not exists scan_ergebnis jsonb;
 
--- Feste Zuordnung Betreff → Akte (z. B. interne Ordner ohne Kundennamen: „ki manager“ → interne Holding-Akte).
+-- Feste Zuordnung Betreff → Akte (z. B. Ordner ohne Kundennamen: „ki manager“ → Akademie-Akte „Seminar KI-Manager (AZAV)“).
 alter table scan_eingang add column if not exists betreff_akten jsonb not null default '{}'::jsonb;
-update scan_eingang set betreff_akten = betreff_akten || '{"ki manager": "k_intern_holding"}'::jsonb where id = 'standard';
+update scan_eingang set betreff_akten = betreff_akten || '{"ki manager": "k_eaa19f5d2445"}'::jsonb where id = 'standard';
