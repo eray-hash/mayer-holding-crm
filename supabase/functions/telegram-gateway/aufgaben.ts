@@ -211,5 +211,7 @@ export async function aufgabenUebersicht(
     }
     if (g.aufgaben.length > max) zeilen.push(`- … und ${g.aufgaben.length - max} weitere (vollständig im CRM unter „Aufgaben nach Mitarbeiter“)`)
   }
-  return zeilen.join('\n').slice(0, 24000)
+  const text = zeilen.join('\n')
+  // Nie stillschweigend abschneiden: Ist die Liste zu lang, sagt das Ergebnis es ausdrücklich.
+  return text.length > 24000 ? `${text.slice(0, 24000)}\n… ACHTUNG: Die Übersicht ist hier abgeschnitten, es gibt WEITERE Aufgaben. Nicht als vollständig darstellen — nach Person oder Zeitraum eingrenzen und erneut abfragen.` : text
 }

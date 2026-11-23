@@ -2141,6 +2141,10 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
       .join(' ')
   }
 
+  // Listen nie stillschweigend kürzen (23.11.2026: Hasan bekam 11 von 68 Mails an Herrn Bosler, ohne Hinweis).
+  const mehrHinweis = (gezeigt: number, gesamt?: number) =>
+    `\nACHTUNG: Das sind nur ${gezeigt}${gesamt ? ` von ${gesamt}` : ''} Treffern — es gibt WEITERE. Nicht als vollständig darstellen: mit suche bzw. Zeitraum eingrenzen und erneut abfragen, oder ausdrücklich sagen, dass die Liste nicht vollständig ist.`
+
   // Privater Bereich: ausschließlich die Sachen des Mitarbeiters, der gerade schreibt — jede Abfrage
   // ist an seine eigene Adresse gebunden, nie an eine Angabe aus dem Gespräch.
   if (name === 'privater_bereich' || name === 'in_oeffentlich_holen') {
@@ -2153,24 +2157,26 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
         const { data } = await alleZeilen(() => supabase.from('kunden').select(KUNDE_SPALTEN).eq('bereich', 'privat').eq('verantwortlich_email', ich))
         const liste = suche ? sucheKunden((data ?? []) as KundeRow[], suche) : ((data ?? []) as KundeRow[])
         if (liste.length === 0) return 'Keine privaten Kontakte gefunden.'
-        return JSON.stringify(liste.slice(0, 40).map((k) => ({ kontakt_id: k.id, name: kundeName(k), email: k.email, telefon: k.telefon, dokumente: (k.dokumente ?? []).length })))
+        return JSON.stringify(liste.slice(0, 40).map((k) => ({ kontakt_id: k.id, name: kundeName(k), email: k.email, telefon: k.telefon, dokumente: (k.dokumente ?? []).length }))) + (liste.length > 40 ? mehrHinweis(40, liste.length) : '')
       }
       if (input.was === 'gesendete_mails') {
         let abfrage = supabase.from('gesendete_emails').select('id, an, an_name, betreff, text, gesendet_am').eq('besitzer_email', ich)
         if (suche) abfrage = abfrage.or(`betreff.ilike.%${suche}%,an.ilike.%${suche}%,an_name.ilike.%${suche}%`)
-        const { data } = await abfrage.order('gesendet_am', { ascending: false }).limit(15)
-        if (!data?.length) return 'Keine privat gesendeten Mails gefunden.'
+        const { data: roh } = await abfrage.order('gesendet_am', { ascending: false }).limit(16)
+        if (!roh?.length) return 'Keine privat gesendeten Mails gefunden.'
+        const data = roh.slice(0, 15)
         // deno-lint-ignore no-explicit-any
-        return JSON.stringify(data.map((m: any) => ({ mail_id: m.id, an: `${m.an_name ?? ''} <${m.an}>`, betreff: m.betreff, gesendet: datumDeutsch(m.gesendet_am), anfang: String(m.text ?? '').slice(0, 300) })))
+        return JSON.stringify(data.map((m: any) => ({ mail_id: m.id, an: `${m.an_name ?? ''} <${m.an}>`, betreff: m.betreff, gesendet: datumDeutsch(m.gesendet_am), anfang: String(m.text ?? '').slice(0, 300) }))) + (roh.length > 15 ? mehrHinweis(15) : '')
       }
       let abfrage = supabase.from('eingegangene_emails').select('message_id, von, von_name, betreff, mail_datum, ausschnitt, anhaenge').eq('besitzer_email', ich)
       if (suche) abfrage = abfrage.or(`betreff.ilike.%${suche}%,von.ilike.%${suche}%,von_name.ilike.%${suche}%`)
-      const { data } = await abfrage.order('mail_datum', { ascending: false }).limit(15)
-      if (!data?.length) return 'Im privaten Postfach liegen keine (passenden) Mails. Hinweis: Ein eigenes Postfach verbindet der Mitarbeiter im CRM unter „Mein Profil“.'
+      const { data: roh } = await abfrage.order('mail_datum', { ascending: false }).limit(16)
+      if (!roh?.length) return 'Im privaten Postfach liegen keine (passenden) Mails. Hinweis: Ein eigenes Postfach verbindet der Mitarbeiter im CRM unter „Mein Profil“.'
+      const data = roh.slice(0, 15)
       return JSON.stringify(
         // deno-lint-ignore no-explicit-any
         data.map((m: any) => ({ mail_id: m.message_id, von: `${m.von_name ?? ''} <${m.von}>`, betreff: m.betreff, datum: datumDeutsch(m.mail_datum), anhaenge: (m.anhaenge ?? []).length, anfang: String(m.ausschnitt ?? '').slice(0, 400) })),
-      )
+      ) + (roh.length > 15 ? mehrHinweis(15) : '')
     }
 
     const kennung = String(input.kennung ?? '')
@@ -2304,7 +2310,8 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     roh = roh.filter((m) => darfZuordnung(mitarbeiter, m.zugewiesener_kunde_id, m.zugewiesener_bereich, nachgeschlagen))
     const liste = roh.slice(0, 20)
     if (liste.length === 0) return `Im gemeinsamen Postfach liegt aus den letzten ${tage} Tagen keine ${suche ? 'passende ' : ''}Mail.`
-    return JSON.stringify(
+    const weitere = roh.length > 20 || (data ?? []).length >= 60
+    return (weitere ? (x: string) => x + mehrHinweis(20, roh.length > 20 && (data ?? []).length < 60 ? roh.length : undefined) : (x: string) => x)(JSON.stringify(
       liste.map((m) => ({
         mail_id: m.id,
         von: `${m.von_name ?? ''} <${m.von}>`,
@@ -2314,7 +2321,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
         akte: m.zugewiesener_kunde_id ? `${m.zugewiesener_kunde_name} (kunde_id=${m.zugewiesener_kunde_id})` : 'keine',
         anfang: String(m.ausschnitt ?? '').replace(/\s+/g, ' ').slice(0, 200),
       })),
-    )
+    ))
   }
 
   // Eine Mail ganz lesen bzw. weiterleiten: aus dem eigenen privaten Postfach (nur der Besitzer) oder
@@ -2534,7 +2541,10 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
           : []),
         'Aktivitäten/Notizen (neueste zuerst):',
         ...((k.activities ?? []).length > 0
-          ? (k.activities ?? []).slice(0, 30).map((a) => `- ${deDatum(a.date)} ${a.user}: ${a.text} [aktivitaet_id=${a.id}]`)
+          ? [
+              ...(k.activities ?? []).slice(0, 30).map((a) => `- ${deDatum(a.date)} ${a.user}: ${a.text} [aktivitaet_id=${a.id}]`),
+              ...((k.activities ?? []).length > 30 ? [`(… und ${(k.activities ?? []).length - 30} ältere Einträge, hier NICHT gezeigt — frag danach gezielt oder sag, dass der Verlauf länger ist)`] : []),
+            ]
           : ['(keine)']),
         '',
         'Gesprächsprotokolle (neueste zuerst):',
