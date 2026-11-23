@@ -1,5 +1,6 @@
 // Gemeinsames für die neuen automatischen Nachfragen des Assistenten (Runde 6, 23.11.2026):
-// tägliche Kontakt-Nachfrage (kontaktNachfrage.ts) und wöchentlicher Kurzprüfungs-Hinweis (kurzpruefungHinweis.ts).
+// tägliche Kontakt-Nachfrage (kontaktNachfrage.ts) und wöchentlicher Kurzprüfungs-Hinweis (kurzpruefungHinweis.ts);
+// seit 23.11.2026 auch der Abend-Rückblick im Mayer-Bot (abendRueckblick.ts, eigene Uhrzeit, Vorgabe 'superuser').
 //
 // - Gemeinsamer Schalter assistent_hinweis_einstellung (eine Zeile, id 1): 'aus' (Vorgabe) | 'superuser' (Probelauf —
 //   nur Mitarbeiter mit ist_superuser bekommen die Nachrichten, die sonst an die Kollegen gingen) | 'alle'.
@@ -12,13 +13,13 @@
 type Db = any
 
 export type Modus = 'aus' | 'superuser' | 'alle'
-export type HinweisArt = 'kontakt_nachfrage' | 'kurzpruefung_hinweis'
+export type HinweisArt = 'kontakt_nachfrage' | 'kurzpruefung_hinweis' | 'abend_rueckblick'
 
 export const EINSTELLUNG_TABELLE = 'assistent_hinweis_einstellung'
 export const PERSON_TABELLE = 'assistent_hinweise'
 
 /** Stempel-Spalte je Art (Tag bzw. Montag der letzten Nachricht). */
-const STEMPEL: Record<HinweisArt, string> = { kontakt_nachfrage: 'kontakt_tag', kurzpruefung_hinweis: 'kurzpruefung_woche' }
+const STEMPEL: Record<HinweisArt, string> = { kontakt_nachfrage: 'kontakt_tag', kurzpruefung_hinweis: 'kurzpruefung_woche', abend_rueckblick: 'abend_rueckblick_tag' }
 
 export type Person = {
   id: string

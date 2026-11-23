@@ -322,6 +322,7 @@ import { pruefeSuperuserWochenbericht, superuserAuswertung, superuserWochenberic
 import { datensicherungAktion, pruefeNaechtlicheSicherung } from './datensicherung.ts'
 import { pruefeWochenrueckblick, wochenrueckblickEinstellung, wochenrueckblickTest } from './wochenrueckblick.ts'
 import { kontrollberichtTest, pruefeKontrollberichte } from './kontrollbericht.ts'
+import { abendRueckblickTrockenlauf, sendeAbendRueckblicke } from './abendRueckblick.ts'
 import { ueberfuehreInsBereichspostfach } from './bereichspostfach.ts'
 import { istSuperuser } from './superuser.ts'
 import { GESPRAECH_AKTIONEN, gespraechAktion, gespraechMinutentakt } from './gespraechPipeline.ts'
@@ -3521,6 +3522,14 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       EdgeRuntime.waitUntil(sendeTagesplanMeldungen(admin, { sende: sendeTelegram }).then((r) => {
         if (r.morgen > 0 || r.abend > 0 || r.fehler.length > 0) console.log(`Tagesablauf-Meldungen: ${r.morgen} morgens, ${r.abend} abends.`, r.fehler.join(' | '))
       }))
+      // Abend-Rückblick im Mayer-Bot (abendRueckblick.ts, 23.11.2026): werktags ab der eingestellten Uhrzeit (Vorgabe 17:30)
+      // „Heute erledigt: N“, offene fällige Aufgaben mit Knöpfen „✓ Erledigt“/„→ Morgen“ (ar:…) und eine Zeile für morgen.
+      // Schalter assistent_hinweis_einstellung.abend_rueckblick (aus | superuser = Probelauf | alle), je Person abschaltbar,
+      // nicht für Leute mit Tagesablauf-Abend; ohne Microsoft-/private Aufgaben; ohne KI; wirft nie.
+      // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
+      EdgeRuntime.waitUntil(sendeAbendRueckblicke(admin).then((r) => {
+        if (r.gesendet > 0 || r.fehler.length > 0) console.log(`Abend-Rückblick: ${r.gesendet} gesendet.`, r.fehler.join(' | '))
+      }))
       // Privater Tagesplan (privatTagesplan.ts, 23.11.2026, Hasans Wünsche 1, 2, 4, 6, 8): nur für Leute mit privatem Bot,
       // jeden Tag inkl. Wochenende — morgens ab 8 Uhr (vorher Fristen-Radar über Hotmail), abends ab 21:30 mit Knöpfen
       // „✓ Erledigt“/„→ Morgen“ und Rückfrage zu vage diktierten To-dos. Nur über den privaten Bot; wirft nie.
@@ -5233,6 +5242,21 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       return new Response(JSON.stringify(ergebnis), { headers })
     }
 
+    // Abend-Rückblick (abendRueckblick.ts) ansehen, ohne zu senden und ohne zu schreiben — nur Dienstschlüssel oder Superuser.
+    // { email?: nur diese Person (sonst alle aktiven), jetzt?: Zeitpunkt } → je Person Stand und genauer Text.
+    if (body.action === 'abend_rueckblick_test') {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const token = (req.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '').trim()
+      if (!istDienstSchluessel(token)) {
+        const aufrufer = await ermittleAufrufer(req, admin, body)
+        if (!aufrufer) return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
+        if (!(await istSuperuser(admin, aufrufer.email))) return new Response(JSON.stringify({ error: 'Nur für Superuser.' }), { status: 403, headers })
+      }
+      const jetzt = typeof body.jetzt === 'string' && !Number.isNaN(Date.parse(body.jetzt)) ? new Date(body.jetzt) : undefined
+      const ergebnis = await abendRueckblickTrockenlauf(admin, { email: typeof body.email === 'string' ? body.email : undefined, jetzt })
+      return new Response(JSON.stringify(ergebnis), { headers })
+    }
+
     if (body.action === 'mail_zuordnung_lauf') {
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
       const aufrufer = await ermittleAufrufer(req, admin, body)
@@ -5643,7 +5667,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       return new Response(JSON.stringify({ ok: true }), { headers })
     }
 
-    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "public_objekt_portal", "public_objekt_portal_zustimmen", "public_objekt_portal_dokument", "public_objekt_portal_besichtigung", "bewertung_recherche_start", "bewertung_recherche_schritt", "kunden_umfeld_recherche", "steuer_analyse_start", "steuer_analyse_schritt", "dokument_lesen", "dokument_inhalte", "postfaecher_liste", "postfach_verbinden", "postfach_trennen", "postfach_abruf", "postfach_ordner", "mail_zuordnen", "mail_freigeben", "mail_anhang_url", "termin_speichern", "termin_loeschen", "termin_erinnerungen", "tagesmeldung_test", "kontoauszug_auslesen", "kontoauszug_abgleich_auslesen", "rendite_marktvergleich", "checkliste_vorschlag", "todos_priorisieren", "willkommen_jetzt", "auto_nachricht_jetzt", "anfrage_pruefen_jetzt", "akte_zu_objekt", "mail_zuordnung_lauf", "wochenrueckblick_test", "wochenrueckblick_einstellung", "chance_vorschlaege", "stammdaten_nachtrag", "beleg_ergaenzen", "dubletten", "neuanfrage_einschaetzung", "kv_zuordnen", "termin_zuordnen", "datensicherung", "tagesplan", "public_seminar_termin", "public_seminar_anmelden", "public_unterschrift_laden", "public_unterschrift_absenden", "gesendet_abruf", "bereichspostfach_ueberfuehren", "kontrollbericht_test" oder "firmenwissen_answer"' }), { status: 400, headers })
+    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "public_objekt_portal", "public_objekt_portal_zustimmen", "public_objekt_portal_dokument", "public_objekt_portal_besichtigung", "bewertung_recherche_start", "bewertung_recherche_schritt", "kunden_umfeld_recherche", "steuer_analyse_start", "steuer_analyse_schritt", "dokument_lesen", "dokument_inhalte", "postfaecher_liste", "postfach_verbinden", "postfach_trennen", "postfach_abruf", "postfach_ordner", "mail_zuordnen", "mail_freigeben", "mail_anhang_url", "termin_speichern", "termin_loeschen", "termin_erinnerungen", "tagesmeldung_test", "kontoauszug_auslesen", "kontoauszug_abgleich_auslesen", "rendite_marktvergleich", "checkliste_vorschlag", "todos_priorisieren", "willkommen_jetzt", "auto_nachricht_jetzt", "anfrage_pruefen_jetzt", "akte_zu_objekt", "mail_zuordnung_lauf", "wochenrueckblick_test", "wochenrueckblick_einstellung", "chance_vorschlaege", "stammdaten_nachtrag", "beleg_ergaenzen", "dubletten", "neuanfrage_einschaetzung", "kv_zuordnen", "termin_zuordnen", "datensicherung", "tagesplan", "public_seminar_termin", "public_seminar_anmelden", "public_unterschrift_laden", "public_unterschrift_absenden", "gesendet_abruf", "bereichspostfach_ueberfuehren", "kontrollbericht_test", "abend_rueckblick_test" oder "firmenwissen_answer"' }), { status: 400, headers })
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }

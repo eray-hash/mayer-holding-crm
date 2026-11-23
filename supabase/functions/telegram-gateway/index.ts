@@ -87,6 +87,8 @@ import { alleZeilen } from '../_shared/alleZeilen.ts'
 import { fuehreLeadWerkzeugAus, istLeadWerkzeug, LEAD_WERKZEUGE } from './leadWerkzeug.ts'
 import { fuehreKontaktLueckenWerkzeugAus, istKontaktLueckenWerkzeug, KONTAKT_LUECKEN_WERKZEUGE } from './kontaktLueckenWerkzeug.ts'
 import { fuehreKurzpruefungWerkzeugAus, istKurzpruefungWerkzeug, KURZPRUEFUNG_WERKZEUGE } from './kurzpruefungWerkzeug.ts'
+import { ABEND_RUECKBLICK_WERKZEUGE, fuehreAbendRueckblickWerkzeugAus, istAbendRueckblickWerkzeug, verarbeiteAbendKnopf } from './abendRueckblickWerkzeug.ts'
+import { istAbendKnopf } from '../email-gateway/abendRueckblick.ts'
 import { hatUhrzeit, istVorlaeufig, notizOhneHinweis, ohneZusatz, vorlaeufigeNotiz, vorlaeufigerTitel } from './uhrzeitOffen.ts'
 import { nurDaumen, reagiereMitDaumen } from './bestaetigung.ts'
 
@@ -1679,6 +1681,7 @@ export const TOOLS = [
   ...LEAD_WERKZEUGE,
   ...KONTAKT_LUECKEN_WERKZEUGE,
   ...KURZPRUEFUNG_WERKZEUGE,
+  ...ABEND_RUECKBLICK_WERKZEUGE,
   {
     name: 'todo_erledigen',
     description: 'Hakt ein offenes To-do ab (eigene Liste oder freigegebene Bereichsliste), nur wenn es wirklich erledigt ist — nicht, um es zu korrigieren (dafür todo_aendern). Mit todo_id oder einem Suchbegriff aus dem Aufgabentext; bei mehreren Treffern kommt eine Liste zum Nachfragen.',
@@ -1878,6 +1881,8 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
   if (istKontaktLueckenWerkzeug(name)) return await fuehreKontaktLueckenWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
   // Runde 6: Vorab-Kurzprüfung eines Objekts im Chat ausfüllen — kurzpruefungWerkzeug.ts (Kern _shared/kurzpruefungKern.ts).
   if (istKurzpruefungWerkzeug(name)) return await fuehreKurzpruefungWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
+  // Abend-Rückblick im Mayer-Bot für sich an-/abschalten — abendRueckblickWerkzeug.ts.
+  if (istAbendRueckblickWerkzeug(name)) return await fuehreAbendRueckblickWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere })
 
   // Wunsch an das CRM für die Geschäftsführung (Tabelle wuensche, siehe _shared/wuensche.ts). Kein
   // Bereichsbezug; gleiche offene Wünsche werden hochgezählt statt doppelt angelegt.
@@ -3633,6 +3638,7 @@ So arbeitest du:
 - Kollegen Bescheid geben: Bittet der Mitarbeiter, einem Kollegen etwas auszurichten oder ihm kurz Bescheid zu geben ("sag Hasan, dass die Akte angelegt ist"), schickst du das mit kollegen_benachrichtigen. Dafür ist kein Termin nötig. Sag danach, wem du was geschickt hast und wer nicht mit Telegram verbunden ist.
 - To-dos ohne Kundenakte: Will der Mitarbeiter sich oder einem Bereich eine Aufgabe notieren, die zu keinem Kunden gehört ("schreib mir auf: Steuerunterlagen bis Freitag sortieren"), legst du sie mit todo_anlegen an, standardmäßig in seiner eigenen To-do-Liste. Gehört die Aufgabe zu einer Kundenakte, nimmst du aufgabe_setzen. Mehrere neue Kunden auf einmal (Liste, Foto einer Liste) legst du mit kunden_aus_liste an: erst Vorschau zeigen, nach Bestätigung mit bestaetigt=true, danach jede Zeile mit Ergebnis nennen — besonders die, die nicht angelegt wurden. Erledigtes hakst du mit todo_erledigen ab. Will er einem Kollegen eine Aufgabe schicken („schick Hasan ein To-do: Exposé prüfen“, „Quirin soll bis Freitag …“), nimm todo_anlegen mit fuer=<Kollege>: Das To-do landet in dessen eigener Liste, mit dem Absender in Klammern; danach bietest du an, ihn per kollegen_benachrichtigen sofort zu informieren. Eine Bereichsliste (bereich) nimmst du nur, wenn er ausdrücklich die gemeinsame Liste meint.
 - Tagesablauf: Jeder mit Immobilien-Recht hat auf der Seite „Tagesablauf & Woche“ einen Tagesplan nach Quirins Vorlage (Organisatorisch, Fristsachen, A ca. 2 Std., B ca. 1,5 Std., C ca. 1 Std., kurze Arbeiten, Unvorhergesehenes; „Fokus liegt auf Umsatz“). Fragen wie „Was steht heute an?“, „Zeig mir meinen Tag“ oder „Was hat Quirin heute vor?“ beantwortest du mit tag_zeigen (Kollegen nur lesen). „Plan mir meinen Tag“ / „Mach mir den Tag für morgen“ → tag_vorschlagen (baut aus der eigenen To-do-Liste, den Terminen, fälligen Wiedervorlagen und dem Offenen vom letzten Plan und speichert; Vorhandenes bleibt). „Setz mir X als B-Aufgabe heute“ → tag_eintrag_hinzufuegen (block frist/A/B/C/kurz/unvorhergesehen). „X ist erledigt“ bei einem Eintrag des Tages → tag_eintrag_erledigt (hakt das verknüpfte To-do mit ab; Minuten mitgeben, wenn er sie nennt). „Streich X aus meinem Tag“ → tag_eintrag_entfernen (das To-do bleibt). Antwortet jemand auf die Abendnachricht „Offen geblieben“ mit Wünschen zum nächsten Tag, nimm datum = nächster Werktag. Nimm die Kürzel (A1, F2 …) aus tag_zeigen; frag bei Mehrdeutigem kurz nach.
+- Abend-Rückblick: Werktags gegen Feierabend schickt das CRM eine kurze Nachricht „🌙 Rückblick …“ mit „Heute erledigt: N“, den noch offenen fälligen Aufgaben (die Knöpfe „✓ Erledigt“ / „→ Morgen“ führt das CRM selbst aus) und einer Zeile für morgen. Schreibt der Mitarbeiter dazu z. B. „2 ist erledigt“, such das To-do mit aufgaben_uebersicht bzw. todo_erledigen per Suchbegriff. „Abend-Rückblick aus/an“ → abend_rueckblick_einstellen.
 - To-dos aufräumen: Sagt der Mitarbeiter „räum meine To-dos auf“, „was kann von meiner Liste weg?“ oder fragt nach doppelten oder uralten To-dos, nimm todos_aufraeumen. Zuerst ohne bestaetigt: Das zeigt nur Vorschläge (doppelt, lange unberührt, lange überfällig, sieht erledigt aus, Akte abgeschlossen) mit Zahlen und Gruppen-Codes. Nenn ihm die Zahlen kurz und frag, welche Gruppen er aufräumen will. Erst nach seinem klaren Ja in der nächsten Nachricht rufst du es mit bestaetigt=true und gruppe=<Code> (oder todo_ids) auf, mit demselben tage_alt wie in der Vorschau. Standard ist abhaken mit dem Vermerk „aufgeräumt“ im aktuellen Stand; abgehakte To-dos lassen sich im CRM unter „Erledigt“ wieder öffnen. Löschen (aktion=loeschen) nur, wenn er ausdrücklich „löschen“ sagt. Es betrifft nur seine eigene Liste; im CRM geht dasselbe in der To-Do-Liste über den Knopf „Aufräumen“.
 - Gesendete Mails: Was einem Kunden geschrieben oder geschickt wurde (auch Briefe und Mails, die aus Outlook oder Webmail über info@ oder das eigene Postfach rausgingen), findest du mit gesendete_mails (nach kunde_id, Suchbegriff, Zeitraum; mit mail_id ganz lesen). Sie werden alle paar Minuten automatisch aus dem Gesendet-Ordner ins CRM übernommen und der Akte des Empfängers zugeordnet.
 - Kostenvoranschläge: Das CRM hat eine Seite „Kostenvoranschläge“ und in jeder Akte einen Reiter dafür. Will jemand Kostenvoranschläge erfassen, oder schickt er ein Foto/Dokument mit einer Liste von Kostenvoranschlägen und will sie eingetragen haben, legst du jede Zeile mit kostenvoranschlag_anlegen an (Name, Beschreibung, Betrag, Status; „bez.“ = bezahlt; Summenzeilen nicht). Gehören sie eindeutig zu einer Akte, gib kunde_id an, sonst ohne; geht es um private Geschäfte des Mitarbeiters (Bereich Privat), setze privat=true, damit nur er sie sieht. Fragen nach Kostenvoranschlägen, Summen oder Status beantwortest du mit kostenvoranschlaege_auflisten, Änderungen (z. B. „Breh ist bezahlt“, „gehört zu Akte X“) mit kostenvoranschlag_aendern. Löschen geht nur im CRM. Legst du Kostenvoranschläge ohne kunde_id an und hängt das Ergebnis „Mögliche Akten“ an, frag den Mitarbeiter kurz, ob du zuordnen sollst (bei „sicher“: „Gehört X zur Akte Y? Soll ich zuordnen?“; bei mehreren Möglichkeiten nenne sie zur Auswahl), und ordne erst nach seinem Ja mit kostenvoranschlag_aendern (kv_id + kunde_id) zu. Ohne Akte fehlen Kostenvoranschläge in Umsatzvorschau, Rechnungsvorschlägen, Wiedervorlagen und im Reiter der Akte. Bei einem einzelnen Eintrag, dessen Name nach einem Kunden klingt, darfst du vorher kunden_suchen nutzen; bei Listen genügt der Hinweis im Ergebnis. Weiß er es nicht, bleiben die Einträge ohne Akte.
@@ -4370,6 +4376,11 @@ async function verarbeiteKnopf(knopf: any): Promise<void> {
     if (!ma?.aktiv || !ma.email) return void (await antworte('Nicht freigeschaltet.'))
     const r = await fuehrePlanKnopfAus(supa(), String(ma.email), String(knopf.data)).catch(() => ({ ok: false, text: 'Das hat gerade nicht geklappt.' }))
     return void (await antworte(r.text))
+  }
+  // Abend-Rückblick im Mayer-Bot (ar:e:<todo_id> erledigt, ar:m:<todo_id> auf morgen) — email-gateway/abendRueckblick.ts.
+  if (istAbendKnopf(knopf?.data)) {
+    if (imPrivatBot()) return void (await antworte('Dieser Knopf gilt nur im Mayer-Assistenten.'))
+    return await verarbeiteAbendKnopf({ supabase: supa(), knopf, antworte, telegram: telegramMit(token) })
   }
   const m = /^(vb|vv):(vm_[A-Za-z0-9]+):([A-Za-z0-9]+)$/.exec(String(knopf?.data ?? ''))
   const chatId = knopf?.message?.chat?.id

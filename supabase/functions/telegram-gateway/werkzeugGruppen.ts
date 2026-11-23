@@ -181,9 +181,9 @@ export const GRUPPEN: Record<GruppenName, Gruppe> = {
   },
   nachfassen: {
     titel: 'Nachfassen',
-    wofuer: 'Wiedervorlagen, To-do-Liste aufräumen, Stand der Online-Unterschriften, Statusbericht an den Kunden, „Bitte bestätigen“-Vorschläge (Zuordnung, Statuswechsel)',
-    werkzeuge: ['wiedervorlagen_auflisten', 'wiedervorlage_anlegen', 'wiedervorlage_erledigen', 'wiedervorlage_verschieben', 'todos_aufraeumen', 'unterschrift_status', 'statusbericht_entwurf', 'vorschlaege_bestaetigen'],
-    stichworte: /wiedervorlage|nachfass|nachhak|erinner|aufraeum|\braeum.{0,40}\bauf\b|to-?dos?.{0,30}(weg|streich)|was kann weg|von (meiner|der) liste|unterschrift|unterschrieb|unterzeichn|vertrag|vollmacht|vereinbarung|statusbericht|zwischenstand|bericht|vorschlaege_bestaetigen|bitte bestaetigen|andere akte/,
+    wofuer: 'Wiedervorlagen, To-do-Liste aufräumen, Stand der Online-Unterschriften, Statusbericht an den Kunden, „Bitte bestätigen“-Vorschläge (Zuordnung, Statuswechsel), Abend-Rückblick an/aus',
+    werkzeuge: ['wiedervorlagen_auflisten', 'wiedervorlage_anlegen', 'wiedervorlage_erledigen', 'wiedervorlage_verschieben', 'todos_aufraeumen', 'unterschrift_status', 'statusbericht_entwurf', 'vorschlaege_bestaetigen', 'abend_rueckblick_einstellen'],
+    stichworte: /wiedervorlage|nachfass|nachhak|erinner|aufraeum|\braeum.{0,40}\bauf\b|to-?dos?.{0,30}(weg|streich)|was kann weg|von (meiner|der) liste|unterschrift|unterschrieb|unterzeichn|vertrag|vollmacht|vereinbarung|statusbericht|zwischenstand|bericht|vorschlaege_bestaetigen|bitte bestaetigen|andere akte|rueckblick/,
   },
   hotmail: {
     titel: 'Hotmail und Briefe (Bereich Privat)',
@@ -261,6 +261,7 @@ export const ABSATZ_GRUPPE: readonly [string, GruppenName][] = [
   ['- Kurzprüfung von Objekten:', 'objekte'],
   ['- Wiedervorlagen:', 'nachfassen'],
   ['- To-dos aufräumen:', 'nachfassen'],
+  ['- Abend-Rückblick:', 'nachfassen'],
   ['- Statusbericht an den Kunden:', 'nachfassen'],
   ['- Online-Unterschrift:', 'nachfassen'],
   ['- Termin-Briefing:', 'kalender'],
