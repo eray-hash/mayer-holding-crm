@@ -127,7 +127,8 @@ async function versendeEine(admin: Admin, zeile: any, absenden: Absenden, basis:
   }
   const { error: anfFehler } = await admin.from('kunden').update({ unterlagen_anforderungen: [anforderung, ...alteAnf] }).eq('id', k.id)
   if (anfFehler) {
-    await setze({ status: 'fehler', grund: `Link zum Hochladen ließ sich nicht anlegen: ${anfFehler.message}` })
+    // Nichts ging raus: gesendet_am wieder leeren (wie beim Versandfehler), sonst steht „fehler“ mit Sendezeit da.
+    await setze({ status: 'fehler', gesendet_am: null, grund: `Link zum Hochladen ließ sich nicht anlegen: ${anfFehler.message}` })
     return 'fehler'
   }
 

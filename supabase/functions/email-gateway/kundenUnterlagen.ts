@@ -64,8 +64,9 @@ type KundenZeile = {
   unterlagen_anforderungen?: Anforderung[] | null
 }
 
+// Kalenderdatum in Deutschland, nicht UTC (sonst kurz nach Mitternacht noch der Vortag).
 function heuteIso(jetzt: Date): string {
-  return jetzt.toISOString().slice(0, 10)
+  return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Berlin' }).format(jetzt)
 }
 
 function nichtGefunden(): Antwort {

@@ -15,12 +15,16 @@ export function today(): string {
 
 export function fmtDate(iso: string): string {
   if (!iso) return '–'
-  const d = new Date(iso + 'T00:00:00')
+  // Reines Datum als lokales Kalenderdatum; Zeitstempel normal lesen; Unlesbares unverändert zeigen.
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(iso) ? new Date(iso + 'T00:00:00') : new Date(iso)
+  if (Number.isNaN(d.getTime())) return String(iso)
   return d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' })
 }
 
 export function fmtDateTime(iso: string): string {
+  if (!iso) return '–'
   const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return String(iso)
   return d.toLocaleString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 

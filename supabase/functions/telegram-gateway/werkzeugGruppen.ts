@@ -110,7 +110,7 @@ export const GRUPPEN: Record<GruppenName, Gruppe> = {
     titel: 'Vermarktung',
     wofuer: 'Besichtigungen, Gesuche und passende Käufer oder Objekte, Zugang zum Interessenten-Portal, Rendite und Kaufpreis prüfen',
     werkzeuge: ['besichtigungen_zeigen', 'besichtigung_anlegen', 'besichtigung_aendern', 'gesuche_suchen', 'passende_kaeufer', 'passende_objekte', 'portal_zugang_anlegen', 'rendite_rechnen', 'rendite_pruefstein'],
-    stichworte: /besichtig|kaeufer|kaufinteress|interessent|gesuch|suchprofil|portal|rendite|kaufpreis|lohnt sich|\bmiete|mietrendite|faktor|passend/,
+    stichworte: /besichtig|kaeufer|kaufinteress|interessent|gesuch|suchprofil|wer sucht|sucht (ein|eine|einen|nach)\b|portal|rendite|kaufpreis|lohnt sich|\bmiete|mietrendite|faktor|passend|quadratmeter|\bqm\b|m²/,
   },
   rechnungen: {
     titel: 'Rechnungen und Buchhaltung',
@@ -130,7 +130,7 @@ export const GRUPPEN: Record<GruppenName, Gruppe> = {
       'verbindlichkeiten_pruefen',
     ],
     stichworte:
-      /rechnung|zahlung|bezahlt|ueberwies|ueberweisung|kontoauszug|mahnung|mahnen|offene posten|steuerberater|datev|buchhaltung|\bbeleg|kostenvoranschlag|\bkv\b|angebot|skonto|verbindlichkeit|abrechn|abgerechnet|honorar|gutschrift/,
+      /rechnung|zahlung|bezahl|gezahlt|zahlt\b|ueberwies|ueberweisung|kontoauszug|\bmahn|offene posten|\bgeld\b|\bschuld(et|en|ig)|forderung|steuerberater|datev|buchhaltung|\bbeleg|kostenvoranschlag|\bkv\b|angebot|skonto|verbindlichkeit|abrechn|abgerechnet|honorar|gutschrift/,
   },
   vertrieb: {
     titel: 'Umsatz und Partner',
@@ -154,14 +154,14 @@ export const GRUPPEN: Record<GruppenName, Gruppe> = {
     titel: 'Postfach und E-Mails',
     wofuer: 'gemeinsames Postfach lesen und zuordnen, Mails ganz lesen und weiterleiten, Mails an Kunden vorbereiten und senden, gesendete Mails, privater Bereich und Vorschläge im eigenen Postfach',
     werkzeuge: ['gemeinsames_postfach', 'mail_zuordnen', 'mail_lesen', 'mail_weiterleiten', 'mail_vorbereiten', 'mail_senden', 'gesendete_mails', 'privater_bereich', 'in_oeffentlich_holen', 'meine_post_vorschlaege'],
-    stichworte: /mail|postfach|posteingang|weiterleit|newsletter|rundschreiben|anschreiben|geschrieben|gesendet|verschickt|absender|schreib(e|st)? (ihm|ihr|ihnen|dem|der|den|an)|privat|@/,
+    stichworte: /mail|postfach|posteingang|weiterleit|newsletter|rundschreiben|anschreiben|geschrieben|gesendet|verschickt|absender|schreib(e|st)? (ihm|ihr|ihnen|dem|der|den|an|herrn?|frau)\b|antworte (ihm|ihr|ihnen|dem|der|den|herrn?|frau)\b|geantwortet|beantwort|zurueckgeschrieben|kam (was|etwas|post|eine?)\b|privat|@/,
   },
   kalender: {
     titel: 'Kalender',
     wofuer: 'Termine absagen und verschieben, Termine einer Akte zuordnen, freie Zeiten finden, Termin-Briefing, Protokoll nach einem Kundentermin, Tagesablauf (Tag zeigen, planen, abhaken)',
     werkzeuge: ['termin_absagen', 'termin_aendern', 'freie_zeiten', 'termin_briefing', 'nachtermin_protokoll', 'termin_zuordnen', 'tag_zeigen', 'tag_vorschlagen', 'tag_eintrag_erledigt', 'tag_eintrag_hinzufuegen', 'tag_eintrag_entfernen'],
     stichworte:
-      /termin|kalender|absag|verschieb|verleg|\bfrei|wann (hast|habe|hat|kann|koennen)|\buhr\b|\d{1,2}[:.]\d{2}|morgen|naechste woche|montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag|briefing|vorbereit|wie lief|besprechung|meeting|treffen|mein tag|tagesablauf|tagesplan|heute an|plan mir|offen geblieben|a-aufgabe|b-aufgabe|c-aufgabe/,
+      /termin|kalender|absag|verschieb|verleg|\bfrei|wann (hast|habe|hat|kann|koennen)|\buhr\b|(?<![\d.])\d{1,2}[:.]\d{2}(?![\d])|morgen|naechste woche|montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag|briefing|vorbereit|wie lief|besprechung|meeting|treffen|mein(en)? tag|tagesablauf|tagesplan|tagesliste|heute an|heute (zu tun|dran|machen|erledigen)|plan(e)? (mir|meinen|den) tag|plan mir|offen geblieben|a-aufgabe|b-aufgabe|c-aufgabe/,
   },
   dateien: {
     titel: 'Dateien verwalten',
@@ -174,7 +174,7 @@ export const GRUPPEN: Record<GruppenName, Gruppe> = {
     wofuer: 'Kunden aus einer Liste anlegen, Akte in einen anderen Bereich verschieben, Akten zusammenführen, doppelte Akten finden, Stammdaten aus Mail-Signaturen',
     werkzeuge: ['kunden_aus_liste', 'kunde_bereich_wechseln', 'kunden_zusammenfuehren', 'dubletten_finden', 'stammdaten_vorschlaege'],
     stichworte:
-      /liste|tabelle|excel|\bcsv\b|import|bereich|nach (erben|immobilien|akademie|finanzierung|unternehmensberatung|betriebs)|zusammenfuehr|zusammenleg|dieselbe|derselbe|doppelt|dublette|zweimal|signatur|stammdaten/,
+      /liste|tabelle|excel|\bcsv\b|import|mehrere kunden|(diese|folgende|neue) kunden|kunden auf einmal|bereich|nach (erben|immobilien|akademie|finanzierung|unternehmensberatung|betriebs)|zusammenfuehr|zusammenleg|dieselbe|derselbe|doppelt|dublette|zweimal|signatur|stammdaten/,
   },
   nachfassen: {
     titel: 'Nachfassen',
@@ -299,9 +299,28 @@ export function benutzteWerkzeuge(verlauf: readonly VerlaufNachricht[]): string[
   return namen
 }
 
-/** Gruppen, deren Stichwörter im Text vorkommen. */
+/**
+ * Feste Sätze, die das System selbst in eine Nachricht schreibt (Sprachnachricht, Datei-Eingang, CRM-Fenster,
+ * Mitteilung eines Kollegen). Sie zählen nicht als Stichwort: Bis 23.11.2026 lud „Bildunterschrift des
+ * Mitarbeiters“ bei JEDEM Datei-Eingang die Gruppe nachfassen („unterschrift“), und „„Diese Mail“, „dieser
+ * Kunde“ …“ im CRM-Fenster bei jeder geöffneten Akte die Gruppe postfach — je Schritt rund 5.000 bzw.
+ * 7.000 Tokens umsonst. Was der Mitarbeiter selbst schreibt (auch die Bildunterschrift), bleibt stehen.
+ */
+const SYSTEM_SAETZE: readonly RegExp[] = [
+  /\[Sprachnachricht des Mitarbeiters, automatisch abgehört[^\]]*\]/g,
+  /Bildunterschrift des Mitarbeiters:/g,
+  /„Diese Mail["“], „dieser Kunde["“], „hier["“] meinen das, wenn nichts anderes genannt ist\. Nenne die Kennung nicht\./g,
+  /\[Systemmeldung, nicht vom Mitarbeiter getippt\] Im Auftrag von [^\n\]]{1,80} wurde dem Mitarbeiter über dich die folgende Mitteilung geschickt\. Fragt er danach weiter, hilf ihm ganz normal mit deinen Werkzeugen\./g,
+]
+
+/** Text ohne die festen Systemsätze (für die Stichwortsuche). */
+export function ohneSystemSaetze(text: string): string {
+  return SYSTEM_SAETZE.reduce((t, re) => t.replace(re, ' '), text)
+}
+
+/** Gruppen, deren Stichwörter im Text vorkommen (ohne die festen Systemsätze). */
 export function gruppenAusText(text: string): Set<GruppenName> {
-  const t = normalisiere(text)
+  const t = normalisiere(ohneSystemSaetze(text))
   return new Set(GRUPPEN_REIHENFOLGE.filter((g) => GRUPPEN[g].stichworte.test(t)))
 }
 

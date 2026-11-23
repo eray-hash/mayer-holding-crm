@@ -1,6 +1,7 @@
 import { type ReactNode } from 'react'
 import { HashRouter, Routes, Route, Navigate, useLocation, useParams } from 'react-router-dom'
 import { AppProvider, useApp } from './context/AppContext'
+import { Fehlergrenze } from './components/Fehlergrenze'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import { PortalAuthProvider, usePortalAuth } from './context/PortalAuthContext'
 import { RollenAuswahl } from './pages/auth/RollenAuswahl'
@@ -419,7 +420,7 @@ function App() {
       <AppProvider>
         <PortalAuthProvider>
           <HashRouter>
-            <AppRoutes />
+            <Fehlergrenze name="Ganzes CRM" ganz><AppRoutes /></Fehlergrenze>
           </HashRouter>
         </PortalAuthProvider>
       </AppProvider>

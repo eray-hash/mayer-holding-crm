@@ -259,7 +259,7 @@ export function ObjektListe({ privat }: { privat?: boolean } = {}) {
                     <td className="px-4 py-3 text-slate-500">{gruppeLabel(o.gruppe)}</td>
                     <td className="px-4 py-3 text-slate-500">{o.typ}</td>
                     <td className="px-4 py-3"><PriorityBadge value={o.prioritaet} /></td>
-                    <td className="px-4 py-3"><StatusBadge label={node.label} color={node.color} /></td>
+                    <td className="px-4 py-3">{node ? <StatusBadge label={node.label} color={node.color} /> : <span className="text-xs text-slate-400">{o.status}</span>}</td>
                     <td className="px-4 py-3">
                       <div className={overdue ? 'font-medium text-rose-600' : 'text-slate-600'}>{fmtDate(o.followUp.date)}</div>
                       <div className="text-xs text-slate-400">{o.followUp.note}</div>
@@ -267,7 +267,7 @@ export function ObjektListe({ privat }: { privat?: boolean } = {}) {
                     <td className="px-4 py-3 text-slate-500">{o.verantwortlich}</td>
                     <td className="px-4 py-3 text-slate-700">{fmtEUR(o.kaufpreis)}</td>
                     <td className="px-4 py-3 text-right">
-                      {node.next.length > 0 && (
+                      {node && node.next.length > 0 && (
                         <button onClick={(e) => { e.stopPropagation(); advanceObjekt(o.id) }} className="inline-flex items-center gap-1 rounded-md bg-accent-50 px-2 py-1 text-xs font-medium text-accent-700 hover:bg-accent-100">
                           Weiter <ArrowRight size={12} />
                         </button>

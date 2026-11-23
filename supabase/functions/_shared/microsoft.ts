@@ -206,6 +206,26 @@ async function vermerkeFehler(admin: Db, email: string, meldung: string | null):
 
 const warte = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
+// Erfolg vermerken: Ein einmal gespeicherter Fehler (z. B. eine kurze Störung bei Microsoft) blieb vorher für immer
+// in ms_konten.letzter_fehler stehen und wurde in den Einstellungen weiter als Fehler gezeigt — `letzter_erfolg` wurde
+// nur beim Verbinden gesetzt. Höchstens alle fünf Minuten je Konto ein Schreibzugriff.
+const ERFOLG_ABSTAND_MS = 5 * 60_000
+const erfolgVermerkt = new Map<string, number>()
+async function vermerkeErfolg(admin: Db, email: string): Promise<void> {
+  const jetzt = Date.now()
+  if (jetzt - (erfolgVermerkt.get(email) ?? 0) < ERFOLG_ABSTAND_MS) return
+  erfolgVermerkt.set(email, jetzt)
+  try {
+    await vermerkeFehler(admin, email, null)
+  } catch {
+    // nur ein Vermerk — der eigentliche Abruf war erfolgreich
+  }
+}
+/** Nur für Tests: vergisst, wann zuletzt ein Erfolg vermerkt wurde. */
+export function vergissErfolgsVermerke(): void {
+  erfolgVermerkt.clear()
+}
+
 /** Gültiger Zugangsschlüssel; erneuert bei Bedarf (nur einer gleichzeitig). */
 export async function msZugang(admin: Db, email: string, erzwingen = false): Promise<string> {
   email = email.toLowerCase()
@@ -282,6 +302,7 @@ export async function graph<T = Record<string, unknown>>(admin: Db, email: strin
       if (antwort.status >= 500 || antwort.status === 401) await vermerkeFehler(admin, email.toLowerCase(), meldung)
       throw new MsFehler(antwort.status, meldung, String(daten?.error?.code ?? ''))
     }
+    await vermerkeErfolg(admin, email.toLowerCase())
     if (o.roh) return antwort as unknown as T
     if (antwort.status === 204) return {} as T
     const text = await antwort.text()

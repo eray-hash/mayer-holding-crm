@@ -3,6 +3,7 @@
 // Abruf weiterer gemeinsamer Postfächer wie info@coach-es.de, seit 19.11.2026). Vorher lag alles in
 // inbound-email/index.ts; der Inhalt der Funktionen ist unverändert übernommen.
 import { kiAufruf } from './kiVerbrauch.ts'
+import { heuteBerlin } from './heuteBerlin.ts'
 
 // klassifiziereRelevanz: Live-Gegenstück zu scripts/cleanup-inbox.mjs (dort nur als manueller Einmal-Lauf für den
 // historischen Rückstand): klassifiziert jede neu eingehende Mail direkt beim Eingang, damit das
@@ -10,7 +11,10 @@ import { kiAufruf } from './kiVerbrauch.ts'
 // verstecken ("nicht_relevant" setzen), nie löschen — bei einer KI-Fehlklassifizierung geht dadurch
 // nichts verloren, siehe Mitarbeiter-Rückfrage vom 30.10.2026. Ein Fehler beim Klassifizieren darf
 // das Einsortieren der Mail selbst nicht verhindern — im Zweifel bleibt sie sichtbar ("kunde").
-export async function klassifiziereRelevanz(vonName: string, von: string, betreff: string, ausschnitt: string): Promise<'kunde' | 'nicht_relevant'> {
+// `hinweis` (optional): was das CRM über den Absender weiß (siehe absenderHinweis) — ohne ihn wurden echte Mails von
+// Mitarbeitern eines bestehenden Kunden als Rundmail ausgeblendet (VHS Augsburg, 16. und 20.11.2026: Teilnehmerliste,
+// Kursplanung, Seminartermine — alle „nicht_relevant“).
+export async function klassifiziereRelevanz(vonName: string, von: string, betreff: string, ausschnitt: string, hinweis?: string | null): Promise<'kunde' | 'nicht_relevant'> {
   const apiKey = Deno.env.get('ANTHROPIC_API_KEY')
   if (!apiKey) return 'kunde'
   try {
@@ -38,7 +42,7 @@ export async function klassifiziereRelevanz(vonName: string, von: string, betref
 - "nicht_relevant": Newsletter, Werbe-/Marketing-Mails, automatisierte Rechnungen/Belege/Quittungen (z. B. PayPal, Zoom, Telefonanbieter), Spam, Lead-Marktplatz-Benachrichtigungen (z. B. bark.com), Kontoauszüge, Systembenachrichtigungen, Abo-Dienste, Vereins-/Schul-Rundmails ohne direkten Geschäftsbezug.
 
 Im Zweifel (du bist dir nicht sicher, ob Geschäftsbezug zu einem Kunden/Interessenten besteht) wähle "kunde", damit nichts Wichtiges verloren geht.
-
+${hinweis ? `\nHinweis aus dem CRM: ${hinweis} Persönlich geschriebene Mails zu einem konkreten Anliegen (Termine, Teilnehmerlisten, Planung, Unterlagen, Rückfragen) sind dann "kunde" — auch von Schulen, Vereinen oder Behörden. Reine Werbe-, Newsletter- und Rundmails bleiben "nicht_relevant".\n` : ''}
 Von: ${vonName} <${von}>
 Betreff: ${betreff}
 Ausschnitt: ${ausschnitt.slice(0, 300)}`,
@@ -96,6 +100,52 @@ export async function extrahiereTelefonnummer(text: string): Promise<string | nu
   }
 }
 
+/** Maskiert die Platzhalter von ilike (`%`, `_`, `\\`), damit eine Adresse nur sich selbst trifft. */
+export function likeMaskiert(wert: string): string {
+  return wert.replace(/[\\%_]/g, (z) => `\\${z}`)
+}
+
+// Adressen von Mitarbeitern werden nie einer Akte zugeordnet (wie ordneOffeneMailsZu in email-gateway/postfach.ts).
+// deno-lint-ignore no-explicit-any
+async function istMitarbeiterAdresse(supabase: any, adresse: string): Promise<boolean> {
+  const { data } = await supabase.from('mitarbeiter').select('email').ilike('email', likeMaskiert(adresse)).limit(1)
+  return Array.isArray(data) && data.length > 0
+}
+
+// Anbieter, bei denen viele Fremde dieselbe Domain haben — dort sagt die Domain nichts über eine Firma.
+const ALLERWELTS_DOMAINS = new Set([
+  'gmail.com', 'googlemail.com', 'web.de', 'gmx.de', 'gmx.net', 'gmx.at', 'gmx.ch', 't-online.de', 'magenta.de', 'hotmail.com', 'hotmail.de',
+  'outlook.com', 'outlook.de', 'live.com', 'live.de', 'msn.com', 'yahoo.com', 'yahoo.de', 'yahoo.it', 'icloud.com', 'me.com', 'mac.com',
+  'freenet.de', 'aol.com', 'aol.de', 'mail.de', 'posteo.de', 'arcor.de', 'online.de', 'vodafone.de', 'email.de', 'protonmail.com', 'proton.me',
+])
+
+/** Was das CRM über den Absender weiß, als Satz für die Relevanz-Einordnung — oder null. Nur Mayer-Akten (keine
+ *  privaten), nie Mitarbeiter. Wirft nie. */
+// deno-lint-ignore no-explicit-any
+export async function absenderHinweis(supabase: any, von: string): Promise<string | null> {
+  try {
+    const adresse = von.trim().toLowerCase()
+    const domain = adresse.split('@')[1] ?? ''
+    if (!domain || (await istMitarbeiterAdresse(supabase, adresse))) return null
+    const name = (k: { firma?: string | null }) => String(k.firma ?? '').trim() || 'ohne Namen'
+    const { data: genau } = await supabase.from('kunden').select('firma').ilike('email', likeMaskiert(adresse)).neq('bereich', 'privat').limit(3)
+    if (Array.isArray(genau) && genau.length > 0) return `Der Absender ist im CRM als Kunde hinterlegt (Akte „${name(genau[0])}“).`
+    if (ALLERWELTS_DOMAINS.has(domain)) return null
+    const { data: gleicheDomain } = await supabase.from('kunden').select('firma').ilike('email', `%@${likeMaskiert(domain)}`).neq('bereich', 'privat').limit(3)
+    if (Array.isArray(gleicheDomain) && gleicheDomain.length > 0) return `Die Absender-Domain @${domain} gehört zur Kundenakte „${name(gleicheDomain[0])}“ im CRM.`
+    return null
+  } catch {
+    return null
+  }
+}
+
+/** Relevanz einer neuen Mail des gemeinsamen Postfachs, mit dem Wissen des CRM über den Absender. Wirft nie. */
+// deno-lint-ignore no-explicit-any
+export async function klassifiziereEingang(supabase: any, m: { von: string; vonName: string; betreff: string; text: string }): Promise<'kunde' | 'nicht_relevant'> {
+  const hinweis = await absenderHinweis(supabase, m.von)
+  return klassifiziereRelevanz(m.vonName, m.von, m.betreff, m.text.slice(0, 500), hinweis)
+}
+
 // Live-Gegenstück zu scripts/auto-assign-emails.mjs (dort nur als Einmal-Lauf für den historischen
 // Rückstand): ordnet eine neu eingehende Kunden-Mail automatisch zu, wenn genau ein Kunde/Mandant
 // (über alle Bereiche hinweg) exakt dieselbe E-Mail-Adresse hinterlegt hat — sonst (kein Treffer
@@ -112,16 +162,23 @@ export async function versucheAutomatischeZuordnung(
   anhaenge: { filename: string; size: number; contentType: string; url: string }[],
 ): Promise<{ kundeId: string; bereich: string; kundeName: string } | null> {
   try {
+    const adresse = von.trim().toLowerCase()
+    if (!adresse.includes('@') || (await istMitarbeiterAdresse(supabase, adresse))) return null
+    // Private Akten (bereich 'privat') gehören einem einzelnen Mitarbeiter — eine Mail des gemeinsamen Postfachs darf
+    // dort nie landen (sonst verschwindet sie samt Anhängen für alle anderen). `_` und `%` sind in ilike Platzhalter.
     const { data: treffer, error } = await supabase
       .from('kunden')
-      .select('id, bereich, firma, ansprechpartner, telefon, dokumente, activities')
-      .ilike('email', von.trim())
+      .select('id, bereich, firma, ansprechpartner, telefon')
+      .ilike('email', likeMaskiert(adresse))
+      .neq('bereich', 'privat')
     if (error || !treffer || treffer.length !== 1) return null
 
     const kunde = treffer[0]
-    const hatAnhaenge = anhaenge.length > 0
-    const heute = new Date().toISOString().slice(0, 10)
-    const neueDokumente = anhaenge.map((a) => ({
+    // Winzige Bilder sind Logos aus der Signatur, keine Unterlagen (wie ordneMailZu in email-gateway/postfach.ts).
+    const unterlagen = anhaenge.filter((a) => !(String(a.contentType ?? '').startsWith('image/') && Number(a.size ?? 0) < 15 * 1024))
+    const hatAnhaenge = unterlagen.length > 0
+    const heute = heuteBerlin()
+    const neueDokumente = unterlagen.map((a) => ({
       id: crypto.randomUUID(),
       name: a.filename,
       typ: a.contentType,
@@ -134,7 +191,7 @@ export async function versucheAutomatischeZuordnung(
         id: crypto.randomUUID(),
         date: heute,
         text: hatAnhaenge
-          ? `E-Mail automatisch zugeordnet: „${betreff}" von ${vonName} (${anhaenge.length} Anhang/Anhänge in Dokumente abgelegt)`
+          ? `E-Mail automatisch zugeordnet: „${betreff}" von ${vonName} (${unterlagen.length} Anhang/Anhänge in Dokumente abgelegt)`
           : `E-Mail automatisch zugeordnet: „${betreff}" von ${vonName}`,
         user: 'System (automatische E-Mail-Zuordnung)',
       },
@@ -154,12 +211,16 @@ export async function versucheAutomatischeZuordnung(
       })
     }
 
+    // Dokumente und Verlauf erst JETZT lesen (nach dem KI-Aufruf oben): Mit den Listen vom Anfang würde eine in der
+    // Zwischenzeit im Browser gespeicherte Änderung der Akte überschrieben.
+    const { data: frisch, error: frischFehler } = await supabase.from('kunden').select('dokumente, activities').eq('id', kunde.id).maybeSingle()
+    if (frischFehler || !frisch) return null
     const { error: updateError } = await supabase
       .from('kunden')
       .update({
         ...(telefonAktualisieren ? { telefon: neueTelefonnummer } : {}),
-        dokumente: [...neueDokumente, ...((kunde.dokumente as unknown[]) ?? [])],
-        activities: [...neueActivities, ...((kunde.activities as unknown[]) ?? [])],
+        dokumente: [...neueDokumente, ...((frisch.dokumente as unknown[]) ?? [])],
+        activities: [...neueActivities, ...((frisch.activities as unknown[]) ?? [])],
       })
       .eq('id', kunde.id)
     if (updateError) {
@@ -250,9 +311,29 @@ export type MailPruefung = {
  *  ausblenden), automatische Zuordnung zur Akte bei eindeutiger Absenderadresse, und Lieferanten-
  *  rechnungen als Verbindlichkeit. Wirft nie. */
 // deno-lint-ignore no-explicit-any
-export async function pruefeNeueMail(supabase: any, m: { messageId: string; von: string; vonName: string; betreff: string; text: string; anhaenge: { filename: string; size: number; contentType: string; url: string }[] }): Promise<MailPruefung> {
-  const relevanz = await klassifiziereRelevanz(m.vonName, m.von, m.betreff, m.text.slice(0, 500))
+export async function pruefeNeueMail(supabase: any, m: NeueMail): Promise<MailPruefung> {
+  const relevanz = await klassifiziereEingang(supabase, m)
+  const zuordnung = await nachDemSpeichern(supabase, null, m, relevanz)
+  return { relevanz, zuordnung }
+}
+
+export type NeueMail = { messageId: string; von: string; vonName: string; betreff: string; text: string; anhaenge: { filename: string; size: number; contentType: string; url: string }[] }
+
+/** Zweiter Teil der Prüfung, ERST NACHDEM die Mail gespeichert ist (`zeilenId` = ihre Zeile; null = nicht
+ *  nachtragen): Zuordnung zur Akte (nur relevanz 'kunde') und Lieferantenrechnung als Verbindlichkeit. So läuft beides
+ *  genau einmal je Mail — vorher lief es vor dem Speichern, und eine zweite Zustellung derselben Mail (Weiterleitungs-
+ *  dienst wiederholt bei langsamer Antwort, Postfach-Abruf holt dieselbe große Mail) legte Verlauf, Dokumente und
+ *  Verbindlichkeit doppelt an. Wirft nie. */
+// deno-lint-ignore no-explicit-any
+export async function nachDemSpeichern(supabase: any, zeilenId: string | null, m: NeueMail, relevanz: 'kunde' | 'nicht_relevant'): Promise<MailPruefung['zuordnung']> {
   const zuordnung = relevanz === 'kunde' ? await versucheAutomatischeZuordnung(supabase, m.von, m.vonName, m.betreff, m.text, m.anhaenge) : null
+  if (zuordnung && zeilenId) {
+    const { error } = await supabase
+      .from('eingegangene_emails')
+      .update({ zugewiesener_kunde_id: zuordnung.kundeId, zugewiesener_bereich: zuordnung.bereich, zugewiesener_kunde_name: zuordnung.kundeName })
+      .eq('id', zeilenId)
+    if (error) console.error('Zuordnung der Mail nicht gespeichert', error)
+  }
   // Läuft bewusst unabhängig von relevanz — eine Lieferantenrechnung ist für den Posteingang
   // "nicht_relevant", für die Buchhaltung aber hochrelevant.
   const verbindlichkeit = await erkenneEingehendeVerbindlichkeit(m.vonName, m.von, m.betreff, m.text, m.anhaenge)
@@ -262,7 +343,7 @@ export async function pruefeNeueMail(supabase: any, m: { messageId: string; von:
       lieferant: m.vonName,
       lieferant_email: m.von,
       rechnungsnummer: verbindlichkeit.rechnungsnummer ?? null,
-      datum: new Date().toISOString().slice(0, 10),
+      datum: heuteBerlin(),
       betrag_netto: verbindlichkeit.betragNetto ?? null,
       betrag_brutto: verbindlichkeit.betragBrutto ?? null,
       zahlungsziel: verbindlichkeit.zahlungsziel ?? null,
@@ -272,5 +353,5 @@ export async function pruefeNeueMail(supabase: any, m: { messageId: string; von:
     })
     if (error) console.error('Verbindlichkeit anlegen fehlgeschlagen', error)
   }
-  return { relevanz, zuordnung }
+  return zuordnung
 }

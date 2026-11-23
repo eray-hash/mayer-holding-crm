@@ -4,7 +4,7 @@ import { useApp } from '../context/AppContext'
 import { Card, Field, inputClass, PrimaryButton, SecondaryButton } from './ui'
 import { CURRENT_USER } from '../data/constants'
 import { druckeBlatt, type DruckAbschnitt } from '../lib/blattDruck'
-import { fmtDate } from '../lib/dates'
+import { fmtDate, today } from '../lib/dates'
 import { callAuthenticated, isEmailGatewayConfigured } from '../lib/emailGateway'
 import { isSupabaseConfigured, supabase } from '../lib/supabaseClient'
 import { leereKurzpruefung } from '../lib/bewertungAnzeige'
@@ -203,7 +203,7 @@ export function ObjektRenditeCheck({ objekt }: { objekt: Objekt }) {
     setVorgang('pruefstein')
     setFehler('')
     const alt = stand?.pruefsteine?.[id]
-    const eintrag = { erledigt, ...(notiz ?? alt?.notiz ? { notiz: notiz ?? alt?.notiz } : {}), am: new Date().toISOString().slice(0, 10), von: CURRENT_USER }
+    const eintrag = { erledigt, ...(notiz ?? alt?.notiz ? { notiz: notiz ?? alt?.notiz } : {}), am: today(), von: CURRENT_USER }
     try {
       setStand(await speichereStand(objekt.id, { pruefsteine: { [id]: eintrag } }))
     } catch (err) {

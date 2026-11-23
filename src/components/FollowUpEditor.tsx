@@ -17,9 +17,11 @@ export function FollowUpForm({
   done: boolean
   onSubmit: (f: { date: string; note: string; done: boolean }) => void
 }) {
-  const [d, setD] = useState(date)
-  const [n, setN] = useState(note)
-  const [done_, setDone] = useState(done)
+  // In 35 Kunden- und 39 Objektakten ist das Follow-up in der Datenbank ein leeres Objekt ({}), Datum
+  // und Notiz fehlen also trotz Typ — ohne die Ersatzwerte wären die Felder „ungesteuert“ (React-Warnung).
+  const [d, setD] = useState(date ?? '')
+  const [n, setN] = useState(note ?? '')
+  const [done_, setDone] = useState(!!done)
   return (
     <div>
       <Field label="Datum">

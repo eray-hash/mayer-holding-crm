@@ -114,7 +114,7 @@ export function BetriebsuebergabeListe() {
                     <td className="px-4 py-3 font-medium text-slate-800">{k.firma}</td>
                     <td className="px-4 py-3 text-slate-500">{k.ansprechpartner}</td>
                     <td className="px-4 py-3"><PriorityBadge value={k.prioritaet} /></td>
-                    <td className="px-4 py-3"><StatusBadge label={node.label} color={node.color} /></td>
+                    <td className="px-4 py-3">{node ? <StatusBadge label={node.label} color={node.color} /> : <span className="text-xs text-slate-400">{k.status}</span>}</td>
                     <td className="px-4 py-3">
                       <div className={overdue ? 'font-medium text-rose-600' : 'text-slate-600'}>{fmtDate(k.followUp.date)}</div>
                       <div className="text-xs text-slate-400">{k.followUp.note}</div>
@@ -122,7 +122,7 @@ export function BetriebsuebergabeListe() {
                     <td className="px-4 py-3 text-slate-500">{k.verantwortlich}</td>
                     <td className="px-4 py-3 text-slate-400">{fmtDate(k.letzteAktivitaet)}</td>
                     <td className="px-4 py-3 text-right">
-                      {node.next.length > 0 && (
+                      {node && node.next.length > 0 && (
                         <button
                           onClick={(e) => {
                             e.stopPropagation()

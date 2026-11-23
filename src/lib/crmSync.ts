@@ -50,8 +50,25 @@ import type {
 } from '../types'
 import type { Projekt } from '../types/project'
 import { alleZeilen } from './alleZeilen'
+import { meldeFehler } from './fehlerMelden'
+import { alsListe, fuehreListeZusammen, gleich, type ListenEintrag } from './syncZusammenfuehren'
+import {
+  legeAn,
+  legeAnFallsNieGespeichert,
+  loescheZeilen,
+  merkeInDatenbank,
+  plane,
+  schreibeSpaeter,
+  setzeMelder,
+  warteAufSchreibvorgaenge,
+  istNetzFehler,
+  type Ausgang,
+} from './zeilenSchreiben'
 
 export { isSupabaseConfigured }
+// Früher hier definiert; jetzt in den reinen Hilfsdateien (mit Tests), hier nur weitergereicht.
+export { fuehreListeZusammen, wendeServerStandAn } from './syncZusammenfuehren'
+export { schreibtGerade } from './zeilenSchreiben'
 
 const KUNDE_KEYS: { bereich: KundeBereich; key: keyof AppData }[] = [
   { bereich: 'beratung', key: 'kunden' },
@@ -703,8 +720,26 @@ function rowToVerbindlichkeit(row: any): Verbindlichkeit {
   }
 }
 
-function logFehler(kontext: string, error: { message: string } | null) {
-  if (error) console.error(`Supabase-Sync fehlgeschlagen (${kontext}):`, error.message)
+// Fehler beim Speichern landen zusätzlich in app_fehler (täglicher Bericht) — früher nur in der Konsole, also für
+// niemanden sichtbar. Gemeldet wird nur die Tabelle und die Datenbank-Meldung, nie Namen oder Inhalte (der
+// Kontext mit Firmen-/Objektnamen bleibt in der Konsole).
+setzeMelder((art, tabelle, kontext, text) => {
+  if (art === 'fehler') {
+    console.error(`Supabase-Sync fehlgeschlagen (${kontext}):`, text ?? '')
+    meldeFehler(`Speichern in der Datenbank fehlgeschlagen (${tabelle})`, text)
+  } else if (art === 'verworfen') {
+    console.warn(`[crmSync] ${kontext}: in der Datenbank inzwischen gelöscht — Änderung verworfen (${tabelle})`)
+    meldeFehler(`Änderung verworfen: Eintrag war inzwischen gelöscht (${tabelle})`)
+  } else {
+    console.error(`[crmSync] ${kontext}: zu viele Löschungen auf einmal in ${tabelle} — nichts gelöscht (${text ?? ''})`)
+    meldeFehler(`Löschen gesperrt: zu viele Einträge auf einmal (${tabelle})`, text)
+  }
+})
+
+function logFehler(kontext: string, error: { message: string } | null, tabelle = '') {
+  if (!error) return
+  console.error(`Supabase-Sync fehlgeschlagen (${kontext}):`, error.message)
+  if (!istNetzFehler(error)) meldeFehler(`Speichern in der Datenbank fehlgeschlagen${tabelle ? ` (${tabelle})` : ''}`, error.message)
 }
 
 // Einfache 1:1-Collections: genau ein AppData-Feld, genau eine Tabelle, keine Bereichs-Aufteilung
@@ -749,36 +784,25 @@ function syncSimpleCollection(client: NonNullable<typeof supabase>, prev: AppDat
 
   const nextIds = new Set(nextListe.map((x) => x.id))
   const geloeschteIds = prevListe.filter((x) => !nextIds.has(x.id)).map((x) => x.id)
-  if (geloeschteIds.length > 0) {
-    client.from(cfg.table).delete().in('id', geloeschteIds).then(({ error }) => logFehler(`${cfg.table} löschen`, error))
-  }
+  if (geloeschteIds.length > 0) void loescheZeilen(client, cfg.table, geloeschteIds, String(cfg.key))
 
-  // To-dos, Verbindlichkeiten, Rechnungen: bei vorhandenen Zeilen nur die geänderten Felder schreiben (Server ergänzt Belege,
-  // Zahlungen aus Kontoauszügen usw.). To-dos: die automatische Priorisierung auf dem
-  // Server (todoPriorisierung.ts) setzt prio/reihenfolge, und ein Fenster mit älterem Stand soll sie nicht zurückdrehen,
-  // nur weil dort ein anderes Feld bearbeitet wird.
-  const vorherNachId = cfg.table === 'todos' || cfg.table === 'verbindlichkeiten' || cfg.table === 'rechnungen' ? new Map(prevListe.map((x) => [x.id, x])) : null
+  // Alle Tabellen: bei vorhandenen Zeilen nur die geänderten Felder schreiben, geänderte Listen (Meilensteine mit
+  // Aufgaben, Zahlungen, Zeilen eines Tagesplans …) mit dem frischen Stand der Datenbank zusammenführen (siehe
+  // zeilenSchreiben.ts). Früher galt das nur für To-dos, Verbindlichkeiten und Rechnungen; alle anderen Tabellen
+  // schrieben die ganze Zeile und überschrieben, was der Server oder ein Kollege inzwischen geändert hatte
+  // (z. B. per Telegram ergänzte Tagesplan-Zeilen, die Verknüpfung eines Projekts nach dem Zusammenführen).
+  // abteilung_eintraege: Kennungen wie „Name|Datum“ (Tagesplan) legt auch der Server an, und `daten` ist ein
+  // ganzes Datenobjekt — darum Feld für Feld zusammenführen, auch beim ersten Speichern.
+  const abteilung = cfg.table === 'abteilung_eintraege'
+  const vorherNachId = new Map(prevListe.map((x) => [x.id, x]))
   for (const item of diffById(prevListe, nextListe)) {
-    const vorher = vorherNachId?.get(item.id)
-    if (vorher) {
-      const alt = cfg.toRow(vorher)
-      const neu = cfg.toRow(item)
-      const felder = Object.keys(neu).filter((f) => f !== 'id' && !gleich(alt[f], neu[f]))
-      if (felder.length === 0) continue
-      const aenderung = Object.fromEntries(felder.map((f) => [f, neu[f] ?? null]))
-      client
-        .from(cfg.table)
-        .update(aenderung)
-        .eq('id', item.id)
-        .select('id')
-        .then(({ data, error }) => {
-          logFehler(cfg.label(item), error)
-          // Nichts getroffen (Zeile fehlt in der Datenbank): wie bisher vollständig anlegen.
-          if (!error && (data ?? []).length === 0) client.from(cfg.table).upsert(neu).then(({ error: e }) => logFehler(cfg.label(item), e))
-        })
-      continue
-    }
-    client.from(cfg.table).upsert(cfg.toRow(item)).then(({ error }) => logFehler(cfg.label(item), error))
+    const vorher = vorherNachId.get(item.id)
+    void schreibeSpaeter(
+      client,
+      { tabelle: cfg.table, id: item.id, kontext: cfg.label(item), ...(abteilung ? { festeIds: true, objektFelder: ['daten'] } : {}) },
+      vorher ? cfg.toRow(vorher) : undefined,
+      cfg.toRow(item),
+    )
   }
 }
 
@@ -793,7 +817,6 @@ function syncSimpleCollection(client: NonNullable<typeof supabase>, prev: AppDat
 // Stand der Datenbank zusammengeführt: eigene neue, geänderte und gelöschte Einträge gelten, alles
 // andere bleibt so, wie es in der Datenbank steht.
 
-type ListenEintrag = { id: string }
 // unterlagen_anforderungen: Der Server trägt dort Eingänge vom Hochlade-Link ein (kundenUnterlagen.ts).
 const LISTEN_FELDER = ['activities', 'dokumente', 'signaturen', 'gesuche', 'unterlagen_anforderungen'] as const
 type ListenFeld = (typeof LISTEN_FELDER)[number]
@@ -801,100 +824,22 @@ type ListenFeld = (typeof LISTEN_FELDER)[number]
 /** Was die Datenbank gegenüber dem Stand dieses Fensters zusätzlich weiß — je Liste der Akte. */
 export type ServerStand = Partial<Record<ListenFeld, { neu: ListenEintrag[]; weg: string[]; frisch: ListenEintrag[] }>>
 
-function gleich(a: unknown, b: unknown): boolean {
-  return a === b || JSON.stringify(a ?? null) === JSON.stringify(b ?? null)
-}
-
-function alsListe(wert: unknown): ListenEintrag[] | null {
-  if (wert == null) return []
-  if (!Array.isArray(wert)) return null
-  return wert.every((x) => x && typeof x === 'object' && typeof (x as ListenEintrag).id === 'string') ? (wert as ListenEintrag[]) : null
-}
-
-/**
- * Führt eine Liste zusammen: `vorher` und `nachher` sind der Stand dieses Fensters vor und nach der
- * Änderung, `server` ist der aktuelle Stand der Datenbank. Gibt die zu schreibende Liste zurück und
- * was der Server zusätzlich wusste (damit das Fenster es gleich mit anzeigt).
- */
-export function fuehreListeZusammen(
-  vorher: ListenEintrag[],
-  nachher: ListenEintrag[],
-  server: ListenEintrag[],
-): { liste: ListenEintrag[]; neu: ListenEintrag[]; weg: string[]; frisch: ListenEintrag[] } {
-  const vorherNachId = new Map(vorher.map((x) => [x.id, x]))
-  const serverNachId = new Map(server.map((x) => [x.id, x]))
-  const nachherIds = new Set(nachher.map((x) => x.id))
-  // Was andere inzwischen dazugelegt haben: steht in der Datenbank, war diesem Fenster nie bekannt.
-  const neu = server.filter((x) => !vorherNachId.has(x.id) && !nachherIds.has(x.id))
-  const weg: string[] = []
-  const frisch: ListenEintrag[] = []
-  const liste: ListenEintrag[] = []
-  let fremdeEingefuegt = false
-  for (const eintrag of nachher) {
-    const alt = vorherNachId.get(eintrag.id)
-    if (!alt) {
-      liste.push(eintrag) // in diesem Fenster neu angelegt
-      continue
-    }
-    // Fremde neue Einträge kommen vor den ersten schon bekannten Eintrag (neueste stehen oben).
-    if (!fremdeEingefuegt) {
-      liste.push(...neu)
-      fremdeEingefuegt = true
-    }
-    if (!gleich(alt, eintrag)) {
-      liste.push(eintrag) // in diesem Fenster geändert
-      continue
-    }
-    const aktuell = serverNachId.get(eintrag.id)
-    if (!aktuell) {
-      weg.push(eintrag.id) // hier unverändert, in der Datenbank inzwischen gelöscht
-      continue
-    }
-    if (!gleich(aktuell, eintrag)) frisch.push(aktuell) // hier unverändert, in der Datenbank ergänzt
-    liste.push(aktuell)
-  }
-  if (!fremdeEingefuegt) liste.push(...neu)
-  return { liste, neu, weg, frisch }
-}
-
-/** Trägt in eine Liste des Fensters nach, was die Datenbank zusätzlich wusste. */
-export function wendeServerStandAn<T extends ListenEintrag>(liste: T[] | undefined, stand: { neu: ListenEintrag[]; weg: string[]; frisch: ListenEintrag[] }): T[] {
-  const weg = new Set(stand.weg)
-  const frisch = new Map(stand.frisch.map((x) => [x.id, x]))
-  const vorhanden = new Set((liste ?? []).map((x) => x.id))
-  const fremde = stand.neu.filter((x) => !vorhanden.has(x.id)) as T[]
-  const rest = (liste ?? []).filter((x) => !weg.has(x.id)).map((x) => (frisch.get(x.id) as T | undefined) ?? x)
-  return [...fremde, ...rest]
-}
-
-// Schreibvorgänge je Akte nacheinander, damit zwei schnelle Änderungen sich nicht überholen.
-const schreibKetten = new Map<string, Promise<void>>()
-let offeneSchreibvorgaenge = 0
-
-/** Läuft gerade noch ein Speichern? Dann lädt das Fenster den Stand nicht neu. */
-export function schreibtGerade(): boolean {
-  return offeneSchreibvorgaenge > 0
-}
-
 async function schreibeKunde(
   client: NonNullable<typeof supabase>,
   vorher: { bereich: KundeBereich; kunde: Kunde } | undefined,
   bereich: KundeBereich,
   kunde: Kunde,
   meldeServerStand?: (id: string, stand: ServerStand) => void,
-): Promise<void> {
+): Promise<Ausgang> {
   const nachherZeile = kundeToRow(bereich, kunde) as Record<string, unknown>
-  if (!vorher) {
-    // In diesem Fenster neu angelegt: ganze Zeile schreiben.
-    const { error } = await client.from('kunden').upsert(nachherZeile)
-    logFehler(`Kunde ${kunde.firma}`, error)
-    return
-  }
+  const kontext = `Kunde ${kunde.firma}`
+  // In diesem Fenster neu angelegt: ganze Zeile schreiben.
+  if (!vorher) return legeAn(client, 'kunden', kunde.id, nachherZeile, kontext)
   const vorherZeile = kundeToRow(vorher.bereich, vorher.kunde) as Record<string, unknown>
   // Nur Felder, die der neue Stand mitbringt: Ein Feld, das dieses Fenster gar nicht (mehr) kennt, wird
   // nie geleert (siehe potenzial_analyse in kundeToRow).
   const geaendert = Object.keys(nachherZeile).filter((feld) => feld !== 'id' && !gleich(vorherZeile[feld], nachherZeile[feld]))
-  if (geaendert.length === 0) return
+  if (geaendert.length === 0) return 'ok'
 
   const aenderung: Record<string, unknown> = {}
   for (const feld of geaendert) aenderung[feld] = nachherZeile[feld] ?? null
@@ -902,33 +847,34 @@ async function schreibeKunde(
   const stand: ServerStand = {}
   if (listen.length > 0) {
     const { data: server, error } = await client.from('kunden').select(`id, ${listen.join(', ')}`).eq('id', kunde.id).maybeSingle()
-    if (!error && !server) {
-      // Die Akte gibt es in der Datenbank (noch) nicht: wie bisher vollständig anlegen.
-      const { error: anlegeFehler } = await client.from('kunden').upsert(nachherZeile)
-      logFehler(`Kunde ${kunde.firma}`, anlegeFehler)
-      return
+    // Ohne frischen Stand nie die eigenen ganzen Listen schreiben — das löschte früher bei einem kurzen Netz-
+    // oder Datenbankfehler alles, was andere inzwischen abgelegt hatten. Am Netz gescheitert: später nachholen.
+    if (error) {
+      logFehler(kontext, error, 'kunden')
+      return istNetzFehler(error) ? 'nachholen' : 'fehler'
     }
-    if (server) {
-      for (const feld of listen) {
-        const a = alsListe(vorherZeile[feld])
-        const b = alsListe(nachherZeile[feld])
-        const c = alsListe((server as unknown as Record<string, unknown>)[feld])
-        if (!a || !b || !c) continue // Einträge ohne Kennung: Feld wie geändert schreiben
-        const ergebnis = fuehreListeZusammen(a, b, c)
-        aenderung[feld] = ergebnis.liste
-        if (ergebnis.neu.length > 0 || ergebnis.weg.length > 0 || ergebnis.frisch.length > 0) stand[feld] = { neu: ergebnis.neu, weg: ergebnis.weg, frisch: ergebnis.frisch }
-      }
+    // Die Akte gibt es in der Datenbank nicht: nur anlegen, wenn sie nie dort war (sonst anderswo gelöscht).
+    if (!server) return legeAnFallsNieGespeichert(client, 'kunden', kunde.id, nachherZeile, kontext)
+    for (const feld of listen) {
+      const a = alsListe(vorherZeile[feld])
+      const b = alsListe(nachherZeile[feld])
+      const c = alsListe((server as unknown as Record<string, unknown>)[feld])
+      if (!a || !b || !c) continue // Einträge ohne Kennung: Feld wie geändert schreiben
+      const ergebnis = fuehreListeZusammen(a, b, c)
+      aenderung[feld] = ergebnis.liste
+      if (ergebnis.neu.length > 0 || ergebnis.weg.length > 0 || ergebnis.frisch.length > 0) stand[feld] = { neu: ergebnis.neu, weg: ergebnis.weg, frisch: ergebnis.frisch }
     }
   }
   const { data: geschrieben, error } = await client.from('kunden').update(aenderung).eq('id', kunde.id).select('id')
-  logFehler(`Kunde ${kunde.firma}`, error)
-  if (!error && (geschrieben ?? []).length === 0) {
-    // Nichts getroffen: Die Akte fehlt in der Datenbank — vollständig anlegen wie bisher.
-    const { error: anlegeFehler } = await client.from('kunden').upsert(nachherZeile)
-    logFehler(`Kunde ${kunde.firma}`, anlegeFehler)
-    return
+  if (error) {
+    logFehler(kontext, error, 'kunden')
+    return istNetzFehler(error) ? 'nachholen' : 'fehler'
   }
-  if (!error && Object.keys(stand).length > 0) meldeServerStand?.(kunde.id, stand)
+  // Nichts getroffen: Die Akte fehlt in der Datenbank — nur anlegen, wenn sie nie dort war.
+  if ((geschrieben ?? []).length === 0) return legeAnFallsNieGespeichert(client, 'kunden', kunde.id, nachherZeile, kontext)
+  merkeInDatenbank('kunden', [kunde.id])
+  if (Object.keys(stand).length > 0) meldeServerStand?.(kunde.id, stand)
+  return 'ok'
 }
 
 // Nach jedem Dispatch aufgerufen (außer beim initialen Hydrate selbst) — schreibt nur, was sich
@@ -942,29 +888,27 @@ export type ObjektServerStand = { activities?: Objekt['activities']; dokumente?:
  * Dokumente (je Ordner) werden mit dem Stand der Datenbank zusammengeführt — was der Server inzwischen
  * abgelegt hat (Mail-Zuordnung, Eigentümer-Zugang, ungeklärte Eingänge), bleibt erhalten.
  */
-async function schreibeObjekt(client: NonNullable<typeof supabase>, vorher: Objekt | undefined, o: Objekt, meldeStand?: (id: string, stand: ObjektServerStand) => void): Promise<void> {
+async function schreibeObjekt(client: NonNullable<typeof supabase>, vorher: Objekt | undefined, o: Objekt, meldeStand?: (id: string, stand: ObjektServerStand) => void): Promise<Ausgang> {
   const nachherZeile = objektToRow(o) as Record<string, unknown>
-  if (!vorher) {
-    const { error } = await client.from('objekte').upsert(nachherZeile)
-    logFehler(`Objekt ${o.bezeichnung}`, error)
-    return
-  }
+  const kontext = `Objekt ${o.bezeichnung}`
+  if (!vorher) return legeAn(client, 'objekte', o.id, nachherZeile, kontext)
   const vorherZeile = objektToRow(vorher) as Record<string, unknown>
   const geaendert = Object.keys(nachherZeile).filter((feld) => feld !== 'id' && !gleich(vorherZeile[feld], nachherZeile[feld]))
-  if (geaendert.length === 0) return
+  if (geaendert.length === 0) return 'ok'
   const aenderung: Record<string, unknown> = {}
   for (const feld of geaendert) aenderung[feld] = nachherZeile[feld] ?? null
   const stand: ObjektServerStand = {}
   const listen = geaendert.filter((feld) => feld === 'activities' || feld === 'dokumente')
   if (listen.length > 0) {
     const { data: server, error } = await client.from('objekte').select(`id, ${listen.join(', ')}`).eq('id', o.id).maybeSingle()
-    if (!error && !server) {
-      const { error: anlegeFehler } = await client.from('objekte').upsert(nachherZeile)
-      logFehler(`Objekt ${o.bezeichnung}`, anlegeFehler)
-      return
+    // Ohne frischen Stand nie die eigenen ganzen Listen schreiben (siehe schreibeKunde).
+    if (error) {
+      logFehler(kontext, error, 'objekte')
+      return istNetzFehler(error) ? 'nachholen' : 'fehler'
     }
-    const zeile = server as unknown as Record<string, unknown> | null
-    if (zeile && listen.includes('activities')) {
+    if (!server) return legeAnFallsNieGespeichert(client, 'objekte', o.id, nachherZeile, kontext)
+    const zeile = server as unknown as Record<string, unknown>
+    if (listen.includes('activities')) {
       const a = alsListe(vorher.activities)
       const b = alsListe(o.activities)
       const c = alsListe(zeile.activities)
@@ -974,7 +918,7 @@ async function schreibeObjekt(client: NonNullable<typeof supabase>, vorher: Obje
         if (ergebnis.neu.length > 0 || ergebnis.weg.length > 0 || ergebnis.frisch.length > 0) stand.activities = ergebnis.liste as Objekt['activities']
       }
     }
-    if (zeile && listen.includes('dokumente')) {
+    if (listen.includes('dokumente')) {
       const serverOrdner = (zeile.dokumente && typeof zeile.dokumente === 'object' ? zeile.dokumente : {}) as Record<string, unknown>
       const vorherOrdner = (vorher.dokumente ?? {}) as Record<string, unknown>
       const nachherOrdner = (o.dokumente ?? {}) as Record<string, unknown>
@@ -997,13 +941,14 @@ async function schreibeObjekt(client: NonNullable<typeof supabase>, vorher: Obje
     }
   }
   const { data: geschrieben, error } = await client.from('objekte').update(aenderung).eq('id', o.id).select('id')
-  logFehler(`Objekt ${o.bezeichnung}`, error)
-  if (!error && (geschrieben ?? []).length === 0) {
-    const { error: anlegeFehler } = await client.from('objekte').upsert(nachherZeile)
-    logFehler(`Objekt ${o.bezeichnung}`, anlegeFehler)
-    return
+  if (error) {
+    logFehler(kontext, error, 'objekte')
+    return istNetzFehler(error) ? 'nachholen' : 'fehler'
   }
-  if (!error && (stand.activities || stand.dokumente)) meldeStand?.(o.id, stand)
+  if ((geschrieben ?? []).length === 0) return legeAnFallsNieGespeichert(client, 'objekte', o.id, nachherZeile, kontext)
+  merkeInDatenbank('objekte', [o.id])
+  if (stand.activities || stand.dokumente) meldeStand?.(o.id, stand)
+  return 'ok'
 }
 
 export function syncAfterDispatch(prev: AppData, next: AppData, meldeServerStand?: (id: string, stand: ServerStand) => void, meldeObjektStand?: (id: string, stand: ObjektServerStand) => void) {
@@ -1019,9 +964,7 @@ export function syncAfterDispatch(prev: AppData, next: AppData, meldeServerStand
   const prevKundenIds = new Set(KUNDE_KEYS.flatMap(({ key }) => (prev[key] as Kunde[]).map((k) => k.id)))
   const nextKundenIds = new Set(KUNDE_KEYS.flatMap(({ key }) => (next[key] as Kunde[]).map((k) => k.id)))
   const geloeschteKundenIds = [...prevKundenIds].filter((id) => !nextKundenIds.has(id))
-  if (geloeschteKundenIds.length > 0) {
-    client.from('kunden').delete().in('id', geloeschteKundenIds).then(({ error }) => logFehler('Kunde löschen', error))
-  }
+  if (geloeschteKundenIds.length > 0) void loescheZeilen(client, 'kunden', geloeschteKundenIds, 'Kunde')
   // Vorheriger Stand je Akte über alle Bereiche (eine verschobene Akte steht vorher in einer anderen Liste).
   let vorherNachId: Map<string, { bereich: KundeBereich; kunde: Kunde }> | null = null
   for (const { bereich, key } of KUNDE_KEYS) {
@@ -1030,29 +973,25 @@ export function syncAfterDispatch(prev: AppData, next: AppData, meldeServerStand
         vorherNachId = new Map()
         for (const alt of KUNDE_KEYS) for (const kunde of prev[alt.key] as Kunde[]) vorherNachId.set(kunde.id, { bereich: alt.bereich, kunde })
       }
-      const vorher = vorherNachId.get(k.id)
-      offeneSchreibvorgaenge++
-      const kette = (schreibKetten.get(k.id) ?? Promise.resolve())
-        .then(() => schreibeKunde(client, vorher, bereich, k, meldeServerStand))
-        .catch((err) => console.error(`[crmSync] Kunde ${k.firma}:`, err))
-        .finally(() => {
-          offeneSchreibvorgaenge--
-          if (schreibKetten.get(k.id) === kette) schreibKetten.delete(k.id)
-        })
-      schreibKetten.set(k.id, kette)
+      // Je Akte nacheinander; scheitert es am Netz, wird es vom letzten gespeicherten Stand aus nachgeholt.
+      void plane(`kunden:${k.id}`, vorherNachId.get(k.id), { bereich, kunde: k }, (vorher, n) => schreibeKunde(client, vorher, n.bereich, n.kunde, meldeServerStand))
     }
   }
 
-  // Vorlagen: dasselbe Muster wie Kunden (eine Tabelle, sieben Arrays).
+  // Vorlagen: dasselbe Muster wie Kunden (eine Tabelle, sieben Arrays) — feldweise wie alle Tabellen.
   const prevVorlagenIds = new Set(VORLAGEN_KEYS.flatMap(({ key }) => (prev[key] as Vorlage[]).map((v) => v.id)))
   const nextVorlagenIds = new Set(VORLAGEN_KEYS.flatMap(({ key }) => (next[key] as Vorlage[]).map((v) => v.id)))
   const geloeschteVorlagenIds = [...prevVorlagenIds].filter((id) => !nextVorlagenIds.has(id))
-  if (geloeschteVorlagenIds.length > 0) {
-    client.from('vorlagen').delete().in('id', geloeschteVorlagenIds).then(({ error }) => logFehler('Vorlage löschen', error))
-  }
+  if (geloeschteVorlagenIds.length > 0) void loescheZeilen(client, 'vorlagen', geloeschteVorlagenIds, 'Vorlage')
+  let vorlagenVorher: Map<string, { bereich: Bereich; vorlage: Vorlage }> | null = null
   for (const { bereich, key } of VORLAGEN_KEYS) {
     for (const v of diffById(prev[key] as Vorlage[], next[key] as Vorlage[])) {
-      client.from('vorlagen').upsert(vorlageToRow(bereich, v)).then(({ error }) => logFehler(`Vorlage ${v.name}`, error))
+      if (!vorlagenVorher) {
+        vorlagenVorher = new Map()
+        for (const alt of VORLAGEN_KEYS) for (const vorlage of prev[alt.key] as Vorlage[]) vorlagenVorher.set(vorlage.id, { bereich: alt.bereich, vorlage })
+      }
+      const alt = vorlagenVorher.get(v.id)
+      void schreibeSpaeter(client, { tabelle: 'vorlagen', id: v.id, kontext: `Vorlage ${v.name}` }, alt ? vorlageToRow(alt.bereich, alt.vorlage) : undefined, vorlageToRow(bereich, v))
     }
   }
 
@@ -1061,25 +1000,20 @@ export function syncAfterDispatch(prev: AppData, next: AppData, meldeServerStand
   let objekteVorher: Map<string, Objekt> | null = null
   for (const o of [...diffById(prev.objekte, next.objekte), ...diffById(prev.privatObjekte, next.privatObjekte)]) {
     if (!objekteVorher) objekteVorher = new Map([...prev.objekte, ...prev.privatObjekte].map((x) => [x.id, x]))
-    const vorher = objekteVorher.get(o.id)
-    const schluessel = `objekt:${o.id}`
-    offeneSchreibvorgaenge++
-    const kette = (schreibKetten.get(schluessel) ?? Promise.resolve())
-      .then(() => schreibeObjekt(client, vorher, o, meldeObjektStand))
-      .catch((err) => console.error(`[crmSync] Objekt ${o.bezeichnung}:`, err))
-      .finally(() => {
-        offeneSchreibvorgaenge--
-        if (schreibKetten.get(schluessel) === kette) schreibKetten.delete(schluessel)
-      })
-    schreibKetten.set(schluessel, kette)
+    void plane(`objekte:${o.id}`, objekteVorher.get(o.id), o, (vorher, n) => schreibeObjekt(client, vorher, n, meldeObjektStand))
   }
 
+  // Protokolle und Objekt-Vorschläge legt der Browser nur an; über denselben Weg (Kette, Nachholen).
+  const protokolleVorher = new Map(prev.protokolle.map((p) => [p.id, p]))
   for (const p of diffById(prev.protokolle, next.protokolle)) {
-    client.from('protokolle').upsert(protokollToRow(p)).then(({ error }) => logFehler('Protokoll', error))
+    const alt = protokolleVorher.get(p.id)
+    void schreibeSpaeter(client, { tabelle: 'protokolle', id: p.id, kontext: 'Protokoll' }, alt ? protokollToRow(alt) : undefined, protokollToRow(p))
   }
 
+  const vorschlaegeVorher = new Map(prev.objektVorschlaege.map((v) => [v.id, v]))
   for (const v of diffById(prev.objektVorschlaege, next.objektVorschlaege)) {
-    client.from('objekt_vorschlaege').upsert(vorschlagToRow(v)).then(({ error }) => logFehler('Objekt-Vorschlag', error))
+    const alt = vorschlaegeVorher.get(v.id)
+    void schreibeSpaeter(client, { tabelle: 'objekt_vorschlaege', id: v.id, kontext: 'Objekt-Vorschlag' }, alt ? vorschlagToRow(alt) : undefined, vorschlagToRow(v))
   }
 
   for (const cfg of SIMPLE_SYNCS) {
@@ -1134,6 +1068,9 @@ async function alleTodoZeilen(): Promise<{ data: unknown[] | null; error: { mess
 export async function hydrateFromSupabase(): Promise<HydratedData | null> {
   const db = supabase
   if (!db) return null
+  // Erst laufende Speichervorgänge abwarten (höchstens 8 Sekunden): Sonst lädt z. B. `neuLaden()` direkt nach
+  // einer Eingabe den Stand ohne diese Eingabe, und sie verschwindet aus der Anzeige.
+  await warteAufSchreibvorgaenge(8000)
   // Jede Tabelle seitenweise (alleZeilen): Die Datenbank liefert höchstens 1000 Zeilen je Abfrage, ohne Fehler —
   // Akten, Verlaufseinträge der Abteilungen (Zeiten, Ablage, Treffer) usw. wachsen darüber hinaus.
   const [
@@ -1179,7 +1116,7 @@ export async function hydrateFromSupabase(): Promise<HydratedData | null> {
     alleZeilen(() => db.from('todo_freigaben').select('*')),
     alleZeilen(() => db.from('verbindlichkeiten').select('*')),
     db.from('mitarbeiter').select('name').eq('aktiv', true).order('name'),
-    alleZeilen(() => db.from('abteilung_eintraege').select('art, daten')),
+    alleZeilen(() => db.from('abteilung_eintraege').select('id, art, daten')),
   ])
   // Fehlt diese Tabelle einmal oder antwortet sie nicht, soll deshalb nicht das ganze CRM leer bleiben.
   if (abteilungRes.error) console.error('[crmSync] abteilung_eintraege:', abteilungRes.error.message)
@@ -1221,6 +1158,30 @@ export async function hydrateFromSupabase(): Promise<HydratedData | null> {
   for (const row of kundenRes.data ?? []) {
     kunden[row.bereich as KundeBereich].push(rowToKunde(row))
   }
+
+  // Merken, welche Zeilen es in der Datenbank gibt: Fehlt eine davon später beim Speichern, wurde sie anderswo
+  // gelöscht und wird nicht wieder angelegt (siehe zeilenSchreiben.ts).
+  const ids = (res: { data: unknown[] | null }) => ((res.data ?? []) as { id: string }[]).map((r) => r.id)
+  merkeInDatenbank('kunden', ids(kundenRes))
+  merkeInDatenbank('objekte', ids(objekteRes))
+  merkeInDatenbank('protokolle', ids(protokolleRes))
+  merkeInDatenbank('objekt_vorschlaege', ids(vorschlaegeRes))
+  merkeInDatenbank('vorlagen', ids(vorlagenRes))
+  merkeInDatenbank('rechnungen', ids(rechnungenRes))
+  merkeInDatenbank('konzepte', ids(konzepteRes))
+  merkeInDatenbank('vertraege', ids(vertraegeRes))
+  merkeInDatenbank('objekt_finanzierungen', ids(finanzierungenRes))
+  merkeInDatenbank('projekte', ids(projekteRes))
+  merkeInDatenbank('fonds_investoren', ids(fondsInvestorenRes))
+  merkeInDatenbank('fonds_dokumente_allgemein', ids(fondsDokumenteRes))
+  merkeInDatenbank('importierte_dokumente', ids(importierteDokumenteRes))
+  merkeInDatenbank('mail_vorlagen', ids(mailVorlagenRes))
+  merkeInDatenbank('notizen', ids(notizenRes))
+  merkeInDatenbank('abwesenheiten', ids(abwesenheitenRes))
+  merkeInDatenbank('todos', ids(todosRes))
+  merkeInDatenbank('todo_freigaben', ids(todoFreigabenRes))
+  merkeInDatenbank('verbindlichkeiten', ids(verbindlichkeitenRes))
+  if (!abteilungRes.error) merkeInDatenbank('abteilung_eintraege', ids(abteilungRes))
 
   // 'privat' und 'immobilienkunden' haben (noch) keine eigene Vorlagen-Seite/-Tabelle — bleiben hier
   // absichtlich immer leer.
@@ -1322,6 +1283,7 @@ export async function migriereLokaleDatenFallsLeer(hydrated: HydratedData, lokal
       console.error(`Migration fehlgeschlagen (${table}):`, error.message)
       continue
     }
+    merkeInDatenbank(table, lokaleListe.map((x) => x.id))
     ;(result as any)[key] = lokaleListe
   }
 
@@ -1349,6 +1311,7 @@ export async function migriereLokaleDatenFallsLeer(hydrated: HydratedData, lokal
       console.error(`Migration fehlgeschlagen (${table}):`, error.message)
       return
     }
+    merkeInDatenbank(table, echte.map((x) => x.id))
     ;(result as any)[key] = echte
   }
 
@@ -1366,6 +1329,7 @@ export async function migriereLokaleDatenFallsLeer(hydrated: HydratedData, lokal
       console.error('Migration fehlgeschlagen (vorlagen):', error.message)
       continue
     }
+    merkeInDatenbank('vorlagen', lokaleListe.map((v) => v.id))
     result.vorlagen[bereich] = lokaleListe
   }
 

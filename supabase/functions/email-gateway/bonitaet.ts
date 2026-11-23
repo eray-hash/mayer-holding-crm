@@ -509,7 +509,8 @@ export async function pruefeBonitaet(
       dokumente.push({ ...basis, stand: 'nicht_lesbar', hinweis: 'Dateiart kann nicht gelesen werden' })
       return
     }
-    const haengt = z?.status === 'laeuft' && Date.now() - new Date(z.aktualisiert_am ?? 0).getTime() > 6 * 60_000
+    // Hängende Läufe setzt der Minutentakt fort (dokumentLesen.ts, mit Obergrenze der Versuche).
+    const haengt = false
     if (z?.status === 'laeuft' && !haengt) {
       dokumente.push({ ...basis, stand: 'wird_eingelesen' })
       return

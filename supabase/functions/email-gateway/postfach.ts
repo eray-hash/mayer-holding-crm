@@ -13,10 +13,11 @@
 import { istSichererPfad } from '../_shared/speicherPfad.ts'
 import { ImapFlow } from 'npm:imapflow@1'
 import nodemailer from 'npm:nodemailer@6'
-import { pruefeNeueMail } from '../_shared/mailEingang.ts'
+import { klassifiziereEingang, nachDemSpeichern } from '../_shared/mailEingang.ts'
 import { uebernehmeEinladung } from '../_shared/einladung.ts'
 import { entschluessele, verschluessele } from '../_shared/geheim.ts'
 import { alleZeilen } from '../_shared/alleZeilen.ts'
+import { heuteBerlin } from '../_shared/heuteBerlin.ts'
 
 // deno-lint-ignore no-explicit-any
 type Db = any
@@ -758,8 +759,10 @@ export async function rufePostfachAb(
             await admin.from('postfaecher').update({ in_arbeit_uid: n.uid, in_arbeit_ordner: pfad, ...standSpalten() }).eq('id', p.id)
             const { text: textTeil, html: htmlTeil, anhaenge: anhangTeile, kalender: kalenderTeile } = gliedere(n.bodyStructure)
             let text = ''
-            const quelle = textTeil ?? htmlTeil
-            if (quelle) {
+            // Erst der Klartext-Teil; ist er leer (manche Newsletter und Mail-Programme), der HTML-Teil — vorher blieb
+            // der Mailtext dann ganz leer.
+            for (const quelle of [textTeil, htmlTeil]) {
+              if (!quelle || text) continue
               const geladen = await zeitlimit(ladeTeil(client, n.uid, quelle, 300000), 30000, 'Der Mail-Server hat den Text der Mail nicht rechtzeitig geliefert.')
               if (geladen) {
                 const roh = alsText(geladen.bytes, geladen.meta?.charset ?? quelle.parameters?.charset)
@@ -815,27 +818,26 @@ export async function rufePostfachAb(
           }
           // Gemeinsame Postfächer: dieselbe Prüfung wie beim Eingang über die Weiterleitung (inbound-email) —
           // Newsletter/Werbung ausblenden, eindeutige Absender der Akte zuordnen, Lieferantenrechnungen
-          // als Verbindlichkeit. Ein Fehler dort verhindert das Speichern der Mail nicht.
-          if (gemeinsam) {
-            const pruefung = await pruefeNeueMail(admin, {
-              messageId: kennung,
-              von: String(zeile.von),
-              vonName: String(zeile.von_name),
-              betreff: String(zeile.betreff),
-              text: String(zeile.ausschnitt ?? ''),
-              anhaenge: (zeile.anhaenge as { filename: string; size: number; contentType: string; url: string }[] | null) ?? [],
-            })
-            zeile.relevanz = pruefung.relevanz
-            if (pruefung.zuordnung) {
-              zeile.zugewiesener_kunde_id = pruefung.zuordnung.kundeId
-              zeile.zugewiesener_bereich = pruefung.zuordnung.bereich
-              zeile.zugewiesener_kunde_name = pruefung.zuordnung.kundeName
-            }
+          // als Verbindlichkeit. Ein Fehler dort verhindert das Speichern der Mail nicht. Zuordnung und
+          // Verbindlichkeit erst NACH dem Speichern und nur, wenn diese Zeile neu ist — kam dieselbe Mail
+          // inzwischen über die Weiterleitung (Mails knapp unter 512 KB nehmen beide Wege), entstand sonst
+          // alles doppelt.
+          const neueMail = {
+            messageId: kennung,
+            von: String(zeile.von),
+            vonName: String(zeile.von_name),
+            betreff: String(zeile.betreff),
+            text: String(zeile.ausschnitt ?? ''),
+            anhaenge: (zeile.anhaenge as { filename: string; size: number; contentType: string; url: string }[] | null) ?? [],
           }
-          const { error } = await admin.from('eingegangene_emails').insert(zeile)
+          if (gemeinsam) zeile.relevanz = await klassifiziereEingang(admin, neueMail)
+          const { data: gespeichert, error } = await admin.from('eingegangene_emails').insert(zeile).select('id').maybeSingle()
           // 23505 = dieselbe Mail wurde gerade von einem gleichzeitigen Lauf gespeichert — kein Fehler.
           if (error && error.code !== '23505') throw new Error(`Mail konnte nicht gespeichert werden: ${error.message}`)
-          if (!error) neu++
+          if (!error) {
+            neu++
+            if (gemeinsam) await nachDemSpeichern(admin, gespeichert?.id ?? null, neueMail, zeile.relevanz === 'nicht_relevant' ? 'nicht_relevant' : 'kunde')
+          }
         }
         hoechste = n.uid
         merke(hoechste, gueltig)
@@ -1052,7 +1054,7 @@ export async function ordneMailZu(
   const { data: kunde } = await admin.from('kunden').select('id, bereich, firma, ansprechpartner, dokumente, activities').eq('id', kundeId).neq('bereich', 'privat').maybeSingle()
   if (!kunde) return { ok: false, fehler: 'Diese Kundenakte gibt es nicht.' }
 
-  const heute = new Date().toISOString().slice(0, 10)
+  const heute = heuteBerlin()
   const vorhanden = new Set(((kunde.dokumente ?? []) as { url?: string }[]).map((d) => d.url).filter(Boolean))
   const neueDokumente = ((mail.anhaenge ?? []) as MailAnhang[])
     // Nur was öffentlich abgelegt ist; winzige Bilder sind Logos aus der Signatur, keine Unterlagen.

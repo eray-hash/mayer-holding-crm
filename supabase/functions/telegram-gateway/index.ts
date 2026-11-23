@@ -959,9 +959,16 @@ export async function werteDateiAus(supabase: Supa, bytes: Uint8Array, dateiname
 type OrdnerDatei = { name: string; created_at?: string; metadata?: { size?: number; mimetype?: string } | null }
 
 async function listeOrdner(supabase: Supa): Promise<OrdnerDatei[]> {
-  const { data, error } = await supabase.storage.from(BUCKET).list(ORDNER, { limit: 1000, sortBy: { column: 'created_at', order: 'desc' } })
-  if (error) throw new Error(`Dateiablage nicht lesbar: ${error.message}`)
-  return ((data ?? []) as OrdnerDatei[]).filter((d) => d.metadata) // Unterordner haben keine Metadaten
+  // Seitenweise: die Ablage liefert höchstens 1000 Einträge je Abfrage.
+  const alle: OrdnerDatei[] = []
+  for (let offset = 0; offset < 50_000; offset += 1000) {
+    const { data, error } = await supabase.storage.from(BUCKET).list(ORDNER, { limit: 1000, offset, sortBy: { column: 'created_at', order: 'desc' } })
+    if (error) throw new Error(`Dateiablage nicht lesbar: ${error.message}`)
+    const seite = (data ?? []) as OrdnerDatei[]
+    alle.push(...seite)
+    if (seite.length < 1000) break
+  }
+  return alle.filter((d) => d.metadata) // Unterordner haben keine Metadaten
 }
 
 // Alles, was irgendeine Kunden- oder Objektakte an Dateien referenziert, als ein durchsuchbarer Text —
@@ -2088,7 +2095,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
         const { data } = await abfrage.order('gesendet_am', { ascending: false }).limit(15)
         if (!data?.length) return 'Keine privat gesendeten Mails gefunden.'
         // deno-lint-ignore no-explicit-any
-        return JSON.stringify(data.map((m: any) => ({ mail_id: m.id, an: `${m.an_name ?? ''} <${m.an}>`, betreff: m.betreff, gesendet: m.gesendet_am, anfang: String(m.text ?? '').slice(0, 300) })))
+        return JSON.stringify(data.map((m: any) => ({ mail_id: m.id, an: `${m.an_name ?? ''} <${m.an}>`, betreff: m.betreff, gesendet: datumDeutsch(m.gesendet_am), anfang: String(m.text ?? '').slice(0, 300) })))
       }
       let abfrage = supabase.from('eingegangene_emails').select('message_id, von, von_name, betreff, mail_datum, ausschnitt, anhaenge').eq('besitzer_email', ich)
       if (suche) abfrage = abfrage.or(`betreff.ilike.%${suche}%,von.ilike.%${suche}%,von_name.ilike.%${suche}%`)
@@ -2096,7 +2103,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
       if (!data?.length) return 'Im privaten Postfach liegen keine (passenden) Mails. Hinweis: Ein eigenes Postfach verbindet der Mitarbeiter im CRM unter „Mein Profil“.'
       return JSON.stringify(
         // deno-lint-ignore no-explicit-any
-        data.map((m: any) => ({ mail_id: m.message_id, von: `${m.von_name ?? ''} <${m.von}>`, betreff: m.betreff, datum: m.mail_datum, anhaenge: (m.anhaenge ?? []).length, anfang: String(m.ausschnitt ?? '').slice(0, 400) })),
+        data.map((m: any) => ({ mail_id: m.message_id, von: `${m.von_name ?? ''} <${m.von}>`, betreff: m.betreff, datum: datumDeutsch(m.mail_datum), anhaenge: (m.anhaenge ?? []).length, anfang: String(m.ausschnitt ?? '').slice(0, 400) })),
       )
     }
 
@@ -2204,7 +2211,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
         mail_id: m.id,
         von: `${m.von_name ?? ''} <${m.von}>`,
         betreff: m.betreff,
-        datum: m.mail_datum,
+        datum: datumDeutsch(m.mail_datum),
         akte: m.zugewiesener_kunde_id ? { kunde_id: m.zugewiesener_kunde_id, name: m.zugewiesener_kunde_name } : 'noch keiner Akte zugeordnet',
         anhaenge,
         hinweis: anhaenge.length === 0 ? undefined : m.zugewiesener_kunde_id ? 'Die Anhänge liegen in den Dokumenten der Akte (kundenakte_lesen, dokument_inhalt).' : 'Den Inhalt der Anhänge kannst du erst lesen, wenn die Mail mit mail_zuordnen einer Akte zugeordnet ist.',
@@ -2236,7 +2243,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
         mail_id: m.id,
         von: `${m.von_name ?? ''} <${m.von}>`,
         betreff: m.betreff,
-        datum: m.mail_datum,
+        datum: datumDeutsch(m.mail_datum),
         anhaenge: anhaengeVon(m).length,
         akte: m.zugewiesener_kunde_id ? `${m.zugewiesener_kunde_name} (kunde_id=${m.zugewiesener_kunde_id})` : 'keine',
         anfang: String(m.ausschnitt ?? '').replace(/\s+/g, ' ').slice(0, 200),

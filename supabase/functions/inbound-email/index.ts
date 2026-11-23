@@ -13,23 +13,8 @@
 
 import { createClient } from 'npm:@supabase/supabase-js@2.119.1'
 import { mitAnlass, setzeAnlass } from '../_shared/kiVerbrauch.ts'
-import { erkenneEingehendeVerbindlichkeit, klassifiziereRelevanz, versucheAutomatischeZuordnung } from '../_shared/mailEingang.ts'
-
-// Message-IDs enthalten u.a. spitze Klammern und @ (z.B. "<123@mail.example.com>"), die im
-// Storage-Pfad nicht erlaubt sind — deshalb wird hier auf ein sicheres Zeichenset reduziert.
-function sicheresPfadsegment(s: string): string {
-  return s.replace(/^<|>$/g, '').replace(/[^a-zA-Z0-9._-]/g, '_')
-}
-
-function parseFromHeader(raw: string): { email: string; name: string } {
-  const match = raw.match(/^(.*?)<(.+)>$/)
-  if (match) {
-    const name = match[1].trim().replace(/^"|"$/g, '')
-    const email = match[2].trim()
-    return { email, name: name || email }
-  }
-  return { email: raw.trim(), name: raw.trim() }
-}
+import { klassifiziereEingang, nachDemSpeichern } from '../_shared/mailEingang.ts'
+import { anhangPfad, mailDatum, parseFromHeader, textAusHtml } from './eingang.ts'
 
 function istDienstSchluessel(token: string): boolean {
   if (token.length < 30) return false
@@ -65,7 +50,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
     // deno-lint-ignore no-explicit-any
     for (const m of (mails ?? []) as any[]) {
       if (m.besitzer_email) continue // private Postfächer werden hier nicht angefasst
-      const nachher = await klassifiziereRelevanz(m.von_name ?? '', m.von ?? '', m.betreff ?? '', m.ausschnitt ?? '')
+      const nachher = await klassifiziereEingang(db, { von: m.von ?? '', vonName: m.von_name ?? '', betreff: m.betreff ?? '', text: m.ausschnitt ?? '' })
       if (nachher !== m.relevanz) await db.from('eingegangene_emails').update({ relevanz: nachher }).eq('id', m.id)
       ergebnis.push({ id: m.id, vorher: m.relevanz, nachher })
     }
@@ -131,20 +116,11 @@ Deno.serve((req: Request) => mitAnlass(async () => {
     ?? '(ohne Betreff)'
   const plain = pick('plain', 'reply_plain')
   const html = pick('html')
-  const text = plain ?? (html
-    ? html.replace(/<[^>]*>/g, ' ')
-        .replace(/&nbsp;/gi, ' ')
-        .replace(/&amp;/gi, '&')
-        .replace(/&lt;/gi, '<')
-        .replace(/&gt;/gi, '>')
-        .replace(/&quot;/gi, '"')
-        .replace(/&#39;/gi, "'")
-        .replace(/\s+/g, ' ')
-        .trim()
-    : '')
+  const text = plain ?? (html ? textAusHtml(html) : '')
   const messageId = pick('headers[message_id]', 'headers[message-id]')
     ?? (typeof headers.message_id === 'string' ? headers.message_id : undefined)
     ?? crypto.randomUUID()
+  const datum = mailDatum(pick('headers[date]') ?? (typeof headers.date === 'string' ? headers.date : undefined))
 
   const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
 
@@ -157,9 +133,9 @@ Deno.serve((req: Request) => mitAnlass(async () => {
   // Rest dieses Projekts bewusst als internes Tool ohne zusätzliche Zugriffsprüfung behandelt) —
   // ein fehlgeschlagener Upload darf das Einsortieren der E-Mail selbst nicht verhindern.
   const anhaenge: { filename: string; size: number; contentType: string; url: string }[] = []
-  for (const datei of gefundeneDateien) {
+  for (const [i, datei] of gefundeneDateien.entries()) {
     try {
-      const pfad = `${sicheresPfadsegment(messageId)}/${sicheresPfadsegment(datei.name)}`
+      const pfad = anhangPfad(messageId, datei.name, i + 1)
       const { error: uploadError } = await supabase.storage
         .from('email-anhaenge')
         .upload(pfad, datei, { contentType: datei.type || 'application/octet-stream', upsert: true })
@@ -176,47 +152,32 @@ Deno.serve((req: Request) => mitAnlass(async () => {
 
   // Voller Text (bis 20.000 Zeichen) wie beim Postfach-Abruf — vorher 500, dadurch fehlten Signaturen (22.11.2026).
   const ausschnitt = text.slice(0, 20000)
-  const relevanz = await klassifiziereRelevanz(vonName, von, betreff, ausschnitt.slice(0, 500))
-  const zuordnung = relevanz === 'kunde' ? await versucheAutomatischeZuordnung(supabase, von, vonName, betreff, text, anhaenge) : null
+  const relevanz = await klassifiziereEingang(supabase, { von, vonName, betreff, text: ausschnitt })
 
-  // Läuft bewusst unabhängig von relevanz oben — eine Lieferantenrechnung ist für den Posteingang
-  // "nicht_relevant", für die Buchhaltung aber hochrelevant.
-  const verbindlichkeit = await erkenneEingehendeVerbindlichkeit(vonName, von, betreff, text, anhaenge)
-  if (verbindlichkeit?.istRechnung) {
-    const { error: verbError } = await supabase.from('verbindlichkeiten').insert({
-      id: crypto.randomUUID(),
-      lieferant: vonName,
-      lieferant_email: von,
-      rechnungsnummer: verbindlichkeit.rechnungsnummer ?? null,
-      datum: new Date().toISOString().slice(0, 10),
-      betrag_netto: verbindlichkeit.betragNetto ?? null,
-      betrag_brutto: verbindlichkeit.betragBrutto ?? null,
-      zahlungsziel: verbindlichkeit.zahlungsziel ?? null,
-      status: 'offen',
-      quelle: 'email-automatisch',
-      quell_email_id: messageId,
-    })
-    if (verbError) console.error('Verbindlichkeit anlegen fehlgeschlagen', verbError)
-  }
-
-  const { error } = await supabase.from('eingegangene_emails').insert({
+  // Erst die Mail speichern, DANN Zuordnung zur Akte und Verbindlichkeit. Vorher lief beides vor dem Speichern: Kam
+  // dieselbe Mail ein zweites Mal (der Weiterleitungsdienst wiederholt, wenn die Antwort zu lange dauert oder ein
+  // Fehler kommt; der Postfach-Abruf holt große Mails), entstanden Verlaufseintrag, Dokumente und Verbindlichkeit
+  // doppelt — und der Fehler beim zweiten Speichern ließ den Dienst immer wieder neu zustellen.
+  const { data: gespeichert, error } = await supabase.from('eingegangene_emails').insert({
     message_id: messageId,
     von,
     von_name: vonName,
     betreff,
+    mail_datum: datum,
     ausschnitt,
     rohdaten: payload,
     anhaenge: anhaenge.length > 0 ? anhaenge : null,
     relevanz,
-    zugewiesener_kunde_id: zuordnung?.kundeId ?? null,
-    zugewiesener_bereich: zuordnung?.bereich ?? null,
-    zugewiesener_kunde_name: zuordnung?.kundeName ?? null,
-  })
+  }).select('id').maybeSingle()
 
   if (error) {
+    // 23505 = dieselbe Message-ID ist inzwischen gespeichert (gleichzeitige Zustellung) — erledigt, kein neuer Versuch.
+    if (error.code === '23505') return new Response(JSON.stringify({ ok: true, doppelt: true }), { status: 200 })
     console.error('insert failed', error)
     return new Response(JSON.stringify({ error: error.message }), { status: 500 })
   }
+
+  await nachDemSpeichern(supabase, gespeichert?.id ?? null, { messageId, von, vonName, betreff, text, anhaenge }, relevanz)
 
   return new Response(JSON.stringify({ ok: true }), { status: 200 })
 }))

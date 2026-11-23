@@ -3,7 +3,7 @@
 // zuordnen über die Mail-Funktion), Verwerfen, Fehlerfälle.
 import { assert, assertEquals, assertStringIncludes } from 'jsr:@std/assert@1'
 import { FalscheDatenbank, type Zeile } from '../_shared/testDoppel.ts'
-import { darfZiel, fuehrePrivatPostWerkzeugAus, istPrivatPostWerkzeug, type PrivatPostKontext } from './privatPostWerkzeug.ts'
+import { berlinTag, darfZiel, fuehrePrivatPostWerkzeugAus, istPrivatPostWerkzeug, type PrivatPostKontext } from './privatPostWerkzeug.ts'
 
 const ICH = 'immo@amayer-holding.com'
 const QUIRIN = { name: 'Quirin Lang', email: ICH, rolle: 'mitarbeiter', ist_admin: false, bereiche: ['immobilien'], nurPrivat: true }
@@ -135,4 +135,14 @@ Deno.test('verwerfen', async () => {
   assertStringIncludes(r, 'verworfen')
   const z = db.tabelle('eingegangene_emails').find((m) => m.message_id === 'pf_q:<a@x>')!
   assertEquals((z.zuordnung_vorschlag as { status: string }).status, 'privat_verworfen')
+})
+
+Deno.test('berlinTag: Tag in deutscher Ortszeit, nicht in UTC', () => {
+  // 23:30 UTC im Winter = 00:30 Uhr am nächsten Tag in Deutschland.
+  assertEquals(berlinTag('2026-11-21T23:30:00+00:00'), '2026-11-22')
+  // Sommerzeit: 22:30 UTC = 00:30 Uhr.
+  assertEquals(berlinTag('2026-07-01T22:30:00Z'), '2026-07-02')
+  assertEquals(berlinTag('2026-11-22T10:00:00Z'), '2026-11-22')
+  assertEquals(berlinTag(null), '')
+  assertEquals(berlinTag('kaputt'), 'kaputt')
 })

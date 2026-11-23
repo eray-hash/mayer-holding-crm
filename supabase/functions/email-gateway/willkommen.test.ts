@@ -3,7 +3,9 @@ import { fuelleWillkommen, heuteBerlin, hochladeLink, neuesToken, versendeWillko
 
 // Kleine nachgebaute Datenbank: from(t).select().eq().lte().order().limit().maybeSingle(), update().eq().select(), insert().
 // deno-lint-ignore no-explicit-any
-function fakeAdmin(tabellen: Record<string, any[]>) {
+// `scheitert(tabelle, werte)` → Fehlermeldung: diese Änderung schlägt fehl (nichts wird geschrieben).
+// deno-lint-ignore no-explicit-any
+function fakeAdmin(tabellen: Record<string, any[]>, scheitert?: (t: string, werte: any) => string | null) {
   // deno-lint-ignore no-explicit-any
   function abfrage(t: string, art: 'select' | 'update', werte?: any) {
     // deno-lint-ignore no-explicit-any
@@ -11,6 +13,8 @@ function fakeAdmin(tabellen: Record<string, any[]>) {
     let grenze = Infinity
     let mitAntwort = art === 'select'
     const ausfuehren = () => {
+      const fehler = art === 'update' ? scheitert?.(t, werte) ?? null : null
+      if (fehler) return { data: null, error: { message: fehler } }
       const treffer = (tabellen[t] ?? []).filter((z) => filter.every((f) => f(z))).slice(0, grenze)
       if (art === 'update') for (const z of treffer) Object.assign(z, structuredClone(werte))
       return { data: mitAntwort ? structuredClone(treffer) : null, error: null }
@@ -129,4 +133,18 @@ Deno.test('Jetzt senden: auch bei ausgeschaltetem Schalter, nur diese Akte', asy
   const r = await versendeWillkommen(fakeAdmin(t), async (to) => void mails.push(to), { kundeId: 'k1' })
   assertEquals(r.gesendet, 1)
   assertEquals(mails, ['kunde@beispiel.de'])
+})
+
+Deno.test('Link zum Hochladen lässt sich nicht anlegen: fehler ohne Sendezeit, keine Mail', async () => {
+  const t = stand(true)
+  const mails: string[] = []
+  // deno-lint-ignore no-explicit-any
+  const admin = fakeAdmin(t, (tabelle, werte: any) => (tabelle === 'kunden' && 'unterlagen_anforderungen' in werte ? 'Zeile gesperrt' : null))
+  const r = await versendeWillkommen(admin, async (to) => void mails.push(to))
+  assertEquals(r.fehler, 1)
+  assertEquals(mails.length, 0)
+  const z = t.willkommen_nachrichten[0] as { status: string; gesendet_am?: string | null; grund?: string }
+  assertEquals(z.status, 'fehler')
+  assertEquals(z.gesendet_am, null)
+  assertMatch(String(z.grund), /Link zum Hochladen/)
 })

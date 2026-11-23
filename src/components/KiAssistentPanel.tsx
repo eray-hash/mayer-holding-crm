@@ -19,7 +19,7 @@ import { buildFirmenwissenKontext } from '../lib/firmenwissenKontext'
 import { collectFollowUpPriorities } from '../lib/followUpPriorities'
 import { suggestKundeKandidaten, type KundeMatch } from '../lib/matchKunde'
 import { KUNDEN_BEREICHE } from '../data/kundenBereiche'
-import { getStatusMap } from '../data/statusNetworks'
+import { getHauptpfad, getStatusMap } from '../data/statusNetworks'
 import { CallRecorder } from './CallRecorder'
 import { Modal, inputClass } from './ui'
 import { today, fmtDate, uid, addDays } from '../lib/dates'
@@ -182,7 +182,9 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
     const kontext = [
       `Kunde/Mandant: ${kunde.firma} (${kunde.ansprechpartner})`,
       `Status: ${statusLabel}`,
-      `Follow-up: ${fmtDate(kunde.followUp.date)} — ${kunde.followUp.note}${kunde.followUp.done ? ' (erledigt)' : ''}`,
+      kunde.followUp?.date
+        ? `Follow-up: ${fmtDate(kunde.followUp.date)} — ${kunde.followUp.note ?? ''}${kunde.followUp.done ? ' (erledigt)' : ''}`
+        : 'Follow-up: keins gesetzt',
       '',
       'Aktivitäten (neueste zuerst):',
       ...kunde.activities.slice(0, 20).map((a) => `- ${fmtDate(a.date)}: ${a.text}`),
@@ -282,7 +284,9 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
       email: '',
       telefon: '',
       prioritaet: 'Mittel',
-      status: 'lead',
+      // Anfangsstatus des Bereichs: „lead“ gibt es nur in der Beratung. Mit „lead“ in z. B. Erben fehlte
+      // der Status im Ablauf des Bereichs, und die Liste des Bereichs brach beim Anzeigen ab.
+      status: getHauptpfad(bereich)[0] ?? 'lead',
       followUp: { date: addDays(today(), 2), note: 'Erstkontakt aufnehmen', done: false },
       verantwortlich: CURRENT_USER,
       letzteAktivitaet: today(),

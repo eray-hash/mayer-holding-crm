@@ -305,6 +305,8 @@ import { pruefeMahnVorschlaege } from './mahnVorschlag.ts'
 import { aktuellePerson, kiAufruf, mitAnlass, setzeAnlass, setzePerson, setzePrivat } from '../_shared/kiVerbrauch.ts'
 import { darfObjekt, darfPrivatKunde, istPrivaterKunde, istPrivatesObjekt } from '../_shared/privatZugriff.ts'
 import { alleZeilen } from '../_shared/alleZeilen.ts'
+import { fehlerNachAbbruch, istWeiteresTextFormat, MAX_TEILE, reiheDokumentEin, SEITEN_JE_TEIL, setzeHaengendeDokumenteFort, SOFORT_HOECHSTENS, teileFuer, weitererDateiText } from './dokumentLesen.ts'
+import { heuteBerlin } from '../_shared/heuteBerlin.ts'
 
 const ALLOWED_ORIGINS = [
   'https://eray-hash.github.io',
@@ -623,7 +625,7 @@ async function erkenneRechnungUndLegeAn(kundeId: string, betreff: string, text: 
   if (betragNetto == null || betragBrutto == null) return // ohne jeden Betrag kein sinnvoller Rechnungs-Datensatz
 
   const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
-  const heute = new Date().toISOString().slice(0, 10)
+  const heute = heuteBerlin()
   await admin.from('rechnungen').insert({
     id: crypto.randomUUID(),
     nummer: erkennung.rechnungsnummer || `RE-${heute.slice(0, 4)}-${Math.floor(1000 + Math.random() * 8999)}`,
@@ -1381,8 +1383,7 @@ Gib GANZ AM ENDE zusätzlich einen einzelnen Codeblock mit reinem JSON zurück (
 //
 // Dokumente liegen an zwei Orten: Mail- und Telegram-Anhänge im Bucket "email-anhaenge" (url ist die
 // volle Adresse), im CRM hochgeladene Dateien im privaten Bucket "kunden-dokumente" (url ist der Pfad).
-const SEITEN_JE_TEIL = 8
-const MAX_TEILE = 8
+// SEITEN_JE_TEIL / MAX_TEILE / teileFuer: siehe dokumentLesen.ts (4 Seiten je Teil seit 23.11.2026).
 
 type DokumentRef = { url: string; name: string; typ?: string }
 type DokumentInhaltZeile = {
@@ -1436,7 +1437,7 @@ async function ladeDokumentBytes(admin: any, url: string): Promise<Uint8Array> {
 
 function lesbareArt(name: string, typ?: string): 'pdf' | 'bild' | 'buero' | null {
   if (/\.pdf$/i.test(name) || typ === 'application/pdf') return 'pdf'
-  if (istDocx(name, typ) || istXlsx(name, typ) || istCsv(name, typ)) return 'buero'
+  if (istDocx(name, typ) || istXlsx(name, typ) || istCsv(name, typ) || istWeiteresTextFormat(name, typ)) return 'buero'
   if (/\.(jpe?g|png|webp|gif)$/i.test(name) || (typ ?? '').startsWith('image/')) return 'bild'
   return null
 }
@@ -1468,7 +1469,7 @@ async function stosseDokumentLesenAn(ref: DokumentRef, extra: Record<string, unk
 // werden in Teilen zu je SEITEN_JE_TEIL Seiten nacheinander gelesen — jeder Teil ist ein eigener
 // Aufruf mit eigener Laufzeit, und nacheinander statt parallel, damit sich die Teile beim Speichern
 // nicht gegenseitig überschreiben.
-async function leseDokument(ref: DokumentRef, teil: number, umleitungen: number): Promise<void> {
+async function leseDokument(ref: DokumentRef, teil: number, umleitungen: number, fortsetzen = false): Promise<void> {
   const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
   const schluessel = dokumentSchluessel(ref.url)
   const art = lesbareArt(ref.name, ref.typ)
@@ -1482,16 +1483,19 @@ async function leseDokument(ref: DokumentRef, teil: number, umleitungen: number)
     return
   }
   // Ein neuer Lauf (teil 0) startet nur, wenn nicht gerade schon einer arbeitet.
-  if (teil === 0 && umleitungen === 0 && vorhanden?.status === 'laeuft' && Date.now() - new Date(vorhanden.aktualisiert_am).getTime() < 4 * 60 * 1000) return
+  // Ausnahme: der Minutentakt (dokumentLesen.ts) hat die Zeile gerade beansprucht und setzt fort.
+  if (teil === 0 && umleitungen === 0 && !fortsetzen && vorhanden?.status === 'laeuft' && Date.now() - new Date(vorhanden.aktualisiert_am).getTime() < 4 * 60 * 1000) return
 
   const rest = WORKER_LEBENSDAUER_MS - (Date.now() - WORKER_GEBOOTET)
   if (rest < 120_000 && umleitungen < 3) {
     if (teil === 0) await admin.from('dokument_inhalte').upsert({ schluessel, name: ref.name, status: 'laeuft', versuche: vorhanden?.versuche ?? 0, aktualisiert_am: jetztIso() })
     await warteBisWorkerAbgeloestWird()
-    await stosseDokumentLesenAn(ref, { teil, umleitungen: umleitungen + 1 })
+    await stosseDokumentLesenAn(ref, { teil, umleitungen: umleitungen + 1, ...(fortsetzen ? { fortsetzen: true } : {}) })
     return
   }
   const timeoutMs = Math.min(SCHRITT_HOECHSTENS_MS - 12_000, Math.max(20_000, rest - 12_000))
+  // Der Minutentakt zählt seinen Versuch beim Beanspruchen selbst; sonst zählt der Start (Teil 0).
+  const versucheJetzt = teil === 0 && !fortsetzen ? (vorhanden?.versuche ?? 0) + 1 : (vorhanden?.versuche ?? 0)
 
   try {
     if (teil === 0) {
@@ -1503,7 +1507,7 @@ async function leseDokument(ref: DokumentRef, teil: number, umleitungen: number)
         teile: null,
         teile_gesamt: null,
         fehler: null,
-        versuche: (vorhanden?.versuche ?? 0) + 1,
+        versuche: versucheJetzt,
         aktualisiert_am: jetztIso(),
       })
       // Ohne Ablageort (Tabelle fehlt oder nicht erreichbar) gar nicht erst lesen — das Ergebnis ginge verloren.
@@ -1513,7 +1517,7 @@ async function leseDokument(ref: DokumentRef, teil: number, umleitungen: number)
     if (bytes.length > 20 * 1024 * 1024) throw new Error('Datei größer als 20 MB')
 
     if (art === 'buero') {
-      const text = bueroDateiText(ref.name, ref.typ, bytes, 200_000) ?? ''
+      const text = bueroDateiText(ref.name, ref.typ, bytes, 200_000) ?? (await weitererDateiText(ref.name, ref.typ, bytes, 200_000)) ?? ''
       const zusammenfassung = await callClaudeResearch(
         // Sonnet statt Haiku: Haiku hat hier Eigenschaften dazuerfunden ("anwaltliche" Analyse) und
         // Begriffe verdreht ("Steuernachlass" statt "Steuer auf den Gewinn") — die Kurzfassung fließt
@@ -1537,18 +1541,24 @@ async function leseDokument(ref: DokumentRef, teil: number, umleitungen: number)
 
     // PDF
     let seiten = 0
+    let quelle: PDFDocument | null = null
     try {
-      seiten = (await PDFDocument.load(bytes, { ignoreEncryption: true })).getPageCount()
+      quelle = await PDFDocument.load(bytes, { ignoreEncryption: true })
+      seiten = quelle.getPageCount()
     } catch {
       seiten = 0 // beschädigt oder ungewöhnlich aufgebaut: als Ganzes versuchen
     }
-    const teileGesamt = seiten > SEITEN_JE_TEIL + 2 ? Math.min(MAX_TEILE, Math.ceil(seiten / SEITEN_JE_TEIL)) : 1
+    const teileGesamt = teileFuer(seiten)
+    // Mit einer anderen Aufteilung begonnen (z. B. vor dem 23.11.2026 mit 8 Seiten je Teil): von vorn.
+    if (teil > 0 && (teil >= teileGesamt || (vorhanden?.teile_gesamt && vorhanden.teile_gesamt !== teileGesamt))) {
+      await stosseDokumentLesenAn(ref, { teil: 0, umleitungen: 0, fortsetzen: true })
+      return
+    }
     let teilBytes = bytes
     let bereich = ''
-    if (teileGesamt > 1) {
+    if (teileGesamt > 1 && quelle) {
       const von = teil * SEITEN_JE_TEIL
       const bis = Math.min(seiten, von + SEITEN_JE_TEIL)
-      const quelle = await PDFDocument.load(bytes, { ignoreEncryption: true })
       const ziel = await PDFDocument.create()
       for (const seite of await ziel.copyPages(quelle, Array.from({ length: bis - von }, (_, i) => von + i))) ziel.addPage(seite)
       teilBytes = await ziel.save()
@@ -1585,9 +1595,11 @@ async function leseDokument(ref: DokumentRef, teil: number, umleitungen: number)
     if (!fertig) await stosseDokumentLesenAn(ref, { teil: teil + 1, umleitungen: 0 })
   } catch (err) {
     console.error(`Dokument lesen fehlgeschlagen (${ref.name}, Teil ${teil}):`, err)
+    // Zeitüberschreitung/Überlastung: zurück auf „laeuft“ (gelesene Teile bleiben), der Minutentakt setzt
+    // nach 15 Minuten beim offenen Teil fort; nach vier Versuchen oder bei anderen Fehlern „fehler“.
     await admin
       .from('dokument_inhalte')
-      .update({ status: 'fehler', fehler: err instanceof Error ? err.message : String(err), aktualisiert_am: jetztIso() })
+      .update(fehlerNachAbbruch(err instanceof Error ? err.message : String(err), versucheJetzt, jetztIso()))
       .eq('schluessel', schluessel)
   }
 }
@@ -1603,16 +1615,28 @@ async function dokumentInhalte(dokumente: DokumentRef[], einlesen: boolean, voll
   // deno-lint-ignore no-explicit-any
   const nach = new Map(((data ?? []) as any[]).map((z) => [z.schluessel, z]))
   let angestossen = 0
+  let eingereiht = 0
   const ergebnis = []
   for (let i = 0; i < refs.length; i++) {
     const zeile = nach.get(schluessel[i])
     const lesbar = !!lesbareArt(refs[i].name, refs[i].typ)
     let status: string = zeile?.status ?? (lesbar ? 'ungelesen' : 'nicht lesbar')
-    const haengt = zeile?.status === 'laeuft' && Date.now() - new Date(zeile.aktualisiert_am).getTime() > 6 * 60 * 1000
-    const darfNochmal = (zeile?.status === 'fehler' && (zeile.versuche ?? 0) < 3) || haengt
-    if (einlesen && lesbar && (!zeile || darfNochmal) && angestossen < 12) {
-      await stosseDokumentLesenAn(refs[i])
-      angestossen++
+    // Hängende Läufe („laeuft“ ohne Fortschritt) setzt der Minutentakt fort (dokumentLesen.ts) — mit
+    // Obergrenze der Versuche statt eines Neustarts bei jeder Abfrage.
+    const darfNochmal = zeile?.status === 'fehler' && (zeile.versuche ?? 0) < 3
+    if (einlesen && lesbar && (!zeile || darfNochmal) && angestossen + eingereiht < 12) {
+      // Höchstens zwei sofort; der Rest wartet in der Schlange und wird nacheinander gelesen. Zwölf
+      // gleichzeitig (zum Teil 20–38 MB große Scans) haben am 16.11.2026 den Worker zum Absturz gebracht.
+      // Ohne erkennbare Dateiendung sofort, weil der Takt den Dateityp (typ) nicht kennt.
+      let eingereihtOk = false
+      if (angestossen >= SOFORT_HOECHSTENS && lesbareArt(refs[i].name)) {
+        eingereihtOk = await reiheDokumentEin(admin, schluessel[i], refs[i].name, zeile?.versuche ?? 0).then(() => true, () => false)
+      }
+      if (eingereihtOk) eingereiht++
+      else {
+        await stosseDokumentLesenAn(refs[i])
+        angestossen++
+      }
       status = 'laeuft'
     }
     ergebnis.push({
@@ -1624,7 +1648,7 @@ async function dokumentInhalte(dokumente: DokumentRef[], einlesen: boolean, voll
       ...(volltext ? { inhalt: zeile?.inhalt ?? '' } : {}),
     })
   }
-  return { dokumente: ergebnis, angestossen }
+  return { dokumente: ergebnis, angestossen: angestossen + eingereiht }
 }
 
 // ---------- Steuerliche Ansatzpunkte (Teil der Potenzial-Analyse) ----------
@@ -1848,7 +1872,7 @@ async function fuehreSteuerSchrittAus(bereich: string, kundeId: string, umleitun
     return
   }
   const timeoutMs = Math.min(SCHRITT_HOECHSTENS_MS - 12_000, Math.max(20_000, rest - 12_000))
-  const heute = new Date().toISOString().slice(0, 10)
+  const heute = heuteBerlin()
   const person = kunde.ansprechpartner || kunde.firma
   // deno-lint-ignore no-explicit-any
   const dokumente: { name: string; url: string; typ?: string; groesse?: string }[] = (kunde.dokumente ?? []) as any[]
@@ -2470,7 +2494,7 @@ async function fuehreObjektBewertungAus(objektId: string, umleitungen: number, w
     if (schritt.nr === 3) {
       const fakten = [z.zwischen?.unterlagen, z.zwischen?.unterlagen2].filter(Boolean).join('\n\n').slice(0, 14_000)
       const markt = await callClaudeResearch(
-        `Du recherchierst für die Bewertung einer Immobilie die Marktlage am Standort. Stichtag heute: ${new Date().toISOString().slice(0, 10)}.
+        `Du recherchierst für die Bewertung einer Immobilie die Marktlage am Standort. Stichtag heute: ${heuteBerlin()}.
 
 Objekt: „${o.bezeichnung}", Lage: ${ort}, Objektart: ${o.verkaufsdaten?.uebersicht?.objektart || o.typ}.
 ${fakten ? `\nWas aus den Unterlagen bekannt ist:\n${fakten}\n` : ''}
@@ -2984,7 +3008,7 @@ async function classifyNewLeads(): Promise<{ geprueft: number; vorgeschlagen: nu
       // Lipps-Fall) bleibt die eigentliche Sicherung gegen Fehlzuordnungen; zusätzlich landet jeder so
       // angelegte Kunde mit einer klar als "automatisch" markierten Aktivitätsnotiz in der Akte, damit
       // ein Fehlgriff beim nächsten Öffnen sofort auffällt statt sich zu verstecken.
-      const heute = new Date().toISOString().slice(0, 10)
+      const heute = heuteBerlin()
       const bereich = BEREICH_VORSCHLAG_ZU_KUNDE_BEREICH[r.bereich_vorschlag] ?? 'beratung'
       const kundeId = `k_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`
       const { error: kundeError } = await supabase.from('kunden').insert({
@@ -2995,6 +3019,8 @@ async function classifyNewLeads(): Promise<{ geprueft: number; vorgeschlagen: nu
         email: gruppe.email,
         telefon: r.telefon || '',
         prioritaet: 'Mittel',
+        // Bewusst weiter „lead“: ein anderer Anfangsstatus würde Willkommensmail und Wiedervorlagen
+        // auslösen (offene Frage an Eray, 23.11.2026). Die Listen zeigen unbekannte Stände seit dem 23.11. grau statt abzustürzen.
         status: 'lead',
         follow_up: { date: heute, note: 'Erstkontakt aufnehmen', done: false },
         verantwortlich: '',
@@ -3461,6 +3487,13 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       // Hängengebliebene Umzüge Kundenakte → Objektakte fortsetzen (akteZuObjekt.ts), ohne offenes Browserfenster.
       // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
       EdgeRuntime.waitUntil(setzeHaengendeUmzuegeFort(admin))
+      // Dokumente lesen (dokumentLesen.ts): abgebrochene Leseläufe (Worker beendet, Zeitüberschreitung) und die
+      // Warteschlange fortsetzen — höchstens zwei Dateien gleichzeitig, nach vier Versuchen endgültig „fehler“.
+      // Der Takt selbst ruft keine KI auf; wirft nie.
+      // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
+      EdgeRuntime.waitUntil(setzeHaengendeDokumenteFort(admin, { stosseAn: (ref, extra) => stosseDokumentLesenAn(ref, extra) }).then((r) => {
+        if (r.angestossen > 0 || r.aufgegeben > 0) console.log(`Dokumente lesen: ${r.angestossen} fortgesetzt, ${r.aufgegeben} aufgegeben.`)
+      }))
       // Gesprächs-App (gespraechPipeline.ts): hängende Abschriften/Auswertungen als eigene Anfragen anstoßen (höchstens 5),
       // nicht zugestellte „Auswertung fertig“-Nachrichten nachholen, Audio nach Ablauf der Frist löschen. Ohne KI; wirft nie.
       // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
@@ -3899,7 +3932,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       if (!transcript || typeof transcript !== 'string' || !transcript.trim()) {
         return new Response(JSON.stringify({ error: 'transcript ist ein Pflichtfeld' }), { status: 400, headers })
       }
-      const klassifikation = await classifyAssistantInput(transcript, heute || new Date().toISOString().slice(0, 10))
+      const klassifikation = await classifyAssistantInput(transcript, heute || heuteBerlin())
       return new Response(JSON.stringify({ klassifikation }), { headers })
     }
 
@@ -4218,7 +4251,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       if (selectError) return new Response(JSON.stringify({ error: selectError.message }), { status: 500, headers })
       if (!bestehend) return new Response(JSON.stringify({ error: 'Kunde/Mandant nicht gefunden' }), { status: 404, headers })
 
-      const heute = new Date().toISOString().slice(0, 10)
+      const heute = heuteBerlin()
       const activities: unknown[] = [
         { id: crypto.randomUUID(), date: heute, text: aktivitaetText, user: aktivitaetUser || 'Kunde (Formular)' },
         ...((bestehend.activities as unknown[]) ?? []),
@@ -4349,7 +4382,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       ) {
         return new Response(JSON.stringify({ error: 'Gerade sind zu viele Anmeldungen eingegangen. Bitte versuchen Sie es in einer Stunde erneut.' }), { status: 429, headers })
       }
-      const heute = new Date().toISOString().slice(0, 10)
+      const heute = heuteBerlin()
       const id = `k_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`
       const { error: insertError } = await admin.from('kunden').insert({
         id,
@@ -4447,7 +4480,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
 
       // Nur, was die Eigentümer-Seite wirklich schickt — keine beliebigen Felder, keine fremden Ablage-Pfade.
       const kurz = (wert: unknown, max: number) => String(wert ?? '').trim().slice(0, max)
-      const heute = new Date().toISOString().slice(0, 10)
+      const heute = heuteBerlin()
       const activities: unknown[] = [
         { id: crypto.randomUUID(), date: heute, text: kurz(aktivitaetText, 500), user: 'Eigentümer (Formular)' },
         ...((bestehend.activities as unknown[]) ?? []),
@@ -4621,7 +4654,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
         return new Response(JSON.stringify({ error: 'vorschlagId und eine gültige entscheidung sind Pflichtfelder' }), { status: 400, headers })
       }
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
-      const heute = new Date().toISOString().slice(0, 10)
+      const heute = heuteBerlin()
       const { data: vorschlagRow, error: vorschlagError } = await admin
         .from('objekt_vorschlaege')
         .select('id, objekt_id, kunde_bereich, kunde_id, kunde_name, status')
@@ -5288,7 +5321,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
         if (!(await darfDokument(admin, await ermittlePruefer(req, admin, body), String(url), new Map()))) return keinRecht(headers)
       }
       // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
-      EdgeRuntime.waitUntil(leseDokument({ url: String(url), name: String(name), typ: typeof typ === 'string' ? typ : undefined }, Number(body.teil) || 0, Number(body.umleitungen) || 0))
+      EdgeRuntime.waitUntil(leseDokument({ url: String(url), name: String(name), typ: typeof typ === 'string' ? typ : undefined }, Number(body.teil) || 0, Number(body.umleitungen) || 0, body.fortsetzen === true))
       return new Response(JSON.stringify({ ok: true }), { headers })
     }
 

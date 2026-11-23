@@ -7,6 +7,7 @@
 import { pruefeSpeicherPfad } from '../_shared/speicherPfad.ts'
 import { belegtVon, ueberschneidet, zeitraumText, type FremdZeile, type TerminZeile } from '../_shared/besichtigungZeiten.ts'
 import { alleZeilen } from '../_shared/alleZeilen.ts'
+import { heuteBerlin } from '../_shared/heuteBerlin.ts'
 
 export const PORTAL_TEXTE = { agb: 'vl_immo_portal_agb', provision: 'vl_immo_portal_provision', widerruf: 'vl_immo_portal_widerruf' } as const
 const TOKEN = /^[A-Za-z0-9_-]{43,128}$/
@@ -188,7 +189,7 @@ export async function portalDokument(admin: Admin, token: unknown, dokumentId: u
 
 /** Eintrag oben in den Verlauf des Objekts und (falls verknüpft) der Kundenakte — Liste direkt vor dem Schreiben frisch gelesen. */
 async function verlaufEintragen(admin: Admin, objektId: string, kundeId: string | null | undefined, textObjekt: string, textKunde: string, user: string) {
-  const heute = new Date().toISOString().slice(0, 10)
+  const heute = heuteBerlin()
   const { data: o } = await admin.from('objekte').select('activities').eq('id', objektId).maybeSingle()
   if (o) {
     const verlauf = Array.isArray(o.activities) ? o.activities : []

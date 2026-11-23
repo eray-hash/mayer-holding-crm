@@ -37,6 +37,7 @@ import { collectFehlendeStammdaten } from '../lib/stammdatenWarnungen'
 import { kundeDetailPfad } from '../data/kundenBereiche'
 import { isLeadsDbConfigured, fetchOffeneLeads } from '../lib/leadsDb'
 import { DokumentenImportModal } from './DokumentenImportModal'
+import { Fehlergrenze } from './Fehlergrenze'
 import { KiAssistentPanel } from './KiAssistentPanel'
 import { GespraechAufzeichnenGlobal } from './GespraechAufzeichnenGlobal'
 import { GlobaleSuche } from './GlobaleSuche'
@@ -429,7 +430,7 @@ export function Layout({ children }: { children: ReactNode }) {
 
         {/* Main */}
         <main className="min-w-0 flex-1 overflow-y-auto">
-          <div className="mx-auto max-w-[1400px] px-4 py-5 sm:px-6 sm:py-6">{children}</div>
+          <div className="mx-auto max-w-[1400px] px-4 py-5 sm:px-6 sm:py-6"><Fehlergrenze name="Seite" schluessel={location.pathname + location.search}>{children}</Fehlergrenze></div>
         </main>
       </div>
 

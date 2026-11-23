@@ -304,11 +304,30 @@ async function findeTodo(supabase: Supa, fragender: Fragender, input: { todo_id?
   } else {
     const such = String(input?.suchbegriff ?? '').trim().toLowerCase()
     if (!such) return 'Fehler: todo_id oder suchbegriff angeben.'
-    const { data } = await supabase.from('todos').select(TODO_SPALTEN).is('erledigt_am', null).ilike('aufgabe', `%${such.replace(/[%_]/g, ' ')}%`).limit(20)
-    treffer = (data ?? []) as TodoZeile[]
+    const muster = `%${such.replace(/[%_]/g, ' ')}%`
+    // Nur in Listen suchen, die er ändern darf (eigene Liste, Bereichslisten). Bis 23.11.2026 wurde über ALLE
+    // offenen To-dos gesucht, auf 20 begrenzt und erst danach nach Rechten gefiltert: Hasans über 2.600
+    // private To-dos füllten bei häufigen Wörtern („anrufen“ 42, „senden“ 50) die 20 Plätze, die eigenen
+    // Treffer fielen weg → „Kein passendes offenes To-do“, obwohl es da war.
+    const [eigene, bereichsListen] = await Promise.all([
+      eigeneEmail
+        ? supabase.from('todos').select(TODO_SPALTEN).is('erledigt_am', null).is('bereich', null).ilike('besitzer_email', eigeneEmail).ilike('aufgabe', muster).order('id').limit(50)
+        : Promise.resolve({ data: [] }),
+      supabase.from('todos').select(TODO_SPALTEN).is('erledigt_am', null).not('bereich', 'is', null).ilike('aufgabe', muster).order('id').limit(200),
+    ])
+    treffer = [...((eigene.data ?? []) as TodoZeile[]), ...((bereichsListen.data ?? []) as TodoZeile[])]
   }
   treffer = treffer.filter(darf)
-  if (treffer.length === 0) return 'Kein passendes offenes To-do in Listen gefunden, die dieser Mitarbeiter ändern darf.'
+  if (treffer.length === 0) {
+    const kopf = 'Kein passendes offenes To-do in Listen gefunden, die dieser Mitarbeiter ändern darf.'
+    if (id || !eigeneEmail) return kopf
+    // Sprachnachrichten: Der Suchbegriff ist oft falsch gehört (22.11.2026: „Judo“ statt des eben angelegten
+    // AOK-To-dos — der Assistent legte ein neues an). Die zuletzt geänderten eigenen To-dos helfen beim Zuordnen.
+    const { data: zuletzt } = await supabase.from('todos').select(TODO_SPALTEN).is('erledigt_am', null).is('bereich', null).ilike('besitzer_email', eigeneEmail).order('updated_at', { ascending: false }).limit(5)
+    const liste = ((zuletzt ?? []) as TodoZeile[]).filter(darf)
+    if (liste.length === 0) return kopf
+    return `${kopf} Der Suchbegriff kann falsch verstanden sein (z. B. aus einer Sprachnachricht). Zuletzt geänderte offene To-dos seiner eigenen Liste — meint er eines davon, nimm dessen todo_id; sonst frag kurz nach, bevor du ein neues anlegst:\n${liste.map((t) => `- ${t.aufgabe}${t.erledigen_bis ? ` (bis ${deDatum(t.erledigen_bis)})` : ''} · todo_id=${t.id}`).join('\n')}`
+  }
   if (treffer.length > 1) {
     return `Mehrere passende To-dos, frag nach, welches gemeint ist:\n${treffer.map((t) => `- ${t.aufgabe}${t.erledigen_bis ? ` (bis ${deDatum(t.erledigen_bis)})` : ''} · ${t.bereich ? bereichName(t.bereich) : 'eigene Liste'} · todo_id=${t.id}`).join('\n')}`
   }

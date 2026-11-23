@@ -149,6 +149,59 @@ Deno.test('Stichwörter: typische Bitten laden die passende Gruppe', () => {
   }
 })
 
+Deno.test('Stichwörter: Alltagsformulierungen, die bis 23.11.2026 keine Gruppe luden', () => {
+  // Durchgespielt an typischen Bitten und an den gespeicherten Gesprächen vom 17.–22.11.2026.
+  const faelle: [string, GruppenName][] = [
+    ['Hat Müller schon gezahlt?', 'rechnungen'],
+    ['Was müssen wir noch bezahlen?', 'rechnungen'],
+    ['Ist das Geld von Schmidt eingegangen?', 'rechnungen'],
+    ['Wer schuldet uns noch was?', 'rechnungen'],
+    ['Mahn den Müller', 'rechnungen'],
+    ['Wer sucht eine Wohnung in Ulm?', 'vermarktung'],
+    ['Was kostet der Quadratmeter', 'vermarktung'],
+    ['Schreib Herrn Müller, dass alles klar ist', 'postfach'],
+    ['Antworte Frau Kaya kurz', 'postfach'],
+    ['Hat der Kunde schon geantwortet?', 'postfach'],
+    ['Kam was von der Bank?', 'postfach'],
+    ['Plane meinen Tag', 'kalender'],
+    ['Was hab ich heute zu tun?', 'kalender'],
+    ['Zeig mir meine Tagesliste', 'kalender'],
+    ['Leg diese Kunden an: Müller, Maier, Schulz', 'aktenpflege'],
+    ['Mehrere Kunden auf einmal anlegen', 'aktenpflege'],
+  ]
+  for (const [text, erwartet] of faelle) {
+    const g = waehleGruppen({ eingang: text, ...ohneVerlauf })
+    assert(g.has(erwartet), `„${text}“ lädt ${erwartet} nicht (geladen: ${[...g].join(', ') || 'nichts'})`)
+  }
+  // Keine Fehlgriffe durch die neuen Wörter.
+  assert(!waehleGruppen({ eingang: 'Entschuldigung, ich meinte Lehle', ...ohneVerlauf }).has('rechnungen'))
+  // Ein Kaufpreis ist keine Uhrzeit.
+  assert(!waehleGruppen({ eingang: 'Kaufpreis 1.200.000 € zzgl. 3,57 % Provision', ...ohneVerlauf }).has('kalender'))
+  assert(waehleGruppen({ eingang: 'Termin um 9.30', ...ohneVerlauf }).has('kalender'))
+})
+
+Deno.test('Systemsätze laden keine Gruppe (Datei-Eingang, Sprachnachricht, CRM-Fenster)', () => {
+  // Echter Datei-Eingang vom 22.11.2026 (gekürzt): „Bildunterschrift“ lud früher nachfassen.
+  const datei = '[Datei-Eingang per Telegram — Systemmeldung, nicht vom Mitarbeiter getippt]\nOriginaldatei: „foto_1795366921944.jpg"\nBildunterschrift des Mitarbeiters: (keine)\nIm Dokument erkannt: Firma „Boarding House Lorch", Art: Flächenaufstellung\nGespeichert, noch keiner Akte zugeordnet:\n1. pfad=telegram/1795366925357_h1_foto.jpg | Name: foto.jpg'
+  const g = waehleGruppen({ eingang: datei, ...ohneVerlauf })
+  assert(!g.has('nachfassen'), [...g].join(', '))
+  assert(g.has('dateien') && g.has('objekte'))
+  // Schreibt der Mitarbeiter selbst etwas in die Bildunterschrift, zählt das weiter.
+  const mitText = datei.replace('Bildunterschrift des Mitarbeiters: (keine)', 'Bildunterschrift des Mitarbeiters: „Vertrag unterschrieben, zu Lehle"')
+  assert(waehleGruppen({ eingang: mitText, ...ohneVerlauf }).has('nachfassen'))
+  // CRM-Fenster mit geöffneter Akte: früher immer postfach.
+  const akte = 'Was ist bei diesem Kunden der letzte Eintrag im Verlauf? Ein Satz.\n\n[Vom CRM ergänzt, nicht vom Mitarbeiter getippt: Er hat im CRM gerade die Akte mit kunde_id k_ql_werner_dechant (mit kundenakte_lesen lesen) geöffnet. „Diese Mail", „dieser Kunde", „hier" meinen das, wenn nichts anderes genannt ist. Nenne die Kennung nicht.]'
+  assertEquals([...waehleGruppen({ eingang: akte, ...ohneVerlauf })], [])
+  // Mit geöffneter Mail bleibt postfach (der Hinweis nennt das gemeinsame Postfach).
+  const mail = akte.replace('die Akte mit kunde_id k_ql_werner_dechant (mit kundenakte_lesen lesen)', 'eine E-Mail im gemeinsamen Postfach (mail_id <x@y> — mit gemeinsames_postfach und dieser mail_id lesen)')
+  assert(waehleGruppen({ eingang: mail, ...ohneVerlauf }).has('postfach'))
+  // Sprachnachricht: nur der gesprochene Text zählt.
+  const sprache = '[Sprachnachricht des Mitarbeiters, automatisch abgehört — behandle sie wie eine getippte Nachricht. Hörfehler sind möglich, vor allem bei Namen und Zahlen.]\nWas weißt du über Lipps?'
+  assertEquals([...waehleGruppen({ eingang: sprache, ...ohneVerlauf })], [])
+  // Dasselbe gilt für den Verlauf (letzte Züge).
+  assert(!waehleGruppen({ eingang: 'Und jetzt?', verlauf: [{ role: 'user', content: datei }], privatBot: false }).has('nachfassen'))
+})
+
 Deno.test('Gesprächszustand: Verlauf, offene Rückfragen und Datei-Eingänge', () => {
   // „ja, schick sie ab“ nach einem Mail-Entwurf: Werkzeug im Verlauf → Gruppe bleibt geladen.
   const verlaufMail = [

@@ -57,7 +57,7 @@ function zuExcelZeile(rows: unknown[][]): ExcelSpalten[] {
 
 function textWert(v: unknown): string | undefined {
   if (v === null || v === undefined) return undefined
-  if (typeof v === 'number') return String(v)
+  if (typeof v === 'number') return String(Number(v.toPrecision(12)))
   const s = String(v).trim()
   return s || undefined
 }

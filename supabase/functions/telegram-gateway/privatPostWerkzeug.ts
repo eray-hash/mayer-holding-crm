@@ -19,6 +19,15 @@ import { darfAkte, istEigene, ohneNurPrivat, type RechteMitarbeiter, SAMMELAKTEN
 // deno-lint-ignore no-explicit-any
 type Supa = any
 
+const BERLIN_TAG = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Berlin' })
+
+/** Kalendertag in deutscher Ortszeit (JJJJ-MM-TT). Vorher die ersten 10 Zeichen des UTC-Zeitstempels: Mails
+ *  zwischen Mitternacht und 1 bzw. 2 Uhr bekamen den Vortag (23 Mails im Bestand, 23.11.2026). */
+export function berlinTag(zeitpunkt: string | null | undefined): string {
+  const d = new Date(String(zeitpunkt ?? ''))
+  return Number.isNaN(d.getTime()) ? String(zeitpunkt ?? '').slice(0, 10) : BERLIN_TAG.format(d)
+}
+
 export type PrivatPostKontext = {
   supabase: Supa
   mitarbeiter: RechteMitarbeiter & { name: string }
@@ -152,7 +161,7 @@ export async function fuehrePrivatPostWerkzeugAus(werkzeug: string, input: any, 
         mail_id: m.message_id ?? m.id,
         von: `${m.von_name ?? ''} <${m.von ?? ''}>`.trim(),
         betreff: m.betreff ?? '(ohne Betreff)',
-        datum: String(m.mail_datum ?? '').slice(0, 10),
+        datum: berlinTag(m.mail_datum),
         kandidaten: (m.zuordnung_vorschlag?.kandidaten ?? [])
           .filter((x) => erlaubt.has(x.kundeId))
           .map((x) => ({ kunde_id: x.kundeId, name: akteName(erlaubt.get(x.kundeId)!), privater_kontakt: erlaubt.get(x.kundeId)!.bereich === 'privat', sicher: x.sicher === true, grund: x.grund })),
