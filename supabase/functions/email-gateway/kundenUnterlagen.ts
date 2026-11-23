@@ -28,6 +28,9 @@
 type Db = any
 
 export const UNTERLAGEN_BUCKET = 'kunden-dokumente'
+/** Kunden laden zuerst hierhin (Speicher-Grenze 25 MB je Datei, seit 23.11.2026); erst nach der Prüfung beim Eingang
+ *  wandert die Datei in die Akte (UNTERLAGEN_BUCKET). Bricht ein Kunde ab, bleibt nichts in der Kundenablage liegen. */
+export const EINGANG_BUCKET = 'kunden-uploads'
 export const GUELTIG_TAGE = 60
 export const MAX_BYTES = 20 * 1024 * 1024
 /** Obergrenze je Link, damit ein weitergereichter Link die Ablage nicht beliebig füllen kann. */
@@ -188,9 +191,9 @@ export async function unterlagenUploadUrl(
   if ((Array.isArray(anforderung.eingang) ? anforderung.eingang : []).length >= MAX_DATEIEN_JE_LINK) return fehler(429, 'Über diesen Link können keine weiteren Dateien mehr hochgeladen werden. Bitte melden Sie sich bei uns.')
 
   const pfad = `${kunde.id}/kundenupload_${crypto.randomUUID()}_${sichererDateiname(dateiname)}`
-  const { data, error } = await admin.storage.from(UNTERLAGEN_BUCKET).createSignedUploadUrl(pfad)
+  const { data, error } = await admin.storage.from(EINGANG_BUCKET).createSignedUploadUrl(pfad)
   if (error || !data?.token) return fehler(500, 'Das Hochladen konnte nicht vorbereitet werden. Bitte versuchen Sie es gleich noch einmal.')
-  return { status: 200, body: { pfad: data.path ?? pfad, token: data.token } }
+  return { status: 200, body: { pfad: data.path ?? pfad, token: data.token, bucket: EINGANG_BUCKET } }
 }
 
 // ---------- public_unterlagen_eingang ----------
@@ -245,8 +248,15 @@ export async function unterlagenEingang(
   const muster = new RegExp(`^${regexSicher(kunde.id)}/kundenupload_[0-9a-f-]{36}_[A-Za-z0-9._-]{1,80}$`)
   if (!muster.test(pfad)) return fehler(400, 'Die Datei gehört nicht zu diesem Link.')
 
-  const ablage = admin.storage.from(UNTERLAGEN_BUCKET)
-  const { data: datei, error: ladeFehler } = await ablage.download(pfad)
+  // Neu: aus dem Eingangsfach. Ältere Seiten (vor dem 23.11.2026 geöffnet) luden direkt in die Kundenablage.
+  let ablage = admin.storage.from(EINGANG_BUCKET)
+  let ausEingang = true
+  let { data: datei, error: ladeFehler } = await ablage.download(pfad)
+  if (ladeFehler || !datei) {
+    ablage = admin.storage.from(UNTERLAGEN_BUCKET)
+    ausEingang = false
+    ;({ data: datei, error: ladeFehler } = await ablage.download(pfad))
+  }
   if (ladeFehler || !datei) return fehler(400, 'Die Datei ist bei uns nicht angekommen. Bitte laden Sie sie noch einmal hoch.')
   const bytes = Number(datei.size ?? 0)
   const kopf = new Uint8Array(await datei.slice(0, 8).arrayBuffer())
@@ -254,6 +264,12 @@ export async function unterlagenEingang(
   if (bytes > MAX_BYTES || bytes === 0 || !typ) {
     await ablage.remove([pfad]).catch(() => undefined)
     return fehler(400, bytes > MAX_BYTES ? 'Die Datei ist größer als 20 MB.' : 'Bitte nur PDF-Dateien oder Fotos (JPG oder PNG) hochladen.')
+  }
+  if (ausEingang) {
+    // Geprüft: in die Kundenablage übernehmen, dann aus dem Eingangsfach entfernen.
+    const { error: ablageFehler } = await admin.storage.from(UNTERLAGEN_BUCKET).upload(pfad, datei, { contentType: typ, upsert: true })
+    if (ablageFehler) return fehler(500, 'Die Datei konnte nicht abgelegt werden. Bitte versuchen Sie es gleich noch einmal.')
+    await ablage.remove([pfad]).catch(() => undefined)
   }
 
   const heute = heuteIso(jetzt)

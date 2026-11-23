@@ -164,8 +164,8 @@ export function PublicEigentuemerPortal() {
     setHochladenKategorie(kategorie)
     setUploadFehler('')
     try {
-      const { pfad, token } = await holeObjektUploadUrl(objektId!, zugang!, file.name)
-      const { groesse } = await ladeAlsEigentuemerHoch(pfad, token, file)
+      const { pfad, token, bucket } = await holeObjektUploadUrl(objektId!, zugang!, file.name)
+      const { groesse } = await ladeAlsEigentuemerHoch(pfad, token, file, bucket)
       const dokument: Dokument = { id: uid('dok'), name: file.name, typ: file.type || 'Datei', datum: today(), groesse, url: pfad }
       await sendePublicObjektFormular({
         objektId: objektId!,

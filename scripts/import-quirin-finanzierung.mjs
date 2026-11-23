@@ -226,7 +226,7 @@ async function verarbeiteMandant(m) {
       follow_up: {},
       verantwortlich: VERANTWORTLICH,
       letzte_aktivitaet: heute(),
-      activities: [{ id: uid('act'), date: heute(), text: `${neueDokumente.length} Dokumente aus Quirins Finanzierungs-Altbestand übernommen.`, user: 'Import' }],
+      activities: [{ id: uid('act'), date: heute(), text: `Akte automatisch angelegt beim Import: ${neueDokumente.length} Dokumente aus Quirins Finanzierungs-Altbestand übernommen.`, user: 'Import' }],
       dokumente: neueDokumente,
     }
     const { error: insertFehler } = await supabase.from('kunden').insert(row)

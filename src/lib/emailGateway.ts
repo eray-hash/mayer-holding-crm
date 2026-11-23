@@ -529,9 +529,18 @@ export async function entscheidePublicVorschlag(
 // Erzeugt einen Signed-Upload-Token statt den Datei-Inhalt entgegenzunehmen (Edge-Function-
 // Größenlimit) — der eigentliche Upload läuft danach direkt vom Browser zu Supabase Storage, siehe
 // objektDokumenteStorage.ts ladeAlsEigentuemerHoch().
-export async function holeObjektUploadUrl(objektId: string, zugang: string, dateiname: string): Promise<{ pfad: string; token: string }> {
+export async function holeObjektUploadUrl(objektId: string, zugang: string, dateiname: string): Promise<{ pfad: string; token: string; bucket?: string }> {
   const data = await call({ action: 'public_objekt_upload_url', objektId, zugang, dateiname })
-  return { pfad: data.pfad, token: data.token }
+  return { pfad: data.pfad, token: data.token, bucket: data.bucket }
+}
+
+/** Höchstgröße je Datei für Uploads von Kunden und Eigentümern (Eingangsfach „kunden-uploads“). */
+export const KUNDEN_UPLOAD_MAX_BYTES = 25 * 1024 * 1024
+
+/** Speicher-Fehler auf Deutsch (die Ablage antwortet englisch, z. B. bei zu großen Dateien). */
+export function uploadFehlerText(meldung: string): string {
+  if (/maximum allowed size|too large|413/i.test(meldung)) return 'Die Datei ist größer als 25 MB. Bitte verkleinern oder in mehreren Teilen schicken.'
+  return 'Hochladen fehlgeschlagen. Bitte versuchen Sie es noch einmal.'
 }
 
 export async function sendePublicObjektFormular(params: {
@@ -707,16 +716,16 @@ export async function holePublicUnterlagen(token: string): Promise<PublicUnterla
 }
 
 /** Einmalige Hochlade-Adresse für genau eine Datei in der Akte, die zu `token` gehört. */
-export async function holeUnterlagenUploadUrl(token: string, punkt: string, dateiname: string, groesse: number): Promise<{ pfad: string; token: string }> {
+export async function holeUnterlagenUploadUrl(token: string, punkt: string, dateiname: string, groesse: number): Promise<{ pfad: string; token: string; bucket?: string }> {
   const data = await call({ action: 'public_unterlagen_upload_url', token, punkt, dateiname, groesse })
-  return { pfad: data.pfad, token: data.token }
+  return { pfad: data.pfad, token: data.token, bucket: data.bucket }
 }
 
 /** Lädt die Datei mit der einmaligen Adresse in die geschützte Ablage — ohne Login. */
-export async function ladeKundenUnterlageHoch(pfad: string, uploadToken: string, datei: Blob, typ: string): Promise<void> {
+export async function ladeKundenUnterlageHoch(pfad: string, uploadToken: string, datei: Blob, typ: string, bucket = 'kunden-dokumente'): Promise<void> {
   if (!supabase) throw new Error('Die Ablage ist gerade nicht erreichbar.')
-  const { error } = await supabase.storage.from('kunden-dokumente').uploadToSignedUrl(pfad, uploadToken, datei, { contentType: typ })
-  if (error) throw new Error(error.message)
+  const { error } = await supabase.storage.from(bucket).uploadToSignedUrl(pfad, uploadToken, datei, { contentType: typ })
+  if (error) throw new Error(uploadFehlerText(error.message))
 }
 
 /** Meldet die hochgeladene Datei; der Server prüft sie und legt sie in der Akte ab. */

@@ -82,7 +82,7 @@ function leadToKundeRow(lead, bereich) {
     follow_up: { date: addDays(heute(), 2), note: 'Erstkontakt aufnehmen', done: false },
     verantwortlich: VERANTWORTLICH_DEFAULT,
     letzte_aktivitaet: heute(),
-    activities: [{ id: uid('act'), date: heute(), text: `Als Lead aus E-Mail-Analyse übernommen: „${lead.notiz}"`, user: 'KI-Lead-Analyse' }],
+    activities: [{ id: uid('act'), date: heute(), text: `Als Lead aus E-Mail-Analyse übernommen (automatisch angelegt, keine Willkommensnachricht): „${lead.notiz}"`, user: 'KI-Lead-Analyse' }],
     dokumente: null, // wird im Anschluss von scripts/auto-assign-emails.mjs befüllt
   }
 }

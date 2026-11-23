@@ -5,6 +5,7 @@
 // begrenzte Signed URL wird erst bei Bedarf (Klick zum Öffnen) erzeugt, siehe erzeugeDownloadUrl().
 import { supabase } from './supabaseClient'
 import { uid } from './dates'
+import { KUNDEN_UPLOAD_MAX_BYTES, uploadFehlerText } from './emailGateway'
 
 const BUCKET = 'objekt-dokumente'
 
@@ -42,10 +43,11 @@ export async function loescheObjektDokument(pfad: string): Promise<void> {
 // Bucket. Nutzt stattdessen einen Signed-Upload-Token, den emailGateway.ts (holeObjektUploadUrl)
 // serverseitig mit dem Service-Role-Key erzeugt hat — der Token selbst erlaubt den Upload für genau
 // diesen einen Pfad, unabhängig von der sonst geltenden "nur Mitarbeiter"-RLS-Policy.
-export async function ladeAlsEigentuemerHoch(pfad: string, token: string, file: File): Promise<{ groesse: string }> {
-  if (!supabase) throw new Error('Supabase ist nicht konfiguriert.')
-  const { error } = await supabase.storage.from(BUCKET).uploadToSignedUrl(pfad, token, file, { contentType: file.type || undefined })
-  if (error) throw new Error(error.message)
+export async function ladeAlsEigentuemerHoch(pfad: string, token: string, file: File, bucket = BUCKET): Promise<{ groesse: string }> {
+  if (!supabase) throw new Error('Die Ablage ist gerade nicht erreichbar.')
+  if (file.size > KUNDEN_UPLOAD_MAX_BYTES) throw new Error('Die Datei ist größer als 25 MB. Bitte verkleinern oder in mehreren Teilen schicken.')
+  const { error } = await supabase.storage.from(bucket).uploadToSignedUrl(pfad, token, file, { contentType: file.type || undefined })
+  if (error) throw new Error(uploadFehlerText(error.message))
   return { groesse: formatiereGroesse(file.size) }
 }
 

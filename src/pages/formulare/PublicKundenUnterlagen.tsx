@@ -292,7 +292,7 @@ function UnterlagenSeite({ token }: { token: string }) {
         setFortschritt(dateien.length > 1 ? `Wird hochgeladen … (${i + 1} von ${dateien.length})` : 'Wird hochgeladen …')
         const fertig = await vorbereiten(dateien[i])
         const ziel = await holeUnterlagenUploadUrl(token, punkt, fertig.name, fertig.blob.size)
-        await ladeKundenUnterlageHoch(ziel.pfad, ziel.token, fertig.blob, fertig.typ)
+        await ladeKundenUnterlageHoch(ziel.pfad, ziel.token, fertig.blob, fertig.typ, ziel.bucket)
         await meldeKundenUnterlage(token, punkt, { pfad: ziel.pfad, name: fertig.name })
         setHochgeladen((h) => ({ ...h, [punkt]: [...(h[punkt] ?? []), fertig.name] }))
         setErledigt((s) => new Set(s).add(punkt))

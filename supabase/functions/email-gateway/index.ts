@@ -452,6 +452,28 @@ function env(name: string): string {
 // lädt, kann es auslesen. Für Aktionen, die Account-Zugriff gewähren (Login-Link erzeugen, Mitarbeiter
 // einladen, Login-E-Mail ändern), reicht das Secret allein daher nicht: zusätzlich muss der Aufrufer
 // per eigenem Supabase-Login nachweisen, dass er eine aktive Geschäftsführung/Admin-Person ist.
+/**
+ * Login-Links für andere erzeugen und Login-Adressen ändern heißt: sich als diese Person anmelden können.
+ * Seit 23.11.2026 (Erays Entscheidung) nur, wer `mitarbeiter.darf_zugaenge` hat (Eray, Hasan) oder Superuser ist —
+ * nicht mehr jede Geschäftsführung. Den Link zur eigenen Adresse darf jede Geschäftsführung weiter erzeugen.
+ */
+async function pruefeZugangsVerwalter(
+  req: Request,
+  admin: ReturnType<typeof createClient>,
+  zielEmail?: string,
+): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+  const grund = await pruefeAdminAufrufer(req, admin)
+  if (!grund.ok) return grund
+  const token = (req.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '').trim()
+  const { data: userData } = await admin.auth.getUser(token)
+  const eigene = String(userData.user?.email ?? '').trim().toLowerCase()
+  if (zielEmail && zielEmail.trim().toLowerCase() === eigene) return { ok: true }
+  const { data } = await admin.from('mitarbeiter').select('darf_zugaenge, ist_superuser').eq('email', userData.user?.email ?? '').maybeSingle()
+  const mRow = data as { darf_zugaenge?: boolean; ist_superuser?: boolean } | null
+  if (mRow?.darf_zugaenge || mRow?.ist_superuser) return { ok: true }
+  return { ok: false, status: 403, error: 'Login-Links und Login-Adressen anderer Mitarbeiter dürfen nur Eray Yesil und Hasan Süslü verwalten.' }
+}
+
 async function pruefeAdminAufrufer(
   req: Request,
   admin: ReturnType<typeof createClient>,
@@ -4037,7 +4059,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
         return new Response(JSON.stringify({ error: 'mitarbeiterId und neueEmail sind Pflichtfelder' }), { status: 400, headers })
       }
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
-      const berechtigung = await pruefeAdminAufrufer(req, admin)
+      const berechtigung = await pruefeZugangsVerwalter(req, admin)
       if (!berechtigung.ok) {
         return new Response(JSON.stringify({ error: berechtigung.error }), { status: berechtigung.status, headers })
       }
@@ -4075,7 +4097,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
         return new Response(JSON.stringify({ error: 'email ist ein Pflichtfeld' }), { status: 400, headers })
       }
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
-      const berechtigung = await pruefeAdminAufrufer(req, admin)
+      const berechtigung = await pruefeZugangsVerwalter(req, admin, email)
       if (!berechtigung.ok) {
         return new Response(JSON.stringify({ error: berechtigung.error }), { status: berechtigung.status, headers })
       }
@@ -4488,9 +4510,10 @@ Deno.serve((req: Request) => mitAnlass(async () => {
         return new Response(JSON.stringify({ error: 'Dieser Link ist abgelaufen – bitte fordern Sie bei uns einen neuen an.' }), { status: 403, headers })
       }
       const pfad = `${objektId}/eigentuemer_${crypto.randomUUID()}_${String(dateiname).replace(/[^a-zA-Z0-9._-]/g, '_').slice(-120)}`
-      const { data, error: uploadUrlError } = await admin.storage.from('objekt-dokumente').createSignedUploadUrl(pfad)
-      if (uploadUrlError) return new Response(JSON.stringify({ error: uploadUrlError.message }), { status: 500, headers })
-      return new Response(JSON.stringify({ pfad: data.path, token: data.token }), { headers })
+      // Erst ins Eingangsfach für Kunden-Uploads (25 MB je Datei); beim Absenden wandert die Datei ins Objekt.
+      const { data, error: uploadUrlError } = await admin.storage.from('kunden-uploads').createSignedUploadUrl(pfad)
+      if (uploadUrlError) return new Response(JSON.stringify({ error: 'Das Hochladen konnte nicht vorbereitet werden. Bitte versuchen Sie es gleich noch einmal.' }), { status: 500, headers })
+      return new Response(JSON.stringify({ pfad: data.path, token: data.token, bucket: 'kunden-uploads' }), { headers })
     }
 
     if (body.action === 'public_submit_objekt_formular') {
@@ -4529,6 +4552,14 @@ Deno.serve((req: Request) => mitAnlass(async () => {
         // Hochgeladen wird nur über public_objekt_upload_url — der Pfad muss genau daher stammen.
         if (!url.startsWith(`${objektId}/eigentuemer_`) || url.includes('..')) {
           return new Response(JSON.stringify({ error: 'Die Datei konnte nicht zugeordnet werden. Bitte erneut hochladen.' }), { status: 400, headers })
+        }
+        // Liegt die Datei im Eingangsfach (Seiten ab 23.11.2026), ins Objekt übernehmen; ältere Seiten luden direkt dorthin.
+        const eingangsfach = admin.storage.from('kunden-uploads')
+        const { data: hochgeladen } = await eingangsfach.download(url)
+        if (hochgeladen) {
+          const { error: ablageFehler } = await admin.storage.from('objekt-dokumente').upload(url, hochgeladen, { contentType: hochgeladen.type || undefined, upsert: true })
+          if (ablageFehler) return new Response(JSON.stringify({ error: 'Die Datei konnte nicht abgelegt werden. Bitte erneut hochladen.' }), { status: 500, headers })
+          await eingangsfach.remove([url]).catch(() => undefined)
         }
         const ordnerName = kurz(ordner, 80)
         const sauber = { id: kurz(d.id, 60) || `dok_${crypto.randomUUID().slice(0, 11)}`, name: kurz(d.name, 200), typ: kurz(d.typ, 100), datum: heute, groesse: kurz(d.groesse, 30), url }
