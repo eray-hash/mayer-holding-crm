@@ -229,6 +229,14 @@ export async function verarbeiteScanEingang(
   return ergebnis
 }
 
+async function festeAkte(admin: Admin, betreff: string): Promise<string | null> {
+  const { data } = await admin.from('scan_eingang').select('betreff_akten').eq('id', 'standard').maybeSingle()
+  const karte = (data?.betreff_akten ?? {}) as Record<string, unknown>
+  const schluessel = normText(normBetreff(betreff))
+  for (const [b, id] of Object.entries(karte)) if (normText(b) === schluessel && typeof id === 'string') return id
+  return null
+}
+
 type FertigerTeil = { name: string; bytes: Uint8Array; kategorie: string; kurzinhalt?: string; seiten: string; quelleUrl: string }
 
 async function bearbeiteMail(admin: Admin, dienste: ScanDienste, m: MailZeile, ersetzen: boolean): Promise<{ teile: number; neueAkte: boolean }> {
@@ -282,7 +290,13 @@ async function bearbeiteMail(admin: Admin, dienste: ScanDienste, m: MailZeile, e
   // „Bauer Schebek“ haben oft auch Einzel-Akten). Bei zu vielen Teiltreffern (häufiger Nachname) zählen nur die ganzen.
   const ganz = (akten as AkteZeile[]).filter((a) => betreffIstAktenName(betreff, a))
   const teilweise = (akten as AkteZeile[]).filter((a) => !ganz.includes(a) && betreffNenntTeilDesNamens(betreff, a))
-  const kandidaten = (ganz.length + teilweise.length <= 6 ? [...ganz, ...teilweise] : ganz).slice(0, 6)
+  let kandidaten = (ganz.length + teilweise.length <= 6 ? [...ganz, ...teilweise] : ganz).slice(0, 6)
+  // Feste Zuordnung aus der Einstellung (scan_eingang.betreff_akten) geht vor — z. B. interne Ordner ohne Kundennamen.
+  const fest = await festeAkte(admin, betreff)
+  if (fest) {
+    const akte = (akten as AkteZeile[]).find((a) => a.id === fest)
+    if (akte) kandidaten = [akte]
+  }
   let ziel: (AkteZeile | null)[] = teile.map(() => kandidaten.length === 1 ? kandidaten[0] : null)
   let neuerBereich = ''
   let begruendung = kandidaten.length === 1 ? 'Betreff ist der Name genau einer Akte' : ''
