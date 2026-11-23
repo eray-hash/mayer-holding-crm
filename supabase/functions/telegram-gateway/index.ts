@@ -57,7 +57,8 @@ import { DATEI_VERWALTUNG_WERKZEUGE, fuehreDateiVerwaltungAus, istDateiVerwaltun
 import { BUECHER_WERKZEUGE, fuehreBuecherWerkzeugAus, istBuecherWerkzeug } from './buecherWerkzeuge.ts'
 import { fuehreSeminarWerkzeugAus, istSeminarWerkzeug, SEMINAR_WERKZEUGE } from './seminarWerkzeuge.ts'
 import { BESICHTIGUNG_WERKZEUGE, fuehreBesichtigungWerkzeugAus, istBesichtigungWerkzeug } from './besichtigungWerkzeuge.ts'
-import { fuehreRechnungZahlungWerkzeugAus, istRechnungZahlungWerkzeug, RECHNUNG_ZAHLUNG_WERKZEUGE } from './rechnungZahlungWerkzeuge.ts'
+import { darfRechnungen, fuehreRechnungZahlungWerkzeugAus, istRechnungZahlungWerkzeug, RECHNUNG_ZAHLUNG_WERKZEUGE } from './rechnungZahlungWerkzeuge.ts'
+import { anzeigeNameAusOrdner, besitzerMarkeAusName, besitzerZusatz, fremdPruefer, MARKE_MUSTER } from './dateiBesitz.ts'
 import { ABGLEICH_WERKZEUGE, fuehreAbgleichWerkzeugAus, istAbgleichWerkzeug } from './abgleichWerkzeug.ts'
 import { fuehreUmsatzWerkzeugAus, istUmsatzWerkzeug, UMSATZ_WERKZEUGE } from './umsatzWerkzeuge.ts'
 import { fuehreRechnungVorschlagWerkzeugAus, istRechnungVorschlagWerkzeug, RECHNUNG_VORSCHLAG_WERKZEUGE } from './rechnungVorschlagWerkzeug.ts'
@@ -161,7 +162,8 @@ async function sendTelegramMessage(chatId: number, text: string): Promise<void> 
         if (res.ok) { grund = ''; break }
         grund = `${res.status} ${(await res.text().catch(() => '')).slice(0, 300)}`
       } catch (err) {
-        grund = err instanceof Error ? err.message : String(err)
+        // Netzfehler enthalten die Adresse samt Bot-Schlüssel — nie so ins Fehlerprotokoll schreiben.
+        grund = (err instanceof Error ? err.message : String(err)).replace(/bot\d+:[\w-]+/g, 'bot<geheim>')
       }
       if (versuch === 0) await new Promise((r) => setTimeout(r, 1500))
     }
@@ -661,8 +663,9 @@ export async function inhaltsHash(bytes: Uint8Array): Promise<string> {
   return [...digest.slice(0, 6)].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
-async function speichereDatei(supabase: Supa, bytes: Uint8Array, dateiname: string, contentType: string, marke: string, lesen = true): Promise<string | null> {
-  const pfad = `${ORDNER}/${Date.now()}_${marke}_${sicheresPfadsegment(dateiname)}`
+// `besitzer`: Besitzer-Marke „_pv…“ für Dateien aus dem privaten Assistenten (dateiBesitz.ts), sonst leer.
+async function speichereDatei(supabase: Supa, bytes: Uint8Array, dateiname: string, contentType: string, marke: string, lesen = true, besitzer = ''): Promise<string | null> {
+  const pfad = `${ORDNER}/${Date.now()}_${marke}${besitzer}_${sicheresPfadsegment(dateiname)}`
   const { error } = await supabase.storage.from(BUCKET).upload(pfad, bytes, { contentType, upsert: true })
   if (error) {
     console.error('Upload fehlgeschlagen:', error.message)
@@ -691,10 +694,14 @@ async function holeInhalte(dokumente: Dokument[], volltext = false): Promise<Map
   }
 }
 
-const MARKE_MUSTER = /^\d{10,}_(h[0-9a-f]{12}(?:p\d+-\d+)?)_/
-
+// Muster der Dateinamen (Zeitstempel, Inhaltsabdruck, Besitzer-Marke) und Anzeigename: dateiBesitz.ts.
 export function anzeigeName(dateiImOrdner: string): string {
-  return dateiImOrdner.replace(MARKE_MUSTER, '').replace(/^\d{10,}_/, '')
+  return anzeigeNameAusOrdner(dateiImOrdner)
+}
+
+// Prüfer für unabgelegte Dateien (true = gibt es für ihn nicht). Ohne bekannten Mitarbeiter: alles mit Besitzer-Marke verbergen.
+async function fremdFuer(mitarbeiter?: RechteTraeger): Promise<(name: string) => boolean> {
+  return mitarbeiter ? await fremdPruefer(mitarbeiter) : (name: string) => besitzerMarkeAusName(name) !== null
 }
 
 // Sichert eine per Telegram geschickte Datei (Sammel-Scans werden vorher in Einzeldokumente zerlegt)
@@ -706,9 +713,12 @@ const SICHERUNG = 'telegram-eingang'
 // Holt Dateien zurück, deren Verarbeitung früher abgebrochen ist (der Worker wurde beendet, bevor
 // die Datei fertig gespeichert war): Sie liegen noch als Sicherungskopie da und kommen jetzt in die
 // normale Ablage. Liefert Zeilen für den Datei-Eingang.
-async function retteAbgebrocheneEingaenge(supabase: Supa): Promise<string[]> {
+async function retteAbgebrocheneEingaenge(supabase: Supa, mitarbeiter?: RechteTraeger): Promise<string[]> {
   const zeilen: string[] = []
   try {
+    // Gerettet wird alles; gemeldet (und damit vom Assistenten abgelegt) nur, was dem Mitarbeiter gehört —
+    // nie die private Datei eines Kollegen aus dessen privatem Assistenten (Besitzer-Marke, dateiBesitz.ts).
+    const fremd = await fremdFuer(mitarbeiter)
     const { data } = await supabase.storage.from(BUCKET).list(SICHERUNG, { limit: 100 })
     // Erst wenn die Kopie älter ist, als ein Lauf überhaupt leben kann (LAUF_VERWAIST_MS) — eine
     // jüngere gehört womöglich zu einem Eingang, der gerade noch ausgewertet wird (auch von einem
@@ -718,7 +728,7 @@ async function retteAbgebrocheneEingaenge(supabase: Supa): Promise<string[]> {
     for (const d of alt) {
       const ziel = `${ORDNER}/${d.name}`
       const { error } = await supabase.storage.from(BUCKET).move(`${SICHERUNG}/${d.name}`, ziel)
-      if (!error) zeilen.push(`pfad=${ziel} | Name: ${anzeigeName(d.name)} | aus einem früheren, abgebrochenen Eingang gerettet`)
+      if (!error && !fremd(d.name)) zeilen.push(`pfad=${ziel} | Name: ${anzeigeName(d.name)} | aus einem früheren, abgebrochenen Eingang gerettet`)
     }
   } catch (err) {
     console.error('Rettung abgebrochener Eingänge fehlgeschlagen:', err)
@@ -752,11 +762,13 @@ async function verarbeiteDateiEingang(supabase: Supa, eingangsDatei: DateiEingan
     return `[Datei-Eingang per Telegram — Systemmeldung] Die Datei „${dateiname}" konnte NICHT von Telegram heruntergeladen werden und ist deshalb nicht gespeichert. Häufigster Grund: Sie ist größer als 20 MB; so große Dateien gibt Telegram nicht heraus. Sag dem Mitarbeiter das klar und dass er sie im CRM direkt in der Akte hochladen soll.`
   }
   const marke0 = `h${await inhaltsHash(bytes)}`
+  // Besitzer-Marke schon an der Sicherungskopie: Auch eine gerettete Kopie bleibt dem privaten Assistenten zugeordnet.
+  const besitzer = await besitzerZusatz(mitarbeiter)
   // Zuerst sichern, dann auswerten: Bricht die Auswertung ab, ist die Datei trotzdem da.
-  const sicherungsPfad = `${SICHERUNG}/${stempel}_${marke0}_${sicheresPfadsegment(dateiname)}`
+  const sicherungsPfad = `${SICHERUNG}/${stempel}_${marke0}${besitzer}_${sicheresPfadsegment(dateiname)}`
   const { error: sicherungsFehler } = await supabase.storage.from(BUCKET).upload(sicherungsPfad, bytes, { contentType, upsert: true })
   if (sicherungsFehler) console.error('Sicherungskopie fehlgeschlagen:', sicherungsFehler.message)
-  const gerettet = await retteAbgebrocheneEingaenge(supabase)
+  const gerettet = await retteAbgebrocheneEingaenge(supabase, mitarbeiter)
   let ergebnis: string
   try {
     ergebnis = await werteDateiAus(supabase, bytes, dateiname, contentType, caption, marke0, mitarbeiter)
@@ -768,7 +780,7 @@ async function verarbeiteDateiEingang(supabase: Supa, eingangsDatei: DateiEingan
     if (!sicherungsFehler) await supabase.storage.from(BUCKET).remove([sicherungsPfad])
   } else if (!sicherungsFehler) {
     // Auswertung oder Speichern gescheitert: die Sicherungskopie wird zur abgelegten Datei.
-    const ziel = `${ORDNER}/${stempel}_${marke0}_${sicheresPfadsegment(dateiname)}`
+    const ziel = `${ORDNER}/${stempel}_${marke0}${besitzer}_${sicheresPfadsegment(dateiname)}`
     const { error } = await supabase.storage.from(BUCKET).move(sicherungsPfad, ziel)
     ergebnis = [
       '[Datei-Eingang per Telegram — Systemmeldung, nicht vom Mitarbeiter getippt]',
@@ -790,11 +802,25 @@ export async function werteDateiAus(supabase: Supa, bytes: Uint8Array, dateiname
     `Bildunterschrift des Mitarbeiters: ${caption ? `„${caption}"` : '(keine)'}`,
   ]
 
+  const besitzer = await besitzerZusatz(mitarbeiter)
   // Genau diese Datei schon einmal bekommen? Dann nicht noch einmal zerlegen und speichern.
   try {
-    const frueher = (await listeOrdner(supabase)).filter((d) => d.name.includes(`_${marke}`))
-    if (frueher.length > 0) {
-      const referenzen = await ladeReferenzen(supabase)
+    const kandidaten = (await listeOrdner(supabase)).filter((d) => d.name.includes(`_${marke}`))
+    const referenzen = kandidaten.length > 0 ? await ladeReferenzen(supabase) : null
+    // Nur frühere Eingänge, die es für ihn gibt: Unabgelegte Dateien aus dem privaten Assistenten eines
+    // Kollegen und Dateien, die nur in fremden privaten Akten/Objekten liegen, zählen nicht (sonst verriete
+    // „schon einmal geschickt“, dass ein Kollege genau dieses Dokument privat hat) — dann wird neu gespeichert.
+    // Im privaten Assistenten zählen nur eigene Sachen; dort bekommt er sonst eine eigene Kopie.
+    const fremd = await fremdFuer(mitarbeiter)
+    const wer: RechteTraeger = mitarbeiter ?? { name: '' }
+    const frueher = kandidaten.filter((d) => {
+      const stelle = `/${BUCKET}/${ORDNER}/${d.name}`
+      const inAkten = referenzen!.kunden.filter((k) => (k.dokumente ?? []).some((x) => x.url.includes(stelle)))
+      const inObjekten = referenzen!.objekte.filter((o) => JSON.stringify(o.dokumente ?? null).includes(stelle))
+      if (inAkten.length === 0 && inObjekten.length === 0) return !fremd(d.name)
+      return inAkten.some((k) => !istFremdePrivatakte(wer, k)) || inObjekten.some((o) => !istUnsichtbaresObjekt(wer, o))
+    })
+    if (frueher.length > 0 && referenzen) {
       const wann = frueher.at(-1)?.created_at
         ? new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', dateStyle: 'short', timeStyle: 'short' }).format(new Date(frueher.at(-1)!.created_at!))
         : 'einem früheren Zeitpunkt'
@@ -837,7 +863,7 @@ export async function werteDateiAus(supabase: Supa, bytes: Uint8Array, dateiname
       try {
         const teilBytes = await pdfSeitenAusschneiden(bytes, teil.start_seite, teil.end_seite, drehungen)
         const name = teil.vorgeschlagener_dateiname || `${teil.kategorie}_${teil.start_seite}-${teil.end_seite}.pdf`
-        const pfad = await speichereDatei(supabase, teilBytes, name, 'application/pdf', `${marke}p${teil.start_seite}-${teil.end_seite}`)
+        const pfad = await speichereDatei(supabase, teilBytes, name, 'application/pdf', `${marke}p${teil.start_seite}-${teil.end_seite}`, true, besitzer)
         if (!pfad) continue
         zeilen.push(
           `${zeilen.length + 1}. pfad=${pfad} | Name: ${name} | Kategorie: ${teil.kategorie}${teil.erkanntes_datum ? ` | Datum im Dokument: ${teil.erkanntes_datum}` : ''} | Seiten ${teil.start_seite}–${teil.end_seite}${rechnungsZusatz(teil.rechnung)}`,
@@ -857,7 +883,7 @@ export async function werteDateiAus(supabase: Supa, bytes: Uint8Array, dateiname
       ].join('\n')
     }
     // Aufteilung nicht gelungen: den Scan als Ganzes sichern statt ihn zu verlieren.
-    const pfad = await speichereDatei(supabase, bytes, dateiname, contentType, marke)
+    const pfad = await speichereDatei(supabase, bytes, dateiname, contentType, marke, true, besitzer)
     if (!pfad) return `${kopf.join('\n')}\nDie Datei konnte nicht gespeichert werden.`
     return [
       ...kopf,
@@ -871,7 +897,7 @@ export async function werteDateiAus(supabase: Supa, bytes: Uint8Array, dateiname
   const auswertbar = /pdf|^image\/|wordprocessingml|spreadsheetml|csv/.test(contentType) || /\.(pdf|jpe?g|png|webp|gif|docx|xlsx|csv)$/i.test(dateiname)
   if (!auswertbar) {
     const istTon = /^audio\//.test(contentType) || /^video\//.test(contentType)
-    const pfad = await speichereDatei(supabase, bytes, dateiname, contentType, marke, !istTon)
+    const pfad = await speichereDatei(supabase, bytes, dateiname, contentType, marke, !istTon, besitzer)
     if (!pfad) return `${kopf.join('\n')}\nDie Datei konnte nicht gespeichert werden.`
     const art = /^audio\//.test(contentType) ? 'eine Sprachnachricht oder Tonaufnahme' : /^video\//.test(contentType) ? 'ein Video' : 'ein Format, das nicht gelesen werden kann'
     // Ton und Video abhören, wenn das eingerichtet ist. Die Abschrift wird wie der Inhalt eines
@@ -940,7 +966,7 @@ export async function werteDateiAus(supabase: Supa, bytes: Uint8Array, dateiname
       console.error('Foto ausrichten fehlgeschlagen:', err)
     }
   }
-  const pfad = await speichereDatei(supabase, zuSpeichern, dateiname, contentType, marke)
+  const pfad = await speichereDatei(supabase, zuSpeichern, dateiname, contentType, marke, true, besitzer)
   if (!pfad) return `${kopf.join('\n')}\nDie Datei konnte nicht gespeichert werden.`
   const erkannt = [
     klassifikation?.erkannter_name && `Name „${klassifikation.erkannter_name}"`,
@@ -1706,7 +1732,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
   if (istLinkWerkzeug(name)) {
     return await fuehreLinkWerkzeugAus(name, input ?? {}, {
       protokolliere,
-      speichere: async (bytes, dateiname, contentType) => await speichereDatei(supabase, bytes, dateiname, contentType, `h${await inhaltsHash(bytes)}`),
+      speichere: async (bytes, dateiname, contentType) => await speichereDatei(supabase, bytes, dateiname, contentType, `h${await inhaltsHash(bytes)}`, true, await besitzerZusatz(mitarbeiter)),
     })
   }
   // Entwurf des Statusberichts an den Kunden (nur lesen, gesendet wird im CRM) — kundenberichtWerkzeug.ts.
@@ -1941,9 +1967,16 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
       return meine.length === 0 ? 'In diesem Zeitraum stehen keine Termine im Kalender.' : JSON.stringify(meine)
     }
 
+    if (name === 'termin_absagen') {
+      // Nur eigene Termine oder solche, bei denen er dabei ist — sonst gibt es den Termin für ihn nicht
+      // (wie die Zeilenregel „termine lesen“); Titel und Zeit eines fremden Termins nie nennen.
+      const { data: eigen } = await supabase.from('termine').select('besitzer_email, teilnehmer').eq('id', String(input.termin_id ?? '').trim()).maybeSingle()
+      const dabei = !!eigen && (String(eigen.besitzer_email ?? '').toLowerCase() === ich || ((eigen.teilnehmer ?? []) as string[]).some((p) => String(p).toLowerCase() === ich))
+      if (!dabei) return 'Fehler: Diesen Termin gibt es nicht (mehr). Ermittle die termin_id mit termine_zeigen.'
+    }
     if (name === 'termin_absagen' && msErlaubt(ich)) {
       // Bereich Privat (Regel des Desktop-Assistenten): Absagen/Löschen nur nach Bestätigung durch den Mitarbeiter.
-      const { data: t } = await supabase.from('termine').select('titel, beginn, besitzer_email').eq('id', String(input.termin_id ?? '')).maybeSingle()
+      const { data: t } = await supabase.from('termine').select('titel, beginn, besitzer_email').eq('id', String(input.termin_id ?? '').trim()).maybeSingle()
       if (!t) return 'Fehler: Diesen Termin gibt es nicht (mehr). Ermittle die termin_id mit termine_zeigen.'
       const beschreibung = `Termin absagen: ${t.titel} (${berlinText(t.beginn, t.beginn, false)})`.slice(0, 200)
       const vm = await rufeKalender({ action: 'vormerkung_anlegen', art: 'crm_termin_absagen', beschreibung, parameter: { terminId: String(input.termin_id), bezug: t.titel } })
@@ -2427,7 +2460,12 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
       .eq('kunde_id', k.id)
       .order('datum', { ascending: false })
       .limit(8)
-    const { data: rechnungen } = await supabase.from('rechnungen').select('nummer, datum, betrag_brutto, status, zahlungsziel').eq('kunde_id', k.id).order('datum', { ascending: false })
+    // Rechnungen hängen am Bereich Unternehmensberatung (Zeilenregel darf_bereich('beratung')) — ohne dieses Recht
+    // (und im privaten Assistenten) keine Rechnungen, auch nicht bei Akten anderer Bereiche.
+    const mitRechnungen = darfRechnungen(mitarbeiter)
+    const { data: rechnungen } = mitRechnungen
+      ? await supabase.from('rechnungen').select('nummer, datum, betrag_brutto, status, zahlungsziel').eq('kunde_id', k.id).order('datum', { ascending: false })
+      : { data: [] }
     const inhalte = await holeInhalte(k.dokumente ?? [])
     const inhaltVermerk = (d: Dokument) => {
       const i = inhalte.get(d.url)
@@ -2451,12 +2489,16 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
         `Dokumente (${(k.dokumente ?? []).length}):`,
         ...((k.dokumente ?? []).length > 0 ? (k.dokumente ?? []).map((d) => `- ${d.name} (${deDatum(d.datum)}, ${d.groesse}) [dokument_id=${d.id}]${inhaltVermerk(d)}`) : ['(keine)']),
         '',
-        `Rechnungen an den Kunden (${(rechnungen ?? []).length}):`,
-        ...((rechnungen ?? []).length > 0
-          // deno-lint-ignore no-explicit-any
-          ? (rechnungen ?? []).map((r: any) => `- ${r.nummer} vom ${deDatum(r.datum)}: ${euro(Number(r.betrag_brutto))} brutto, Status ${r.status}${r.status === 'Bezahlt' ? '' : `, fällig ${deDatum(r.zahlungsziel)}`}`)
-          : ['(keine erfasst)']),
-        '',
+        ...(mitRechnungen
+          ? [
+              `Rechnungen an den Kunden (${(rechnungen ?? []).length}):`,
+              ...((rechnungen ?? []).length > 0
+                // deno-lint-ignore no-explicit-any
+                ? (rechnungen ?? []).map((r: any) => `- ${r.nummer} vom ${deDatum(r.datum)}: ${euro(Number(r.betrag_brutto))} brutto, Status ${r.status}${r.status === 'Bezahlt' ? '' : `, fällig ${deDatum(r.zahlungsziel)}`}`)
+                : ['(keine erfasst)']),
+              '',
+            ]
+          : []),
         'Aktivitäten/Notizen (neueste zuerst):',
         ...((k.activities ?? []).length > 0
           ? (k.activities ?? []).slice(0, 30).map((a) => `- ${deDatum(a.date)} ${a.user}: ${a.text} [aktivitaet_id=${a.id}]`)
@@ -2696,14 +2738,17 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     if (eintraege.length > 40) return `Fehler: ${eintraege.length} Einträge sind zu viele auf einmal (höchstens 40). Teile die Liste auf.`
     const text = (v: unknown) => String(v ?? '').trim()
     if (input?.bestaetigt !== true) {
-      const { data: vorhanden } = await alleZeilen(() => supabase.from('kunden').select('id, firma, ansprechpartner, email, bereich, verantwortlich_email'))
+      const { data: vorhandenRoh } = await alleZeilen(() => supabase.from('kunden').select('id, firma, ansprechpartner, email, bereich, verantwortlich_email'))
+      // Private Kontakte von Kollegen gibt es für ihn nicht — auch nicht als „gibt es schon“ (wie kunde_anlegen).
+      type Vorhanden = { id: string; firma: string; email: string | null; bereich: string; verantwortlich_email: string | null }
+      const vorhanden = ((vorhandenRoh ?? []) as Vorhanden[]).filter((k) => !istFremdePrivatakte(mitarbeiter, k))
       const norm = (v: string) => v.toLowerCase().replace(/\s+/g, ' ').trim()
       const zeilen = eintraege.map((e, i) => {
         const hinweise: string[] = []
         const n = text(e.name)
         if (!n) hinweise.push('Name fehlt')
         if (!text(e.bereich)) hinweise.push('Bereich fehlt')
-        const gleich = ((vorhanden ?? []) as { id: string; firma: string; email: string | null; bereich: string; verantwortlich_email: string | null }[]).find((k) =>
+        const gleich = vorhanden.find((k) =>
           (n && norm(k.firma ?? '') === norm(n)) || (text(e.email) && norm(k.email ?? '') === norm(text(e.email))))
         if (gleich) hinweise.push(darfAkte(mitarbeiter, gleich as AkteFuerRechte) ? `gibt es schon (kunde_id=${gleich.id}) — wird nicht doppelt angelegt` : 'gibt es schon in einem nicht freigegebenen Bereich — wird nicht angelegt')
         if (text(e.aufgabe_bis) && !/^\d{4}-\d{2}-\d{2}$/.test(text(e.aufgabe_bis))) hinweise.push('Fälligkeit nicht als JJJJ-MM-TT')
@@ -2765,10 +2810,12 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
   }
 
   if (name === 'unzugeordnete_dateien') {
-    const [dateien, referenzen] = await Promise.all([listeOrdner(supabase), ladeReferenzen(supabase)])
+    const [dateien, referenzen, fremd] = await Promise.all([listeOrdner(supabase), ladeReferenzen(supabase), fremdFuer(mitarbeiter)])
     const grenze = Date.now() - 30 * 24 * 60 * 60 * 1000
     const offen = dateien
       .filter((d) => !referenzen.text.includes(`/${BUCKET}/${ORDNER}/${d.name}`))
+      // Unabgelegtes aus dem privaten Assistenten eines Kollegen (bzw. im privaten Assistenten: alles außer den eigenen) gibt es nicht.
+      .filter((d) => !fremd(d.name))
       .filter((d) => !d.created_at || new Date(d.created_at).getTime() > grenze)
       .slice(0, 40)
     if (offen.length === 0) return 'Es gibt keine gespeicherten Dateien, die noch keiner Akte zugeordnet sind.'
@@ -2788,7 +2835,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     // deno-lint-ignore no-explicit-any
     const gewuenscht: any[] = Array.isArray(input.dateien) ? input.dateien : []
     if (gewuenscht.length === 0) return 'Fehler: keine Dateien angegeben.'
-    const [ordner, referenzen] = await Promise.all([listeOrdner(supabase), ladeReferenzen(supabase)])
+    const [ordner, referenzen, fremd] = await Promise.all([listeOrdner(supabase), ladeReferenzen(supabase), fremdFuer(mitarbeiter)])
     const imOrdner = new Map(ordner.map((d) => [d.name, d]))
     let dokumente = [...(k.dokumente ?? [])]
     const abgelegt: string[] = []
@@ -2797,7 +2844,8 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
       const pfad = String(g?.pfad ?? '')
       const dateiName = pfad.startsWith(`${ORDNER}/`) ? pfad.slice(ORDNER.length + 1) : ''
       const datei = imOrdner.get(dateiName)
-      if (!datei) {
+      // Unabgelegte Datei aus dem privaten Assistenten eines Kollegen: gibt es für ihn nicht (gleiche Meldung wie „fehlt“).
+      if (!datei || (fremd(dateiName) && !referenzen.text.includes(`/${BUCKET}/${ORDNER}/${dateiName}`))) {
         meldungen.push(`„${pfad}": Diese Datei gibt es in der Ablage nicht (pfad exakt übernehmen).`)
         continue
       }
@@ -2879,6 +2927,8 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
   }
 
   if (name === 'rechnung_erfassen') {
+    // Rechnungen gehören zur Unternehmensberatung (Zeilenregel darf_bereich('beratung')).
+    if (!darfRechnungen(mitarbeiter)) return nichtFreigegeben('beratung', mitarbeiter.name)
     const k = await ladeErlaubteAkte(supabase, mitarbeiter, { kunde_id: input.kunde_id })
     if (typeof k === 'string') return k
     const nummer = String(input.nummer ?? '').trim()
@@ -2928,6 +2978,8 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
   }
 
   if (name === 'rechnung_status_setzen') {
+    // Rechnungen gehören zur Unternehmensberatung (Zeilenregel darf_bereich('beratung')).
+    if (!darfRechnungen(mitarbeiter)) return nichtFreigegeben('beratung', mitarbeiter.name)
     const nummer = String(input.nummer ?? '').trim()
     if (!['Versendet', 'Bezahlt', 'Überfällig'].includes(input.status)) return 'Fehler: ungültiger Status.'
     const { data: treffer } = await supabase.from('rechnungen').select('id, kunde_id, status, betrag_brutto').eq('nummer', nummer).limit(1)
@@ -2944,12 +2996,13 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
   if (name === 'dateien_aussortieren') {
     const pfade: string[] = Array.isArray(input.pfade) ? input.pfade.map(String) : []
     if (pfade.length === 0) return 'Fehler: keine Dateien angegeben.'
-    const referenzen = await ladeReferenzen(supabase)
+    const [referenzen, fremd] = await Promise.all([ladeReferenzen(supabase), fremdFuer(mitarbeiter)])
     const meldungen: string[] = []
     const aussortiert: string[] = []
     for (const pfad of pfade) {
       const dateiName = pfad.startsWith(`${ORDNER}/`) ? pfad.slice(ORDNER.length + 1) : ''
-      if (!dateiName || dateiName.includes('/')) {
+      // Auch die unabgelegte Datei aus dem privaten Assistenten eines Kollegen ist für ihn „kein gültiger Pfad“.
+      if (!dateiName || dateiName.includes('/') || (fremd(dateiName) && !referenzen.text.includes(`/${BUCKET}/${ORDNER}/${dateiName}`))) {
         meldungen.push(`„${pfad}": kein gültiger Pfad.`)
         continue
       }
@@ -3092,6 +3145,9 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
         if (!oeffentlich && !inObjekten.some((o) => !o.privat_besitzer)) return 'Fehler: Diese Datei gibt es in der Ablage nicht.'
         return nichtFreigegeben(oeffentlich?.bereich ?? 'immobilien', mitarbeiter.name)
       }
+      // Noch nirgends abgelegt: Dateien aus dem privaten Assistenten eines Kollegen gibt es für ihn nicht
+      // (im privaten Assistenten: nur die eigenen), siehe dateiBesitz.ts.
+      if (inAkten.length === 0 && inObjekten.length === 0 && (await fremdFuer(mitarbeiter))(dateiName)) return 'Fehler: Diese Datei gibt es in der Ablage nicht.'
     }
     const dok: Dokument = { id: 'vorab', name: anzeigeName(dateiName), typ: datei.metadata?.mimetype ?? 'application/octet-stream', datum: heute, groesse: '', url: supabase.storage.from(BUCKET).getPublicUrl(pfad).data.publicUrl }
     let info = (await holeInhalte([dok], true)).get(dok.url)
@@ -4699,7 +4755,8 @@ export const bearbeiteAnfrage = (req: Request): Promise<Response> => mitAnlass(a
   }
 
   // 3) Telegram.
-  if (WEBHOOK_SECRET && req.headers.get('x-telegram-bot-api-secret-token') !== WEBHOOK_SECRET) {
+  // Ohne eingerichtetes Geheimnis wird nichts angenommen (früher stand der Weg dann jedem offen).
+  if (!WEBHOOK_SECRET || !gleichesGeheimnis(req.headers.get('x-telegram-bot-api-secret-token'), WEBHOOK_SECRET)) {
     return new Response('Unauthorized', { status: 401 })
   }
   const arbeit = verarbeiteUpdate(body).catch((err) => console.error('Update-Verarbeitung fehlgeschlagen:', err))

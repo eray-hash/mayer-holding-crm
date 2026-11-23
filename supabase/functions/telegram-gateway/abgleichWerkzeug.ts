@@ -39,7 +39,9 @@ import {
   zahlungsNotiz,
   zahlungsVermerk,
 } from '../_shared/zahlungsAbgleich.ts'
-import { darfAkte, istFremdePrivatakte, nichtFreigegeben, type RechteMitarbeiter } from './rechte.ts'
+import { darfAkte, darfObjekt, istFremdePrivatakte, nichtFreigegeben, type RechteMitarbeiter } from './rechte.ts'
+import { unzugeordnetFremd } from './dateiBesitz.ts'
+import { alleZeilen } from '../_shared/alleZeilen.ts'
 import { berechneZahlung, darfRechnungen, offenerBetrag, type RechnungZeile, type Zahlung } from './rechnungZahlungWerkzeuge.ts'
 
 // deno-lint-ignore no-explicit-any
@@ -267,6 +269,18 @@ export async function fuehreAbgleichWerkzeugAus(name: string, input: any, k: Abg
   const marke = `/${TELEGRAM_EIMER}/${pfad}`
   const darin = ((privat ?? []) as (AkteKurz & { dokumente?: { url?: string }[] | null })[]).filter((a) => (a.dokumente ?? []).some((d) => String(d?.url ?? '').includes(marke)))
   if (darin.length && darin.every((a) => istFremdePrivatakte(mitarbeiter, a))) return 'Fehler: Diese Datei gibt es in der Ablage nicht.'
+  // Datei aus dem privaten Assistenten eines Kollegen (Besitzer-Marke, dateiBesitz.ts): gibt es für ihn nicht —
+  // außer sie liegt inzwischen in einer Akte oder einem Objekt, das er sehen darf.
+  if (await unzugeordnetFremd(mitarbeiter, pfad)) {
+    const [{ data: kunden }, { data: objekte }] = await Promise.all([
+      alleZeilen(() => supabase.from('kunden').select('id, bereich, verantwortlich_email, dokumente')),
+      alleZeilen(() => supabase.from('objekte').select('id, privat_besitzer, dokumente')),
+    ])
+    const sichtbarAbgelegt =
+      ((kunden ?? []) as (AkteKurz & { dokumente?: { url?: string }[] | null })[]).some((a) => (a.dokumente ?? []).some((d) => String(d?.url ?? '').includes(marke)) && darfAkte(mitarbeiter, a)) ||
+      ((objekte ?? []) as { privat_besitzer: string | null; dokumente: unknown }[]).some((o) => JSON.stringify(o.dokumente ?? null).includes(marke) && darfObjekt(mitarbeiter, o))
+    if (!sichtbarAbgelegt) return 'Fehler: Diese Datei gibt es in der Ablage nicht.'
+  }
 
   const g = await ladeOderLies(k, pfad)
   if (typeof g === 'string') return g

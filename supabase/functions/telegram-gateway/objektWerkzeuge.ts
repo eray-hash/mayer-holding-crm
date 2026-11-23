@@ -29,6 +29,7 @@ import { speicherOrt } from './dateiSenden.ts'
 import { OBJEKT_STATUS, objektStatus, type ObjektDokument, type ObjektRow, sucheObjekte } from './objektakte.ts'
 import { adresse, darfAkte, darfObjekt, darfObjekte, istFremdePrivatakte, istPrivat, istUnsichtbaresObjekt, nichtFreigegeben, type RechteMitarbeiter } from './rechte.ts'
 import { alleZeilen } from '../_shared/alleZeilen.ts'
+import { anzeigeNameAusOrdner, fremdPruefer } from './dateiBesitz.ts'
 
 // deno-lint-ignore no-explicit-any
 type Supa = any
@@ -277,9 +278,9 @@ export function speicherName(name: string): string {
   return s.slice(-120) || 'datei'
 }
 
-/** Anzeigename einer per Telegram gespeicherten Datei (ohne Zeitstempel und Inhaltsabdruck, wie anzeigeName in index.ts). */
+/** Anzeigename einer per Telegram gespeicherten Datei (ohne Zeitstempel, Inhaltsabdruck und Besitzer-Marke, wie anzeigeName in index.ts). */
 export function telegramAnzeigeName(dateiImOrdner: string): string {
-  return dateiImOrdner.replace(/^\d{10,}_(h[0-9a-f]{12}(?:p\d+-\d+)?)_/, '').replace(/^\d{10,}_/, '')
+  return anzeigeNameAusOrdner(dateiImOrdner)
 }
 
 function endung(name: string): string {
@@ -636,6 +637,8 @@ async function dateienInsObjekt(input: any, k: ObjektKontext): Promise<string> {
   const kunden = new Map<string, KundeZeile | string>()
   // Wo die Telegram-Datei sonst schon liegt (nur zum Prüfen der Rechte), einmal je Aufruf geladen.
   let referenzen: { kunden: KundeZeile[]; objekte: ObjektRow[] } | null = null
+  // Unabgelegte Dateien aus dem privaten Assistenten eines Kollegen gibt es für ihn nicht (dateiBesitz.ts).
+  let fremd: ((name: string) => boolean) | null = null
 
   for (const g of gewuenscht) {
     const ordner = ordnerVon(g?.ordner)
@@ -671,6 +674,12 @@ async function dateienInsObjekt(input: any, k: ObjektKontext): Promise<string> {
         referenzen = { kunden: (kz ?? []) as KundeZeile[], objekte: (oz ?? []) as ObjektRow[] }
       }
       const enthaelt = (liste: unknown) => (Array.isArray(liste) ? liste : []).some((d: { url?: string; herkunft?: string }) => d?.url === url || d?.herkunft === url)
+      const irgendwoAbgelegt = referenzen.kunden.some((x) => enthaelt(x.dokumente)) || referenzen.objekte.some((x) => Object.values(x.dokumente ?? {}).some(enthaelt))
+      fremd ??= await fremdPruefer(mitarbeiter)
+      if (!irgendwoAbgelegt && fremd(dateiName)) {
+        meldungen.push(`„${pfad}“: Diese Datei gibt es in der Ablage nicht (pfad exakt übernehmen).`)
+        continue
+      }
       const fremdeAkte = referenzen.kunden.find((x) => enthaelt(x.dokumente) && !darfAkte(mitarbeiter, x))
       const fremdesObjekt = referenzen.objekte.find((x) => x.id !== o.id && Object.values(x.dokumente ?? {}).some(enthaelt) && !darfObjekt(mitarbeiter, { privat_besitzer: x.privat_besitzer }))
       if (fremdeAkte || fremdesObjekt) {

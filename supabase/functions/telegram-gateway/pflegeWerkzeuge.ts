@@ -176,6 +176,7 @@ async function bereichNachziehen(supabase: Supa, id: string, nach: string): Prom
     ['protokolle', { bereich: nach }, 'kunde_id'],
     ['objekt_vorschlaege', { kunde_bereich: nach }, 'kunde_id'],
     ['termine', { kunde_bereich: nach }, 'kunde_id'],
+    ['gespraech_aufnahmen', { kunde_bereich: nach }, 'kunde_id'],
     ['gesendete_emails', { kunde_bereich: nach }, 'kunde_id'],
     ['eingegangene_emails', { zugewiesener_bereich: nach }, 'zugewiesener_kunde_id'],
   ]

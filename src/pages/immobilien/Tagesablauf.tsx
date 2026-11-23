@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Check, ChevronDown, ChevronLeft, ChevronRight, GripVertical, Plus, Trash2, Wand2 } from 'lucide-react'
 import { useApp, type AppData } from '../../context/AppContext'
 import { useAuth } from '../../context/AuthContext'
-import { isSupabaseConfigured } from '../../lib/supabaseClient'
+import { isSupabaseConfigured, supabase } from '../../lib/supabaseClient'
 import { ladeTermine, type Termin } from '../../lib/kalenderDb'
 import { erledigeWiedervorlage, ladeOffeneWiedervorlagen, oeffneWiedervorlageWieder } from '../../lib/wiedervorlagen'
 import { Card, EmptyState, Field, inputClass, PrimaryButton, SecondaryButton } from '../../components/ui'
@@ -1413,8 +1413,46 @@ function KollegenTagesablaeufe({ ich, datum }: { ich: string; datum: string }) {
   )
 }
 
+// Termine im Tagesablauf eines Kollegen, an denen ich nicht beteiligt bin (z. B. aus seinem Outlook oder mit
+// privaten Kontakten), nur als „Termin (belegt)“ zeigen — wie im Kalender und im Telegram-Assistenten.
+function useBeteiligteTermine(ids: string[]): Set<string> | null {
+  const { session } = useAuth()
+  const ich = (session?.user?.email ?? '').trim().toLowerCase()
+  const schluessel = [...ids].sort().join(',')
+  const [dabei, setDabei] = useState<{ schluessel: string; ids: Set<string> } | null>(null)
+  useEffect(() => {
+    if (!schluessel || !supabase) return
+    let abgebrochen = false
+    void supabase
+      .from('termine')
+      .select('id, besitzer_email, teilnehmer')
+      .in('id', schluessel.split(','))
+      .then(({ data }) => {
+        if (abgebrochen) return
+        const sichtbar = new Set(
+          ((data ?? []) as { id: string; besitzer_email: string | null; teilnehmer: string[] | null }[])
+            .filter((t) => !!ich && (String(t.besitzer_email ?? '').toLowerCase() === ich || (t.teilnehmer ?? []).some((p) => String(p).toLowerCase() === ich)))
+            .map((t) => String(t.id)),
+        )
+        setDabei({ schluessel, ids: sichtbar })
+      })
+    return () => {
+      abgebrochen = true
+    }
+  }, [schluessel, ich])
+  if (!schluessel) return new Set()
+  return dabei?.schluessel === schluessel ? dabei.ids : null
+}
+
 function KollegenKarte({ plan }: { plan: Tagesplan }) {
-  const zeilen = (plan.zeilen ?? []).filter((z) => z.was.trim() !== '')
+  // terminId schreibt der Server (Tagesplan-Kern) mit — im Browser-Typ nicht beschrieben.
+  const roh = (plan.zeilen ?? []).filter((z) => z.was.trim() !== '') as (Tagesplan['zeilen'][number] & { terminId?: string })[]
+  const dabei = useBeteiligteTermine(roh.map((z) => z.terminId).filter(Boolean) as string[])
+  const zeilen = roh.map((z) => {
+    if (!z.terminId || dabei?.has(z.terminId)) return z
+    const zeit = /^((?:[\d:]+(?:–[\d:]+)? Uhr)|ganztägig):/.exec(z.was)?.[1]
+    return { ...z, was: `${zeit ? `${zeit}: ` : ''}Termin (belegt)`, stand: undefined, ergebnis: undefined }
+  })
   const zahlen = kennzahlen(zeilen)
   const anrufe = (plan.anrufe ?? '').trim()
 

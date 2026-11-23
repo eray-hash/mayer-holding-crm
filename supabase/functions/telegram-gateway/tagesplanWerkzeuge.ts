@@ -206,6 +206,34 @@ async function bezugKandidaten(supabase: Supa, m: RechteMitarbeiter): Promise<Be
   return raus
 }
 
+/**
+ * Plan eines Kollegen ansehen: Zeilen aus seinem Kalender (terminId) nennen nur dann Titel und Akte, wenn der
+ * Fragende selbst bei dem Termin dabei ist — sonst „Termin (belegt)“ mit der Uhrzeit. Wie die Zeilenregel
+ * „termine lesen“ und freie_zeiten (kalenderZeiten.ts): Outlook-Termine, Termine zu privaten Kontakten und
+ * überhaupt fremde Termine zeigt der Assistent nie mit Inhalt. Gelöschte Termine gelten als fremd.
+ */
+export async function ohneFremdeTermine(supabase: Supa, plan: PlanTag, ichEmail: string): Promise<PlanTag> {
+  const ids = [...new Set(plan.zeilen.map((z) => z.terminId).filter(Boolean) as string[])]
+  if (!ids.length) return plan
+  const ich = ichEmail.trim().toLowerCase()
+  const { data } = await supabase.from('termine').select('id, besitzer_email, teilnehmer').in('id', ids)
+  const dabei = new Set(
+    ((data ?? []) as { id: string; besitzer_email: string | null; teilnehmer: string[] | null }[])
+      .filter((t) => !!ich && (String(t.besitzer_email ?? '').toLowerCase() === ich || (t.teilnehmer ?? []).some((p) => String(p).toLowerCase() === ich)))
+      .map((t) => String(t.id)),
+  )
+  return {
+    ...plan,
+    zeilen: plan.zeilen.map((z) => {
+      if (!z.terminId || dabei.has(z.terminId)) return z
+      // Uhrzeit vorn behalten („09:00–10:00 Uhr: …“ bzw. „ganztägig: …“), den Rest ersetzen.
+      const zeit = /^((?:[\d:]+(?:–[\d:]+)? Uhr)|ganztägig):/.exec(String(z.was ?? ''))?.[1]
+      const { bezug: _bezug, umsatz: _umsatz, ...rest } = z
+      return { ...rest, was: `${zeit ? `${zeit}: ` : ''}Termin (belegt)` }
+    }),
+  }
+}
+
 // ── Ausführung ────────────────────────────────────────────────────────────────────────────────────
 
 // deno-lint-ignore no-explicit-any
@@ -233,7 +261,7 @@ export async function fuehreTagesplanWerkzeugAus(name: string, input: any, k: Ta
     if (!plan || !plan.zeilen.some((z) => String(z.was ?? '').trim())) {
       return fremd ? `${name_} hat für ${deDatum(datum)} keinen Tagesplan gespeichert.` : `Für ${deDatum(datum)} gibt es noch keinen Tagesplan. Mit tag_vorschlagen baue ich ihn aus deiner To-do-Liste und deinen Terminen.`
     }
-    return planText(plan, { fremd })
+    return planText(fremd ? await ohneFremdeTermine(supabase, plan, ich.email) : plan, { fremd })
   }
 
   if (name === 'tag_vorschlagen') {
