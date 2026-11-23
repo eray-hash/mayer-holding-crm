@@ -12,8 +12,8 @@
 //        Akte zugeordnet ist, oder
 //     c) der Betreff eine Antwort („AW:“, „Re:“) auf eine Mail aus genau einer Akte ist UND der Absender genau der
 //        Empfänger dieser Mail war (für abgeholte Mails ohne Kopfzeilen), oder
-//     d) Scan-Eingang (23.11.2026): der Betreff ist genau der Name genau einer Akte („Max Muster“, auch „Muster, Max“,
-//        „Max Muster Teil 2“) und die Mail hat Anhänge — so schicken Kollegen eingescannte Papierakten an info@.
+//     d) Scan-Eingang (23.11.2026): der Betreff ist der Name genau einer Akte („Max Muster“, auch „Muster, Max“,
+//        „Max Muster Teil 2“, Teilnamen und ein Tippfehler je Wort) und die Mail hat Anhänge — so schicken Kollegen eingescannte Papierakten an info@.
 //        Gilt auch für Absender ohne Akte und für Mails, die die KI als unwichtig eingestuft hat.
 //     Geschrieben wird über ordneMailZu (postfach.ts) — dieselbe Zuordnung wie das Werkzeug mail_zuordnen,
 //     samt Verlaufseintrag und Anhängen in den Dokumenten der Akte.
@@ -242,27 +242,36 @@ function namensWoerter(s: string, fuell: boolean): string[] {
   return woerter(s).filter((w) => !/^\d+$/.test(w) && w.length >= 2 && !ANREDE.has(w) && !ALLGEMEIN.has(w) && !(fuell && SCAN_FUELLWOERTER.has(w)))
 }
 
-function gleicheMenge(a: string[], b: string[]): boolean {
-  const x = new Set(a)
-  const y = new Set(b)
-  return x.size === y.size && [...x].every((w) => y.has(w))
+/** Gleiches Wort, bei längeren Wörtern auch mit einem Tippfehler („Schebek“/„Schebeck“). */
+function aehnlich(a: string, b: string): boolean {
+  if (a === b) return true
+  if (a.length < 5 || b.length < 5 || Math.abs(a.length - b.length) > 1) return false
+  // Abstand höchstens 1 (ein Zeichen anders, zu viel oder zu wenig).
+  let i = 0
+  while (i < a.length && i < b.length && a[i] === b[i]) i++
+  return a.slice(i + 1) === b.slice(i + 1) || a.slice(i) === b.slice(i + 1) || a.slice(i + 1) === b.slice(i)
 }
 
-/** Ist der Betreff (ohne Füllwörter wie „Teil 2“) genau der Name dieser Akte? Reihenfolge egal („Muster, Max“). */
+/** Ist der Betreff (ohne Füllwörter wie „Teil 2“) der Name dieser Akte? Reihenfolge egal („Muster, Max“); es reicht,
+ *  wenn alle Namenswörter des Betreffs (mindestens zwei) im Namen der Akte vorkommen — „Bauer Schebek“ passt zur Akte
+ *  „Christine Schebeck und Michael Bauer“. */
 export function betreffIstAktenName(betreff: string | null | undefined, a: AkteZeile): boolean {
   const roh = normBetreff(betreff)
   if (!roh) return false
   const ganz = normText(roh)
-  const imBetreff = namensWoerter(roh, true)
+  const imBetreff = [...new Set(namensWoerter(roh, true))]
+  const imNamen = new Set<string>()
   for (const name of [a.ansprechpartner, a.firma]) {
     const n = String(name ?? '').trim()
     if (!n) continue
-    // Ganz genau gleich (auch einteilige Firmennamen), sonst gleiche Namenswörter — mindestens zwei.
+    // Ganz genau gleich (auch einteilige Firmennamen).
     if (normText(n).length >= 4 && ganz === normText(n)) return true
-    const imNamen = namensWoerter(n, false)
-    if (imNamen.length >= 2 && gleicheMenge(imBetreff, imNamen)) return true
+    for (const w of namensWoerter(n, false)) imNamen.add(w)
   }
-  return false
+  if (imBetreff.length < 2) return false
+  // Mindestens ein Betreff-Wort muss ein richtiger Name sein (4+ Buchstaben), nicht nur Kürzel.
+  if (!imBetreff.some((w) => w.length >= 4)) return false
+  return imBetreff.every((w) => [...imNamen].some((n) => aehnlich(w, n)))
 }
 
 function hatAnhaenge(m: MailZeile): boolean {
@@ -432,11 +441,27 @@ export async function ladeKontext(admin: Admin, mails: MailZeile[], jetzt = new 
       for (const t of wert.match(/<[^<>\s]+>/g) ?? []) roheKennungen.add(t.trim())
     }
   }
-  const liste = [...roheKennungen]
-  for (let i = 0; i < liste.length; i += 100) {
-    const { data, error } = await admin.from('eingegangene_emails').select('message_id, zugewiesener_kunde_id').is('besitzer_email', null).in('message_id', liste.slice(i, i + 100))
-    if (error) throw new Error(`Verlauf nicht lesbar: ${error.message}`)
-    for (const z of (data ?? []) as { message_id: string; zugewiesener_kunde_id: string | null }[]) merke(z.message_id, z.zugewiesener_kunde_id)
+  // Nur gewöhnliche Kennungen abfragen: Eine einzige ungewöhnliche (Sonderzeichen, sehr lang) ließ am 23.11.2026 die
+  // Schutzschicht vor der Datenbank die ganze Abfrage abweisen — dann blieb die Zuordnung für ALLE Mails stehen.
+  const liste = [...roheKennungen].filter((t) => t.length <= 200 && /^<[A-Za-z0-9._%+=$#!&*~^{}|/?'-]+@[A-Za-z0-9._-]+>$/.test(t))
+  type VerlaufZeile = { message_id: string; zugewiesener_kunde_id: string | null }
+  const frage = (teil: string[]) => admin.from('eingegangene_emails').select('message_id, zugewiesener_kunde_id').is('besitzer_email', null).in('message_id', teil)
+  for (let i = 0; i < liste.length; i += 50) {
+    const teil = liste.slice(i, i + 50)
+    const { data, error } = await frage(teil)
+    if (!error) {
+      for (const z of (data ?? []) as VerlaufZeile[]) merke(z.message_id, z.zugewiesener_kunde_id)
+      continue
+    }
+    // Abgewiesen: einzeln nachfragen, was nicht geht, auslassen (die Mail wird dann ohne diesen Verlaufs-Hinweis geprüft).
+    for (const kennung of teil) {
+      const einzeln = await frage([kennung])
+      if (einzeln.error) {
+        console.error('Post-Zuordnung: Verlaufs-Kennung nicht abfragbar, ausgelassen', kennung.slice(0, 80))
+        continue
+      }
+      for (const z of (einzeln.data ?? []) as VerlaufZeile[]) merke(z.message_id, z.zugewiesener_kunde_id)
+    }
   }
   return { akten: (akten.data ?? []) as AkteZeile[], mitarbeiterAdressen, eigeneWoerter, eigeneDomains, gesendet: ausAkten, kennungAkten }
 }

@@ -306,6 +306,11 @@ Deno.test('Scan-Eingang: Betreff ist genau der Name einer Akte und die Mail hat 
   assert(betreffIstAktenName('WG: Anna Beispiel Teil 2', akte))
   assert(betreffIstAktenName('Kundenakte Anna Beispiel (3)', akte))
   assert(!betreffIstAktenName('Anna', akte))
+  assert(betreffIstAktenName('anna beispil', akte)) // ein Tippfehler
+  const paar = { id: 'k_p', bereich: 'erben', firma: 'Erika Mustermann und Otto Normal – Erben', ansprechpartner: 'Erika Musterman, Otto Normal', email: null }
+  assert(betreffIstAktenName('Normal Mustermann', paar))
+  assert(betreffIstAktenName('Herr Normal und Frau Musterman', paar))
+  assert(!betreffIstAktenName('Normal Beispiel', paar))
   assert(!betreffIstAktenName('Anna Beispiel und Otto Muster', akte))
   const k = kontext({ akten: [...kontext().akten, akte] })
   // Fremder Absender ohne Akte, KI hat die Mail als unwichtig eingestuft — trotzdem in die Akte.
