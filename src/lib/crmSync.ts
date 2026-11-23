@@ -35,6 +35,7 @@ import type {
   FondsDokument,
   ImportiertesDokument,
   MailVorlage,
+  FragenkatalogFrage,
   Notiz,
   Abwesenheit,
   ImmoFrage,
@@ -555,6 +556,44 @@ function rowToImportDok(row: any): ImportiertesDokument {
   }
 }
 
+// Fragenkatalog (Selbstauskunft) — seit 23.11.2026 in der Datenbank statt nur im Browser des Bearbeiters
+// (vorher sah weder ein Kollege noch das Kunden-Formular eine Änderung).
+function frageToRow(f: FragenkatalogFrage) {
+  return { id: f.id, bereich: f.bereich, text: f.text, typ: f.typ, optionen: f.optionen ?? null, pflichtfeld: f.pflichtfeld }
+}
+
+export function rowToFrage(row: any): FragenkatalogFrage {
+  return {
+    id: row.id,
+    bereich: row.bereich,
+    text: row.text ?? '',
+    typ: row.typ ?? 'text',
+    ...(Array.isArray(row.optionen) ? { optionen: row.optionen.map(String) } : {}),
+    pflichtfeld: !!row.pflichtfeld,
+  }
+}
+
+/**
+ * Einmalig je Browser: Fragen, die ein Mitarbeiter früher im Browser selbst angelegt oder umformuliert hat, in die
+ * Datenbank übernehmen (alles, was weder eine Standardfrage noch schon in der Datenbank ist). Gibt die neue Liste
+ * zurück, bei einem Fehler null (dann beim nächsten Laden noch einmal).
+ */
+export async function uebernehmeEigeneFragen(server: FragenkatalogFrage[], lokal: FragenkatalogFrage[] | undefined, standard: FragenkatalogFrage[]): Promise<FragenkatalogFrage[] | null> {
+  if (!supabase || !Array.isArray(lokal)) return server
+  const schluessel = (f: FragenkatalogFrage) => `${f.bereich}|${f.text.trim().toLowerCase()}`
+  const bekannt = new Set([...standard, ...server].map(schluessel))
+  const serverIds = new Set(server.map((f) => f.id))
+  const eigene = lokal.filter((f) => f?.id && f.text?.trim() && !serverIds.has(f.id) && !bekannt.has(schluessel(f)))
+  if (eigene.length === 0) return server
+  const { error } = await supabase.from('fragenkatalog').upsert(eigene.map(frageToRow))
+  if (error) {
+    console.error('[crmSync] eigene Fragen nicht übernommen:', error.message)
+    return null
+  }
+  merkeGeladen('fragenkatalog', eigene.map((f) => f.id))
+  return [...server, ...eigene]
+}
+
 function mailVorlageToRow(m: MailVorlage) {
   return { id: m.id, name: m.name, betreff: m.betreff, text: m.text }
 }
@@ -765,6 +804,7 @@ const SIMPLE_SYNCS: { table: string; key: keyof AppData; label: (item: any) => s
     toRow: importDokToRow,
   },
   { table: 'mail_vorlagen', key: 'mailVorlagen', label: (m: MailVorlage) => `Mail-Vorlage ${m.name}`, toRow: mailVorlageToRow },
+  { table: 'fragenkatalog', key: 'fragenkataloge', label: (f: FragenkatalogFrage) => `Frage ${f.text}`, toRow: frageToRow },
   { table: 'notizen', key: 'notizen', label: () => 'Notiz', toRow: notizToRow },
   { table: 'abwesenheiten', key: 'abwesenheiten', label: (a: Abwesenheit) => `Abwesenheit ${a.mitarbeiterName}`, toRow: abwesenheitToRow },
   { table: 'abteilung_eintraege', key: 'immoFragen', label: () => 'Frage an die Geschäftsführung', toRow: abteilungZeile('frage') },
@@ -1038,6 +1078,8 @@ export type HydratedData = {
   fondsDokumenteAllgemein: FondsDokument[]
   importierteDokumente: ImportiertesDokument[]
   mailVorlagen: MailVorlage[]
+  /** Fehlt, wenn die Tabelle nicht antwortet — dann bleibt der bisherige Stand im Fenster. */
+  fragenkataloge?: FragenkatalogFrage[]
   notizen: Notiz[]
   abwesenheiten: Abwesenheit[]
   immoFragen: ImmoFrage[]
@@ -1096,6 +1138,7 @@ export async function hydrateFromSupabase(): Promise<HydratedData | null> {
     verbindlichkeitenRes,
     mitarbeiterRes,
     abteilungRes,
+    fragenRes,
   ] = await Promise.all([
     alleZeilen(() => db.from('kunden').select('*')),
     alleZeilen(() => db.from('objekte').select('*')),
@@ -1118,7 +1161,9 @@ export async function hydrateFromSupabase(): Promise<HydratedData | null> {
     alleZeilen(() => db.from('verbindlichkeiten').select('*')),
     db.from('mitarbeiter').select('name').eq('aktiv', true).order('name'),
     alleZeilen(() => db.from('abteilung_eintraege').select('id, art, daten')),
+    db.from('fragenkatalog').select('*').order('angelegt_am', { ascending: true }),
   ])
+  if (fragenRes.error) console.error('[crmSync] fragenkatalog:', fragenRes.error.message)
   // Fehlt diese Tabelle einmal oder antwortet sie nicht, soll deshalb nicht das ganze CRM leer bleiben.
   if (abteilungRes.error) console.error('[crmSync] abteilung_eintraege:', abteilungRes.error.message)
   const abteilung = (art: string) => ((abteilungRes.data ?? []) as { art: string; daten: unknown }[]).filter((z) => z.art === art).map((z) => z.daten)
@@ -1183,6 +1228,7 @@ export async function hydrateFromSupabase(): Promise<HydratedData | null> {
   merkeGeladen('todo_freigaben', ids(todoFreigabenRes))
   merkeGeladen('verbindlichkeiten', ids(verbindlichkeitenRes))
   if (!abteilungRes.error) merkeGeladen('abteilung_eintraege', ids(abteilungRes))
+  if (!fragenRes.error) merkeGeladen('fragenkatalog', ids(fragenRes))
 
   // 'privat' und 'immobilienkunden' haben (noch) keine eigene Vorlagen-Seite/-Tabelle — bleiben hier
   // absichtlich immer leer.
@@ -1227,6 +1273,7 @@ export async function hydrateFromSupabase(): Promise<HydratedData | null> {
     fondsDokumenteAllgemein: (fondsDokumenteRes.data ?? []).map(rowToFondsDokumentAllgemein),
     importierteDokumente: (importierteDokumenteRes.data ?? []).map(rowToImportDok),
     mailVorlagen: (mailVorlagenRes.data ?? []).map(rowToMailVorlage),
+    fragenkataloge: fragenRes.error ? undefined : (fragenRes.data ?? []).map(rowToFrage),
     notizen: (notizenRes.data ?? []).map(rowToNotiz),
     abwesenheiten: (abwesenheitenRes.data ?? []).map(rowToAbwesenheit),
     immoFragen: abteilung('frage') as ImmoFrage[],

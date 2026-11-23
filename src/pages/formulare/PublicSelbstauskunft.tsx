@@ -7,15 +7,16 @@ import { Card, Field, inputClass, PrimaryButton, SecondaryButton } from '../../c
 import { SignaturePad } from '../../components/SignaturePad'
 import { today } from '../../lib/dates'
 import { holePublicKunde, sendePublicFormular, type PublicKunde } from '../../lib/emailGateway'
-import type { KundeBereich } from '../../types'
+import type { FragenkatalogFrage, KundeBereich } from '../../types'
+import { supabase } from '../../lib/supabaseClient'
+import { rowToFrage } from '../../lib/crmSync'
 import { DatenschutzHinweis } from '../../components/DatenschutzHinweis'
 
 // Öffentliches, nicht-authentifiziertes Selbstauskunft-Formular für einen bereits angelegten
-// Kunden/Mandanten. Der Fragenkatalog kommt bewusst aus dem festen DEFAULT_FRAGENKATALOG statt aus
-// dem im CRM editierbaren state.fragenkataloge — Letzteres wird aktuell nicht nach Supabase
-// synchronisiert (lebt nur im Browser des jeweiligen Mitarbeiters), ein unauthentifizierter externer
-// Besucher könnte es also ohnehin nie sehen. Eine komplett neue öffentliche Lead-Gen-Website pro
-// Bereich ist bewusst nicht Teil dieses Formulars.
+// Kunden/Mandanten. Die Fragen kommen seit 23.11.2026 aus der Tabelle `fragenkatalog` (im CRM über den
+// Fragenkatalog-Editor gepflegt, ohne Anmeldung lesbar); nur wenn sie nicht antwortet, aus dem festen
+// DEFAULT_FRAGENKATALOG. Eine komplett neue öffentliche Lead-Gen-Website pro Bereich ist bewusst nicht
+// Teil dieses Formulars.
 export function PublicSelbstauskunft() {
   const { bereich: bereichParam, kundeId } = useParams()
   const [kunde, setKunde] = useState<PublicKunde | null | undefined>(undefined)
@@ -25,6 +26,25 @@ export function PublicSelbstauskunft() {
   const [einverstanden, setEinverstanden] = useState(false)
   const [signatur, setSignatur] = useState<string | null>(null)
   const [error, setError] = useState('')
+  // undefined = lädt noch, null = Tabelle antwortet nicht (dann die festen Standardfragen)
+  const [katalog, setKatalog] = useState<FragenkatalogFrage[] | null | undefined>(supabase ? undefined : null)
+
+  useEffect(() => {
+    if (!supabase) return
+    let aus = false
+    supabase
+      .from('fragenkatalog')
+      .select('*')
+      .order('angelegt_am', { ascending: true })
+      .then(({ data, error: fehler }) => {
+        if (!aus) setKatalog(!fehler && data ? data.map(rowToFrage) : null)
+      }, () => {
+        if (!aus) setKatalog(null)
+      })
+    return () => {
+      aus = true
+    }
+  }, [])
 
   const bereichRoh = KUNDEN_BEREICHE.find((b) => b.id === bereichParam)?.id as KundeBereich | undefined
 
@@ -46,7 +66,7 @@ export function PublicSelbstauskunft() {
     )
   }
 
-  if (kunde === undefined) {
+  if (kunde === undefined || katalog === undefined) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
         <Loader2 className="animate-spin text-slate-400" size={28} />
@@ -68,7 +88,7 @@ export function PublicSelbstauskunft() {
 
   // Private Kontakte: Fragenkatalog des Bereichs, nach dem sie geführt werden (kunden.privat_art).
   const katalogBereich = bereich === 'privat' ? (kunde?.privatArt ?? kunde?.privat_art ?? 'privat') : bereich
-  const fragen = DEFAULT_FRAGENKATALOG.filter((f) => f.bereich === katalogBereich)
+  const fragen = (katalog ?? DEFAULT_FRAGENKATALOG).filter((f) => f.bereich === katalogBereich)
   const bereitsEingereicht = !!kunde.selbstauskunft
 
   function setAntwort(frageId: string, wert: string) {

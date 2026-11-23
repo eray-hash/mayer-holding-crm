@@ -47,7 +47,7 @@ function fakeAdmin(tabellen: Record<string, any[]>, scheitert?: (t: string, wert
 function stand(aktiv = true) {
   return {
     willkommen_einstellung: [{ id: 1, aktiv, link_basis: 'https://beispiel.test/crm/' }],
-    willkommen_nachrichten: [{ id: 'w1', kunde_id: 'k1', status: 'geplant', senden_ab: '2000-01-01T00:00:00Z' }],
+    willkommen_nachrichten: [{ id: 'w1', kunde_id: 'k1', status: 'geplant', senden_ab: new Date(Date.now() - 60_000).toISOString() }],
     kunden: [{ id: 'k1', bereich: 'beratung', status: 'erstkontakt', email: 'kunde@beispiel.de', firma: 'Muster GmbH', ansprechpartner: 'Thomas Beispiel', verantwortlich: 'Hasan Süslü', unterlagen_anforderungen: [], activities: [{ id: 'a0', text: 'alt' }] }],
     mail_vorlagen: [{ id: 'mv-willkommen-auto', betreff: 'Willkommen', text: 'Guten Tag {{ansprechpartner}},\n\n{{ansprechpartner_satz}}\n{{link}}\n\n{{gruss}}' }],
     gesendete_emails: [] as unknown[],
@@ -147,4 +147,20 @@ Deno.test('Link zum Hochladen lässt sich nicht anlegen: fehler ohne Sendezeit, 
   assertEquals(z.status, 'fehler')
   assertEquals(z.gesendet_am, null)
   assertMatch(String(z.grund), /Link zum Hochladen/)
+})
+
+Deno.test('Älter als 7 Tage: verfällt statt zu senden, Jetzt senden geht weiter', async () => {
+  const t = stand(true)
+  t.willkommen_nachrichten[0].senden_ab = new Date(Date.now() - 8 * 86_400_000).toISOString()
+  const mails: string[] = []
+  const r = await versendeWillkommen(fakeAdmin(t), async (to) => void mails.push(to))
+  assertEquals(mails.length, 0)
+  assertEquals(r.uebersprungen, 1)
+  assertEquals(t.willkommen_nachrichten[0].status, 'abgebrochen')
+  assertMatch(String((t.willkommen_nachrichten[0] as { grund?: string }).grund), /Älter als 7 Tage/)
+
+  const t2 = stand(false)
+  t2.willkommen_nachrichten[0].senden_ab = new Date(Date.now() - 8 * 86_400_000).toISOString()
+  const r2 = await versendeWillkommen(fakeAdmin(t2), async (to) => void mails.push(to), { kundeId: 'k1' })
+  assertEquals(r2.gesendet, 1)
 })

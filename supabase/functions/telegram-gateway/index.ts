@@ -2961,6 +2961,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
       zahlungsziel,
       leistung_bezeichnung: leistung || null,
     })
+    if (error?.code === '23505') return `Nicht erfasst: Die Rechnungsnummer ${nummer} ist bereits vergeben. Bitte eine andere Nummer verwenden.`
     if (error) return `Fehler beim Erfassen: ${error.message}`
     await supabase
       .from('kunden')

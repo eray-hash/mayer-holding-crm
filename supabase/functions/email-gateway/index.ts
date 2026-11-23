@@ -638,7 +638,8 @@ async function erkenneRechnungUndLegeAn(kundeId: string, betreff: string, text: 
     status: 'Versendet',
     zahlungsziel: erkennung.zahlungsziel || new Date(Date.parse(`${heute}T12:00:00Z`) + 30 * 86_400_000).toISOString().slice(0, 10),
   })
-  if (anlegeFehler) console.error('Rechnung aus gesendeter Mail nicht angelegt:', anlegeFehler.message)
+  // 23505 = Nummer schon vergeben (z. B. dieselbe Rechnung noch einmal verschickt) — dann bleibt die vorhandene stehen.
+  if (anlegeFehler && anlegeFehler.code !== '23505') console.error('Rechnung aus gesendeter Mail nicht angelegt:', anlegeFehler.message)
 }
 
 type Zusammenfassung = {

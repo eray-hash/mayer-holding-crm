@@ -26,6 +26,8 @@ Mit freundlichen Grüßen
 {{gruss}}
 Mayer Holding`
 
+/** Vorgemerkte Nachrichten, die länger als so viele Tage liegen, verfallen statt verspätet verschickt zu werden. */
+export const VERFALL_TAGE = 7
 const VERLOREN = new Set(['verloren', 'nicht_qualifiziert', 'abgebrochen'])
 const ADRESSE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
 
@@ -191,7 +193,19 @@ export async function versendeWillkommen(admin: Admin, absenden: Absenden, opts:
     return ergebnis
   }
   const vorlage = await ladeVorlage(admin)
+  const verfallenVor = Date.now() - VERFALL_TAGE * 86_400_000
   for (const z of zeilen) {
+    // Lag die Nachricht über 7 Tage (z. B. weil der Schalter aus war), geht sie nicht mehr automatisch raus —
+    // ein „Willkommen“ Wochen nach dem Gespräch wirkt seltsam. „Jetzt senden“ in der Akte geht weiterhin.
+    if (!opts.kundeId && Date.parse(String(z.senden_ab ?? '')) < verfallenVor) {
+      await admin
+        .from('willkommen_nachrichten')
+        .update({ status: 'abgebrochen', grund: `Älter als ${VERFALL_TAGE} Tage, nicht mehr automatisch gesendet` })
+        .eq('id', z.id)
+        .eq('status', 'geplant')
+      ergebnis.uebersprungen++
+      continue
+    }
     const r = await versendeEine(admin, z, absenden, basis, vorlage)
     if (r === 'gesendet') ergebnis.gesendet++
     else if (r === 'fehler') ergebnis.fehler++

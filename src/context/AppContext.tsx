@@ -41,7 +41,7 @@ import type {
 } from '../types'
 import { DEFAULT_FRAGENKATALOG } from '../data/fragenkataloge'
 import { KUNDEN_BEREICHE, kundeBereichLabel } from '../data/kundenBereiche'
-import { isSupabaseConfigured, hydrateFromSupabase, syncAfterDispatch, migriereLokaleDatenFallsLeer, schreibtGerade, wendeServerStandAn, type HydratedData, type ServerStand } from '../lib/crmSync'
+import { isSupabaseConfigured, hydrateFromSupabase, syncAfterDispatch, migriereLokaleDatenFallsLeer, uebernehmeEigeneFragen, schreibtGerade, wendeServerStandAn, type HydratedData, type ServerStand } from '../lib/crmSync'
 import type { Projekt, Aufgabe, AufgabenStatus, Meilenstein } from '../types/project'
 import { seedKunden, seedRechnungen, seedProtokolle, seedKonzepte, seedVertraege, seedVorlagen } from '../data/seedBeratung'
 import { seedObjekte, seedFinanzierungen } from '../data/seedImmobilien'
@@ -139,6 +139,7 @@ const STORAGE_KEY = 'mayer-holding-crm-data-v1'
 // Speicher hat, lädt sie dann einfach wieder hoch. Genau das ist am 2026-11-03 zweimal real passiert
 // (eine gelöschte Test-Notiz kam über eine andere, noch nicht neu geladene Browser-Session zurück).
 const MIGRATION_FLAG_KEY = 'mayer-holding-crm-migriert-v1'
+const FRAGEN_MIGRATION_FLAG_KEY = 'mayer-holding-crm-fragen-migriert-v1'
 
 // Analog zu MIGRATION_FLAG_KEY, aber eigens für das Profil (telefon/signaturHtml/fotoDataUrl/
 // buchungslink) — war bis 2026-11-03 komplett lokal pro Browser, ohne jede Supabase-Anbindung (siehe
@@ -1137,6 +1138,7 @@ function reducer(state: AppData, action: Action): AppData {
         fondsDokumenteAllgemein: action.data.fondsDokumenteAllgemein,
         importierteDokumente: action.data.importierteDokumente,
         mailVorlagen: action.data.mailVorlagen,
+        fragenkataloge: action.data.fragenkataloge ?? state.fragenkataloge,
         notizen: action.data.notizen,
         abwesenheiten: action.data.abwesenheiten,
         immoFragen: action.data.immoFragen,
@@ -1305,6 +1307,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const bereitsMigriert = localStorage.getItem(MIGRATION_FLAG_KEY) === 'true'
         const fertig = lokalerStandVorSync && !bereitsMigriert ? await migriereLokaleDatenFallsLeer(data, lokalerStandVorSync) : data
         if (!bereitsMigriert) localStorage.setItem(MIGRATION_FLAG_KEY, 'true')
+        // Fragenkatalog lag bis 23.11.2026 nur im Browser: eigene Fragen dieses Browsers einmalig übernehmen.
+        if (fertig.fragenkataloge && localStorage.getItem(FRAGEN_MIGRATION_FLAG_KEY) !== 'true') {
+          const mitEigenen = await uebernehmeEigeneFragen(fertig.fragenkataloge, lokalerStandVorSync?.fragenkataloge, DEFAULT_FRAGENKATALOG)
+          if (mitEigenen) {
+            fertig.fragenkataloge = mitEigenen
+            localStorage.setItem(FRAGEN_MIGRATION_FLAG_KEY, 'true')
+          }
+        }
         if (cancelled) return
         dispatch({ type: 'HYDRATE_SUPABASE', data: fertig })
         setHydrated(true)
