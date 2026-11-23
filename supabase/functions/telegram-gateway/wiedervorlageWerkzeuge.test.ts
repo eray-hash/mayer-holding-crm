@@ -1,6 +1,6 @@
 // Prüft die Wiedervorlage-Werkzeuge mit einer nachgebauten Datenbank (ohne Netz): Rechte je Bereich,
 // private Akten, Filter und Sortierung der Liste, Felder beim Anlegen, Erledigen und Verschieben.
-import { assert, assertEquals, assertStringIncludes } from 'jsr:@std/assert@1'
+import { assert, assertEquals, assertMatch, assertStringIncludes } from 'jsr:@std/assert@1'
 import { darfWv, fuehreWvWerkzeugAus, pruefeDatum, type WvKontext } from './wiedervorlageWerkzeuge.ts'
 import { aufgabenUebersicht } from './aufgaben.ts'
 
@@ -206,4 +206,13 @@ Deno.test('aufgaben_uebersicht: offene Wiedervorlagen als Follow-up „Wiedervor
   const privat = await aufgabenUebersicht(db.supabase, { ...ma, nurPrivat: true }, {}, HEUTE)
   assert(!/Wiedervorlage \d/.test(privat))
   assertStringIncludes(privat, 'Keine offenen Aufgaben')
+})
+
+Deno.test('aufgaben_uebersicht: Zeilen tragen die Kennung für Erledigen (todo_id, wiedervorlage id)', async () => {
+  const daten = grunddaten()
+  const todos = [{ id: 'todo_42', aufgabe: 'Steuerberater anrufen', kunde_projekt: null, zustaendig: 'Quirin', erledigen_bis: '2026-11-21', geplante_wiedervorlage: null, erledigt_am: null, bereich: 'erben', besitzer_email: null }]
+  const db = falscheDb({ ...daten, todos, todo_freigaben: [], objekte: [], projekte: [] })
+  const text = await aufgabenUebersicht(db.supabase, ma, { mitarbeiter: 'Quirin' }, HEUTE)
+  assertMatch(text, /Steuerberater anrufen · To-do · Erben · todo_id=todo_42$/m)
+  assertMatch(text, /Heute dran · Follow-up · Familie Huber · Anna Huber · Erben · wiedervorlage id=\S+$/m)
 })

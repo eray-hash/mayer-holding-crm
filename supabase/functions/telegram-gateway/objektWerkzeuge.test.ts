@@ -2,7 +2,7 @@
 // Immobilien, private Objekte, privater Assistent), Dubletten beim Anlegen, nur geänderte Spalten beim
 // Ändern, Ordner- und Fassungslogik beim Ablegen, Herausnehmen aus der Kundenakte.
 import { assert, assertEquals, assertMatch, assertStringIncludes } from 'jsr:@std/assert@1'
-import { findeDublette, freierName, fuehreObjektSchreibWerkzeugAus, istObjektSchreibWerkzeug, leseBetrag, mitEndung, type ObjektKontext, ordnerVon, speicherName, strassenSchluessel } from './objektWerkzeuge.ts'
+import { findeDublette, findeMitarbeiter, freierName, fuehreObjektSchreibWerkzeugAus, istObjektSchreibWerkzeug, leseBetrag, mitEndung, type ObjektKontext, ordnerVon, speicherName, strassenSchluessel } from './objektWerkzeuge.ts'
 import type { ObjektRow } from './objektakte.ts'
 
 // deno-lint-ignore no-explicit-any
@@ -214,7 +214,7 @@ Deno.test('Anlegen: fremder Verantwortlicher muss aktiver Mitarbeiter sein', asy
   const r = await fuehreObjektSchreibWerkzeugAus('objekt_anlegen', { bezeichnung: 'Neu', typ: 'Haus', verantwortlich: 'Quirin' }, kontext(db, GF))
   assertMatch(r, /verantwortlich Quirin Lutzenberger/)
   const r2 = await fuehreObjektSchreibWerkzeugAus('objekt_anlegen', { bezeichnung: 'Neu 2', typ: 'Haus', verantwortlich: 'Niemand' }, kontext(db, GF))
-  assertMatch(r2, /^Fehler: „Niemand“ ist kein aktiver Mitarbeiter/)
+  assertMatch(r2, /^Fehler: „Niemand“ ist kein eindeutiger aktiver Mitarbeiter/)
 })
 
 Deno.test('Anlegen im privaten Assistenten: privates Objekt mit eigener Adresse (klein); private Objekte anderer zählen nicht als Dublette', async () => {
@@ -351,4 +351,55 @@ Deno.test('Ablegen: Rechte — Kundenakte aus fremdem Bereich, Objekt ohne Recht
   assertMatch(await fuehreObjektSchreibWerkzeugAus('dateien_ins_objekt', { objekt_id: 'o_lorch', dateien: [{ kunde_id: 'k_beratung', dokument_id: 'kb1', ordner: 'Sonstiges' }] }, kontext(db, BERATER)), /^Nicht freigegeben/)
   assertMatch(await fuehreObjektSchreibWerkzeugAus('dateien_ins_objekt', { objekt_id: 'o_privat_carl', dateien: [{ kunde_id: 'k_dick', dokument_id: 'kd1', ordner: 'Exposé' }] }, kontext(db, GF)), /^Fehler: Es gibt kein Objekt/)
   assertEquals(db.geschrieben.length, 0)
+})
+
+Deno.test('Ablegen: was während des Hochladens dazukommt (CRM, zweite Sendung), geht beim Schreiben nicht verloren', async () => {
+  const db = falscheDb(stand(), dateien())
+  // Während die Datei hochgeladen wird, legt jemand anderes etwas in dieselbe Objektakte und schreibt in den Verlauf.
+  const ablage = db.supabase.storage.from
+  db.supabase.storage.from = (eimer: string) => {
+    const e = ablage(eimer)
+    return {
+      ...e,
+      upload: async (pfad: string, bytes: Uint8Array, opt: { contentType?: string }) => {
+        const o = db.tabellen.objekte.find((x) => x.id === 'o_lorch')!
+        o.dokumente = { ...o.dokumente, Grundrisse: [{ id: 'd_browser', name: 'Grundriss EG.pdf', typ: 'application/pdf', datum: '2026-11-22', groesse: '1 MB', url: 'o_lorch/d_browser.pdf' }] }
+        o.activities = [{ id: 'a_browser', date: '2026-11-22', text: 'Im CRM abgelegt', user: 'Quirin Lutzenberger' }, ...o.activities]
+        return await e.upload(pfad, bytes, opt)
+      },
+    }
+  }
+  const r = await fuehreObjektSchreibWerkzeugAus('dateien_ins_objekt', { objekt_id: 'o_lorch', dateien: [{ pfad: 'telegram/1763800000000_h0123456789ab_Expose_Boarding_House.pdf', ordner: 'Exposé' }] }, kontext(db, QUIRIN))
+  assertMatch(r, /^In die Objektakte „MFH Lorch“/)
+  const o = db.tabellen.objekte.find((x) => x.id === 'o_lorch')!
+  assertEquals(o.dokumente['Grundrisse'].map((d: Zeile) => d.id), ['d_browser'])
+  assertEquals(o.dokumente['Exposé'].length, 2)
+  assertEquals(o.activities.map((a: Zeile) => a.id).slice(1), ['a_browser', 'a0'])
+})
+
+Deno.test('Ändern: Verlauf wird direkt vor dem Schreiben frisch gelesen', async () => {
+  const db = falscheDb(stand(), dateien())
+  // Ein Verlaufseintrag, der nach dem Laden (beim Nachschlagen der Mitarbeiter) dazukommt, bleibt erhalten.
+  const from = db.supabase.from
+  db.supabase.from = (t: string) => {
+    if (t === 'mitarbeiter') {
+      const o = db.tabellen.objekte.find((x) => x.id === 'o_lorch')!
+      o.activities = [{ id: 'a_zwischen', date: '2026-11-22', text: 'Dazwischen', user: 'Andreas Mayer' }, ...o.activities]
+    }
+    return from(t)
+  }
+  assertMatch(await fuehreObjektSchreibWerkzeugAus('objekt_aendern', { objekt_id: 'o_lorch', verantwortlich: 'Andreas' }, kontext(db, QUIRIN)), /geändert/)
+  const o = db.tabellen.objekte.find((x) => x.id === 'o_lorch')!
+  assertEquals(o.activities.map((a: Zeile) => a.id).slice(1), ['a_zwischen', 'a0'])
+})
+
+Deno.test('findeMitarbeiter: nur eindeutige Treffer („Mayer“ passt auf zwei)', () => {
+  const namen = ['Andreas Mayer', 'Mayer Holding', 'Quirin Lutzenberger', 'Hasan Süslü']
+  assertEquals(findeMitarbeiter(namen, 'Mayer'), undefined)
+  assertEquals(findeMitarbeiter(namen, 'Andreas'), 'Andreas Mayer')
+  assertEquals(findeMitarbeiter(namen, 'andreas mayer'), 'Andreas Mayer')
+  assertEquals(findeMitarbeiter(namen, 'Quirin'), 'Quirin Lutzenberger')
+  assertEquals(findeMitarbeiter(namen, 'Hasan Suslu'), undefined)
+  assertEquals(findeMitarbeiter(namen, 'lutzen'), 'Quirin Lutzenberger')
+  assertEquals(findeMitarbeiter(namen, ''), undefined)
 })

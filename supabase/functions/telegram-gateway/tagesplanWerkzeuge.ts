@@ -327,7 +327,11 @@ export async function fuehreTagesplanWerkzeugAus(name: string, input: any, k: Ta
       const t = findeBezugImText(text, await bezugKandidaten(supabase, mitarbeiter))
       if (t) z.bezug = t.bezug
     }
-    const neuPlan: PlanTag = { ...basis, zeilen: ordneEin(basis.zeilen, [z]) }
+    // Plan direkt vor dem Schreiben frisch lesen: das Nachschlagen oben dauert, und in der Zeit kann das CRM
+    // (Stoppuhr, Abhaken, Anrufliste) den Plan geändert haben — der Stand vom Anfang würde das überschreiben.
+    const frisch = (await ladePlan(supabase, ich.name, datum)) ?? basis
+    if (z.todoId && frisch.zeilen.some((x) => x.todoId === z.todoId)) return 'Dieses To-do steht inzwischen schon im Plan. Nichts eingetragen.'
+    const neuPlan: PlanTag = { ...frisch, zeilen: ordneEin(frisch.zeilen, [z]) }
     const f = await speicherePlan(supabase, neuPlan)
     if (f) return `Fehler beim Speichern: ${f}`
     protokolliere(`Tagesplan ${deDatum(datum)}: „${z.was}“ als ${BLOCK_TITEL[block]} eingetragen`)
@@ -345,7 +349,8 @@ export async function fuehreTagesplanWerkzeugAus(name: string, input: any, k: Ta
   const k_ = kuerzelListe(plan.zeilen).get(z.id) ?? ''
 
   if (name === 'tag_eintrag_entfernen') {
-    const f = await speicherePlan(supabase, { ...plan, zeilen: plan.zeilen.filter((x) => x.id !== z.id) })
+    const aktuell = (await ladePlan(supabase, ich.name, datum)) ?? plan
+    const f = await speicherePlan(supabase, { ...aktuell, zeilen: aktuell.zeilen.filter((x) => x.id !== z.id) })
     if (f) return `Fehler beim Speichern: ${f}`
     protokolliere(`Tagesplan ${deDatum(datum)}: „${z.was}“ entfernt`)
     return `Entfernt: ${k_} „${z.was}“ aus dem Tagesplan vom ${deDatum(datum)}.${z.todoId ? ' Das To-do selbst bleibt offen in der Liste.' : ''}`

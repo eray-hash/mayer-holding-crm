@@ -452,10 +452,27 @@ export async function ordneNeueMailsZu(admin: Admin, opts: ZuordnungsOptionen = 
       mails = (zeilen ?? []) as MailZeile[]
     }
     if (mails.length === 0) return ergebnis
-    const kontext = await ladeKontext(admin, mails, jetzt)
+    // Beansprucht, aber nicht geprüft (Kontext nicht ladbar, Zeit um): wieder freigeben — sonst blieben diese Mails
+    // für immer ungeprüft, und eine Antwort im Verlauf einer Akte würde nie zugeordnet (wie terminZuordnung.ts).
+    const anspruch = jetzt.toISOString()
+    const freigeben = async (ids: string[]) => {
+      if (opts.trockenlauf || ids.length === 0) return
+      const { error: e } = await admin.from('eingegangene_emails').update({ zuordnung_geprueft_am: null }).in('id', ids).eq('zuordnung_geprueft_am', anspruch)
+      if (e) ergebnis.fehler.push(`Mails nicht freigegeben: ${e.message}`)
+    }
+    let kontext: Kontext
+    try {
+      kontext = await ladeKontext(admin, mails, jetzt)
+    } catch (err) {
+      await freigeben(mails.map((m) => m.id))
+      throw err
+    }
     if (opts.trockenlauf) ergebnis.entscheidungen = []
-    for (const m of mails) {
-      if (!opts.trockenlauf && Date.now() - beginn > (opts.zeitBudgetMs ?? 40_000)) break
+    for (const [i, m] of mails.entries()) {
+      if (!opts.trockenlauf && Date.now() - beginn > (opts.zeitBudgetMs ?? 40_000)) {
+        await freigeben(mails.slice(i).map((x) => x.id))
+        break
+      }
       ergebnis.geprueft++
       const e = entscheide(m, kontext, jetzt)
       if (e.art === 'zuordnen') ergebnis.zugeordnet++

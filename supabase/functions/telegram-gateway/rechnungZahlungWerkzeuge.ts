@@ -22,6 +22,7 @@
 
 import { darfAkte, darfBereich, istFremdePrivatakte, nichtFreigegeben, type RechteMitarbeiter } from './rechte.ts'
 import { deDatum, pruefeDatum } from './wiedervorlageWerkzeuge.ts'
+import { alleZeilen } from '../_shared/alleZeilen.ts'
 
 // deno-lint-ignore no-explicit-any
 type Supa = any
@@ -222,9 +223,12 @@ export async function fuehreRechnungZahlungWerkzeugAus(name: string, input: any,
 
   if (name === 'rechnungen_offen') {
     const kundeId = String(input?.kunde_id ?? '').trim()
-    let q = supabase.from('rechnungen').select(RECHNUNG_SPALTEN).in('status', ['Versendet', 'Überfällig'])
-    if (kundeId) q = q.eq('kunde_id', kundeId)
-    const { data, error } = await q.limit(2000)
+    // Seitenweise: die Datenbank liefert höchstens 1000 Zeilen je Abfrage, ein höheres limit hilft nicht.
+    const { data, error } = await alleZeilen(() => {
+      let q = supabase.from('rechnungen').select(RECHNUNG_SPALTEN).in('status', ['Versendet', 'Überfällig'])
+      if (kundeId) q = q.eq('kunde_id', kundeId)
+      return q
+    })
     if (error) return `Fehler beim Laden: ${error.message}`
     const roh = (data ?? []) as RechnungZeile[]
     const ids = [...new Set(roh.map((r) => r.kunde_id).filter(Boolean))]
@@ -285,7 +289,7 @@ export async function fuehreRechnungZahlungWerkzeugAus(name: string, input: any,
       treffer = (data ?? []) as RechnungZeile[]
       if (!treffer.length) {
         // Groß-/Kleinschreibung und Leerzeichen großzügig: offene Rechnungen durchsuchen.
-        const { data: alle } = await supabase.from('rechnungen').select(RECHNUNG_SPALTEN).limit(5000)
+        const { data: alle } = await alleZeilen(() => supabase.from('rechnungen').select(RECHNUNG_SPALTEN))
         const n = nummer.replace(/\s+/g, '').toLowerCase()
         treffer = ((alle ?? []) as RechnungZeile[]).filter((r) => String(r.nummer).replace(/\s+/g, '').toLowerCase() === n)
       }

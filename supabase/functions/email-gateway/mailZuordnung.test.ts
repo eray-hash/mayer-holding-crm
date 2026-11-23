@@ -283,3 +283,16 @@ Deno.test('Trockenlauf schreibt nichts und beansprucht nichts', async () => {
   assert(db.tabelle('eingegangene_emails').every((z) => z.zuordnung_geprueft_am === null && z.zugewiesener_kunde_id === null))
   assertEquals(db.tabelle('eingegangene_emails').find((z) => z.id === b.id)!.relevanz, null)
 })
+
+Deno.test('Lauf: Zeit um — nicht geprüfte Mails werden wieder freigegeben und beim nächsten Lauf geprüft', async () => {
+  const a = mail({ von: 'ch.lipps@googlemail.com', betreff: 'A' })
+  const b = mail({ von: 'sanny30390@gmail.com', betreff: 'B' })
+  const db = datenbank([a, b])
+  // Budget 0: der Lauf beansprucht beide, kommt aber zu keiner — beide müssen danach wieder offen sein.
+  const r = await ordneNeueMailsZu(db, { jetzt: JETZT, zeitBudgetMs: -1 })
+  assertEquals(r.geprueft, 0)
+  assertEquals(r.fehler, [])
+  assert(db.tabelle('eingegangene_emails').every((z) => z.zuordnung_geprueft_am === null))
+  const r2 = await ordneNeueMailsZu(db, { jetzt: JETZT })
+  assertEquals([r2.geprueft, r2.zugeordnet], [2, 2])
+})

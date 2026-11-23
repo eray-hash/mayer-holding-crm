@@ -135,3 +135,25 @@ Deno.test('Rechte: ohne Immobilien nichts, privater Assistent nichts; Kürzel un
   assertEquals(findeEintrag(zeilen, 'zweite').zeile?.id, 'b')
   assert(findeEintrag(zeilen, 'nix').fehler)
 })
+
+Deno.test('tag_eintrag_hinzufuegen: was das CRM währenddessen am Plan ändert (Stoppuhr, Anrufe), bleibt erhalten', async () => {
+  const d = db()
+  const id = `${QUIRIN.name}|${HEUTE}`
+  d.tabelle('abteilung_eintraege').push({ id, art: 'tagesplan', daten: { id, mitarbeiter: QUIRIN.name, datum: HEUTE, zeilen: [{ id: 'q1', block: 'A', was: 'Bankgespräch' }], anrufe: '', aktualisiertAm: '' } })
+  let einmal = false
+  // Während der Assistent nach Akten und Objekten sucht, speichert das CRM den Plan (Stoppuhr läuft, Anruf notiert).
+  d.nachAbfrage = (info) => {
+    if (einmal || info.tabelle !== 'objekte') return
+    einmal = true
+    const z = d.tabelle('abteilung_eintraege').find((x) => x.id === id)!
+    z.daten = { ...(z.daten as PlanTag), anrufe: 'Herr Maier zurückrufen', zeilen: [{ id: 'q1', block: 'A', was: 'Bankgespräch', laeuftSeit: '2026-11-23T08:00:00Z' }, { id: 'q2', block: 'C', was: 'Im CRM ergänzt' }] }
+  }
+  const r = await fuehreTagesplanWerkzeugAus('tag_eintrag_hinzufuegen', { text: 'Vöhringen Exposé drucken', block: 'kurz', dauer_min: 5 }, kontext(d))
+  assertStringIncludes(r, 'Eingetragen:')
+  assert(einmal)
+  const p = plan(d)
+  assertEquals(p.anrufe, 'Herr Maier zurückrufen')
+  assertEquals(p.zeilen.map((x) => x.id).filter((x) => x.startsWith('q')), ['q1', 'q2'])
+  assertEquals(p.zeilen.find((x) => x.id === 'q1')!.laeuftSeit, '2026-11-23T08:00:00Z')
+  assert(p.zeilen.some((x) => x.block === 'kurz'))
+})

@@ -387,11 +387,20 @@ async function aktiveMitarbeiter(supabase: Supa): Promise<string[]> {
   return ((data ?? []) as { name: string }[]).map((m) => m.name).filter(Boolean)
 }
 
-/** Name eines aktiven Mitarbeiters zur Eingabe (genau, sonst Teil des Namens, z. B. Vorname). */
-function findeMitarbeiter(namen: string[], eingabe: string): string | undefined {
+/**
+ * Name eines aktiven Mitarbeiters zur Eingabe (genau, sonst ein ganzes Namenswort wie der Vorname, sonst Teil
+ * des Namens) — nur wenn auf der ersten passenden Stufe genau einer passt. „Mayer“ passt auf „Andreas Mayer“
+ * und „Mayer Holding“: dann keiner, statt still den ersten der Liste zu nehmen.
+ */
+export function findeMitarbeiter(namen: string[], eingabe: string): string | undefined {
   const s = norm(eingabe).trim()
   if (!s) return undefined
-  return namen.find((n) => norm(n) === s) ?? namen.find((n) => norm(n).split(/\s+/).includes(s)) ?? namen.find((n) => norm(n).includes(s))
+  for (const passt of [(n: string) => norm(n) === s, (n: string) => norm(n).split(/\s+/).includes(s), (n: string) => norm(n).includes(s)]) {
+    const treffer = [...new Set(namen.filter(passt))]
+    if (treffer.length === 1) return treffer[0]
+    if (treffer.length > 1) return undefined
+  }
+  return undefined
 }
 
 /** Lädt ein Objekt samt Rechteprüfung: fremde private Objekte gibt es nicht, Holding-Objekte nur mit Immobilien-Rechten. */
@@ -455,7 +464,7 @@ async function objektAnlegen(input: any, k: ObjektKontext): Promise<string> {
     if (privat) return 'Fehler: Bei einem privaten Objekt ist der Mitarbeiter selbst verantwortlich.'
     const namen = await aktiveMitarbeiter(supabase)
     const treffer = findeMitarbeiter(namen, gewuenscht)
-    if (!treffer) return `Fehler: „${gewuenscht}“ ist kein aktiver Mitarbeiter. Möglich: ${namen.join(', ')}.`
+    if (!treffer) return `Fehler: „${gewuenscht}“ ist kein eindeutiger aktiver Mitarbeiter. Möglich: ${namen.join(', ')}.`
     verantwortlich = treffer
   }
 
@@ -560,7 +569,7 @@ async function objektAendern(input: any, k: ObjektKontext): Promise<string> {
     const namen = await aktiveMitarbeiter(supabase)
     const treffer = findeMitarbeiter(namen, input.verantwortlich)
     if (o.privat_besitzer && norm(treffer ?? input.verantwortlich) !== norm(o.verantwortlich)) return 'Nicht geändert: Bei einem privaten Objekt bleibt der Mitarbeiter selbst verantwortlich.'
-    if (!treffer) return `Fehler: „${input.verantwortlich}“ ist kein aktiver Mitarbeiter. Möglich: ${namen.join(', ')}.`
+    if (!treffer) return `Fehler: „${input.verantwortlich}“ ist kein eindeutiger aktiver Mitarbeiter. Möglich: ${namen.join(', ')}.`
     if (treffer !== o.verantwortlich) {
       patch.verantwortlich = treffer
       geaendert.push(`verantwortlich: ${o.verantwortlich || '—'} → ${treffer}`)
@@ -606,7 +615,10 @@ async function objektAendern(input: any, k: ObjektKontext): Promise<string> {
   if (!geaendert.length && !notiz) return `Nichts geändert: Die Angaben entsprechen schon dem Stand der Objektakte ${objektName(o)}. objekt_id=${o.id}`
 
   const verlauf = [geaendert.length ? `Per Telegram geändert — ${geaendert.join('; ')}.` : '', notiz && (geaendert.length ? `Notiz: ${notiz}` : notiz)].filter(Boolean).join(' ')
-  patch.activities = [{ id: neueId('act'), date: heute, text: verlauf, user: mitarbeiter.name }, ...(Array.isArray(o.activities) ? o.activities : [])]
+  // Verlauf direkt vor dem Schreiben frisch lesen (Einträge, die inzwischen dazukamen, bleiben erhalten).
+  const { data: frischerVerlauf } = await supabase.from('objekte').select('activities').eq('id', o.id).maybeSingle()
+  const bisher = Array.isArray(frischerVerlauf?.activities) ? frischerVerlauf.activities : Array.isArray(o.activities) ? o.activities : []
+  patch.activities = [{ id: neueId('act'), date: heute, text: verlauf, user: mitarbeiter.name }, ...bisher]
   patch.updated_at = new Date().toISOString()
   const { error } = await supabase.from('objekte').update(patch).eq('id', o.id)
   if (error) return `Fehler beim Speichern: ${error.message}. Nichts wurde geändert.`
@@ -745,7 +757,7 @@ async function dateienInsObjekt(input: any, k: ObjektKontext): Promise<string> {
 
   // Dateien in den Objekt-Speicher kopieren; geht danach das Speichern der Akte schief, wieder entfernen.
   const hochgeladen: string[] = []
-  const abgelegt: string[] = []
+  const neueDoks: { v: Vorhaben; dok: ObjektDokument & { herkunft: string } }[] = []
   for (const v of vorhaben) {
     const dokId = neueId('dok')
     const speicherPfad = `${o.id}/${dokId}_${speicherName(v.name)}`
@@ -759,21 +771,32 @@ async function dateienInsObjekt(input: any, k: ObjektKontext): Promise<string> {
       continue
     }
     hochgeladen.push(speicherPfad)
-    const liste = Array.isArray(dokumente[v.ordner]) ? dokumente[v.ordner] : []
+    neueDoks.push({ v, dok: { id: dokId, name: v.name, typ: v.typ, datum: heute, groesse: formatGroesse(v.bytes.length), url: speicherPfad, herkunft: v.herkunft } })
+  }
+  if (!neueDoks.length) return [`Nichts in die Objektakte ${objektName(o)} gelegt.`, ...meldungen, `objekt_id=${o.id}`].join('\n')
+
+  // Dokumente und Verlauf direkt vor dem Schreiben frisch lesen: Herunter- und Hochladen dauert, und in der
+  // Zeit legt das CRM oder eine zweite Sendung (z. B. mehrere Fotos auf einmal) womöglich selbst etwas ab —
+  // mit dem Stand vom Anfang ginge das verloren. Nur Dokumente und Verlauf schreiben — nie die ganze Zeile.
+  const { data: frisch, error: frischFehler } = await supabase.from('objekte').select('dokumente, activities').eq('id', o.id).maybeSingle()
+  if (frischFehler || !frisch) {
+    if (hochgeladen.length) await supabase.storage.from(OBJEKT_EIMER).remove(hochgeladen)
+    return `Fehler beim Speichern der Objektakte: ${frischFehler?.message ?? 'Das Objekt gibt es nicht mehr.'} Nichts wurde abgelegt. objekt_id=${o.id}`
+  }
+  const zusammen: Record<string, ObjektDokument[]> = { ...((frisch.dokumente && typeof frisch.dokumente === 'object' && !Array.isArray(frisch.dokumente) ? frisch.dokumente : {}) as Record<string, ObjektDokument[]>) }
+  const abgelegt: string[] = []
+  for (const { v, dok } of neueDoks) {
+    const liste = Array.isArray(zusammen[v.ordner]) ? zusammen[v.ordner] : []
     const name = freierName(v.name, liste)
-    const neu: ObjektDokument & { herkunft: string } = { id: dokId, name, typ: v.typ, datum: heute, groesse: formatGroesse(v.bytes.length), url: speicherPfad, herkunft: v.herkunft }
-    dokumente[v.ordner] = [neu, ...liste]
+    zusammen[v.ordner] = [{ ...dok, name }, ...liste]
     abgelegt.push(`${name} (Ordner ${v.ordner}${name !== v.name ? ', weitere Fassung' : ''})`)
     v.name = name
     v.fertig = true
   }
-  if (!abgelegt.length) return [`Nichts in die Objektakte ${objektName(o)} gelegt.`, ...meldungen, `objekt_id=${o.id}`].join('\n')
-
-  // Nur Dokumente und Verlauf schreiben — nie die ganze Zeile.
   const eintrag = { id: neueId('act'), date: heute, text: `Per Telegram von ${mitarbeiter.name} in die Objektakte gelegt: ${abgelegt.map((n) => `„${n}“`).join(', ')}`, user: mitarbeiter.name }
   const { error: schreibFehler } = await supabase
     .from('objekte')
-    .update({ dokumente, activities: [eintrag, ...(Array.isArray(o.activities) ? o.activities : [])], updated_at: new Date().toISOString() })
+    .update({ dokumente: zusammen, activities: [eintrag, ...(Array.isArray(frisch.activities) ? frisch.activities : [])], updated_at: new Date().toISOString() })
     .eq('id', o.id)
   if (schreibFehler) {
     if (hochgeladen.length) await supabase.storage.from(OBJEKT_EIMER).remove(hochgeladen)

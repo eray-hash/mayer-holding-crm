@@ -627,7 +627,7 @@ async function erkenneRechnungUndLegeAn(kundeId: string, betreff: string, text: 
 
   const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
   const heute = heuteBerlin()
-  await admin.from('rechnungen').insert({
+  const { error: anlegeFehler } = await admin.from('rechnungen').insert({
     id: crypto.randomUUID(),
     // Ohne erkannte Nummer kein Zufallswert im RE-Schema (sonst schlägt das CRM danach RE-JJJJ-<Zufall+1> vor).
     nummer: erkennung.rechnungsnummer || `MAIL-${heute}-${crypto.randomUUID().slice(0, 6)}`,
@@ -636,8 +636,9 @@ async function erkenneRechnungUndLegeAn(kundeId: string, betreff: string, text: 
     betrag_netto: Math.round(betragNetto * 100) / 100,
     betrag_brutto: Math.round(betragBrutto * 100) / 100,
     status: 'Versendet',
-    zahlungsziel: erkennung.zahlungsziel || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+    zahlungsziel: erkennung.zahlungsziel || new Date(Date.parse(`${heute}T12:00:00Z`) + 30 * 86_400_000).toISOString().slice(0, 10),
   })
+  if (anlegeFehler) console.error('Rechnung aus gesendeter Mail nicht angelegt:', anlegeFehler.message)
 }
 
 type Zusammenfassung = {
@@ -3363,6 +3364,12 @@ Deno.serve((req: Request) => mitAnlass(async () => {
           return new Response(JSON.stringify({ error: `Der Anhang "${a.filename}" lässt sich nicht laden.` }), { status: 400, headers })
         }
       }
+      // Ob die Mail an einen privaten Kontakt geht, sagt die Akte selbst — nicht nur die mitgeschickte Angabe kundeBereich.
+      let anPrivatKontakt = kundeBereich === 'privat'
+      if (kundeId && !anPrivatKontakt) {
+        const { data: kz } = await supabase.from('kunden').select('bereich').eq('id', String(kundeId)).maybeSingle()
+        anPrivatKontakt = istPrivaterKunde(kz)
+      }
       // Message-ID selbst vergeben und sofort speichern, damit Antworten dem Verlauf der Akte zugeordnet werden (gesendetMessageId.ts).
       const messageId = neueMessageId(absender?.adresse ?? Deno.env.get('SMTP_USER'))
       await sendMail(to, subject, text, html, anhaengeFertig, absender, messageId)
@@ -3381,7 +3388,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
           kunde_name: kundeName ?? null,
           postfach_id: postfachId,
           // Mail an einen privaten Kontakt (auch über das gemeinsame Postfach): nur für den Absender sichtbar.
-          besitzer_email: privat ? aufrufer!.email : kundeBereich === 'privat' ? (aufrufer?.email ?? (aktuellePerson() || null)) : null,
+          besitzer_email: privat ? aufrufer!.email : anPrivatKontakt ? (aufrufer?.email ?? (aktuellePerson() || null)) : null,
           von: absender?.adresse ?? Deno.env.get('SMTP_USER') ?? null,
           message_id: gesendetKennung(messageId, { id: postfachId, persoenlich }),
         })
@@ -3395,7 +3402,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       // Rechnungen nirgends im CRM erfasst, nur die manuell über "Neue Rechnung" angelegten. Best
       // effort: ein Fehler hier darf den bereits erfolgreich versendeten Mailversand nicht stören.
       // Bei einer Mail an viele Empfänger (Telegram-Assistent) wäre das ein KI-Aufruf je Empfänger — abschaltbar.
-      if (kundeId && ohneRechnungsErkennung !== true && !privat && kundeBereich !== 'privat') {
+      if (kundeId && ohneRechnungsErkennung !== true && !privat && !anPrivatKontakt) {
         try {
           await erkenneRechnungUndLegeAn(kundeId, subject, text)
         } catch (err) {
@@ -4085,6 +4092,10 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       }
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
       const normalisiert = email.trim().toLowerCase()
+      // Ohne Anmeldung aufrufbar: höchstens drei Links je Adresse und Stunde (sonst beliebig viele Mails an Mitarbeiter).
+      if (await grenzeErreicht(admin, [{ schluessel: `passwort:${normalisiert}`, hoechstens: 3 }])) {
+        return new Response(JSON.stringify({ ok: true }), { headers })
+      }
       const { data: mitarbeiterRows } = await admin.from('mitarbeiter').select('email').eq('aktiv', true)
       const treffer = (mitarbeiterRows ?? []).find((m: { email: string }) => m.email?.trim().toLowerCase() === normalisiert)
       if (treffer) await schickePasswortLink(admin, treffer.email)

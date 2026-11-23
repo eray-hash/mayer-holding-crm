@@ -4,7 +4,8 @@
 // unterschrift_anfragen, partner_bezug, willkommen_nachrichten, kundenbericht_einstellung; oder setzt den
 // Verweis auf leer (SET NULL): kostenvoranschlaege, seminar_anmeldungen, objekt_freigaben, objekt_anfragen,
 // auto_nachrichten, partner.akte_id. Ohne Fremdschlüssel blieben verwaist: besichtigungen,
-// kontoauszug_auswertungen, akte_umzug, mitarbeiter.telegram_last_kunde_id.
+// kontoauszug_auswertungen, akte_umzug, mitarbeiter.telegram_last_kunde_id. Nachtrag 23.11.: kunden_portal_zugaenge
+// (CASCADE), mahn_vorschlaege und rechnung_vorschlaege (ohne Fremdschlüssel).
 //
 // Muss VOR dem Löschen laufen (also vor dem bestätigten Aufruf von kunden_zusammenfuehren). Eindeutige
 // Regeln (z. B. eine offene Wiedervorlage je Akte und Regel, ein Willkommensbrief je Akte): Hat die
@@ -34,6 +35,11 @@ export const WEITERE_VERWEISE: readonly [string, string, string][] = [
   ['akte_umzug', 'kunde_id', 'id'],
   ['mitarbeiter', 'telegram_last_kunde_id', 'email'],
   ['gespraech_aufnahmen', 'kunde_id', 'id'],
+  // Nachtrag 23.11.2026: Kundenportal-Zugänge löschte die Datenbank mit (ON DELETE CASCADE) — der Portal-Link des
+  // Kunden war nach dem Zusammenführen tot. Mahn- und Rechnungsvorschläge verwaisten (kein Fremdschlüssel).
+  ['kunden_portal_zugaenge', 'kunde_id', 'id'],
+  ['mahn_vorschlaege', 'kunde_id', 'id'],
+  ['rechnung_vorschlaege', 'kunde_id', 'id'],
 ]
 
 export type UmhaengeErgebnis = { umgehaengt: Record<string, number>; uebersprungen: number; fehler: string[] }

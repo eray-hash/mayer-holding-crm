@@ -179,10 +179,25 @@ async function bereichNachziehen(supabase: Supa, id: string, nach: string): Prom
     ['gespraech_aufnahmen', { kunde_bereich: nach }, 'kunde_id'],
     ['gesendete_emails', { kunde_bereich: nach }, 'kunde_id'],
     ['eingegangene_emails', { zugewiesener_bereich: nach }, 'zugewiesener_kunde_id'],
+    // Neuere Tabellen, deren Zeilenregel am mitgeführten Bereich hängt (darf_bereich) — ohne Umzug sähen nach dem
+    // Verschieben weiter die Kollegen des alten Bereichs Kostenvoranschläge, Unterschriften, Willkommensbrief,
+    // Kundenbericht und Kundenportal dieser Akte, die des neuen nicht (gefunden 23.11.2026).
+    // Die Wiedervorlagen zieht der Datenbank-Auslöser wv_kunden_ausloeser selbst um.
+    ['kostenvoranschlaege', { bereich: nach }, 'kunde_id'],
+    ['unterschrift_anfragen', { bereich: nach }, 'kunde_id'],
+    ['willkommen_nachrichten', { bereich: nach }, 'kunde_id'],
+    ['kundenbericht_einstellung', { bereich: nach }, 'kunde_id'],
+    ['kunden_portal_zugaenge', { kunde_bereich: nach }, 'kunde_id'],
+    ['kontoauszug_auswertungen', { bereich: nach }, 'kunde_id'],
+    ['objekt_freigaben', { kunde_bereich: nach }, 'kunde_id'],
+    ['besichtigungen', { kunde_bereich: nach }, 'kunde_id'],
+    ['rechnung_vorschlaege', { kunde_bereich: nach }, 'kunde_id'],
+    ['mahn_vorschlaege', { kunde_bereich: nach }, 'kunde_id'],
   ]
   for (const [tabelle, aenderung, spalte] of schritte) {
     const { error } = await supabase.from(tabelle).update(aenderung).eq(spalte, id)
-    if (error) fehler.push(`${tabelle}: ${error.message}`)
+    // Eine Tabelle, die es (noch) nicht gibt, ist kein Fehler des Verschiebens.
+    if (error && !(error.code === '42P01' || error.code === 'PGRST205' || /does not exist|could not find the table/i.test(error.message ?? ''))) fehler.push(`${tabelle}: ${error.message}`)
   }
   fehler.push(...(await verknuepfungenUmschreiben(supabase, id, { id, bereich: nach })))
   return fehler

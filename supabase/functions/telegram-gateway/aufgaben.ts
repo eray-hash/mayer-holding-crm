@@ -205,7 +205,9 @@ export async function aufgabenUebersicht(
     for (const a of g.aufgaben.slice(0, max)) {
       const datum = a.datumIso ? `${a.datumArt ?? 'fällig'} ${deDatum(a.datumIso)}${a.lage === 'ueberfaellig' || a.lage === 'heute' ? ` (${LAGE_TEXT[a.lage]})` : ''}` : 'ohne Datum'
       const andere = a.allePersonen.filter((p) => p !== a.person)
-      zeilen.push(`- ${datum}: ${a.titel} · ${ART[a.art]}${a.bezug ? ` · ${a.bezug}` : ''}${a.bereich ? ` · ${a.bereich}` : ''}${andere.length ? ` · auch: ${andere.join(', ')}` : ''}`)
+      // Kennung für todo_erledigen / todo_aendern bzw. wiedervorlage_erledigen / _verschieben, damit der Assistent nicht erneut suchen muss.
+      const kennung = a.id.startsWith('todo:') ? ` · todo_id=${a.id.slice(5)}` : a.id.startsWith('wv:') ? ` · wiedervorlage id=${a.id.slice(3)}` : ''
+      zeilen.push(`- ${datum}: ${a.titel} · ${ART[a.art]}${a.bezug ? ` · ${a.bezug}` : ''}${a.bereich ? ` · ${a.bereich}` : ''}${andere.length ? ` · auch: ${andere.join(', ')}` : ''}${kennung}`)
     }
     if (g.aufgaben.length > max) zeilen.push(`- … und ${g.aufgaben.length - max} weitere (vollständig im CRM unter „Aufgaben nach Mitarbeiter“)`)
   }
