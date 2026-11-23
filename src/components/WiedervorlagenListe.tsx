@@ -11,6 +11,9 @@ import {
 import { addDays, today } from '../lib/dates'
 import type { KundeBereich } from '../types'
 
+/** Vollständiges, plausibles Datum (keine halb getippten Jahre wie 0002). */
+const gueltigesDatum = (v: string) => /^\d{4}-\d{2}-\d{2}$/.test(v) && v >= '2000-01-01' && v <= '2100-12-31'
+
 const kurz = (iso?: string) => (iso ? `${iso.slice(8, 10)}.${iso.slice(5, 7)}.${iso.slice(2, 4)}` : '')
 
 export function WiedervorlagenListe({
@@ -38,6 +41,10 @@ export function WiedervorlagenListe({
   const [neuNotiz, setNeuNotiz] = useState('')
   const [zeigeErledigte, setZeigeErledigte] = useState(false)
   const [laeuft, setLaeuft] = useState(false)
+  // Datum je Zeile erst beim Verlassen des Feldes (oder Eingabetaste) speichern: Beim Tippen meldet das
+  // Datumsfeld nach jeder Ziffer ein gültiges Datum (Tag „1“ von „15“, Jahr „0002“) — vorher wurde jedes
+  // davon sofort gespeichert und das Feld während des Speicherns gesperrt.
+  const [datumEntwurf, setDatumEntwurf] = useState<Record<string, string>>({})
 
   async function laden() {
     try {
@@ -70,6 +77,18 @@ export function WiedervorlagenListe({
     } finally {
       setLaeuft(false)
     }
+  }
+
+  function datumUebernehmen(w: Wiedervorlage) {
+    const neu = datumEntwurf[w.id]
+    if (neu === undefined) return
+    setDatumEntwurf((d) => {
+      const rest = { ...d }
+      delete rest[w.id]
+      return rest
+    })
+    if (!gueltigesDatum(neu) || neu === w.faellig) return
+    aktion(() => verschiebeWiedervorlage(w.id, neu))
   }
 
   function waehle(id: string) {
@@ -122,9 +141,13 @@ export function WiedervorlagenListe({
               </div>
               <input
                 type="date"
-                value={w.faellig}
+                value={datumEntwurf[w.id] ?? w.faellig}
                 disabled={nurLesen || laeuft}
-                onChange={(e) => e.target.value && aktion(() => verschiebeWiedervorlage(w.id, e.target.value))}
+                onChange={(e) => setDatumEntwurf((d) => ({ ...d, [w.id]: e.target.value }))}
+                onBlur={() => datumUebernehmen(w)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') datumUebernehmen(w)
+                }}
                 className={`${inputClass} w-[9.5rem] py-1 text-xs ${w.faellig < heute ? 'font-medium text-rose-600' : ''}`}
                 aria-label="Fällig am"
               />

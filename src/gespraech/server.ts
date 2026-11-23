@@ -47,9 +47,11 @@ export async function gespraechNotiz(id: string, inhalt: { notizen: string } | {
   await callAuthenticated({ action: 'gespraech_notiz', id, ...inhalt })
 }
 
-export async function gespraechAbschliessen(id: string, dauer_s: number, segmente: number): Promise<void> {
-  // nummern: alle aufgenommenen Abschnitte (1…n), damit der Server weiß, worauf er warten muss.
-  await callAuthenticated({ action: 'gespraech_abschliessen', id, dauer_s, segmente, nummern: Array.from({ length: segmente }, (_, i) => i + 1) })
+export async function gespraechAbschliessen(id: string, dauer_s: number, nummern: number[]): Promise<void> {
+  // nummern: die Nummern aller aufgenommenen Abschnitte, damit der Server weiß, worauf er warten muss. Nicht 1…n:
+  // leere Abschnitte (z. B. nach einer Unterbrechung) fallen auf dem Gerät weg und hinterließen sonst eine Lücke, auf
+  // die der Server drei Stunden wartet und die er als „konnte nicht abgeschrieben werden“ in die Abschrift setzt.
+  await callAuthenticated({ action: 'gespraech_abschliessen', id, dauer_s, segmente: nummern.length, nummern })
 }
 
 export async function gespraechStand(id: string): Promise<GespraechAufnahme> {

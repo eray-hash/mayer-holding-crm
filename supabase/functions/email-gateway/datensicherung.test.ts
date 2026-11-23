@@ -441,10 +441,13 @@ Deno.test('Aktion: nur Geschäftsführung und Superuser; Stand, Link, Meldung au
   assertEquals(d.sicherungen.length, 1)
   assertEquals(d.meldungAn, true)
 
-  const link = await datensicherungAktion(req, db, { imAuftragVon: 'hasan@test.de', aufgabe: 'herunterladen' }, warte, JETZT)
+  // Geschäftsführung ohne Superuser darf nicht herunterladen (private Daten in der Sicherung).
+  const verboten = await datensicherungAktion(req, db, { imAuftragVon: 'hasan@test.de', aufgabe: 'herunterladen' }, warte, JETZT)
+  assertEquals(verboten.status, 403)
+  const link = await datensicherungAktion(req, db, { imAuftragVon: 'eray@test.de', aufgabe: 'herunterladen' }, warte, JETZT)
   assertEquals(link.status, 200)
   assertMatch((link.daten as { url: string }).url, /2026-11-23_0230\.zip\?s=600&name=crm-sicherung-2026-11-23_0230\.zip/)
-  assertEquals((await leseStand(db)).stand.downloads![0].von, 'hasan@test.de')
+  assertEquals((await leseStand(db)).stand.downloads![0].von, 'eray@test.de')
 
   const aus = await datensicherungAktion(req, db, { imAuftragVon: 'eray@test.de', aufgabe: 'meldung', an: false }, warte, JETZT)
   assertEquals((aus.daten as { meldungAn: boolean }).meldungAn, false)

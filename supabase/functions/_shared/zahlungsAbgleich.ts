@@ -230,7 +230,10 @@ export function findeNummer(nummer: string | null | undefined, text: string): 'v
   if (voll.test(text)) return 'voll'
   const ziffern = teile.filter((t) => /^\d+$/.test(t))
   if (ziffern.length && ziffern.length < teile.length && ziffern.join('').length >= 6) {
-    const nur = new RegExp(`(?<![0-9])${ziffern.map(stueck).join(TRENNER)}(?![0-9])`)
+    // Ohne Kürzel nur die Ziffern genau so, wie sie in der Nummer stehen (führende Nullen zählen), und nicht als Teil
+    // eines Datums: sonst passte RE-2026-011 auf jedes „2026-11-15“ im Verwendungszweck (Teilzahlung „wahrscheinlich“,
+    // und das Mahnwesen hielt die Rechnung für „Abgleich ausstehend“).
+    const nur = new RegExp(`(?<![0-9]|[0-9][.\\-])${ziffern.map(esc).join(TRENNER)}(?![0-9]|[.\\-][0-9]{1,2}(?![0-9]))`)
     if (nur.test(text)) return 'ziffern'
   }
   return null

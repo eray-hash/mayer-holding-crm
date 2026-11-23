@@ -160,7 +160,10 @@ export async function versucheAutomatischeZuordnung(
   betreff: string,
   text: string,
   anhaenge: { filename: string; size: number; contentType: string; url: string }[],
+  /** Zeile der schon gespeicherten Mail: wird vor dem Ergänzen der Akte beansprucht (siehe unten). */
+  zeilenId: string | null = null,
 ): Promise<{ kundeId: string; bereich: string; kundeName: string } | null> {
+  let beansprucht = false
   try {
     const adresse = von.trim().toLowerCase()
     if (!adresse.includes('@') || (await istMitarbeiterAdresse(supabase, adresse))) return null
@@ -174,11 +177,26 @@ export async function versucheAutomatischeZuordnung(
     if (error || !treffer || treffer.length !== 1) return null
 
     const kunde = treffer[0]
+    const kundeName = `${kunde.firma} (${kunde.ansprechpartner})`
+    // Erst die gespeicherte Mail beanspruchen, dann die Akte ergänzen (Nachtprüfung 23.11.2026): Seit die Mail VOR der
+    // Zuordnung gespeichert wird, kann die Zuordnung im Zeitplan (ordneOffeneMailsZu in email-gateway/postfach.ts)
+    // dieselbe, noch nicht zugeordnete Mail gleichzeitig zur Akte legen — Verlauf und Dokumente kämen doppelt.
+    // Ist sie schon zugeordnet, ist hier nichts mehr zu tun.
+    if (zeilenId) {
+      const { data: geholt, error: holFehler } = await supabase
+        .from('eingegangene_emails')
+        .update({ zugewiesener_kunde_id: kunde.id, zugewiesener_bereich: kunde.bereich, zugewiesener_kunde_name: kundeName })
+        .eq('id', zeilenId)
+        .is('zugewiesener_kunde_id', null)
+        .select('id')
+      if (holFehler || !Array.isArray(geholt) || geholt.length === 0) return null
+      beansprucht = true
+    }
     // Winzige Bilder sind Logos aus der Signatur, keine Unterlagen (wie ordneMailZu in email-gateway/postfach.ts).
     const unterlagen = anhaenge.filter((a) => !(String(a.contentType ?? '').startsWith('image/') && Number(a.size ?? 0) < 15 * 1024))
     const hatAnhaenge = unterlagen.length > 0
     const heute = heuteBerlin()
-    const neueDokumente = unterlagen.map((a) => ({
+    let neueDokumente = unterlagen.map((a) => ({
       id: crypto.randomUUID(),
       name: a.filename,
       typ: a.contentType,
@@ -190,9 +208,7 @@ export async function versucheAutomatischeZuordnung(
       {
         id: crypto.randomUUID(),
         date: heute,
-        text: hatAnhaenge
-          ? `E-Mail automatisch zugeordnet: „${betreff}" von ${vonName} (${unterlagen.length} Anhang/Anhänge in Dokumente abgelegt)`
-          : `E-Mail automatisch zugeordnet: „${betreff}" von ${vonName}`,
+        text: `E-Mail automatisch zugeordnet: „${betreff}" von ${vonName}`,
         user: 'System (automatische E-Mail-Zuordnung)',
       },
     ]
@@ -214,7 +230,13 @@ export async function versucheAutomatischeZuordnung(
     // Dokumente und Verlauf erst JETZT lesen (nach dem KI-Aufruf oben): Mit den Listen vom Anfang würde eine in der
     // Zwischenzeit im Browser gespeicherte Änderung der Akte überschrieben.
     const { data: frisch, error: frischFehler } = await supabase.from('kunden').select('dokumente, activities').eq('id', kunde.id).maybeSingle()
-    if (frischFehler || !frisch) return null
+    if (frischFehler || !frisch) throw new Error(`Akte nicht lesbar: ${frischFehler?.message ?? 'nicht gefunden'}`)
+    // Was schon in der Akte liegt (gleiche Adresse), nicht noch einmal ablegen — wie ordneMailZu in postfach.ts.
+    const vorhanden = new Set(((frisch.dokumente as { url?: string }[] | null) ?? []).map((d) => d?.url).filter(Boolean))
+    neueDokumente = neueDokumente.filter((d) => !vorhanden.has(d.url))
+    if (hatAnhaenge && neueDokumente.length > 0) {
+      neueActivities[neueActivities.length - 1].text = `E-Mail automatisch zugeordnet: „${betreff}" von ${vonName} (${neueDokumente.length} Anhang/Anhänge in Dokumente abgelegt)`
+    }
     const { error: updateError } = await supabase
       .from('kunden')
       .update({
@@ -223,13 +245,16 @@ export async function versucheAutomatischeZuordnung(
         activities: [...neueActivities, ...((frisch.activities as unknown[]) ?? [])],
       })
       .eq('id', kunde.id)
-    if (updateError) {
-      console.error('Automatische Zuordnung fehlgeschlagen (Kunde-Update)', updateError)
-      return null
-    }
-    return { kundeId: kunde.id, bereich: kunde.bereich, kundeName: `${kunde.firma} (${kunde.ansprechpartner})` }
+    if (updateError) throw new Error(`Kunde-Update: ${updateError.message}`)
+    return { kundeId: kunde.id, bereich: kunde.bereich, kundeName }
   } catch (err) {
     console.error('Automatische Zuordnung fehlgeschlagen', err)
+    // Beanspruchung zurücknehmen: Die Mail bleibt unzugeordnet und taucht im Postfach (und im Zeitplan) wieder auf.
+    if (beansprucht && zeilenId) {
+      await Promise.resolve(
+        supabase.from('eingegangene_emails').update({ zugewiesener_kunde_id: null, zugewiesener_bereich: null, zugewiesener_kunde_name: null }).eq('id', zeilenId),
+      ).catch(() => undefined)
+    }
     return null
   }
 }
@@ -326,14 +351,8 @@ export type NeueMail = { messageId: string; von: string; vonName: string; betref
  *  Verbindlichkeit doppelt an. Wirft nie. */
 // deno-lint-ignore no-explicit-any
 export async function nachDemSpeichern(supabase: any, zeilenId: string | null, m: NeueMail, relevanz: 'kunde' | 'nicht_relevant'): Promise<MailPruefung['zuordnung']> {
-  const zuordnung = relevanz === 'kunde' ? await versucheAutomatischeZuordnung(supabase, m.von, m.vonName, m.betreff, m.text, m.anhaenge) : null
-  if (zuordnung && zeilenId) {
-    const { error } = await supabase
-      .from('eingegangene_emails')
-      .update({ zugewiesener_kunde_id: zuordnung.kundeId, zugewiesener_bereich: zuordnung.bereich, zugewiesener_kunde_name: zuordnung.kundeName })
-      .eq('id', zeilenId)
-    if (error) console.error('Zuordnung der Mail nicht gespeichert', error)
-  }
+  // Mit zeilenId trägt versucheAutomatischeZuordnung die Zuordnung selbst an der Mail ein (beansprucht sie vorher).
+  const zuordnung = relevanz === 'kunde' ? await versucheAutomatischeZuordnung(supabase, m.von, m.vonName, m.betreff, m.text, m.anhaenge, zeilenId) : null
   // Läuft bewusst unabhängig von relevanz — eine Lieferantenrechnung ist für den Posteingang
   // "nicht_relevant", für die Buchhaltung aber hochrelevant.
   const verbindlichkeit = await erkenneEingehendeVerbindlichkeit(m.vonName, m.von, m.betreff, m.text, m.anhaenge)

@@ -702,6 +702,12 @@ function MeinTagesablauf({ ich, datum, onUngespeichert }: { ich: string; datum: 
   }, [termine, kalenderEmail, todos, objekte, immobilienKunden, projekte, ich, meineEmail, datum])
 
   const gefuellt = entwurf.zeilen.filter((z) => z.was.trim() !== '')
+  // Neuester Stand für „Tag vorschlagen“: Während die Wiedervorlagen laden, kann jemand abhaken, tippen oder die
+  // Stoppuhr starten — gespeichert wird danach auf diesem Stand, nicht auf dem vom Klick.
+  const neuesterStand = useRef({ entwurf, datum })
+  useEffect(() => {
+    neuesterStand.current = { entwurf, datum }
+  })
   const zahlen = kennzahlen(entwurf.zeilen)
   const zeiten = useMemo(() => new Map(zeitplan(gefuellt, entwurf.startUhr).eintraege.map((e) => [e.id, e])), [gefuellt, entwurf.startUhr])
 
@@ -855,20 +861,23 @@ function MeinTagesablauf({ ich, datum, onUngespeichert }: { ich: string; datum: 
           // Ohne Wiedervorlagen weiter — die übrigen Vorschläge gelten trotzdem.
         }
       }
+      // Inzwischen anderen Tag gewählt: nichts in den falschen Tag schreiben.
+      if (neuesterStand.current.datum !== datum) return
+      const aktuell = neuesterStand.current.entwurf
       const v = schlageTagVor({
         datum,
         todos: eigeneTodosFuerPlan(todos, meineEmail, ich, bezugStand.bezuege),
         termine: kalenderEmail ? termineFuerPlan(termine, kalenderEmail, datum) : [],
         wiedervorlagen: wv,
         vortag: letzterPlan ? { datum: letzterPlan.datum, zeilen: letzterPlan.zeilen ?? [] } : null,
-        bestehend: gefuellt,
+        bestehend: aktuell.zeilen.filter((z) => z.was.trim() !== ''),
         neueId: () => uid('tz'),
       })
       if (v.neu === 0) {
         setUebernahmeMeldung('Nichts Neues: Alles, was ansteht und in die Zeitbudgets passt, steht schon im Plan.')
         return
       }
-      sofort({ ...entwurf, zeilen: mitLeerzeilen(v.zeilen) }, { vorgeschlagenAm: new Date().toISOString() })
+      sofort({ ...aktuell, zeilen: mitLeerzeilen(v.zeilen) }, { vorgeschlagenAm: new Date().toISOString() })
       setUebernahmeMeldung(
         `${v.neu} ${v.neu === 1 ? 'Eintrag' : 'Einträge'} vorgeschlagen und gespeichert.${
           v.nichtEingeplant.length === 1

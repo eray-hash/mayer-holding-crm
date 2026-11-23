@@ -435,7 +435,7 @@ type Action =
   | { type: 'ADD_TODO'; todo: ToDoEintrag }
   | { type: 'UPDATE_TODO'; id: string; patch: Partial<ToDoEintrag> }
   | { type: 'DELETE_TODO'; id: string }
-  | { type: 'SET_TODO_FREIGABE'; besitzerEmail: string; empfaengerEmail: string; recht: 'lesen' | 'schreiben' }
+  | { type: 'SET_TODO_FREIGABE'; besitzerEmail: string; empfaengerEmail: string; recht: 'lesen' | 'schreiben'; neueId?: string }
   | { type: 'DELETE_TODO_FREIGABE'; id: string }
   | { type: 'ADD_VERBINDLICHKEIT'; verbindlichkeit: Verbindlichkeit }
   | { type: 'UPDATE_VERBINDLICHKEIT'; id: string; patch: Partial<Verbindlichkeit> }
@@ -459,24 +459,10 @@ function appendKundeActivity(
       const resolved = typeof extraPatch === 'function' ? extraPatch(k) : extraPatch
       return { ...k, ...resolved, activities: [activity, ...k.activities] }
     })
-  switch (bereich) {
-    case 'beratung':
-      return { ...state, kunden: patch(state.kunden) }
-    case 'erben':
-      return { ...state, erbenMandanten: patch(state.erbenMandanten) }
-    case 'betriebsuebergabe':
-      return { ...state, betriebsuebergabeMandanten: patch(state.betriebsuebergabeMandanten) }
-    case 'betriebsformen':
-      return { ...state, betriebsformenMandanten: patch(state.betriebsformenMandanten) }
-    case 'akademie':
-      return { ...state, akademieTeilnehmer: patch(state.akademieTeilnehmer) }
-    case 'finanzierungen':
-      return { ...state, finanzierungenMandanten: patch(state.finanzierungenMandanten) }
-    case 'privat':
-      return { ...state, privatKunden: patch(state.privatKunden) }
-    default:
-      return state
-  }
+  // Über KUNDEN_BEREICHE statt einer eigenen Liste: Die frühere Fallunterscheidung kannte „immobilienkunden“ nicht —
+  // Käuferprofil, Protokoll-Vermerk, zugeordnete Mail samt Anhängen usw. gingen bei Immobilien-Kunden still verloren.
+  const def = KUNDEN_BEREICHE.find((b) => b.id === bereich)
+  return def ? def.set(state, patch(def.get(state))) : state
 }
 
 // Schreib-Gegenstück zu KUNDEN_BEREICHE's .get() — für Pflege-Modus-Aktionen, die einen Kunden
@@ -1225,7 +1211,8 @@ function reducer(state: AppData, action: Action): AppData {
         }
       }
       const neu: ToDoFreigabe = {
-        id: uid('freigabe'),
+        // Kennung beim Auslösen erzeugt (Reducer kann zweimal laufen → sonst zwei verschiedene Kennungen).
+        id: action.neueId ?? uid('freigabe'),
         besitzerEmail: action.besitzerEmail,
         empfaengerEmail: action.empfaengerEmail,
         recht: action.recht,

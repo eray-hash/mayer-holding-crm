@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { AlertTriangle, CheckCircle2, Loader2, Send, Sparkles, XCircle } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { KUNDEN_BEREICHE, kundeBereichLabel } from '../../data/kundenBereiche'
+import { istSammelakte } from '../../data/sammelakten'
 import { PRIORITAETEN, MITARBEITER } from '../../data/constants'
 import { isEmailGatewayConfigured, sendEmail, draftCampaign } from '../../lib/emailGateway'
 import { applyMailVorlage } from '../../lib/mailVorlagen'
@@ -9,6 +10,10 @@ import { Card, Field, inputClass, PrimaryButton, SecondaryButton } from '../../c
 import type { Kunde, KundeBereich, Prioritaet } from '../../types'
 
 type Empfaenger = { bereich: KundeBereich; kunde: Kunde }
+
+// Kampagnen gehen im Namen der Mayer Holding raus: private Kontakte (Bereich „Privat“) gehören nie dazu,
+// die beiden Sammelakten sind keine Kunden.
+const KAMPAGNEN_BEREICHE = KUNDEN_BEREICHE.filter((b) => b.id !== 'privat')
 type Versandstatus = 'offen' | 'gesendet' | 'fehler'
 
 // Bereichsübergreifende Segment-/Kampagnen-Mail (z.B. zweiwöchentlicher Newsletter) an eine nach
@@ -16,7 +21,7 @@ type Versandstatus = 'offen' | 'gesendet' | 'fehler'
 // Pause zwischen den Aufrufen, damit der IONOS-SMTP-Versand nicht wie ein Spam-Burst aussieht.
 export function Kampagnen() {
   const { state } = useApp()
-  const [bereiche, setBereiche] = useState<Set<KundeBereich>>(new Set(KUNDEN_BEREICHE.map((b) => b.id)))
+  const [bereiche, setBereiche] = useState<Set<KundeBereich>>(new Set(KAMPAGNEN_BEREICHE.map((b) => b.id)))
   const [prioritaeten, setPrioritaeten] = useState<Set<Prioritaet>>(new Set(PRIORITAETEN))
   const [verantwortlich, setVerantwortlich] = useState('')
 
@@ -30,8 +35,9 @@ export function Kampagnen() {
   const [sendeLaeuft, setSendeLaeuft] = useState(false)
 
   const empfaenger = useMemo<Empfaenger[]>(() => {
-    return KUNDEN_BEREICHE.filter((b) => bereiche.has(b.id)).flatMap((b) =>
+    return KAMPAGNEN_BEREICHE.filter((b) => bereiche.has(b.id)).flatMap((b) =>
       b.get(state)
+        .filter((k) => !istSammelakte(k.id))
         .filter((k) => prioritaeten.has(k.prioritaet))
         .filter((k) => !verantwortlich || k.verantwortlich === verantwortlich)
         .filter((k) => k.email)
@@ -122,7 +128,7 @@ export function Kampagnen() {
             <div className="mb-4">
               <p className="mb-1.5 text-xs font-medium text-slate-500">Bereiche</p>
               <div className="space-y-1.5">
-                {KUNDEN_BEREICHE.map((b) => (
+                {KAMPAGNEN_BEREICHE.map((b) => (
                   <label key={b.id} className="flex items-center gap-1.5 text-sm text-slate-600">
                     <input type="checkbox" className="rounded" checked={bereiche.has(b.id)} onChange={() => toggleBereich(b.id)} />
                     {b.label}

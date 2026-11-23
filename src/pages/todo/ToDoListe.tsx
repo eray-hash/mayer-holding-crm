@@ -594,8 +594,12 @@ function ToDoListeKern({ scope }: { scope: Scope }) {
           initial={editEintrag}
           readOnly={!darfSchreiben}
           onClose={() => setEditEintrag(null)}
-          onSubmit={(patch) => {
-            dispatch({ type: 'UPDATE_TODO', id: editEintrag.id, patch })
+          onSubmit={(werte) => {
+            // Nur die im Fenster geänderten Felder schreiben: Das Fenster hält den Stand vom Öffnen. Was
+            // inzwischen anderswo gesetzt wurde (abgehakt im Tagesablauf oder per Telegram, Ist-Zeit der
+            // Stoppuhr, automatische Priorität), würde sonst mit dem alten Wert überschrieben.
+            const patch = geaenderteFelder(editEintrag, werte)
+            if (Object.keys(patch).length > 0) dispatch({ type: 'UPDATE_TODO', id: editEintrag.id, patch })
             setEditEintrag(null)
           }}
         />
@@ -786,7 +790,7 @@ function FreigabenModal({ besitzerEmail, alleMitarbeiter, onClose }: { besitzerE
       if (bestehende) dispatch({ type: 'DELETE_TODO_FREIGABE', id: bestehende.id })
       return
     }
-    dispatch({ type: 'SET_TODO_FREIGABE', besitzerEmail, empfaengerEmail, recht })
+    dispatch({ type: 'SET_TODO_FREIGABE', besitzerEmail, empfaengerEmail, recht, neueId: uid('freigabe') })
   }
 
   return (
@@ -1171,6 +1175,16 @@ function AufraeumenModal({ scope, eigeneEmail, onClose, onGeaendert }: { scope: 
 }
 
 type ToDoFormWert = Omit<ToDoEintrag, 'id' | 'besitzerEmail' | 'bereich' | 'reihenfolge' | 'erstelltAm'>
+
+/** Felder, die sich gegenüber dem Stand beim Öffnen geändert haben (leer, undefined und null gelten als gleich). */
+function geaenderteFelder(vorher: ToDoEintrag, werte: ToDoFormWert): Partial<ToDoEintrag> {
+  const patch: Record<string, unknown> = {}
+  const alt = vorher as unknown as Record<string, unknown>
+  for (const [feld, wert] of Object.entries(werte)) {
+    if ((wert ?? '') !== (alt[feld] ?? '')) patch[feld] = wert
+  }
+  return patch as Partial<ToDoEintrag>
+}
 
 function ToDoModal({
   titel,

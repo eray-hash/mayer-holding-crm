@@ -490,6 +490,9 @@ export async function datensicherungAktion(req: Request, admin: Db, body: Record
   }
 
   if (aufgabe === 'herunterladen') {
+    // Nur Superuser: die Sicherung enthält auch private Daten (private Akten, Postfächer, Outlook) aller Kollegen.
+    const { data: su } = await admin.from('mitarbeiter').select('ist_superuser').ilike('email', aufrufer.email.replace(/[\\%_]/g, (z) => `\\${z}`)).maybeSingle()
+    if (!su?.ist_superuser) return { status: 403, daten: { error: 'Herunterladen nur für Superuser — die Sicherung enthält private Daten.' } }
     const liste = await listeSicherungen(admin)
     const gewuenscht = typeof body.name === 'string' && body.name ? body.name : liste[0]?.name
     if (!gewuenscht || !liste.some((s) => s.name === gewuenscht)) return { status: 404, daten: { error: 'Diese Sicherung gibt es nicht (mehr).' } }

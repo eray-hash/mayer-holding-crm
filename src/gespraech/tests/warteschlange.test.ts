@@ -1,5 +1,6 @@
 // deno test src/gespraech/tests/warteschlange.test.ts
 import {
+  abschlussNummern,
   bereitZumAbschliessen,
   endungZu,
   geschaetzteDauer,
@@ -124,4 +125,11 @@ test('Nummern, Dauer, Endungen, Anzeige', () => {
   const a = aufnahme({ beendet: true, serverId: 's', segmente: [seg(1, 'gemeldet'), seg(2, 'lokal')] })
   gleich(standText(a, 0, false), 'Wartet auf Netz (1 von 2 Abschnitten hochgeladen)')
   gleich(standText(a, 0, true), 'Wird hochgeladen (1 von 2)')
+})
+
+test('Abschließen meldet die tatsächlichen Abschnittsnummern (Lücke nach leerem Abschnitt), nicht 1…n', () => {
+  const seg = (nr: number) => ({ nr, mime: 'audio/mp4', dauer_s: 180, bytes: 10, status: 'gemeldet' as const })
+  // Abschnitt 3 war leer (Unterbrechung direkt nach dem Wechsel) und fiel auf dem Gerät weg.
+  gleich(abschlussNummern(aufnahme({ segmente: [seg(4), seg(1), seg(2), seg(5)] })), [1, 2, 4, 5])
+  gleich(abschlussNummern(aufnahme({ segmente: [] })), [])
 })

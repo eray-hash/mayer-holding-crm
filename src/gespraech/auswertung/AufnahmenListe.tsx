@@ -124,7 +124,7 @@ export function AufnahmenListe() {
             </button>
             <div className="flex justify-end gap-3 border-t border-slate-100 px-3 py-1.5 text-xs">
               {z.status !== 'verworfen' ? (
-                <button disabled={aktion === z.id || ['aufnahme', 'hochladen'].includes(z.status)} onClick={() => verwerfen(z)} className="text-slate-500 disabled:opacity-40">Verwerfen</button>
+                <button disabled={aktion === z.id || (['aufnahme', 'hochladen'].includes(z.status) && Date.now() - new Date(z.erstellt_am).getTime() < 24 * 3600_000)} onClick={() => verwerfen(z)} className="text-slate-500 disabled:opacity-40">Verwerfen</button>
               ) : (
                 <button disabled={aktion === z.id} onClick={() => loeschen(z)} className="text-rose-600 disabled:opacity-40">Endgültig löschen</button>
               )}

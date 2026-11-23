@@ -66,6 +66,21 @@ export function merkeInDatenbank(tabelle: string, ids: Iterable<string>): void {
   for (const id of ids) inDatenbank.add(`${tabelle}:${id}`)
 }
 
+/**
+ * Beim Laden des Stands (hydrate): Diese Zeilen gibt es in der Datenbank. Steht eine davon noch als „in diesem
+ * Fenster gelöscht“ vermerkt, ist das Löschen nicht durchgegangen (fehlendes Recht — die Datenbank löscht dann still
+ * nichts — oder abgelehnt) und die Zeile ist nach dem Neuladen wieder sichtbar: Der Vermerk fällt weg, sonst würde
+ * jede weitere Änderung an ihr bis zum Neuladen der Seite still nicht gespeichert (Nachtprüfung 23.11.2026).
+ * Läuft das Löschen noch oder wartet es aufs Nachholen, bleibt der Vermerk.
+ */
+export function merkeGeladen(tabelle: string, ids: Iterable<string>): void {
+  for (const id of ids) {
+    const s = `${tabelle}:${id}`
+    inDatenbank.add(s)
+    if (geloescht.has(s) && !ketten.has(s) && !offeneLoeschungen.get(tabelle)?.ids.has(id)) geloescht.delete(s)
+  }
+}
+
 export function istInDatenbank(tabelle: string, id: string): boolean {
   return inDatenbank.has(`${tabelle}:${id}`)
 }
@@ -241,7 +256,11 @@ export function loescheZeilen(client: SyncClient, tabelle: string, ids: string[]
         for (const id of ids) eintrag.ids.add(id)
         offeneLoeschungen.set(tabelle, eintrag)
         starteNachholen()
-      } else if (offen) {
+        return ausgang
+      }
+      // Abgelehnt: Die Zeile steht weiter in der Datenbank — spätere Änderungen an ihr nicht still verwerfen.
+      if (ausgang === 'fehler') for (const s of schluessel) geloescht.delete(s)
+      if (offen) {
         for (const id of ids) offen.ids.delete(id)
         if (offen.ids.size === 0) offeneLoeschungen.delete(tabelle)
       }
@@ -281,6 +300,14 @@ function starteNachholen(): void {
 }
 
 if (typeof window !== 'undefined') window.addEventListener('online', () => void holeNach())
+// Noch nicht gespeicherte Änderungen (z. B. offline): vor dem Schließen/Neuladen der Seite warnen.
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeunload', (ev) => {
+    if (anzahlAusstehend() === 0) return
+    ev.preventDefault()
+    ev.returnValue = ''
+  })
+}
 
 /** Wartet (höchstens `ms`), bis die laufenden Schreibvorgänge fertig sind — vor dem Neuladen des Stands. */
 export async function warteAufSchreibvorgaenge(ms: number): Promise<void> {

@@ -35,6 +35,9 @@ export type GespraechSegment = {
   versuche?: number
   letzter_versuch?: string | null
   fehler?: string | null
+  /** Nur Server: Mengengrenze des Abschrift-Dienstes (429) — so oft schon vertröstet, frühestens dann wieder. */
+  mengengrenze?: number
+  naechster_versuch?: string | null
 }
 
 export type GespraechMarker = { sek: number; text: string; art: 'wichtig' | 'aufgabe' | 'frage' }

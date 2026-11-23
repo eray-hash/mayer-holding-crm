@@ -55,7 +55,12 @@ export function Kostenvoranschlaege({ privat }: { privat?: boolean } = {}) {
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [alle, nutzer.nurLesen, nutzer.email])
-  const imUmfang = useMemo(() => (privat ? sichtbar.filter((k) => k.bereich === 'privat') : sichtbar), [sichtbar, privat])
+  // Die allgemeine Seite zeigt nur Einträge der Holding: eigene private stehen unter „Meine Kostenvoranschläge“ und
+  // liefen sonst in Kennzahlen, Summen und ins Angebot mit (die Excel-Datei ließ sie schon weg).
+  const imUmfang = useMemo(
+    () => (privat ? sichtbar.filter((k) => k.bereich === 'privat' || !!k.privatBesitzer) : sichtbar.filter((k) => k.bereich !== 'privat' && !k.privatBesitzer)),
+    [sichtbar, privat],
+  )
 
   const gefiltert = useMemo(() => {
     const such = suche.trim().toLowerCase()
@@ -125,7 +130,7 @@ export function Kostenvoranschlaege({ privat }: { privat?: boolean } = {}) {
           <p className="text-sm text-slate-500">
             {privat
               ? 'Nur deine privaten Kostenvoranschläge — niemand sonst sieht sie.'
-              : 'Alle Kostenvoranschläge, die du sehen darfst — mit Akte oder noch ohne Zuordnung. Private Einträge sieht nur ihr Besitzer.'}
+              : 'Alle Kostenvoranschläge der Holding, die du sehen darfst — mit Akte oder noch ohne Zuordnung. Deine privaten stehen im privaten Bereich.'}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">

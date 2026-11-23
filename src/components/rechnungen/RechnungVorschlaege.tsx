@@ -57,7 +57,8 @@ export function vorlageAusVorschlag(v: VorschlagZeile): Partial<Rechnung> {
   return {
     kundeId: v.kunde_id ?? undefined,
     positionen: (v.positionen ?? []).map((p) => ({ id: uid('p'), bezeichnung: p.bezeichnung, menge: Number(p.menge) || 1, einheit: p.einheit || 'Pauschal', einzelpreis: Number(p.einzelpreis) || 0, ...(p.leistungId ? { leistungId: p.leistungId } : {}) })),
-    ustSatz: Number(v.ust_satz) || 19,
+    // 0 % (z. B. Kleinunternehmer, steuerfreie Leistung) ist ein gültiger Satz — nur ein fehlender Satz wird 19 %.
+    ustSatz: v.ust_satz === null || v.ust_satz === undefined || (v.ust_satz as unknown) === '' || !Number.isFinite(Number(v.ust_satz)) ? 19 : Number(v.ust_satz),
     leistungBezeichnung: v.titel || undefined,
     kvId: v.kv_id ?? undefined,
     notiz: `Aus Rechnungsvorschlag: ${v.grund ?? ''}`.trim(),

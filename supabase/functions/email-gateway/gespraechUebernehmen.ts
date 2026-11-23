@@ -67,6 +67,9 @@ const AKTEN_EIMER = 'kunden-dokumente'
 /** Mehr Audio wird nicht in die Akte kopiert (Speicherplatz; die Aufnahme bleibt bis zur Löschfrist in der App). */
 export const HOECHSTENS_AUDIO_BYTES = 150 * 1024 * 1024
 const HOECHSTENS_FOTOS = 40
+/** Ein Protokoll ohne Vermerk an der Aufnahme, das älter ist, stammt von einem abgebrochenen Aufruf (eine Anfrage lebt
+ *  höchstens wenige Minuten). */
+export const PROTOKOLL_VERWAIST_MS = 10 * 60_000
 
 export type GespraechKontext = {
   admin: Db
@@ -431,12 +434,22 @@ export async function gespraechUebernehmen(k: GespraechKontext, body: any): Prom
       dauer_sekunden: Number.isFinite(Number(zeile.dauer_s)) && zeile.dauer_s !== null ? Math.round(Number(zeile.dauer_s)) : null,
     })
     if (error) {
-      if (String(error.code) === '23505' || /duplicate key/i.test(error.message)) return fehler(409, 'Die Übernahme läuft gerade schon. Bitte kurz warten und die Seite neu laden.')
-      return fehler(500, `Das Gesprächsprotokoll ließ sich nicht anlegen: ${error.message}. Nichts wurde übernommen.`)
+      if (!(String(error.code) === '23505' || /duplicate key/i.test(error.message))) return fehler(500, `Das Gesprächsprotokoll ließ sich nicht anlegen: ${error.message}. Nichts wurde übernommen.`)
+      // Das Protokoll gibt es schon, der Vermerk an der Aufnahme fehlt: entweder läuft gerade ein zweiter Aufruf (→ 409),
+      // oder ein früherer Aufruf brach nach dem Protokoll ab (Worker beendet, Fehler). Ohne diese Unterscheidung bekäme
+      // jede weitere Übernahme für immer „läuft gerade schon“. Ist das Protokoll älter als PROTOKOLL_VERWAIST_MS und
+      // gehört zu dieser Akte, wird es weiterverwendet.
+      const { data: vorhanden } = await admin.from('protokolle').select('id, kunde_id, updated_at').eq('id', protokollId).maybeSingle()
+      const seit = Date.parse(String(vorhanden?.updated_at ?? ''))
+      const verwaist = !!vorhanden && String(vorhanden.kunde_id ?? '') === kundeId && Number.isFinite(seit) && (k.jetzt ?? new Date()).getTime() - seit > PROTOKOLL_VERWAIST_MS
+      if (!verwaist) return fehler(409, 'Die Übernahme läuft gerade schon. Bitte kurz warten und die Seite neu laden.')
+      u.protokollId = protokollId
+      hinweise.push('Ein früherer Übernahme-Versuch brach ab; das damals angelegte Gesprächsprotokoll wird weiterverwendet. Bitte Wiedervorlagen, To-dos und Termine auf Doppelte prüfen.')
+    } else {
+      u.protokollId = protokollId
+      neuAngelegt.push('Gesprächsprotokoll')
+      zeilen.push(`Gesprächsprotokoll „${betreff}“ in der Akte von ${name} angelegt.`)
     }
-    u.protokollId = protokollId
-    neuAngelegt.push('Gesprächsprotokoll')
-    zeilen.push(`Gesprächsprotokoll „${betreff}“ in der Akte von ${name} angelegt.`)
   }
 
   // 2. Wiedervorlagen

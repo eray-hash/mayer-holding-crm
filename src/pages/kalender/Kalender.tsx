@@ -607,6 +607,8 @@ function TerminFormular({
     return (bereich?.get(state).find((k) => k.id === f.kunde?.id)?.email ?? '').trim()
   }, [f.kunde, state])
 
+  const privatMitKollegen = f.kunde?.bereich === 'privat' && f.teilnehmer.length > 0
+
   async function speichern(trotz = false) {
     setLaeuft(true)
     setFehler('')
@@ -622,9 +624,11 @@ function TerminFormular({
         ende: ende.toISOString(),
         ganztags: f.ganztags,
         teilnehmer: f.teilnehmer,
-        kunde: f.kunde,
+        // Private Kontakte nur an Terminen ohne Kollegen — sonst sähen die Kollegen den Namen (Termin-Ansicht,
+        // Telegram-Hinweis). Wer nachträglich Kollegen dazunimmt, verliert hier die Verknüpfung.
+        kunde: privatMitKollegen ? null : f.kunde,
         trotzUeberschneidung: trotz,
-        ...(f.kunde && f.gastEinladen ? { gast_einladen: true } : f.warEingeladen ? { gast_einladen: false } : {}),
+        ...(f.kunde && !privatMitKollegen && f.gastEinladen ? { gast_einladen: true } : f.warEingeladen ? { gast_einladen: false } : {}),
       }
       await speichereTerminRemote(eingabe)
       onGespeichert()
@@ -709,6 +713,7 @@ function TerminFormular({
           <div className="flex items-center gap-2 text-sm text-slate-700">
             {f.kunde.name} <span className="text-xs text-slate-400">({kundeBereichLabel(f.kunde.bereich as KundeBereich)})</span>
             <button type="button" onClick={() => setF({ ...f, kunde: null, gastEinladen: false })} className="text-xs text-slate-400 hover:text-rose-600">entfernen</button>
+            {privatMitKollegen && <span className="text-xs text-amber-700">Privater Kontakt — wird mit Kollegen im Termin nicht gespeichert.</span>}
           </div>
         ) : (
           <div>

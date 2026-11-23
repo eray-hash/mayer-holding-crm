@@ -294,6 +294,7 @@ import { starteRenditeMarktvergleich } from './renditeMarkt.ts'
 import { beantworteUnterschrift } from './unterschrift.ts'
 import { seminarAnmelden, seminarTerminLaden } from './seminarAnmeldung.ts'
 import { beantworteKundenUnterlagen } from './kundenUnterlagen.ts'
+import { istInterneAkte, netzadresse, oeffentlicheGrenzen, pruefeFormularAbgabe, selbstauskunftFuerFormular } from './oeffentlicheFormulare.ts'
 import { beantworteKundenPortal, KUNDENPORTAL_AKTIONEN } from './kundenPortal.ts'
 import { pruefeWunschAnalyse, wunschAnalyseTest } from './wunschAnalyse.ts'
 import { pruefeSuperuserWochenbericht, superuserAuswertung, superuserWochenberichtTest } from './superuser.ts'
@@ -628,7 +629,8 @@ async function erkenneRechnungUndLegeAn(kundeId: string, betreff: string, text: 
   const heute = heuteBerlin()
   await admin.from('rechnungen').insert({
     id: crypto.randomUUID(),
-    nummer: erkennung.rechnungsnummer || `RE-${heute.slice(0, 4)}-${Math.floor(1000 + Math.random() * 8999)}`,
+    // Ohne erkannte Nummer kein Zufallswert im RE-Schema (sonst schlägt das CRM danach RE-JJJJ-<Zufall+1> vor).
+    nummer: erkennung.rechnungsnummer || `MAIL-${heute}-${crypto.randomUUID().slice(0, 6)}`,
     kunde_id: kundeId,
     datum: heute,
     betrag_netto: Math.round(betragNetto * 100) / 100,
@@ -3291,6 +3293,14 @@ Deno.serve((req: Request) => mitAnlass(async () => {
           return new Response(JSON.stringify({ error: 'Bitte neu anmelden — die Anmeldung fehlt oder ist abgelaufen.' }), { status: 401, headers })
         }
       }
+      // Mengengrenze für die älteren öffentlichen Aktionen ohne eigene Grenze (siehe oeffentlicheFormulare.ts).
+      const grenzen = oeffentlicheGrenzen(aktion, netzadresse(req.headers), body ?? {})
+      if (grenzen) {
+        const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+        if (await grenzeErreicht(admin, grenzen)) {
+          return new Response(JSON.stringify({ error: 'Zu viele Aufrufe. Bitte versuchen Sie es in einer Stunde erneut.' }), { status: 429, headers })
+        }
+      }
     }
 
     if (body.action === 'sync') {
@@ -4203,6 +4213,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       if (!bereich || !kundeId) {
         return new Response(JSON.stringify({ error: 'bereich und kundeId sind Pflichtfelder' }), { status: 400, headers })
       }
+      if (istInterneAkte(kundeId)) return new Response(JSON.stringify({ kunde: null }), { headers })
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
       const { data, error: selectError } = await admin
         .from('kunden')
@@ -4228,7 +4239,8 @@ Deno.serve((req: Request) => mitAnlass(async () => {
             ndaUnterschrieben,
             // Private Kontakte: welchem Mayer-Ablauf sie folgen (Fragenkatalog des Formulars), sonst leer.
             ...(data.privat_art ? { privatArt: data.privat_art } : {}),
-            ...(formular === 'selbstauskunft' ? { selbstauskunft: data.selbstauskunft ?? undefined } : {}),
+            // Nur, DASS eine Selbstauskunft vorliegt (Seite zeigt dann „Vielen Dank“) — nie Antworten/Unterschrift.
+            ...(formular === 'selbstauskunft' ? { selbstauskunft: selbstauskunftFuerFormular(data.selbstauskunft) } : {}),
             ...(formular === 'mandantenfragebogen' ? { unterlagenCheckliste: data.unterlagen_checkliste ?? undefined } : {}),
           },
         }),
@@ -4237,14 +4249,19 @@ Deno.serve((req: Request) => mitAnlass(async () => {
     }
 
     if (body.action === 'public_submit_formular') {
-      const { bereich, kundeId, aktivitaetText, aktivitaetUser, signatur, selbstauskunft, unterlagenCheckliste, behoerde } = body
-      if (!bereich || !kundeId || !aktivitaetText) {
+      const { bereich, kundeId } = body
+      if (!bereich || !kundeId || !body.aktivitaetText) {
         return new Response(JSON.stringify({ error: 'bereich, kundeId und aktivitaetText sind Pflichtfelder' }), { status: 400, headers })
       }
+      // Nur bekannte Felder, begrenzte Größen, Unterschrift nur als PNG, Verlaufsname endet auf „(Formular)“.
+      const abgabe = pruefeFormularAbgabe(body)
+      if ('fehler' in abgabe) return new Response(JSON.stringify({ error: abgabe.fehler }), { status: 400, headers })
+      const { aktivitaetText, aktivitaetUser, signatur, selbstauskunft, unterlagenCheckliste, behoerde } = abgabe.werte
+      if (istInterneAkte(kundeId)) return new Response(JSON.stringify({ error: 'Kunde/Mandant nicht gefunden' }), { status: 404, headers })
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
       const { data: bestehend, error: selectError } = await admin
         .from('kunden')
-        .select('firma, ansprechpartner, activities, signaturen, follow_up')
+        .select('firma, ansprechpartner, activities, signaturen, follow_up, sa_da:selbstauskunft->>eingereichtAm')
         .eq('id', kundeId)
         .eq('bereich', bereich)
         .maybeSingle()
@@ -4263,6 +4280,9 @@ Deno.serve((req: Request) => mitAnlass(async () => {
           ...((bestehend.signaturen as unknown[]) ?? []),
         ]
       }
+      // Eine unterschriebene Selbstauskunft wird über den Link nie überschrieben (sonst könnte jeder mit dem
+      // Link sie nachträglich ändern). Soll der Kunde neu ausfüllen, leert ein Mitarbeiter sie in der Akte.
+      if (selbstauskunft && bestehend.sa_da) return new Response(JSON.stringify({ ok: true, schonEingereicht: true }), { headers })
       if (selbstauskunft) patch.selbstauskunft = selbstauskunft
       if (unterlagenCheckliste) patch.unterlagen_checkliste = unterlagenCheckliste
 

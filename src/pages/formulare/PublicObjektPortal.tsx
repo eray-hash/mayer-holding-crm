@@ -9,6 +9,8 @@ import { DatenschutzHinweis } from '../../components/DatenschutzHinweis'
 import { fmtEUR } from '../../lib/dates'
 import { holePortal, holePortalDokument, portalBesichtigen, stimmePortalZu, type PortalBesichtigung, type PortalSeite } from '../../lib/objektPortal'
 import { tagLang, tagSchluessel, uhr } from '../../../supabase/functions/_shared/besichtigungZeiten.ts'
+// Datum und Uhrzeit immer in deutscher Zeit, egal wo der Interessent gerade ist.
+import { zeitDe } from '../../../supabase/functions/_shared/unterschriftKern.ts'
 
 /** Vorlagen-Text (# Titel, ## Abschnitt, **fett**) lesbar darstellen. */
 function Vertragstext({ text }: { text: string }) {
@@ -203,7 +205,7 @@ export function PublicObjektPortal() {
         </Card>
         {token && <Besichtigung token={token} stand={seite.besichtigung} hinweis={seite.hinweis} onSeite={setSeite} />}
         <p className="text-center text-xs text-slate-400">
-          Sie haben am {seite.zugestimmtAm ? new Date(seite.zugestimmtAm).toLocaleString('de-DE') : '–'} zugestimmt. Fragen? Antworten Sie einfach auf unsere E-Mail oder rufen Sie uns an: 0176 209 671 39.
+          Sie haben am {seite.zugestimmtAm ? zeitDe(seite.zugestimmtAm) : '–'} zugestimmt. Fragen? Antworten Sie einfach auf unsere E-Mail oder rufen Sie uns an: 0176 209 671 39.
         </p>
         <DatenschutzHinweis />
       </div>
@@ -319,7 +321,7 @@ function Besichtigung({ token, stand, hinweis, onSeite }: { token: string; stand
 
           <div className="mt-4 border-t border-slate-100 pt-3">
             {b.rueckrufAm && !rueckrufOffen ? (
-              <p className="text-sm text-slate-500">Ihr Rückrufwunsch vom {new Date(b.rueckrufAm).toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' })} Uhr liegt uns vor. Wir melden uns bei Ihnen.</p>
+              <p className="text-sm text-slate-500">Ihr Rückrufwunsch vom {zeitDe(b.rueckrufAm)} liegt uns vor. Wir melden uns bei Ihnen.</p>
             ) : !rueckrufOffen ? (
               <button onClick={() => setRueckrufOffen(true)} className="flex items-center gap-2 text-sm font-medium text-accent-700 hover:underline">
                 <Phone size={14} /> {tage.length === 0 ? 'Bitte rufen Sie mich an' : 'Keiner passt — bitte rufen Sie mich an'}

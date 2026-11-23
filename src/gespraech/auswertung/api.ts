@@ -198,10 +198,9 @@ export async function aktenNamen(ids: string[]): Promise<Map<string, string>> {
   return aus
 }
 
+/** Verworfenen Eintrag endgültig löschen — über den Server (der Browser hat kein Löschrecht auf die Tabelle). */
 export async function loescheAufnahme(id: string): Promise<void> {
-  if (!supabase) throw new Error('Keine Verbindung zur Datenbank eingerichtet.')
-  const { error } = await supabase.from('gespraech_aufnahmen').delete().eq('id', id)
-  if (error) throw new Error(error.message)
+  await callAuthenticated({ action: 'gespraech_loeschen', id })
 }
 
 // ---------- Anzeige ----------

@@ -16,6 +16,14 @@ import { useBereichsRechte } from '../../lib/bereichsRechte'
 import { supabase } from '../../lib/supabaseClient'
 import { erledigeWiedervorlage } from '../../lib/wiedervorlagen'
 import { addDays, fmtEURCent, today, uid } from '../../lib/dates'
+
+/** Kalendertag eines Zeitstempels in Ortszeit (ein UTC-Zeitstempel kurz nach Mitternacht gehört sonst zum Vortag). */
+function lokalerTag(iso: string): string {
+  if (iso.length <= 10) return iso
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso.slice(0, 10)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
 import { AMPEL_RANG, STUFEN, STUFE_ZURUECK, gewichtet, standVon, stufeVon, wochenEnde, zielStatus } from '../../lib/checkliste'
 import { AMPEL_PUNKT, kurzDatum, useChecklisteDaten, type Zeile } from '../checkliste/checklisteDaten'
 import { ChecklisteBearbeiten } from '../checkliste/Checkliste'
@@ -66,7 +74,8 @@ export function Wochenbesprechung() {
     supabase
       ?.from('wiedervorlagen')
       .select('id, kunde_id, titel, erledigt_am, erledigt_von, erledigt_grund')
-      .gte('erledigt_am', montag + 'T00:00:00')
+      // Montag 0 Uhr in deutscher Zeit (nicht UTC) — sonst fehlte, was Montag vor 1 bzw. 2 Uhr erledigt wurde.
+      .gte('erledigt_am', new Date(montag + 'T00:00:00').toISOString())
       .order('erledigt_am', { ascending: false })
       .limit(200)
       .then(({ data }) => setErledigtDieseWoche((data ?? []) as typeof erledigtDieseWoche))
@@ -136,14 +145,14 @@ export function Wochenbesprechung() {
       const z = zeileVon.get(w.kunde_id)
       if (!z || (bereichFilter && z.bereich !== bereichFilter)) continue
       const wie = w.erledigt_grund ? `von selbst erledigt (${w.erledigt_grund})` : `erledigt${w.erledigt_von ? ` von ${w.erledigt_von}` : ''}`
-      liste.push({ schluessel: `w:${w.id}`, datum: w.erledigt_am.slice(0, 10), text: `${akteName(z.kunde)}: „${w.titel}“ ${wie}`, zeile: z })
+      liste.push({ schluessel: `w:${w.id}`, datum: lokalerTag(w.erledigt_am), text: `${akteName(z.kunde)}: „${w.titel}“ ${wie}`, zeile: z })
     }
     for (const kv of kvs) {
-      if ((kv.erstelltAm ?? '').slice(0, 10) < montag) continue
+      if (lokalerTag(kv.erstelltAm ?? '') < montag) continue
       const z = kv.kundeId ? zeileVon.get(kv.kundeId) : undefined
       if (bereichFilter && z?.bereich !== bereichFilter) continue
       const betrag = kv.betrag ? ` über ${fmtEURCent(kv.betrag)}` : ''
-      liste.push({ schluessel: `k:${kv.id}`, datum: kv.erstelltAm.slice(0, 10), text: `${z ? akteName(z.kunde) : kv.name}: Kostenvoranschlag${betrag} angelegt`, zeile: z })
+      liste.push({ schluessel: `k:${kv.id}`, datum: lokalerTag(kv.erstelltAm), text: `${z ? akteName(z.kunde) : kv.name}: Kostenvoranschlag${betrag} angelegt`, zeile: z })
     }
     return liste.sort((a, b) => b.datum.localeCompare(a.datum)).slice(0, 40)
   }, [faelle, erledigtDieseWoche, kvs, zeileVon, montag, bereichFilter])

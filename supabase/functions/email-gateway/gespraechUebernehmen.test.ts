@@ -231,6 +231,23 @@ Deno.test('Gleichzeitiger zweiter Aufruf scheitert am Protokoll-Schlüssel', asy
   assertEquals(t.wiedervorlagen.length, 0)
 })
 
+Deno.test('Abgebrochener früherer Aufruf (Protokoll da, Vermerk fehlt): nach 10 Minuten wird das Protokoll weiterverwendet statt für immer 409', async () => {
+  const t = stand()
+  t.protokolle.push({ id: 'p_gespr_111111112222', kunde_id: 'k1', updated_at: '2026-11-22T09:30:00Z' })
+  const jung = await gespraechUebernehmen(kontext(fakeAdmin(t), { jetzt: new Date('2026-11-22T09:35:00Z') }), { id: AUFNAHME, auswahl: ALLES })
+  assertEquals(jung.status, 409) // könnte noch laufen
+  const r = await gespraechUebernehmen(kontext(fakeAdmin(t), { jetzt: new Date('2026-11-22T09:45:00Z') }), { id: AUFNAHME, auswahl: { protokoll: true, wiedervorlagen: [0] } })
+  assertEquals(r.status, 200, JSON.stringify(r.daten))
+  assertEquals(t.protokolle.length, 1)
+  assertEquals(t.wiedervorlagen.length, 1)
+  assertEquals((t.gespraech_aufnahmen[0].uebernommen as { protokollId?: string }).protokollId, 'p_gespr_111111112222')
+  assertMatch(String((r.daten.hinweise as string[])[0]), /früherer Übernahme-Versuch brach ab/)
+  // Protokoll einer anderen Akte mit derselben Kennung: nie übernehmen.
+  const t2 = stand()
+  t2.protokolle.push({ id: 'p_gespr_111111112222', kunde_id: 'k_anders', updated_at: '2026-11-01T09:30:00Z' })
+  assertEquals((await gespraechUebernehmen(kontext(fakeAdmin(t2)), { id: AUFNAHME, auswahl: ALLES })).status, 409)
+})
+
 Deno.test('Zu großes Audio wird übersprungen, private Akte ohne Wiedervorlagen, ganztägiger Termin', async () => {
   const t = stand()
   const z = t.gespraech_aufnahmen[0]

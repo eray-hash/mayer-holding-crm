@@ -8,6 +8,7 @@ import {
   holeNach,
   istNetzFehler,
   loescheZeilen,
+  merkeGeladen,
   merkeInDatenbank,
   schreibeSpaeter,
   schreibtGerade,
@@ -169,6 +170,42 @@ test('Löschen am Netz gescheitert: wird nachgeholt (sonst käme die Zeile beim 
   await holeNach()
   gleich(db.zeile('todos', 't1'), undefined)
   gleich(schreibtGerade(), false)
+})
+
+test('Löschen abgelehnt: spätere Änderungen derselben Zeile werden wieder gespeichert', async () => {
+  const db = neu()
+  db.lege('todos', todo())
+  merkeInDatenbank('todos', ['t1'])
+  db.fehler = (v) => (v === 'delete' ? 'permission denied for table todos' : null)
+  gleich(await loescheZeilen(db.client(), 'todos', ['t1'], 'Aufgabe'), 'fehler')
+  db.fehler = () => null
+  // Die Zeile kommt beim nächsten Laden zurück; der Mitarbeiter ändert sie.
+  gleich(await schreibeSpaeter(db.client(), { tabelle: 'todos', id: 't1', kontext: 'Aufgabe' }, todo(), todo({ prio: 'A' })), 'ok')
+  gleich(db.zeile('todos', 't1')?.prio, 'A')
+})
+
+test('Löschen still ohne Wirkung (fehlendes Recht): nach dem Neuladen wird die Zeile wieder gespeichert', async () => {
+  const db = neu()
+  db.lege('todos', todo())
+  merkeInDatenbank('todos', ['t1'])
+  gleich(await loescheZeilen(db.client(), 'todos', ['t1'], 'Aufgabe'), 'ok')
+  db.lege('todos', todo()) // Zeilenschutz: die Datenbank hat nichts gelöscht
+  merkeGeladen('todos', ['t1']) // hydrate lädt sie wieder
+  gleich(await schreibeSpaeter(db.client(), { tabelle: 'todos', id: 't1', kontext: 'Aufgabe' }, todo(), todo({ prio: 'A' })), 'ok')
+  gleich(db.zeile('todos', 't1')?.prio, 'A')
+})
+
+test('Neuladen, während das Löschen aufs Nachholen wartet: der Löschvermerk bleibt', async () => {
+  const db = neu()
+  db.lege('todos', todo())
+  db.fehler = (v) => (v === 'delete' ? 'Failed to fetch' : null)
+  gleich(await loescheZeilen(db.client(), 'todos', ['t1'], 'Aufgabe'), 'nachholen')
+  db.fehler = () => null
+  merkeGeladen('todos', ['t1'])
+  gleich(await schreibeSpaeter(db.client(), { tabelle: 'todos', id: 't1', kontext: 'Aufgabe' }, todo(), todo({ prio: 'A' })), 'ok')
+  gleich(db.zeile('todos', 't1')?.prio, 'B', 'keine Änderung an einer Zeile, deren Löschen noch aussteht')
+  await holeNach()
+  gleich(db.zeile('todos', 't1'), undefined)
 })
 
 test('Gelöscht, während das Anlegen noch aufs Nachholen wartete: wird nicht wieder angelegt', async () => {

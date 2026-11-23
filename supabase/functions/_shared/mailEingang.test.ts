@@ -22,6 +22,8 @@ class Db {
   tabellen: Record<string, Zeile[]>
   /** Wird nach jedem Lesen aufgerufen — damit lässt sich eine gleichzeitige Änderung im Browser nachstellen. */
   nachLesen: ((tabelle: string) => void) | null = null
+  /** Tabelle, deren Änderungen scheitern sollen (Fehler der Datenbank nachstellen). */
+  updateScheitertIn: string | null = null
   constructor(t: Record<string, Zeile[]>) {
     this.tabellen = t
   }
@@ -56,6 +58,10 @@ class Abfrage implements PromiseLike<Ergebnis> {
     this.filter.push((z) => z[s] === w)
     return this
   }
+  is(s: string, w: unknown) {
+    this.filter.push((z) => (w === null ? z[s] == null : z[s] === w))
+    return this
+  }
   neq(s: string, w: unknown) {
     this.filter.push((z) => z[s] != null && z[s] !== w)
     return this
@@ -84,8 +90,9 @@ class Abfrage implements PromiseLike<Ergebnis> {
     }
     const treffer = zeilen.filter((z) => this.filter.every((f) => f(z)))
     if (this.art === 'update') {
+      if (this.db.updateScheitertIn === this.tabelle) return { data: null, error: { message: 'Testfehler' } }
       for (const z of treffer) Object.assign(z, structuredClone(this.nutzlast))
-      return { data: null, error: null }
+      return { data: treffer.map((z) => ({ id: z.id })), error: null }
     }
     const aus = treffer.slice(0, this.grenze).map((z) => structuredClone(z))
     this.db.nachLesen?.(this.tabelle)
@@ -232,4 +239,43 @@ Deno.test('Nach dem Speichern: Zuordnung wird an der gespeicherten Mail nachgetr
   assertEquals(await nachDemSpeichern(db, 'm2', { ...mail, messageId: '<2@x>' }, 'nicht_relevant'), null)
   assertEquals(db.tabellen.eingegangene_emails[1].zugewiesener_kunde_id, undefined)
   assertEquals((db.tabellen.kunden[0].activities as unknown[]).length, 1)
+})
+
+Deno.test('Nach dem Speichern: schon vom Zeitplan zugeordnete Mail wird nicht noch einmal zur Akte gelegt', async () => {
+  const db = new Db({
+    mitarbeiter: [],
+    kunden: [{ id: 'k_1', bereich: 'beratung', firma: 'A', ansprechpartner: 'B', email: 'a@firma.de', dokumente: [], activities: [{ id: 'vom-zeitplan' }] }],
+    eingegangene_emails: [{ id: 'm1', message_id: '<1@x>', zugewiesener_kunde_id: 'k_1' }],
+  })
+  const anhang = { filename: 'vertrag.pdf', size: 200_000, contentType: 'application/pdf', url: 'https://x/vertrag.pdf' }
+  const z = await nachDemSpeichern(db, 'm1', { messageId: '<1@x>', von: 'a@firma.de', vonName: 'A', betreff: 'Vertrag', text: 'Text', anhaenge: [anhang] }, 'kunde')
+  assertEquals(z, null)
+  assertEquals((db.tabellen.kunden[0].activities as unknown[]).length, 1)
+  assertEquals((db.tabellen.kunden[0].dokumente as unknown[]).length, 0)
+})
+
+Deno.test('Zuordnung: ein Anhang, der schon in der Akte liegt (gleiche Adresse), wird nicht doppelt abgelegt', async () => {
+  const anhang = { filename: 'vertrag.pdf', size: 200_000, contentType: 'application/pdf', url: 'https://x/vertrag.pdf' }
+  const db = new Db({
+    mitarbeiter: [],
+    kunden: [{ id: 'k_1', bereich: 'beratung', firma: 'A', ansprechpartner: 'B', email: 'a@firma.de', dokumente: [{ id: 'd1', name: 'vertrag.pdf', url: anhang.url }], activities: [] }],
+    eingegangene_emails: [{ id: 'm1', message_id: '<1@x>' }],
+  })
+  const z = await nachDemSpeichern(db, 'm1', { messageId: '<1@x>', von: 'a@firma.de', vonName: 'A', betreff: 'Vertrag', text: 'Text', anhaenge: [anhang] }, 'kunde')
+  assertEquals(z?.kundeId, 'k_1')
+  assertEquals((db.tabellen.kunden[0].dokumente as Zeile[]).length, 1)
+  assertEquals(db.tabellen.eingegangene_emails[0].zugewiesener_kunde_id, 'k_1')
+  assert(!String((db.tabellen.kunden[0].activities as Zeile[])[0].text).includes('Anhang'), 'kein „Anhang abgelegt“, wenn nichts abgelegt wurde')
+})
+
+Deno.test('Zuordnung: scheitert das Ergänzen der Akte, bleibt die Mail unzugeordnet', async () => {
+  const db = new Db({
+    mitarbeiter: [],
+    kunden: [{ id: 'k_1', bereich: 'beratung', firma: 'A', ansprechpartner: 'B', email: 'a@firma.de', dokumente: [], activities: [] }],
+    eingegangene_emails: [{ id: 'm1', message_id: '<1@x>' }],
+  })
+  db.updateScheitertIn = 'kunden'
+  const z = await nachDemSpeichern(db, 'm1', { messageId: '<1@x>', von: 'a@firma.de', vonName: 'A', betreff: 'Frage', text: 'Text', anhaenge: [] }, 'kunde')
+  assertEquals(z, null)
+  assertEquals(db.tabellen.eingegangene_emails[0].zugewiesener_kunde_id, null)
 })

@@ -4,8 +4,9 @@
 // - Wer erinnert wird: Bei der eigenen Liste (bereich leer) ihr Besitzer (besitzer_email). Bei einer
 //   Bereichsliste der Zuständige (Freitext wie „Andreas“ oder „Eray, Hasan“ → aktive Mitarbeiter); steht dort
 //   niemand, der Mitarbeiter, der das To-do angelegt hat (besitzer_email). Nur wer mit Telegram verbunden ist.
-// - Gesendet = erinnert_am wird gesetzt. Nur nach erfolgreichem Versand, oder wenn der Versand sicher nie klappen
-//   kann (niemand zuordenbar, kein Telegram) — sonst würde es jede Minute erneut versucht. Ändert jemand die
+// - Gesendet = erinnert_am wird gesetzt — VOR dem Versand (beansprucht, bedingt auf unveränderte Zeit). Scheitert der
+//   Versand an alle, wird der Vermerk zurückgenommen (nächster Versuch in der nächsten Minute). Auch gesetzt, wenn der
+//   Versand sicher nie klappen kann (niemand zuordenbar, kein Telegram) — sonst würde es jede Minute erneut versucht. Ändert jemand die
 //   Erinnerungszeit, setzt die Datenbank erinnert_am selbst wieder auf leer.
 // - Was länger als 2 Tage überfällig ist und nie ging (z. B. Zeitplan stand still), wird still abgehakt
 //   statt Tage später noch verschickt.
@@ -81,13 +82,36 @@ function privatText(text: string): string {
   return text.replace('Deine eigene To-do-Liste', 'Deine private To-do-Liste')
 }
 
-/** Vermerkt die Erinnerung als erledigt — nur, wenn die Zeit inzwischen nicht geändert wurde. */
-async function vermerke(admin: Db, t: TodoZeile): Promise<void> {
-  const { error } = await admin.from('todos').update({ erinnert_am: new Date().toISOString() }).eq('id', t.id).eq('erinnern_um', t.erinnern_um).is('erinnert_am', null)
-  if (error) console.error('To-do-Erinnerung: erinnert_am nicht gesetzt', t.id, error.message)
+/**
+ * Vermerkt die Erinnerung als erledigt (beansprucht sie) — nur, wenn die Zeit inzwischen nicht geändert wurde und
+ * kein anderer Lauf schneller war. Gibt den gesetzten Zeitstempel zurück oder null (nicht gesetzt → nicht senden).
+ * Vorher wurde erst gesendet und danach vermerkt: Scheiterte das Vermerken, kam dieselbe Erinnerung jede Minute.
+ */
+async function vermerke(admin: Db, t: TodoZeile): Promise<string | null> {
+  const stempel = new Date().toISOString()
+  const { data, error } = await admin.from('todos').update({ erinnert_am: stempel }).eq('id', t.id).eq('erinnern_um', t.erinnern_um).is('erinnert_am', null).select('id')
+  if (error) {
+    console.error('To-do-Erinnerung: erinnert_am nicht gesetzt', t.id, error.message)
+    return null
+  }
+  return Array.isArray(data) && data.length > 0 ? stempel : null
 }
 
-export async function sendeTodoErinnerungen(admin: Db): Promise<{ gesendet: number }> {
+/** Nimmt einen Vermerk zurück, wenn der Versand an alle scheiterte (nächster Versuch im nächsten Lauf). */
+async function nimmZurueck(admin: Db, t: TodoZeile, stempel: string): Promise<void> {
+  const { error } = await admin.from('todos').update({ erinnert_am: null }).eq('id', t.id).eq('erinnert_am', stempel)
+  if (error) console.error('To-do-Erinnerung: Vermerk nicht zurückgenommen (Erinnerung geht verloren)', t.id, error.message)
+}
+
+export type TodoVersand = {
+  sende?: (chat: number | string | null, text: string) => Promise<boolean>
+  sendePrivat?: (chat: number | string | null, text: string) => Promise<boolean>
+  hatPrivatBot?: (email: string) => Promise<boolean>
+}
+
+export async function sendeTodoErinnerungen(admin: Db, versand: TodoVersand = {}): Promise<{ gesendet: number }> {
+  const sende = versand.sende ?? sendeTelegram
+  const sendeP = versand.sendePrivat ?? (async (chat: number | string | null, text: string) => !!(await sendePrivat(chat, text)))
   const jetzt = Date.now()
   const { data, error } = await admin
     .from('todos')
@@ -116,7 +140,7 @@ export async function sendeTodoErinnerungen(admin: Db): Promise<{ gesendet: numb
   const hatPrivatBot = async (email: string | null) => {
     const e = String(email ?? '').toLowerCase()
     if (!e) return false
-    if (!privatAktiv.has(e)) privatAktiv.set(e, await privatBotAktiv(admin, e).catch(() => false))
+    if (!privatAktiv.has(e)) privatAktiv.set(e, await (versand.hatPrivatBot ? versand.hatPrivatBot(e) : privatBotAktiv(admin, e)).catch(() => false))
     return privatAktiv.get(e)!
   }
   let gesendet = 0
@@ -133,17 +157,22 @@ export async function sendeTodoErinnerungen(admin: Db): Promise<{ gesendet: numb
       continue
     }
     const text = nachricht(t)
+    // Erst beanspruchen, dann senden: ohne gespeicherten Vermerk keine Nachricht (nie doppelt, auch bei zwei Läufen).
+    const stempel = await vermerke(admin, t)
+    if (!stempel) continue
     let einer = false
     for (const p of personen) {
       const privat = !t.bereich && (await hatPrivatBot(p.email))
-      if (privat ? !!(await sendePrivat(p.chat, privatText(text))) : await sendeTelegram(p.chat, text)) {
+      if (privat ? await sendeP(p.chat, privatText(text)).catch(() => false) : await sende(p.chat, text).catch(() => false)) {
         einer = true
         gesendet++
       }
     }
-    // Klappt bei keinem der Versand (Telegram gestört), bleibt sie offen und wird in der nächsten Minute erneut versucht.
-    if (einer) await vermerke(admin, t)
-    else console.error('To-do-Erinnerung: Telegram-Versand fehlgeschlagen, nächster Versuch beim nächsten Lauf', t.id)
+    // Klappt bei keinem der Versand (Telegram gestört), wird der Vermerk zurückgenommen und in der nächsten Minute erneut versucht.
+    if (!einer) {
+      console.error('To-do-Erinnerung: Telegram-Versand fehlgeschlagen, nächster Versuch beim nächsten Lauf', t.id)
+      await nimmZurueck(admin, t, stempel)
+    }
   }
   console.log(`To-do-Erinnerungen: ${gesendet} gesendet, ${faellige.length} fällig`)
   return { gesendet }

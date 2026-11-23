@@ -27,6 +27,19 @@ Deno.test('Nummer im Verwendungszweck: verschiedene Schreibweisen, keine Teiltre
   assertEquals(findeNummer('12', 'Rechnung 12'), null)
 })
 
+Deno.test('Ziffern ohne Kürzel: kein Treffer auf ein Datum im Verwendungszweck', () => {
+  // Vorher passte RE-2026-011 auf „2026-11-15“ → Teilzahlung „wahrscheinlich“ und Mahnung zurückgehalten.
+  assertEquals(findeNummer('RE-2026-011', 'Abschlag EREF 2026-11-15'), null)
+  assertEquals(findeNummer('RE-2026-12', 'Lieferung 2026-12-05'), null)
+  assertEquals(findeNummer('RE-2026-12', 'Lieferung 2026.12.05'), null)
+  assertEquals(findeNummer('RE-2026-011', 'Rechnung 2026-011'), 'ziffern')
+  assertEquals(findeNummer('RE-2026-011', 'Rechnungen 2026-011/2026-012'), 'ziffern')
+  // Mit Kürzel bleibt die Schreibweise frei.
+  assertEquals(findeNummer('RE-2026-011', 'RE-2026-11'), 'voll')
+  const e = gleicheAb([b('b1', '2026-11-20', 250, 'Abschlag 2026-11-15', 'Max Muster')], [r('r1', 'RE-2026-011', 1190, ['Firma XY'], '2026-11-01')], [])
+  assertEquals(e.vorschlaege.length, 0)
+})
+
 Deno.test('Namensnähe ohne Rechtsform und Umlaute', () => {
   assertEquals(namensNaehe('Müller Bau GmbH', 'MUELLER BAU GMBH & CO KG'), 1)
   assertEquals(namensNaehe('Hans Müller', 'Mueller, Hans'), 1)

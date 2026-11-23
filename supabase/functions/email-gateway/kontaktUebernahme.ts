@@ -35,5 +35,8 @@ export async function kontaktMailsUebernehmen(req: Request, admin: Db, body: Rec
     if (r.ok) uebernommen++
     else fehler.push(r.fehler)
   }
+  // Protokolle des privaten Kontakts mitnehmen — sonst sieht sie nach der Übernahme niemand mehr.
+  const { error: protFehler } = await admin.from('protokolle').update({ bereich, besitzer_email: null }).eq('kunde_id', kundeId).eq('bereich', 'privat').eq('besitzer_email', a.email)
+  if (protFehler) fehler.push(`Protokolle: ${protFehler.message}`)
   return antwort({ ok: fehler.length === 0, uebernommen, fehler: fehler.slice(0, 5) })
 }

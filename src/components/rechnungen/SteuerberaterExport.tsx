@@ -16,6 +16,7 @@ import { AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, Download, FileArch
 import { Modal, PrimaryButton, SecondaryButton, Field, inputClass } from '../ui'
 import { useAuth } from '../../context/AuthContext'
 import { supabase } from '../../lib/supabaseClient'
+import { alleZeilen } from '../../lib/alleZeilen'
 import { fmtEURCent, today } from '../../lib/dates'
 import { herunterladen } from '../../lib/briefe'
 import { bezahlteSumme } from '../../lib/rechnungen'
@@ -162,7 +163,10 @@ type PersonenkontoZeile = { art: 'debitor' | 'kreditor'; schluessel: string; num
 
 async function ladePersonenkonten(): Promise<Personenkonto[]> {
   if (!supabase) throw new Error('Keine Datenbank verbunden.')
-  const { data, error } = await supabase.from('steuerberater_personenkonten').select('art, schluessel, nummer, name').limit(20000)
+  const db = supabase
+  // Seitenweise: Die Datenbank liefert höchstens 1000 Zeilen je Abfrage (ein `.limit(20000)` hilft nicht) — sonst
+  // gälten bekannte Konten ab dem 1001. als neu und das Anlegen scheiterte an doppelten Nummern.
+  const { data, error } = await alleZeilen<PersonenkontoZeile>(() => db.from('steuerberater_personenkonten').select('id, art, schluessel, nummer, name'))
   if (error) throw new Error(error.message)
   return ((data ?? []) as PersonenkontoZeile[]).map((z) => ({ art: z.art, schluessel: z.schluessel, nummer: Number(z.nummer), name: z.name ?? undefined }))
 }

@@ -104,6 +104,11 @@ export function bereitZumAbschliessen(a: LokaleAufnahme): boolean {
   )
 }
 
+/** Nummern der Abschnitte für gespraech_abschliessen — die tatsächlichen, aufsteigend (Lücken möglich, siehe server.ts). */
+export function abschlussNummern(a: Pick<LokaleAufnahme, 'segmente'>): number[] {
+  return [...new Set(a.segmente.map((s) => s.nr))].sort((x, y) => x - y)
+}
+
 export function markerJson(m: GespraechMarker[]): string {
   return JSON.stringify(m)
 }

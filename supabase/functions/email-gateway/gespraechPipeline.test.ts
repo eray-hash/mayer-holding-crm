@@ -11,9 +11,11 @@ import {
   gespraechMinutentakt,
   type KiFunktion,
   loescheAbgelaufeneAudios,
+  MENGENGRENZE_MAX_WARTEN,
   naechsteArbeit,
   SEGMENT_MAX_VERSUCHE,
   transkribiereSegment,
+  wartezeitMengengrenze,
   wendeWechselAn,
   zerlegeInSaetze,
 } from './gespraechPipeline.ts'
@@ -283,7 +285,7 @@ Deno.test('Abschließen bevor alles hochgeladen ist: Status „hochladen“, dan
 
 // ---------- Wiederholen und Sperren ----------
 
-Deno.test('Wiederholen: Mengengrenze beim ersten Versuch, nach einer Minute klappt es über den Minutentakt', async () => {
+Deno.test('Wiederholen: Mengengrenze beim ersten Versuch zählt nicht als Versuch, nach der Wartezeit klappt es über den Minutentakt', async () => {
   const db = welt()
   const uhr = { t: START }
   let aufrufe = 0
@@ -301,12 +303,14 @@ Deno.test('Wiederholen: Mengengrenze beim ersten Versuch, nach einer Minute klap
   await gespraechAktion(db, HASAN, { action: 'gespraech_segment_fertig', id, nr: 1, dauer_s: 60 }, h)
   await alleFertig(laeufe)
   let s = zeile(db, id).segmente[0]
-  assertEquals([s.status, s.versuche, s.seit], ['hochgeladen', 1, null])
+  assertEquals([s.status, s.versuche, s.seit, s.mengengrenze], ['hochgeladen', 0, null, 1])
   assertMatch(s.fehler, /429/)
-  // Sofort: noch nicht wieder dran.
+  // Sofort und nach einer Minute: noch nicht wieder dran (ohne Zeitangabe des Dienstes 5 Minuten Wartezeit).
+  await gespraechMinutentakt(db, h)
+  uhr.t += 61_000
   await gespraechMinutentakt(db, h)
   assertEquals(p.angestossen, [])
-  uhr.t += 61_000
+  uhr.t += 4 * 60_000
   await gespraechMinutentakt(db, h)
   assertEquals(p.angestossen, [id])
   await arbeiteGespraech(db, id, h)
@@ -504,9 +508,19 @@ Deno.test('Rechte: Anlegen nur mit Einwilligung, freigegebener Akte und eigenem 
   assertEquals((await gespraechAktion(db, HASAN, { action: 'gespraech_anlegen', art: 'telefon', kundeId: 'k_1' }, h)).status, 400)
   assertEquals((await gespraechAktion(db, HASAN, { action: 'gespraech_anlegen', art: 'notiz' }, h)).status, 200) // Notiz ohne Gesprächspartner
   const ohne = hilfen({ uhr, rechte: [] }).h
-  assertEquals((await gespraechAktion(db, HASAN, { action: 'gespraech_anlegen', art: 'termin', kundeId: 'k_1', einwilligung: { bestaetigt: true } }, ohne)).status, 403)
-  assertEquals((await gespraechAktion(db, QUIRIN, { action: 'gespraech_anlegen', art: 'termin', terminId: '11111111-2222-4333-8444-555555555555', einwilligung: { bestaetigt: true } }, h)).status, 403)
-  assertEquals((await gespraechAktion(db, HASAN, { action: 'gespraech_anlegen', art: 'termin', kundeId: 'k_gibtsnicht', einwilligung: { bestaetigt: true } }, h)).status, 404)
+  // Nicht freigegebene Akte, fremder Termin, gelöschte Akte: seit 23.11. angelegt OHNE diese Verknüpfung (statt 403/404,
+  // woran die App endlos scheiterte und der Ton auf dem Handy festsaß) — die Akte wird danach in der App zugeordnet.
+  for (const [wer, body, hh] of [
+    [HASAN, { kundeId: 'k_1' }, ohne],
+    [QUIRIN, { terminId: '11111111-2222-4333-8444-555555555555' }, h],
+    [HASAN, { kundeId: 'k_gibtsnicht' }, h],
+  ] as const) {
+    const r = await gespraechAktion(db, wer, { action: 'gespraech_anlegen', art: 'termin', ...body, einwilligung: { bestaetigt: true } }, hh)
+    assertEquals(r.status, 200, JSON.stringify(r.daten))
+    const z = zeile(db, (r.daten as Any).id)
+    assertEquals([z.kunde_id, z.termin_id], [null, null])
+    assertMatch((r.daten as Any).hinweis, /^Angelegt ohne/)
+  }
   // Gleiche Kennung zweimal (App war offline) → dieselbe Aufnahme.
   const eigene = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
   const a = await gespraechAktion(db, HASAN, { action: 'gespraech_anlegen', id: eigene, art: 'notiz' }, h)
@@ -563,4 +577,109 @@ Deno.test('Liste: eigene Aufnahmen seitenweise, neueste zuerst, ohne verworfene'
   const s1 = (await gespraechAktion(db, HASAN, { action: 'gespraech_liste', seite: 1 }, h)).daten as Any
   assertEquals(s1.zeilen.map((z: Any) => z.id), ['r4', 'r3', 'r2', 'r1'])
   assertEquals(s1.weitere, false)
+})
+
+// ---------- Nachtschicht 2 (23.11.2026) ----------
+
+Deno.test('Mengengrenze: Wartezeit aus der Meldung des Dienstes, höchstens MENGENGRENZE_MAX_WARTEN-mal, danach normale Versuche', async () => {
+  assertEquals(wartezeitMengengrenze('Rate limit reached … Please try again in 1m5.5s. Need more tokens?'), 70_500)
+  assertEquals(wartezeitMengengrenze('Please try again in 12.3s'), 60_000) // mindestens eine Minute
+  assertEquals(wartezeitMengengrenze('Please try again in 2h3m'), 30 * 60_000) // höchstens 30 Minuten
+  assertEquals(wartezeitMengengrenze('zu viele'), 5 * 60_000)
+
+  const db = welt()
+  const uhr = { t: START }
+  const { h, laeufe } = hilfen({ uhr, schreibeAb: () => Promise.reject(new AbschriftFehler('Der Abschrift-Dienst antwortet mit 429: Please try again in 2m0s', 429)) })
+  const id = await anlegen(db, h)
+  const u = await gespraechAktion(db, HASAN, { action: 'gespraech_upload_url', id, nr: 1, mime: 'audio/webm' }, h)
+  await hochladen(db, (u.daten as Any).pfad)
+  await gespraechAktion(db, HASAN, { action: 'gespraech_segment_fertig', id, nr: 1, dauer_s: 60 }, h)
+  await gespraechAktion(db, HASAN, { action: 'gespraech_abschliessen', id }, h)
+  await alleFertig(laeufe)
+  for (let i = 1; i < MENGENGRENZE_MAX_WARTEN; i++) {
+    // Während der Wartezeit wartet auch die Auswertung (kein vorzeitiges Auswerten mit Lücke).
+    assertEquals(naechsteArbeit(zeile(db, id), uhr.t + 60_000), { art: 'warten' })
+    uhr.t += 2 * 60_000 + 6_000
+    await arbeiteGespraech(db, id, h)
+  }
+  let s = zeile(db, id).segmente[0]
+  assertEquals([s.status, s.versuche, s.mengengrenze], ['hochgeladen', 0, MENGENGRENZE_MAX_WARTEN])
+  // Ab jetzt zählt jede weitere 429 als normaler Versuch → nach SEGMENT_MAX_VERSUCHE Lücke, Auswertung läuft.
+  for (let i = 0; i < SEGMENT_MAX_VERSUCHE + 1; i++) {
+    uhr.t += 3 * 60_000
+    await arbeiteGespraech(db, id, h)
+  }
+  s = zeile(db, id).segmente[0]
+  assertEquals(s.status, 'fehler')
+  assertEquals(zeile(db, id).status, 'fertig')
+  // „Neu auswerten“ setzt auch die Wartezähler zurück.
+  await gespraechAktion(db, HASAN, { action: 'gespraech_neu_auswerten', id }, h)
+  s = zeile(db, id).segmente[0]
+  assertEquals([s.status, s.versuche, s.mengengrenze, s.naechster_versuch], ['hochgeladen', 0, 0, null])
+})
+
+Deno.test('Rechte: Aufnahme an einer gelöschten Akte ist nicht mehr für alle lesbar (Prüfung in index.ts lässt fehlende Akten durch)', async () => {
+  const db = welt()
+  const uhr = { t: START }
+  const { h } = hilfen({ uhr })
+  const id = await anlegen(db, h)
+  // So prüft index.ts (darfKundeServer): fehlende Akte → true.
+  const wieIndex: GespraechHilfen = { ...h, darfKunde: (kid) => Promise.resolve(!db.tabelle('kunden').some((k) => k.id === kid) || kid === 'k_1') }
+  assertEquals((await gespraechAktion(db, QUIRIN, { action: 'gespraech_stand', id }, wieIndex)).status, 200) // darf die Akte sehen
+  db.tabellen.kunden = db.tabelle('kunden').filter((k) => k.id !== 'k_1') // Akte gelöscht / zusammengeführt
+  const fremd: GespraechHilfen = { ...h, darfKunde: (kid) => Promise.resolve(!db.tabelle('kunden').some((k) => k.id === kid)) }
+  assertEquals((await gespraechAktion(db, FREMD, { action: 'gespraech_stand', id }, fremd)).status, 403)
+  assertEquals((await gespraechAktion(db, FREMD, { action: 'gespraech_liste', kundeId: 'k_1' }, fremd)).status, 403)
+  assertEquals((await gespraechAktion(db, FREMD, { action: 'gespraech_uebersetzen', id }, fremd)).status, 403)
+  // Der Besitzer sieht sie weiterhin.
+  assertEquals((await gespraechAktion(db, HASAN, { action: 'gespraech_stand', id }, fremd)).status, 200)
+})
+
+Deno.test('Rechte: private Akte + Mayer-Objekt — das Objekt-Recht öffnet die private Aufnahme nicht', async () => {
+  const db = welt({ objekte: [{ id: 'o_1', bezeichnung: 'Haus am See', privat_besitzer: null }] })
+  const uhr = { t: START }
+  const { h } = hilfen({ uhr })
+  const id = await anlegen(db, h, { kundeId: 'k_privat', objektId: 'o_1' })
+  // Objekt-Prüfung im Test: alle dürfen das Objekt; keiner außer Hasan die private Akte.
+  const h2: GespraechHilfen = { ...h, darfObjekt: () => Promise.resolve(true) }
+  assertEquals(zeile(db, id).kunde_bereich, 'privat')
+  const quirin: GespraechHilfen = { ...h2, darfKunde: () => Promise.resolve(false) }
+  assertEquals((await gespraechAktion(db, QUIRIN, { action: 'gespraech_stand', id }, quirin)).status, 403)
+})
+
+Deno.test('Anlegen nach dem Gespräch: gelöschter Termin / fremde Akte halten den Ton nicht auf dem Handy fest', async () => {
+  const db = welt()
+  const uhr = { t: START }
+  const { h } = hilfen({ uhr })
+  const weg = '99999999-2222-4333-8444-555555555555'
+  // Termin gibt es nicht mehr, Akte ist gültig → angelegt mit Akte, ohne Termin.
+  const r1 = await gespraechAktion(db, HASAN, { action: 'gespraech_anlegen', id: 'aaaaaaaa-2222-4333-8444-555555555555', art: 'termin', terminId: weg, kundeId: 'k_1', einwilligung: { bestaetigt: true, text: 'ok' } }, h)
+  assertEquals(r1.status, 200, JSON.stringify(r1.daten))
+  assertMatch((r1.daten as Any).hinweis, /ohne den Termin/)
+  const z1 = zeile(db, 'aaaaaaaa-2222-4333-8444-555555555555')
+  assertEquals([z1.kunde_id, z1.termin_id], ['k_1', null])
+  // Akte nicht (mehr) freigegeben → ohne Akte angelegt, zweiter Aufruf liefert dieselbe Aufnahme.
+  const ohneRecht: GespraechHilfen = { ...h, darfKunde: () => Promise.resolve(false) }
+  const body = { action: 'gespraech_anlegen', id: 'bbbbbbbb-2222-4333-8444-555555555555', art: 'telefon', kundeId: 'k_1', einwilligung: { bestaetigt: true, text: 'ok' } }
+  const r2 = await gespraechAktion(db, HASAN, body, ohneRecht)
+  assertEquals(r2.status, 200, JSON.stringify(r2.daten))
+  assertEquals(zeile(db, 'bbbbbbbb-2222-4333-8444-555555555555').kunde_id, null)
+  assertEquals(((await gespraechAktion(db, HASAN, body, ohneRecht)).daten as Any).id, 'bbbbbbbb-2222-4333-8444-555555555555')
+  // Die Einwilligung bleibt Pflicht.
+  assertEquals((await gespraechAktion(db, HASAN, { action: 'gespraech_anlegen', art: 'termin', kundeId: 'k_1' }, h)).status, 400)
+  // Alles gültig → wie bisher, ohne Hinweis.
+  const r3 = await gespraechAktion(db, HASAN, { action: 'gespraech_anlegen', art: 'termin', kundeId: 'k_1', einwilligung: { bestaetigt: true, text: 'ok' } }, h)
+  assertEquals((r3.daten as Any).hinweis, undefined)
+})
+
+Deno.test('Verworfenen Eintrag endgültig löschen: nur der Besitzer, nur verworfene', async () => {
+  const db = welt()
+  const uhr = { t: START }
+  const { h } = hilfen({ uhr })
+  const id = await anlegen(db, h)
+  assertEquals((await gespraechAktion(db, HASAN, { action: 'gespraech_loeschen', id }, h)).status, 409)
+  assertEquals((await gespraechAktion(db, HASAN, { action: 'gespraech_verwerfen', id }, h)).status, 200)
+  assertEquals((await gespraechAktion(db, QUIRIN, { action: 'gespraech_loeschen', id }, h)).status, 403)
+  assertEquals((await gespraechAktion(db, HASAN, { action: 'gespraech_loeschen', id }, h)).status, 200)
+  assertEquals(db.tabelle('gespraech_aufnahmen').some((z) => z.id === id), false)
 })

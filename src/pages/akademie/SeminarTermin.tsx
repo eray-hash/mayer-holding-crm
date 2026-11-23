@@ -219,8 +219,13 @@ export function SeminarTermin() {
                 {!nutzer.nurLesen && (
                   <button
                     onClick={async () => {
-                      await erneuereAnmeldeLink(termin.id, nutzer.name).catch((e) => setFehler(e instanceof Error ? e.message : 'Ging nicht.'))
-                      setHinweis('Neuer Link erzeugt. Der alte Link funktioniert nicht mehr.')
+                      try {
+                        await erneuereAnmeldeLink(termin.id, nutzer.name)
+                        setHinweis('Neuer Link erzeugt. Der alte Link funktioniert nicht mehr.')
+                      } catch (e) {
+                        // Vorher kam die Erfolgsmeldung auch nach einem Fehler.
+                        setFehler(e instanceof Error ? e.message : 'Ging nicht.')
+                      }
                       await laden()
                     }}
                     className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs text-slate-500 hover:text-slate-700"

@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { Modal, PrimaryButton, SecondaryButton, inputClass } from './ui'
 import { MITARBEITER } from '../data/constants'
+import { zahlAusText } from './KvPositionenEditor'
 import { alsEingabeZeit, ausEingabeZeit, TERMIN_STATUS, type SeminarTermin, type TerminEingabe, type TerminStatus } from '../lib/seminarTermine'
 
 export function SeminarTerminFenster({
@@ -43,7 +44,8 @@ export function SeminarTerminFenster({
     if (e && e < b) return setFehler('Das Ende liegt vor dem Beginn.')
     const p = plaetze.trim() === '' ? undefined : Number(plaetze)
     if (p !== undefined && (!Number.isInteger(p) || p < 1)) return setFehler('Plätze: eine ganze Zahl ab 1, oder leer lassen für unbegrenzt.')
-    const pr = preis.trim() === '' ? undefined : Number(preis.replace(/\./g, '').replace(',', '.'))
+    // zahlAusText: „490,50“, „1.250“ und „490.50“ (Punkt als Komma) — vorher wurde „490.50“ zu 49.050 €.
+    const pr = preis.trim() === '' ? undefined : zahlAusText(preis)
     if (pr !== undefined && (!Number.isFinite(pr) || pr < 0)) return setFehler('Der Preis muss eine Zahl sein, z. B. 490 oder 490,00.')
     const schluss = anmeldeschluss ? ausEingabeZeit(`${anmeldeschluss}T23:59`) : undefined
     setLaeuft(true)

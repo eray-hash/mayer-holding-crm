@@ -21,7 +21,13 @@ const alsText = (n: number) => (Number.isFinite(n) ? rundeCent(n).toFixed(2).rep
 export function RechnungFormular({ rechnung, vorKundeId, vorlage, onClose, onGespeichert }: { rechnung?: Rechnung; vorKundeId?: string; vorlage?: Partial<Rechnung>; onClose: () => void; onGespeichert?: (id: string) => void }) {
   const { state, dispatch } = useApp()
   const nutzer = useKvNutzer()
-  const bereicheMitKunden = useMemo(() => KUNDEN_BEREICHE.map((b) => ({ ...b, kunden: b.get(state) })).filter((b) => b.kunden.length > 0), [state])
+  // Rechnungen der Holding gehen nie an private Kontakte (die Kollegen sähen nur „Kunde nicht gefunden“, die Rechnung
+  // liefe trotzdem in Mahnwesen und Steuerberater-Export). Nur eine schon so verknüpfte Rechnung zeigt ihren Kontakt weiter.
+  const anfangsKunde = rechnung?.kundeId ?? vorKundeId ?? vorlage?.kundeId
+  const bereicheMitKunden = useMemo(
+    () => KUNDEN_BEREICHE.map((b) => ({ ...b, kunden: b.id === 'privat' ? b.get(state).filter((k) => k.id === anfangsKunde) : b.get(state) })).filter((b) => b.kunden.length > 0),
+    [state, anfangsKunde],
+  )
 
   const [kundeId, setKundeId] = useState(rechnung?.kundeId ?? vorKundeId ?? vorlage?.kundeId ?? '')
   const [nummer, setNummer] = useState(rechnung?.nummer ?? naechsteRechnungsnummer(state.rechnungen))
@@ -67,6 +73,9 @@ export function RechnungFormular({ rechnung, vorKundeId, vorlage, onClose, onGes
   function datumSetzen(neu: string) {
     setDatum(neu)
     if (!zielVonHand && neu) setZahlungsziel(addDays(neu, 14))
+    // Neue Rechnung mit unveränderter Vorschlagsnummer: Nummer zum Jahr des Rechnungsdatums (z. B. im Januar eine
+    // Rechnung vom 31.12. erfassen → RE-<Vorjahr>-…).
+    if (!rechnung && /^\d{4}-\d{2}-\d{2}$/.test(neu) && nummer === naechsteRechnungsnummer(state.rechnungen, datum)) setNummer(naechsteRechnungsnummer(state.rechnungen, neu))
   }
 
   function nettoSetzen(text: string, satz = pos.ustSatz) {

@@ -27,6 +27,13 @@ import { call } from '../../lib/emailGateway'
 import { NUR_LESEN_MELDUNG } from '../../lib/nurLesen'
 import { legeWiedervorlageAn, loescheWiedervorlage } from '../../lib/wiedervorlagen'
 import { addDays, daysSince, fmtDate, today, uid } from '../../lib/dates'
+
+/** Kalendertag eines Zeitstempels in Ortszeit. */
+function lokalerTag(iso: string): string {
+  const d = new Date(iso)
+  if (iso.length <= 10 || Number.isNaN(d.getTime())) return iso.slice(0, 10)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
 import { MITARBEITER } from '../../data/constants'
 import { kundeDetailPfad } from '../../data/kundenBereiche'
 import type { ActivityEntry, FollowUp, Kunde, KundeBereich } from '../../types'
@@ -127,7 +134,8 @@ export function NeuanfragenSichten() {
   const index = Math.max(0, aktuellId ? liste.findIndex((n) => n.kunde.id === aktuellId) : 0)
   const aktuell: Neuanfrage | undefined = liste[index] ?? liste[0]
   const zurueckgestellt = alle.filter((n) => n.lage === 'zurueckgestellt').length
-  const heuteGesichtet = [...triage.values()].filter((t) => t.entscheidung?.am.slice(0, 10) === today() && t.entscheidung.von === nutzer.name).length
+  // Tag der Entscheidung in Ortszeit (der Zeitstempel ist UTC — kurz nach Mitternacht zählte sonst der Vortag).
+  const heuteGesichtet = [...triage.values()].filter((t) => !!t.entscheidung?.am && lokalerTag(t.entscheidung.am) === today() && t.entscheidung.von === nutzer.name).length
 
   const geheZu = useCallback((schritt: number) => {
     if (liste.length === 0) return

@@ -7,6 +7,7 @@ import { BookOpen, CalendarDays, Plus, Search } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { Card, EmptyState, Modal, PrimaryButton, SecondaryButton, inputClass } from '../../components/ui'
 import { useKvNutzer } from '../../components/KostenvoranschlaegeSection'
+import { zahlAusText } from '../../components/KvPositionenEditor'
 import { aendereSeminar, KATALOG_STAND, ladeSeminare, legeSeminarAn, loescheSeminar, nachBereich, TEILNEHMER_STAND, type Seminar, type SeminarKatalogStand } from '../../lib/seminare'
 import { fmtEURCent } from '../../lib/dates'
 import { SeminarTerminFenster } from '../../components/SeminarTerminFenster'
@@ -225,7 +226,8 @@ function SeminarFenster({
       setFehler('Titel und Bereich sind nötig.')
       return
     }
-    const p = preis.trim() === '' ? undefined : Number(preis.replace(/\./g, '').replace(',', '.'))
+    // zahlAusText: „490,50“, „1.250“ und „490.50“ (Punkt als Komma) — vorher wurde „490.50“ zu 49.050 €.
+    const p = preis.trim() === '' ? undefined : zahlAusText(preis)
     if (p !== undefined && !Number.isFinite(p)) {
       setFehler('Der Preis muss eine Zahl sein, z. B. 490 oder 490,00.')
       return

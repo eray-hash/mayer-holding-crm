@@ -454,6 +454,8 @@ function kontoauszuege(state: AppData, zeilen: KontoauszugZeile[]): QuellenDaten
   ]
   const daten: Datensatz[] = []
   for (const z of zeilen) {
+    // Private Akten gehören nie in die Auswertungen (wie bei „Kunden und Kontakte“).
+    if (z.bereich === 'privat') continue
     const k = nachId.get(`${z.bereich}|${z.kunde_id}`)
     const kunde = k ? kundenName(k) : 'Akte nicht sichtbar'
     const bereich = (KUNDEN_BEREICHE.some((b) => b.id === z.bereich) ? kundeBereichLabel(z.bereich as KundeBereich) : z.bereich) || ''

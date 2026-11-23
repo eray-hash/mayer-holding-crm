@@ -38,8 +38,9 @@ export function Checkliste() {
   const [mitNeuanfragen, setMitNeuanfragen] = useState(false)
   const [mitAbgeschlossenen, setMitAbgeschlossenen] = useState(false)
   const [offen, setOffen] = useState<{ kundeId: string; bereich: KundeBereich } | null>(null)
-  const neuanfragen = alle.filter((z) => z.stand.neuanfrage && !(wvJeKunde.get(z.kunde.id)?.length)).length
-  const abgeschlossene = alle.filter((z) => z.stand.abgeschlossen).length
+  // Zähler wie die Liste: ausgeblendete Abgeschlossene zählen nicht als Neuanfragen und umgekehrt.
+  const neuanfragen = alle.filter((z) => z.stand.neuanfrage && !(wvJeKunde.get(z.kunde.id)?.length) && (mitAbgeschlossenen || !z.stand.abgeschlossen)).length
+  const abgeschlossene = alle.filter((z) => z.stand.abgeschlossen && (mitNeuanfragen || !z.stand.neuanfrage || (wvJeKunde.get(z.kunde.id)?.length ?? 0) > 0)).length
   const verantwortliche = useMemo(() => [...new Set(alle.map((z) => z.kunde.verantwortlich).filter(Boolean))].sort(), [alle])
 
   const sichtbar = useMemo(() => {
@@ -318,6 +319,9 @@ export function ChecklisteBearbeiten({
     const jetzt = new Date().toISOString()
     const alteChance = chanceVon(k)
     const zusatz = umsatzFelder(umsatzSchaetzung, umsatzMonat)
+    // Eine eingetippte, aber nicht per „Hinzufügen“ übernommene Leistung nicht stillschweigend verlieren.
+    const freiText = frei.trim()
+    const dienstListe = freiText && !dienste.includes(freiText) ? [...dienste, freiText] : dienste
     const chanceNeu =
       prozent === undefined
         ? undefined
@@ -329,10 +333,15 @@ export function ChecklisteBearbeiten({
       sachverhalt: sachverhalt.trim() || undefined,
       branche: branche.trim() || undefined,
       vermittler: vermittler.trim() ? { name: vermittler.trim(), ...(treffer ? { kundeId: treffer.kunde.id, bereich: treffer.bereich } : {}) } : undefined,
-      dienstleistungen: dienste.length ? dienste : undefined,
+      dienstleistungen: dienstListe.length ? dienstListe : undefined,
       auftragChance: chanceNeu,
       naechsteSchritte: naechste.trim() || undefined,
-      ampelManuell: ampel ? { farbe: ampel, grund: ampelGrund.trim(), von: nutzerName, am: jetzt } : undefined,
+      // Unveränderte Ampel behält, wer sie gesetzt hat und wann.
+      ampelManuell: !ampel
+        ? undefined
+        : k.ampelManuell && k.ampelManuell.farbe === ampel && (k.ampelManuell.grund ?? '') === ampelGrund.trim()
+          ? k.ampelManuell
+          : { farbe: ampel, grund: ampelGrund.trim(), von: nutzerName, am: jetzt },
     }
     if (followUpErledigt && offenesFollowUp) patch.followUp = { ...offenesFollowUp, done: true }
     onSpeichern(patch)

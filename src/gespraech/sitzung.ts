@@ -246,6 +246,12 @@ async function starteTon(stream: MediaStream, ersteNr: number): Promise<void> {
 
 /** Setzt die Teilstücke eines Abschnitts zusammen und gibt ihn zum Hochladen frei. */
 async function schliesseSegment(lokalId: string, nr: number, mime: string, dauer_s: number | null): Promise<void> {
+  // Nur einmal je Abschnitt: Kommt das Ende eines Recorders erst nach dem Beenden (stop() wartet höchstens 8 s, danach
+  // setzt wiederherstellen() den Abschnitt schon zusammen), lägen nur noch die letzten Sekunden als Teile da — ein
+  // zweites Zusammensetzen würde den fertigen Abschnitt damit überschreiben (ohne Dateikopf, Ton davor weg) und ihn
+  // erneut zum Hochladen freigeben. Nachzügler-Teile verfallen dann mit dem Aufräumen der Aufnahme.
+  const vorher = (await speicher.ladeAufnahme(lokalId))?.segmente.find((s) => s.nr === nr)
+  if (!vorher || vorher.status !== 'aufnahme') return
   const { bytes, teile } = await speicher.fasseSegmentZusammen(lokalId, nr, mime)
   await speicher.aktualisiere(lokalId, (x) => {
     if (bytes === 0) return { ...x, segmente: x.segmente.filter((s) => s.nr !== nr) }

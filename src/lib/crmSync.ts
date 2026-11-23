@@ -56,6 +56,7 @@ import {
   legeAn,
   legeAnFallsNieGespeichert,
   loescheZeilen,
+  merkeGeladen,
   merkeInDatenbank,
   plane,
   schreibeSpaeter,
@@ -1162,26 +1163,26 @@ export async function hydrateFromSupabase(): Promise<HydratedData | null> {
   // Merken, welche Zeilen es in der Datenbank gibt: Fehlt eine davon später beim Speichern, wurde sie anderswo
   // gelöscht und wird nicht wieder angelegt (siehe zeilenSchreiben.ts).
   const ids = (res: { data: unknown[] | null }) => ((res.data ?? []) as { id: string }[]).map((r) => r.id)
-  merkeInDatenbank('kunden', ids(kundenRes))
-  merkeInDatenbank('objekte', ids(objekteRes))
-  merkeInDatenbank('protokolle', ids(protokolleRes))
-  merkeInDatenbank('objekt_vorschlaege', ids(vorschlaegeRes))
-  merkeInDatenbank('vorlagen', ids(vorlagenRes))
-  merkeInDatenbank('rechnungen', ids(rechnungenRes))
-  merkeInDatenbank('konzepte', ids(konzepteRes))
-  merkeInDatenbank('vertraege', ids(vertraegeRes))
-  merkeInDatenbank('objekt_finanzierungen', ids(finanzierungenRes))
-  merkeInDatenbank('projekte', ids(projekteRes))
-  merkeInDatenbank('fonds_investoren', ids(fondsInvestorenRes))
-  merkeInDatenbank('fonds_dokumente_allgemein', ids(fondsDokumenteRes))
-  merkeInDatenbank('importierte_dokumente', ids(importierteDokumenteRes))
-  merkeInDatenbank('mail_vorlagen', ids(mailVorlagenRes))
-  merkeInDatenbank('notizen', ids(notizenRes))
-  merkeInDatenbank('abwesenheiten', ids(abwesenheitenRes))
-  merkeInDatenbank('todos', ids(todosRes))
-  merkeInDatenbank('todo_freigaben', ids(todoFreigabenRes))
-  merkeInDatenbank('verbindlichkeiten', ids(verbindlichkeitenRes))
-  if (!abteilungRes.error) merkeInDatenbank('abteilung_eintraege', ids(abteilungRes))
+  merkeGeladen('kunden', ids(kundenRes))
+  merkeGeladen('objekte', ids(objekteRes))
+  merkeGeladen('protokolle', ids(protokolleRes))
+  merkeGeladen('objekt_vorschlaege', ids(vorschlaegeRes))
+  merkeGeladen('vorlagen', ids(vorlagenRes))
+  merkeGeladen('rechnungen', ids(rechnungenRes))
+  merkeGeladen('konzepte', ids(konzepteRes))
+  merkeGeladen('vertraege', ids(vertraegeRes))
+  merkeGeladen('objekt_finanzierungen', ids(finanzierungenRes))
+  merkeGeladen('projekte', ids(projekteRes))
+  merkeGeladen('fonds_investoren', ids(fondsInvestorenRes))
+  merkeGeladen('fonds_dokumente_allgemein', ids(fondsDokumenteRes))
+  merkeGeladen('importierte_dokumente', ids(importierteDokumenteRes))
+  merkeGeladen('mail_vorlagen', ids(mailVorlagenRes))
+  merkeGeladen('notizen', ids(notizenRes))
+  merkeGeladen('abwesenheiten', ids(abwesenheitenRes))
+  merkeGeladen('todos', ids(todosRes))
+  merkeGeladen('todo_freigaben', ids(todoFreigabenRes))
+  merkeGeladen('verbindlichkeiten', ids(verbindlichkeitenRes))
+  if (!abteilungRes.error) merkeGeladen('abteilung_eintraege', ids(abteilungRes))
 
   // 'privat' und 'immobilienkunden' haben (noch) keine eigene Vorlagen-Seite/-Tabelle — bleiben hier
   // absichtlich immer leer.

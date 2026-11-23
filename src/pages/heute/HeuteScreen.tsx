@@ -81,6 +81,10 @@ function dispatchFollowUp(dispatch: ReturnType<typeof useApp>['dispatch'], berei
       return dispatch({ type: 'SET_FINANZIERUNGEN_FOLLOWUP', id, followUp })
     case 'privat':
       return dispatch({ type: 'SET_PRIVAT_FOLLOWUP', id, followUp })
+    // Immobilien-Kunden: erscheinen in der Liste (collectFollowUpPriorities), ließen sich hier aber bis 23.11.2026
+    // weder abhaken noch verschieben — der Fall fehlte.
+    case 'immobilienkunden':
+      return dispatch({ type: 'UPDATE_KUNDE_IN_BEREICH', bereich: 'immobilienkunden', id, patch: { followUp } })
   }
 }
 

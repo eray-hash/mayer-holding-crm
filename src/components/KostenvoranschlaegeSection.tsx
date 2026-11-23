@@ -179,9 +179,13 @@ export function KvBearbeitenModal({
   const [pos, setPos] = useState<KvPositionenWert>({ positionen: [], aufschlagProzent: 0, ustSatz: 19 })
   const [fehler, setFehler] = useState('')
   const [speichert, setSpeichert] = useState(false)
+  // In diesem Fenster schon angelegt (z. B. wenn danach das PDF scheiterte): ein zweiter Klick ändert diesen
+  // Eintrag, statt einen zweiten anzulegen.
+  const [angelegt, setAngelegt] = useState<Kostenvoranschlag | null>(null)
 
   useEffect(() => {
     if (!open) return
+    setAngelegt(null)
     setName(eintrag?.name ?? (festeAkte ? akteName(festeAkte.kunde) : ''))
     setBeschreibung(eintrag?.beschreibung ?? '')
     setBetrag(betragAlsText(eintrag?.betrag))
@@ -284,10 +288,21 @@ export function KvBearbeitenModal({
       let kv: Kostenvoranschlag
       if (eintrag) {
         kv = await aendereKostenvoranschlag(eintrag.id, felder, neueZuordnung)
+      } else if (angelegt) {
+        kv = await aendereKostenvoranschlag(angelegt.id, felder)
       } else {
         kv = await legeKostenvoranschlagAn(felder, festeAkte ? zuordnungZuAkte(festeAkte) : zuordnungAusAuswahl(akte), nutzer.name)
+        setAngelegt(kv)
+        // Gleich in der Liste zeigen — auch wenn das PDF danach scheitert und das Fenster geschlossen wird.
+        onGespeichert(kv)
       }
-      if (alsPdf) kv = (await kvPdfAblegen(kv, { state, dispatch, nutzerName: nutzer.name })).kv
+      if (alsPdf) {
+        try {
+          kv = (await kvPdfAblegen(kv, { state, dispatch, nutzerName: nutzer.name })).kv
+        } catch (err) {
+          throw new Error(`Gespeichert, aber das PDF ließ sich nicht erstellen: ${err instanceof Error ? err.message : String(err)}`)
+        }
+      }
       onGespeichert(kv)
       onClose()
     } catch (err) {

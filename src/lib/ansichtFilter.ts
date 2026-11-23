@@ -93,6 +93,9 @@ export function filtereFuerPerson(state: AppData, p: SichtPerson): AppData {
   )
   s.todoFreigaben = state.todoFreigaben.filter((f) => gleich(f.besitzerEmail, p.email) || gleich(f.empfaengerEmail, p.email))
 
+  // Private Objekte und Treffer gehören dem Angemeldeten — in der fremden Sicht nur die der angesehenen Person.
+  s.privatObjekte = state.privatObjekte.filter((o) => gleich(o.privatBesitzer, p.email))
+  s.privatTrefferMeldungen = []
   s.notizen = []
 
   // Profil: das der angesehenen Person (Name, Telefon, Signatur, Foto).

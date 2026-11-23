@@ -254,6 +254,8 @@ export async function speichereTermin(admin: Db, a: Aufrufer, e: TerminEingabe, 
   const schonVorbei = ERLAUBTE_ERINNERUNGEN.filter((m) => bisBeginn <= m)
   const erinnertStart: Record<string, number[]> = {}
   for (const person of [a.email, ...teilnehmer]) erinnertStart[person] = schonVorbei
+  // Private Kontakte nie an Terminen mit Kollegen (sonst sähen die den Namen).
+  if (e.kunde?.bereich === 'privat' && teilnehmer.length > 0) return { ok: false, status: 400, fehler: 'Private Kontakte nur an Terminen ohne Kollegen.' }
   const zeile = {
     titel,
     beschreibung: String(e.beschreibung ?? '').trim(),
@@ -430,10 +432,61 @@ function vorlaufText(minuten: number): string {
   return `in ${minuten} Minuten`
 }
 
+/** Werte in fester Schlüsselreihenfolge — zum Vergleichen zweier `erinnert`-Stände. */
+function stabil(x: unknown): string {
+  if (Array.isArray(x)) return `[${x.map(stabil).join(',')}]`
+  if (x && typeof x === 'object') return `{${Object.keys(x).sort().map((k) => `${JSON.stringify(k)}:${stabil((x as Record<string, unknown>)[k])}`).join(',')}}`
+  return JSON.stringify(x ?? null)
+}
+
+/**
+ * Schreibt `neu` als `erinnert` des Termins — nur, wenn dort noch `alt` steht (sonst war ein anderer Lauf schneller
+ * oder der Termin wurde inzwischen verschoben). true = geschrieben. Erst danach wird gesendet: Scheitert das
+ * Speichern, geht keine Nachricht raus (vorher kam dieselbe Erinnerung dann jede Minute erneut).
+ */
+async function beanspruche(admin: Db, id: string, alt: Record<string, number[]> | null, neu: Record<string, number[]>): Promise<boolean> {
+  let q = admin.from('termine').update({ erinnert: neu }).eq('id', id)
+  q = alt === null ? q.is('erinnert', null) : q.eq('erinnert', JSON.stringify(alt))
+  const { data, error } = await q.select('id, erinnert')
+  if (!error && Array.isArray(data) && data.length > 0) return true
+  // Nichts geschrieben: frisch lesen. Steht dort noch der alte Stand, lag es an der Bedingung selbst (technisch) —
+  // dann ohne Bedingung schreiben, damit Erinnerungen nicht dauerhaft ausbleiben. Sonst: jemand anderes war schneller.
+  if (error) console.error('Termin-Erinnerung: Stand nicht bedingt speicherbar', id, error.message)
+  const { data: frisch, error: lesefehler } = await admin.from('termine').select('id, erinnert').eq('id', id).maybeSingle()
+  if (lesefehler || !frisch) return false
+  if (stabil(frisch.erinnert ?? null) !== stabil(alt)) return false
+  const { data: ohne, error: fehler2 } = await admin.from('termine').update({ erinnert: neu }).eq('id', id).select('id')
+  if (fehler2) console.error('Termin-Erinnerung: Stand nicht speicherbar, keine Nachricht', id, fehler2.message)
+  return !fehler2 && Array.isArray(ohne) && ohne.length > 0
+}
+
+/** Gibt beanspruchte, aber nicht zugestellte Vorläufe wieder frei (nächster Versuch im nächsten Lauf). */
+async function gibFrei(admin: Db, id: string, frei: Map<string, number[]>): Promise<void> {
+  for (let versuch = 0; versuch < 2; versuch++) {
+    const { data: frisch } = await admin.from('termine').select('id, erinnert').eq('id', id).maybeSingle()
+    if (!frisch) return
+    const alt = (frisch.erinnert ?? {}) as Record<string, number[]>
+    const neu: Record<string, number[]> = { ...alt }
+    for (const [p, minuten] of frei) neu[p] = (alt[p] ?? []).filter((m) => !minuten.includes(m))
+    const { data, error } = await admin.from('termine').update({ erinnert: neu }).eq('id', id).eq('erinnert', JSON.stringify(alt)).select('id')
+    if (!error && Array.isArray(data) && data.length > 0) return
+  }
+  console.error('Termin-Erinnerung: nicht zugestellte Erinnerung nicht freigegeben (geht verloren)', id)
+}
+
+export type ErinnerungsVersand = {
+  sende?: (chat: number | string | null, text: string) => Promise<boolean>
+  sendePrivat?: (chat: number | string | null, text: string) => Promise<boolean>
+  hatPrivatBot?: (email: string) => Promise<boolean>
+}
+
 // Vom Zeitplan jede Minute gerufen. Je Person und Termin geht pro Lauf höchstens EINE Erinnerung raus:
 // die knappste fällige. Größere, ebenfalls schon fällige Vorläufe gelten damit als erledigt — sonst
 // kämen bei einem kurzfristig angelegten Termin vier Nachrichten auf einmal.
-export async function sendeErinnerungen(admin: Db): Promise<{ gesendet: number }> {
+// Ablauf je Termin: erst den neuen Stand `erinnert` bedingt speichern (beanspruchen), dann senden.
+export async function sendeErinnerungen(admin: Db, versand: ErinnerungsVersand = {}): Promise<{ gesendet: number }> {
+  const sende = versand.sende ?? sendeTelegram
+  const sendeP = versand.sendePrivat ?? (async (chat: number | string | null, text: string) => !!(await sendePrivat(chat, text)))
   const jetzt = Date.now()
   const { data } = await admin
     .from('termine')
@@ -451,15 +504,17 @@ export async function sendeErinnerungen(admin: Db): Promise<{ gesendet: number }
   // privatem Assistenten nur über diesen, nie über den Mayer-Bot (Erays Regel vom 21.11.2026: Privates bleibt privat).
   const privatAktiv = new Map<string, boolean>()
   const hatPrivatBot = async (email: string) => {
-    if (!privatAktiv.has(email)) privatAktiv.set(email, await privatBotAktiv(admin, email).catch(() => false))
+    if (!privatAktiv.has(email)) privatAktiv.set(email, await (versand.hatPrivatBot ? versand.hatPrivatBot(email) : privatBotAktiv(admin, email)).catch(() => false))
     return privatAktiv.get(email)!
   }
   let gesendet = 0
   for (const t of termine) {
     const privaterTermin = (t.teilnehmer ?? []).length === 0 && (!t.kunde_id || t.kunde_bereich === 'privat')
     const bisBeginn = (new Date(t.beginn).getTime() - jetzt) / 60000
-    const erinnert: Record<string, number[]> = { ...(t.erinnert ?? {}) }
-    let geaendert = false
+    const alt = (t.erinnert ?? null) as Record<string, number[]> | null
+    const erinnert: Record<string, number[]> = { ...(alt ?? {}) }
+    // Erst alles Fällige sammeln und als erledigt vormerken …
+    const nachrichten: { p: string; chat: number | string | null; text: string; privat: boolean; faellig: number[] }[] = []
     for (const p of [t.besitzer_email.toLowerCase(), ...(t.teilnehmer ?? [])]) {
       const person = team.get(p)
       if (!person) continue
@@ -468,20 +523,26 @@ export async function sendeErinnerungen(admin: Db): Promise<{ gesendet: number }
       const faellig = vorlaeufe.filter((m) => bisBeginn <= m && !schon.includes(m)).sort((x, y) => x - y)
       if (faellig.length === 0) continue
       const knappste = faellig[0]
-      // Ganztägige Termine: nur die Erinnerung am Vortag ist sinnvoll.
-      if (!(t.ganztags && knappste < 1440)) {
-        const wann = knappste >= 1440 ? `am ${zeitraumText(t)}` : `${vorlaufText(Math.max(1, Math.round(bisBeginn)))} (${zeitraumText(t)})`
-        const text = `⏰ Erinnerung: ${t.titel} ${wann}${t.ort ? `\nOrt: ${t.ort}` : ''}${t.kunde_name ? `\nKunde: ${t.kunde_name}` : ''}`
-        const privat = privaterTermin && p === t.besitzer_email.toLowerCase() && (await hatPrivatBot(p))
-        const ok = privat ? !!(await sendePrivat(person.chat, text)) : await sendeTelegram(person.chat, text)
-        if (ok) gesendet++
-        // Privat und nicht zugestellt: beim nächsten Lauf erneut versuchen, nie ersatzweise über den Mayer-Bot.
-        else if (privat) continue
-      }
       erinnert[p] = [...new Set([...schon, ...faellig])]
-      geaendert = true
+      // Ganztägige Termine: nur die Erinnerung am Vortag ist sinnvoll.
+      if (t.ganztags && knappste < 1440) continue
+      const wann = knappste >= 1440 ? `am ${zeitraumText(t)}` : `${vorlaufText(Math.max(1, Math.round(bisBeginn)))} (${zeitraumText(t)})`
+      const text = `⏰ Erinnerung: ${t.titel} ${wann}${t.ort ? `\nOrt: ${t.ort}` : ''}${t.kunde_name ? `\nKunde: ${t.kunde_name}` : ''}`
+      const privat = privaterTermin && p === t.besitzer_email.toLowerCase() && (await hatPrivatBot(p))
+      nachrichten.push({ p, chat: person.chat, text, privat, faellig })
     }
-    if (geaendert) await admin.from('termine').update({ erinnert }).eq('id', t.id)
+    if (stabil(erinnert) === stabil(alt ?? {})) continue
+    // … dann beanspruchen (nur ein Lauf gewinnt, und ohne gespeicherten Stand keine Nachricht) …
+    if (!(await beanspruche(admin, t.id, alt, erinnert))) continue
+    // … und erst jetzt senden.
+    const frei = new Map<string, number[]>()
+    for (const n of nachrichten) {
+      const ok = n.privat ? await sendeP(n.chat, n.text).catch(() => false) : await sende(n.chat, n.text).catch(() => false)
+      if (ok) gesendet++
+      // Privat und nicht zugestellt: beim nächsten Lauf erneut versuchen, nie ersatzweise über den Mayer-Bot.
+      else if (n.privat) frei.set(n.p, n.faellig)
+    }
+    if (frei.size > 0) await gibFrei(admin, t.id, frei)
   }
   return { gesendet }
 }

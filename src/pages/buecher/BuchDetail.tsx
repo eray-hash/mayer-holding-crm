@@ -5,6 +5,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, ArrowRight, Check, FileText, Link2, Plus, Trash2, Upload, X } from 'lucide-react'
 import { Card, Field, PrimaryButton, SecondaryButton, StatusBadge, inputClass } from '../../components/ui'
 import { useKvNutzer } from '../../components/KostenvoranschlaegeSection'
+import { zahlAusText } from '../../components/KvPositionenEditor'
 import { MITARBEITER } from '../../data/constants'
 import { getNextMainStep } from '../../data/statusNetworks'
 import {
@@ -63,9 +64,9 @@ function formularAus(b: Buch): Formular {
 }
 
 function zahlAus(text: string, ganz: boolean): number | undefined {
-  const t = text.trim().replace(/\s/g, '').replace(/€/g, '')
-  if (!t) return undefined
-  const n = Number(t.includes(',') ? t.replace(/\./g, '').replace(',', '.') : t)
+  if (!text.trim()) return undefined
+  // „1.250“ ist 1250 (vorher 1,25), „490.50“ bleibt 490,5 — wie bei den Kostenvoranschlägen.
+  const n = zahlAusText(text)
   if (!Number.isFinite(n)) return undefined
   return ganz ? Math.round(n) : Math.round(n * 100) / 100
 }

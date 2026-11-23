@@ -61,6 +61,9 @@ export function Auswertungen() {
     supabase
       .from('kontoauszug_auswertungen')
       .select('id, kunde_id, bereich, titel, erstellt_am, buchungen')
+      // Auswertungen zeigen nur Mayer-Daten — private Akten nie (die Datenbank-Regel lässt Zeilen mit Bereich
+      // „privat“ für alle durch, siehe quellen.ts kontoauszuege).
+      .neq('bereich', 'privat')
       .order('erstellt_am', { ascending: false })
       .then(({ data, error }) => {
         if (abgebrochen) return

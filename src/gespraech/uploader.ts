@@ -6,7 +6,7 @@
 
 import * as speicher from './speicher'
 import * as server from './server'
-import { markerJson, mitFoto, mitSegment, nachErfolg, nachFehler, naechsterSchritt, type LokaleAufnahme, type Schritt } from './warteschlange'
+import { abschlussNummern, markerJson, mitFoto, mitSegment, nachErfolg, nachFehler, naechsterSchritt, type LokaleAufnahme, type Schritt } from './warteschlange'
 
 /** Fertig abgeschlossene Aufnahmen bleiben so lange als Eintrag (ohne Ton) auf dem Gerät. */
 const EINTRAG_BEHALTEN_MS = 7 * 24 * 3600_000
@@ -145,7 +145,7 @@ async function fuehreAus(a: LokaleAufnahme, s: Schritt): Promise<LokaleAufnahme 
       return await speicher.aktualisiere(a.lokalId, (x) => nachErfolg({ ...x, notizenGesendet: text }))
     }
     case 'abschliessen': {
-      await server.gespraechAbschliessen(id, a.dauer_s, a.segmente.length)
+      await server.gespraechAbschliessen(id, a.dauer_s, abschlussNummern(a))
       const neu = await speicher.aktualisiere(a.lokalId, (x) => nachErfolg({ ...x, abgeschlossen: true }))
       await speicher.loescheDaten(a.lokalId).catch(() => undefined)
       return neu

@@ -185,7 +185,21 @@ const p2 = (n: number) => String(n).padStart(2, '0')
 
 // ---------- Freie Zeiten ----------
 
-export type Belegung = { id?: string; beginn: string; ende: string }
+export type Belegung = { id?: string; beginn: string; ende: string; erstellt_am?: string | null; quelle?: string | null }
+
+/**
+ * Nach dem Anlegen: Muss diese Buchung zurückgezogen werden? Ja, wenn in der Zeit (samt Puffer) ein anderer Termin
+ * liegt — außer einer gleichzeitigen Online-Buchung, die NACH dieser angelegt wurde (die zieht sich selbst zurück).
+ * Vorher zogen sich bei zwei gleichzeitigen Buchungen beide zurück, und keiner der Kunden bekam den Termin.
+ */
+export function mussZurueckziehen(meins: { id: string; erstellt_am?: string | null }, andere: Belegung[]): boolean {
+  const zeit = (x?: string | null) => {
+    const t = new Date(String(x ?? '')).getTime()
+    return Number.isNaN(t) ? 0 : t
+  }
+  const spaeter = (x: Belegung) => zeit(x.erstellt_am) > zeit(meins.erstellt_am) || (zeit(x.erstellt_am) === zeit(meins.erstellt_am) && String(x.id) > String(meins.id))
+  return andere.some((x) => String(x.id) !== String(meins.id) && !(x.quelle === 'buchung' && spaeter(x)))
+}
 export type FreierTag = { datum: string; zeiten: string[] }
 
 /**
@@ -229,7 +243,7 @@ const maske = (email: string) => email.replace(/[\\%_]/g, (z) => `\\${z}`)
 
 /** Termine mit Uhrzeit, bei denen der Mitarbeiter Besitzer oder Teilnehmer ist und die [von, bis) berühren. */
 async function ladeBelegung(admin: Db, email: string, von: string, bis: string): Promise<Belegung[]> {
-  const spalten = 'id, beginn, ende'
+  const spalten = 'id, beginn, ende, erstellt_am, quelle'
   const [eigene, dabei] = await Promise.all([
     alleZeilen(() => admin.from('termine').select(spalten).eq('ganztags', false).ilike('besitzer_email', maske(email)).lt('beginn', bis).gt('ende', von)),
     alleZeilen(() => admin.from('termine').select(spalten).eq('ganztags', false).contains('teilnehmer', [email]).lt('beginn', bis).gt('ende', von)),
@@ -402,13 +416,13 @@ export async function buchungAktion(admin: any, body: any, k: BuchungsKontext): 
         erinnert: { [ktx.email]: ERLAUBTE_ERINNERUNGEN.filter((m) => bisBeginn <= m) },
         geaendert_am: jetzt.toISOString(),
       }
-      const { data: termin, error } = await admin.from('termine').insert(zeile).select('id, beginn, ende').single()
+      const { data: termin, error } = await admin.from('termine').insert(zeile).select('id, beginn, ende, erstellt_am').single()
       if (error || !termin) return fehler(500, 'Der Termin konnte nicht gespeichert werden. Bitte versuchen Sie es noch einmal.')
 
-      // Gleichzeitig gebucht? Dann zieht diese Buchung zurück (die andere bleibt bestehen).
+      // Gleichzeitig gebucht? Dann zieht die später angelegte Buchung zurück (die frühere bleibt bestehen).
       const puffer = b.puffer_min * MINUTE_MS
       const nachher = await ladeBelegung(admin, ktx.email, new Date(beginn.getTime() - puffer).toISOString(), new Date(ende.getTime() + puffer).toISOString())
-      if (nachher.some((x) => String(x.id) !== String(termin.id))) {
+      if (mussZurueckziehen({ id: String(termin.id), erstellt_am: termin.erstellt_am ?? null }, nachher)) {
         await admin.from('termine').delete().eq('id', termin.id)
         return BELEGT()
       }

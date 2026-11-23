@@ -33,6 +33,7 @@ export const WEITERE_VERWEISE: readonly [string, string, string][] = [
   ['kontoauszug_auswertungen', 'kunde_id', 'id'],
   ['akte_umzug', 'kunde_id', 'id'],
   ['mitarbeiter', 'telegram_last_kunde_id', 'email'],
+  ['gespraech_aufnahmen', 'kunde_id', 'id'],
 ]
 
 export type UmhaengeErgebnis = { umgehaengt: Record<string, number>; uebersprungen: number; fehler: string[] }

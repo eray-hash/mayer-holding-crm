@@ -77,6 +77,28 @@ export const SEGMENT_MAX_VERSUCHE = 4
 export const SCHRITT_MAX_VERSUCHE = 3
 /** Nach einem Fehlschlag frühestens so spät erneut versuchen (Mengengrenze des Abschrift-Dienstes: 20 je Minute). */
 export const WIEDERHOLEN_NACH_MS = 60_000
+/**
+ * Mengengrenze des Abschrift-Dienstes (Antwort 429): Groq begrenzt auch die Tonsekunden je Stunde und Tag (kostenloser
+ * Schlüssel: 2 Stunden Ton je Stunde, geteilt mit den Sprachnachrichten). Mit vier Versuchen im Minutenabstand wäre
+ * bei einem langen Gespräch der Rest endgültig „fehler“ — darum zählt eine 429 nicht als Versuch, sondern wartet so
+ * lange, wie der Dienst sagt (sonst 5 Minuten, höchstens 30), höchstens MENGENGRENZE_MAX_WARTEN-mal je Abschnitt.
+ */
+export const MENGENGRENZE_MAX_WARTEN = 12
+const MENGENGRENZE_STANDARD_MS = 5 * 60_000
+const MENGENGRENZE_HOECHSTENS_MS = 30 * 60_000
+
+/** Wartezeit aus der Meldung des Dienstes („Please try again in 1m5.5s“), begrenzt auf 1–30 Minuten. */
+export function wartezeitMengengrenze(meldung: string): number {
+  const m = /try again in\s+(?:(\d+)h)?\s*(?:(\d+)m(?!s))?\s*(?:([\d.]+)s)?/i.exec(meldung)
+  const ms = m && (m[1] || m[2] || m[3]) ? ((Number(m[1] ?? 0) * 60 + Number(m[2] ?? 0)) * 60 + Number(m[3] ?? 0)) * 1000 + 5_000 : MENGENGRENZE_STANDARD_MS
+  return Math.max(60_000, Math.min(MENGENGRENZE_HOECHSTENS_MS, Math.round(ms)))
+}
+
+/** Hat der Abschrift-Dienst diesen Abschnitt auf später vertröstet (Mengengrenze)? */
+function vertroestet(s: GespraechSegment, jetzt: number): boolean {
+  const t = typeof s.naechster_versuch === 'string' ? Date.parse(s.naechster_versuch) : NaN
+  return Number.isFinite(t) && t > jetzt
+}
 /** Nach dem Abschließen höchstens so lange auf fehlende Abschnitte warten, dann ohne sie auswerten. */
 export const WARTEN_AUF_TEILE_MS = 3 * 3600_000
 /** Sätze je Aufruf der Sprecher-Zuordnung. */
@@ -388,7 +410,7 @@ export function naechsteArbeit(z: Zeile, jetzt: number): Arbeit {
   if (!['aufnahme', 'hochladen', 'transkription', 'analyse'].includes(z.status)) return null
   const segmente = segmenteVon(z)
   const offenZumAbschreiben = segmente.filter((s) => {
-    if (s.status !== 'hochgeladen' || frisch(s.seit, jetzt) || (s.versuche ?? 0) >= SEGMENT_MAX_VERSUCHE) return false
+    if (s.status !== 'hochgeladen' || frisch(s.seit, jetzt) || (s.versuche ?? 0) >= SEGMENT_MAX_VERSUCHE || vertroestet(s, jetzt)) return false
     if ((s.versuche ?? 0) > 0 && s.letzter_versuch && jetzt - Date.parse(s.letzter_versuch) < WIEDERHOLEN_NACH_MS) return false
     return true
   })
@@ -434,7 +456,7 @@ export async function transkribiereSegment(admin: Db, id: string, nr: number, hi
     const z = await aendere(admin, id, (r) => {
       if (['verworfen', 'fertig'].includes(r.status)) return null
       const s = segmenteVon(r).find((x) => x.nr === nr)
-      if (!s || s.status !== 'hochgeladen' || frisch(s.seit, jetzt) || (s.versuche ?? 0) >= SEGMENT_MAX_VERSUCHE) return null
+      if (!s || s.status !== 'hochgeladen' || frisch(s.seit, jetzt) || (s.versuche ?? 0) >= SEGMENT_MAX_VERSUCHE || vertroestet(s, jetzt)) return null
       versuche = (s.versuche ?? 0) + 1
       return { segmente: ersetzeSegment(segmenteVon(r), { ...s, seit: stempel, versuche, letzter_versuch: stempel }) }
     }, jetzt)
@@ -456,17 +478,31 @@ export async function transkribiereSegment(admin: Db, id: string, nr: number, hi
         const s = segmenteVon(r).find((x) => x.nr === nr)
         if (!s || s.status !== 'hochgeladen') return null
         const dauer = zahl(s.dauer_s) ?? (ab.dauer ? Math.round(ab.dauer) : undefined)
-        return { segmente: ersetzeSegment(segmenteVon(r), { ...s, status: 'transkribiert', text: ab.text, stuecke: ab.stuecke, ...(dauer !== undefined ? { dauer_s: dauer } : {}), ...(sprache ? { sprache } : {}), seit: null, fehler: null }) }
+        return { segmente: ersetzeSegment(segmenteVon(r), { ...s, status: 'transkribiert', text: ab.text, stuecke: ab.stuecke, ...(dauer !== undefined ? { dauer_s: dauer } : {}), ...(sprache ? { sprache } : {}), seit: null, fehler: null, naechster_versuch: null }) }
       }, h.jetzt())
       return 'ok'
     } catch (err) {
       const meldung = err instanceof Error ? err.message : String(err)
       // Ohne Schlüssel oder zu groß hilft kein weiterer Versuch.
       const endgueltig = versuche >= SEGMENT_MAX_VERSUCHE || (err instanceof AbschriftFehler && (err.status === 0 || err.status === 413))
+      const mengengrenze = err instanceof AbschriftFehler && err.status === 429
       console.error(`Gespräch ${id}: Abschnitt ${nr} nicht abgeschrieben (Versuch ${versuche}):`, meldung)
       await aendere(admin, id, (r) => {
         const s = segmenteVon(r).find((x) => x.nr === nr)
         if (!s || s.status !== 'hochgeladen') return null
+        // Mengengrenze: kein Versuch verbraucht, später erneut (siehe MENGENGRENZE_MAX_WARTEN).
+        if (mengengrenze && (s.mengengrenze ?? 0) < MENGENGRENZE_MAX_WARTEN) {
+          return {
+            segmente: ersetzeSegment(segmenteVon(r), {
+              ...s,
+              seit: null,
+              fehler: meldung.slice(0, 300),
+              versuche: Math.max(0, (s.versuche ?? 1) - 1),
+              mengengrenze: (s.mengengrenze ?? 0) + 1,
+              naechster_versuch: new Date(h.jetzt() + wartezeitMengengrenze(meldung)).toISOString(),
+            }),
+          }
+        }
         return { segmente: ersetzeSegment(segmenteVon(r), { ...s, seit: null, fehler: meldung.slice(0, 300), status: endgueltig ? 'fehler' : 'hochgeladen' }) }
       }, h.jetzt())
       return 'fehlschlag'
@@ -1060,6 +1096,7 @@ export const GESPRAECH_AKTIONEN = new Set([
   'gespraech_uebersetzen',
   'gespraech_teilen',
   'gespraech_kundennotiz_vermerken',
+  'gespraech_loeschen',
 ])
 
 async function ladeZeile(admin: Db, id: unknown): Promise<Zeile | null> {
@@ -1073,11 +1110,23 @@ function istBesitzer(z: Zeile, a: GespraechAufrufer | null): boolean {
   return !!a && String(z.mitarbeiter_email).toLowerCase() === a.email.toLowerCase()
 }
 
-async function darfLesen(z: Zeile, a: GespraechAufrufer | null, h: H): Promise<boolean> {
+/** Gibt es die Akte bzw. das Objekt (noch)? Nötig, weil die Rechteprüfung in index.ts (darfKundeServer,
+ *  darfObjektServer) eine fehlende Akte durchlässt — nach dem Löschen oder Zusammenführen einer Akte hätte sonst jeder
+ *  Mitarbeiter die daran hängenden Aufnahmen lesen können. */
+async function gibtEs(admin: Db, tabelle: 'kunden' | 'objekte', id: unknown): Promise<boolean> {
+  const s = txt(id, 120)
+  if (!s) return false
+  const { data, error } = await admin.from(tabelle).select('id').eq('id', s).maybeSingle()
+  return !error && !!data
+}
+
+async function darfLesen(admin: Db, z: Zeile, a: GespraechAufrufer | null, h: H): Promise<boolean> {
   if (istBesitzer(z, a)) return true
   if (!a || z.status === 'verworfen') return false
-  if (z.kunde_id && h.darfKunde && (await h.darfKunde(z.kunde_id))) return true
-  if (z.objekt_id && h.darfObjekt && (await h.darfObjekt(z.objekt_id))) return true
+  if (z.kunde_id && h.darfKunde && (await gibtEs(admin, 'kunden', z.kunde_id)) && (await h.darfKunde(z.kunde_id))) return true
+  // Hängt die Aufnahme an einer privaten Akte, zählt allein diese (wie der Zeilenschutz der Datenbank) — nicht das Objekt.
+  if (z.kunde_bereich === 'privat') return false
+  if (z.objekt_id && h.darfObjekt && (await gibtEs(admin, 'objekte', z.objekt_id)) && (await h.darfObjekt(z.objekt_id))) return true
   return false
 }
 
@@ -1157,8 +1206,30 @@ export async function gespraechAktion(admin: Db, aufrufer: GespraechAufrufer | n
     const e: any = body.einwilligung && typeof body.einwilligung === 'object' ? body.einwilligung : null
     if (art !== 'notiz' && e?.bestaetigt !== true) return fehler(400, 'Bitte zuerst bestätigen, dass der Gesprächspartner mit der Aufnahme einverstanden ist.')
     const einwilligung = e?.bestaetigt === true ? { bestaetigt: true, am: txt(e.am, 40) && Number.isFinite(Date.parse(e.am)) ? new Date(e.am).toISOString() : stempel, text: txt(e.text, 1000), ...(txt(e.wer, 200) ? { wer: txt(e.wer, 200) } : {}) } : null
-    const v = await pruefeVerknuepfung(admin, aufrufer, h, { kundeId: body.kundeId, objektId: body.objektId, terminId: body.terminId })
-    if (!v.ok) return v.antwort
+    let v = await pruefeVerknuepfung(admin, aufrufer, h, { kundeId: body.kundeId, objektId: body.objektId, terminId: body.terminId })
+    const weggelassen: string[] = []
+    if (!v.ok) {
+      // Die App legt die Aufnahme oft erst nach dem Gespräch an (ohne Netz aufgenommen, Link aus dem Kalender). Ist der
+      // Termin inzwischen gelöscht (z. B. vom Outlook-Abgleich neu angelegt) oder die Akte nicht mehr freigegeben, darf das
+      // den Ton nicht für immer auf dem Handy festhalten (die App versucht es sonst endlos): ungültige Verknüpfungen
+      // einzeln weglassen — die Akte lässt sich danach in der App zuordnen.
+      const werte: Zeile = {}
+      let termin: Zeile | null = null
+      const teile: [string, { kundeId?: unknown; objektId?: unknown; terminId?: unknown }][] = [
+        ['den Termin', { terminId: body.terminId }],
+        ['die Akte', { kundeId: body.kundeId }],
+        ['das Objekt', { objektId: body.objektId }],
+      ]
+      for (const [name, ein] of teile) {
+        if (!txt(Object.values(ein)[0], 80)) continue
+        const einzeln = await pruefeVerknuepfung(admin, aufrufer, h, ein)
+        if (einzeln.ok) {
+          Object.assign(werte, einzeln.werte)
+          termin = termin ?? einzeln.termin
+        } else weggelassen.push(name)
+      }
+      v = { ok: true, werte, termin }
+    }
     const zeile: Zeile = {
       ...(eigeneId ? { id: eigeneId } : {}),
       mitarbeiter_email: ich,
@@ -1184,7 +1255,8 @@ export async function gespraechAktion(admin: Db, aufrufer: GespraechAufrufer | n
     }
     const { data, error } = await admin.from(GESPRAECH_TABELLE).insert(zeile).select('id').single()
     if (error) return fehler(500, `Die Aufnahme konnte nicht angelegt werden: ${error.message}`)
-    return ok({ id: data.id })
+    if (weggelassen.length) console.log(`Gespräch ${data.id}: ohne ${weggelassen.join(', ')} angelegt (nicht gefunden oder nicht freigegeben).`)
+    return ok({ id: data.id, ...(weggelassen.length ? { hinweis: `Angelegt ohne ${weggelassen.join(', ')} (nicht gefunden oder nicht freigegeben) — bitte in der App eine Akte zuordnen.` } : {}) })
   }
 
   const z = await ladeZeile(admin, body.id)
@@ -1193,7 +1265,7 @@ export async function gespraechAktion(admin: Db, aufrufer: GespraechAufrufer | n
 
   // ---- Lesen (Besitzer oder wer die Akte sehen darf) ----
   if (aktion === 'gespraech_stand') {
-    if (!(await darfLesen(z, aufrufer, h))) return fehler(403, 'Diese Aufnahme ist für dich nicht freigegeben.')
+    if (!(await darfLesen(admin, z, aufrufer, h))) return fehler(403, 'Diese Aufnahme ist für dich nicht freigegeben.')
     // Fragt der Besitzer nach dem Stand und hängt etwas (Worker abgebrochen, Wartezeit nach Fehler vorbei)? Dann
     // gleich von hier fortsetzen statt bis zum nächsten Minutentakt zu warten. Die Sperren verhindern Doppelarbeit.
     const arbeit = besitzer ? naechsteArbeit(z, jetzt) : null
@@ -1201,7 +1273,7 @@ export async function gespraechAktion(admin: Db, aufrufer: GespraechAufrufer | n
     return ok({ aufnahme: fuerAntwort(z, besitzer) })
   }
   if (aktion === 'gespraech_datei_url') {
-    if (!(await darfLesen(z, aufrufer, h))) return fehler(403, 'Diese Aufnahme ist für dich nicht freigegeben.')
+    if (!(await darfLesen(admin, z, aufrufer, h))) return fehler(403, 'Diese Aufnahme ist für dich nicht freigegeben.')
     let pfad = ''
     if (body.nr !== undefined && body.nr !== null) {
       // Audio hört nur der Besitzer.
@@ -1218,12 +1290,20 @@ export async function gespraechAktion(admin: Db, aufrufer: GespraechAufrufer | n
   }
 
   if (aktion === 'gespraech_uebersetzen' && txt(body.art, 20) !== 'mail' && txt(body.art, 20) !== 'notiz') {
-    if (!(await darfLesen(z, aufrufer, h))) return fehler(403, 'Diese Aufnahme ist für dich nicht freigegeben.')
+    if (!(await darfLesen(admin, z, aufrufer, h))) return fehler(403, 'Diese Aufnahme ist für dich nicht freigegeben.')
     return await uebersetzeAbschrift(admin, z, h)
   }
 
   // ---- Ab hier nur der Besitzer ----
-  if (!besitzer) return (await darfLesen(z, aufrufer, h)) ? fehler(403, 'Ändern kann nur, wer die Aufnahme gemacht hat.') : fehler(403, 'Diese Aufnahme ist für dich nicht freigegeben.')
+  if (!besitzer) return (await darfLesen(admin, z, aufrufer, h)) ? fehler(403, 'Ändern kann nur, wer die Aufnahme gemacht hat.') : fehler(403, 'Diese Aufnahme ist für dich nicht freigegeben.')
+  // Verworfenen Eintrag endgültig aus der Liste löschen („Meine Aufnahmen“). Der Browser darf die Tabelle nicht selbst
+  // löschen (kein Recht dazu) — darum hier. Ton und Fotos sind beim Verwerfen schon gelöscht.
+  if (aktion === 'gespraech_loeschen') {
+    if (z.status !== 'verworfen') return fehler(409, 'Bitte die Aufnahme zuerst verwerfen.')
+    const { error } = await admin.from(GESPRAECH_TABELLE).delete().eq('id', z.id).eq('status', 'verworfen')
+    if (error) return fehler(500, `Der Eintrag ließ sich nicht löschen: ${error.message}`)
+    return ok({ ok: true })
+  }
   if (z.status === 'verworfen') return fehler(409, 'Diese Aufnahme wurde verworfen.')
   const id = z.id as string
 
@@ -1349,7 +1429,7 @@ export async function gespraechAktion(admin: Db, aufrufer: GespraechAufrufer | n
       // Abschnitte, die die App aufgenommen, aber noch nicht angemeldet hat: als „offen“ vormerken.
       for (const nr of nummern) if (!segmente.some((s) => s.nr === nr)) segmente = ersetzeSegment(segmente, { nr, pfad: '', mime: '', status: 'offen' })
       if (neu) {
-        segmente = segmente.map((s) => (s.status === 'fehler' && s.pfad && !x.audio_geloescht_am ? { ...s, status: 'hochgeladen', versuche: 0, seit: null, fehler: null } : s))
+        segmente = segmente.map((s) => (s.status === 'fehler' && s.pfad && !x.audio_geloescht_am ? { ...s, status: 'hochgeladen', versuche: 0, seit: null, fehler: null, mengengrenze: 0, naechster_versuch: null } : s))
       }
       // Andere Sprache gewählt: alle Abschnitte mit Ton noch einmal abschreiben.
       const sprachWechsel = !!neueSprache && neueSprache !== normalisiereSprachwahl(x.sprache) && !x.audio_geloescht_am
@@ -1357,7 +1437,7 @@ export async function gespraechAktion(admin: Db, aufrufer: GespraechAufrufer | n
         segmente = segmente.map((s) => {
           if (s.status !== 'transkribiert' || !s.pfad) return s
           const { text: _t, stuecke: _s, sprache: _sp, ...rest } = s
-          return { ...rest, status: 'hochgeladen' as const, versuche: 0, seit: null, fehler: null }
+          return { ...rest, status: 'hochgeladen' as const, versuche: 0, seit: null, fehler: null, mengengrenze: 0, naechster_versuch: null }
         })
       }
       return {
@@ -1410,10 +1490,10 @@ export async function gespraechListe(admin: Db, aufrufer: GespraechAufrufer, bod
   const kundeId = txt(body.kundeId, 80)
   const objektId = txt(body.objektId, 80)
   if (kundeId) {
-    if (!h.darfKunde || !(await h.darfKunde(kundeId))) return fehler(403, 'Diese Akte ist für dich nicht freigegeben.')
+    if (!h.darfKunde || !(await gibtEs(admin, 'kunden', kundeId)) || !(await h.darfKunde(kundeId))) return fehler(403, 'Diese Akte ist für dich nicht freigegeben.')
     q = q.eq('kunde_id', kundeId).neq('status', 'verworfen')
   } else if (objektId) {
-    if (!h.darfObjekt || !(await h.darfObjekt(objektId))) return fehler(403, 'Dieses Objekt ist für dich nicht freigegeben.')
+    if (!h.darfObjekt || !(await gibtEs(admin, 'objekte', objektId)) || !(await h.darfObjekt(objektId))) return fehler(403, 'Dieses Objekt ist für dich nicht freigegeben.')
     q = q.eq('objekt_id', objektId).neq('status', 'verworfen')
   } else {
     q = q.eq('mitarbeiter_email', aufrufer.email.toLowerCase())
@@ -1640,6 +1720,8 @@ export async function teileMitKollegen(admin: Db, z: Zeile, aufrufer: GespraechA
   if (!z.kunde_id && !z.objekt_id) return fehler(409, 'Bitte zuerst eine Akte zuordnen — geteilt wird nur, was an einer Akte hängt.')
   const k = await ladeKontext(admin, z)
   if (k.privat) return fehler(409, 'Private Aufnahmen lassen sich nicht mit Kollegen teilen.')
+  // Akte gelöscht oder zusammengeführt: die Rechteprüfung ließe sonst jeden Kollegen als „darf“ durch.
+  if ((z.kunde_id && !k.kunde) || (!z.kunde_id && z.objekt_id && !k.objekt)) return fehler(409, 'Die zugeordnete Akte gibt es nicht mehr — bitte zuerst eine andere zuordnen.')
   const pruefer = z.kunde_id ? h.darfKundeFuer : h.darfObjektFuer
   if (!pruefer) return fehler(501, 'Teilen ist auf dem Server noch nicht eingerichtet.')
   const darf = (email: string) => pruefer(email, z.kunde_id ? String(z.kunde_id) : String(z.objekt_id)).catch(() => false)

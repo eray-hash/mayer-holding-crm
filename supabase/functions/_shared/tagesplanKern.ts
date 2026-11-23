@@ -480,7 +480,8 @@ export function jetztDran(zeilen: PlanZeile[], plan: { eintraege: ZeitEintrag[] 
 export function gelaufeneMinuten(laeuftSeit: string | undefined, jetzt: Date): number {
   if (!laeuftSeit) return 0
   const ms = jetzt.getTime() - new Date(laeuftSeit).getTime()
-  return Number.isFinite(ms) && ms > 0 ? Math.max(1, Math.round(ms / 60000)) : 0
+  // Über Nacht vergessene Stoppuhr: höchstens 12 Stunden zählen.
+  return Number.isFinite(ms) && ms > 0 ? Math.min(12 * 60, Math.max(1, Math.round(ms / 60000))) : 0
 }
 
 /** Stoppt die Stoppuhr einer Zeile: istMin erhöht, laeuftSeit weg. Gibt die neue Zeile und die dazugekommenen Minuten. */
