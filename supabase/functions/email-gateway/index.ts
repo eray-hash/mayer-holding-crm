@@ -3522,7 +3522,8 @@ Deno.serve((req: Request) => mitAnlass(async () => {
     if (body.action === 'termin_erinnerungen') {
       // Vom Zeitplan jede Minute, ohne Login: verschickt fällige Erinnerungen, gibt nur eine Zahl zurück.
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
-      const ergebnis = await sendeErinnerungen(admin)
+      // Erinnerungsmails an eingeladene Gäste gehen über das gemeinsame Postfach (wie die Einladung).
+      const ergebnis = await sendeErinnerungen(admin, { sendeMail: (to, subject, text, anhaenge) => sendMail(to, subject, text, undefined, anhaenge) })
       // To-dos mit Erinnerungszeit (todoErinnerung.ts): Telegram an Besitzer bzw. Zuständigen; wirft nie.
       const todoErinnerung = await sendeTodoErinnerungen(admin).catch((err) => {
         console.error('To-do-Erinnerungen fehlgeschlagen:', err)
@@ -3906,7 +3907,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       }
       const ergebnis = await speichereTermin(admin, aufrufer, body.termin ?? {}, sendeKalenderMail)
       if (!ergebnis.ok) return new Response(JSON.stringify({ error: ergebnis.fehler, belegt: ergebnis.belegt }), { status: ergebnis.status, headers })
-      return new Response(JSON.stringify({ ok: true, termin: ergebnis.termin, benachrichtigt: ergebnis.benachrichtigt, ohneTelegram: ergebnis.ohneTelegram, gastEingeladen: ergebnis.gastEingeladen, gastHinweis: ergebnis.gastHinweis }), { headers })
+      return new Response(JSON.stringify({ ok: true, termin: ergebnis.termin, benachrichtigt: ergebnis.benachrichtigt, ohneTelegram: ergebnis.ohneTelegram, gastEingeladen: ergebnis.gastEingeladen, gastHinweis: ergebnis.gastHinweis, gaesteEingeladen: ergebnis.gaesteEingeladen ?? [], gaesteHinweis: ergebnis.gaesteHinweis }), { headers })
     }
 
     // Online-Terminbuchung (buchung.ts): Kunden buchen über einen öffentlichen Link freie Zeiten.

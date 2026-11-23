@@ -20,6 +20,7 @@
 // Funktion mit ?bot=privat auf. Gleicher Code, aber nur der Bereich Privat, eigene Werkzeugliste und
 // eigener Gesprächszustand (privat_einstellungen.telegram_zustand). Einrichten: intern „privat_bot_einrichten“.
 
+import { gaesteEingabe, gaesteText, gaesteZeile } from './terminGaeste.ts'
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2.119.0'
 import { PDFDocument, degrees } from 'npm:pdf-lib@1.17.1'
 import { aktuellePerson, kiAufruf, mitAnlass, setzeAnlass, setzePerson, setzePrivat } from '../_shared/kiVerbrauch.ts'
@@ -1482,6 +1483,8 @@ export const TOOLS = [
         kunde_id: { type: 'string', description: 'Optional: Kundenakte, zu der der Termin gehört.' },
         trotz_ueberschneidung: { type: 'boolean' },
         uhrzeit_offen: { type: 'boolean', description: 'true = Tag steht fest, Uhrzeit noch nicht: vorläufiger ganztägiger Eintrag mit „(Uhrzeit offen)“ im Titel (beginn = JJJJ-MM-TT). Später mit termin_aendern die Uhrzeit nachtragen.' },
+        gaeste: { type: 'array', items: { type: 'string' }, description: 'Externe Gäste (keine Kollegen), je „Name <adresse@firma.de>“ oder nur die E-Mail-Adresse. Sie bekommen eine Einladung per Mail mit Kalenderdatei und automatisch eine Erinnerungsmail 1 Tag und 1 Stunde vorher.' },
+        kunde_einladen: { type: 'boolean', description: 'true = den Kunden der verknüpften Akte (kunde_id) per Mail mit Kalenderdatei einladen (Adresse aus der Akte), samt Erinnerungsmails. false = Einladung zurückziehen.' },
       },
       required: ['titel', 'beginn'],
     },
@@ -1508,6 +1511,8 @@ export const TOOLS = [
         notiz: { type: 'string' },
         teilnehmer: { type: 'array', items: { type: 'string' }, description: 'VOLLSTÄNDIGE neue Liste der Kollegen (ohne den Mitarbeiter selbst). Weglassen, wenn sich an den Teilnehmern nichts ändert.' },
         trotz_ueberschneidung: { type: 'boolean' },
+        gaeste: { type: 'array', items: { type: 'string' }, description: 'Externe Gäste (keine Kollegen), je „Name <adresse@firma.de>“ oder nur die E-Mail-Adresse. Sie bekommen eine Einladung per Mail mit Kalenderdatei und automatisch eine Erinnerungsmail 1 Tag und 1 Stunde vorher. Bei Änderung die VOLLSTÄNDIGE neue Liste angeben (bisherige Gäste stehen in termine_zeigen); Entfernte bekommen eine Absage. Weglassen, wenn sich an den Gästen nichts ändert.' },
+        kunde_einladen: { type: 'boolean', description: 'true = den Kunden der verknüpften Akte (kunde_id) per Mail mit Kalenderdatei einladen (Adresse aus der Akte), samt Erinnerungsmails. false = Einladung zurückziehen.' },
       },
       required: ['termin_id'],
     },
@@ -1978,7 +1983,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
       const bisTag = berlinZuZeitpunkt(String(input.bis || ''))
       if (!von) return 'Fehler: von muss das Format JJJJ-MM-TT haben.'
       const bis = bisTag ? new Date(bisTag.getTime() + 86400000) : new Date(von.getTime() + 8 * 86400000)
-      const { data } = await alleZeilen(() => supabase.from('termine').select('id, titel, ort, beginn, ende, ganztags, besitzer_email, teilnehmer, kunde_id, kunde_bereich, kunde_name, zuordnung_vorschlag').lt('beginn', bis.toISOString()).gt('ende', von.toISOString()).order('beginn'))
+      const { data } = await alleZeilen(() => supabase.from('termine').select('id, titel, ort, beginn, ende, ganztags, besitzer_email, teilnehmer, kunde_id, kunde_bereich, kunde_name, zuordnung_vorschlag, gast, gaeste').lt('beginn', bis.toISOString()).gt('ende', von.toISOString()).order('beginn'))
       // deno-lint-ignore no-explicit-any
       const alle = (data ?? []) as any[]
       // Die verknüpfte Akte nur nennen, wenn der Mitarbeiter sie sehen darf (Bereich freigegeben bzw.
@@ -2002,6 +2007,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
         akte_vorschlag: akteVorschlagText(mitarbeiter, t),
         dabei: [String(t.besitzer_email).toLowerCase(), ...(t.teilnehmer ?? [])].map(nameVon),
         angelegt_von: nameVon(String(t.besitzer_email).toLowerCase()),
+        gaeste: gaesteText(t) || undefined,
       })
       if (input.person && nurPrivat) return 'Kalender von Kollegen zeigt der private Assistent nicht — dafür den Mayer-Assistenten nutzen.'
       if (input.person) {
@@ -2108,6 +2114,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
           beschreibung: input.notiz !== undefined ? String(input.notiz) : vorher.beschreibung ?? '',
           kunde: vorher.kunde_id ? { id: vorher.kunde_id, bereich: vorher.kunde_bereich, name: vorher.kunde_name } : null,
           trotzUeberschneidung: input.trotz_ueberschneidung === true,
+          ...gaesteEingabe(input),
         },
       })
       if (ergebnis.status === 409) return `Überschneidung: ${ergebnis.daten?.error} Nicht geändert. Frag, ob trotzdem geändert werden soll (dann trotz_ueberschneidung=true) oder ein anderer Zeitpunkt.`
@@ -2117,6 +2124,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
       const weg = (vorher.teilnehmer ?? []).filter((p: string) => !teilnehmer.includes(String(p).toLowerCase())).map((p: string) => nameVon(String(p).toLowerCase()))
       return [
         `Geändert: „${t.titel}", ${berlinText(t.beginn, t.ende, t.ganztags)}${t.ort ? `, Ort: ${t.ort}` : ''}. termin_id=${t.id}`,
+        gaesteZeile(ergebnis.daten),
         (ergebnis.daten.benachrichtigt ?? []).length > 0 ? `Per Telegram benachrichtigt: ${ergebnis.daten.benachrichtigt.join(', ')}.` : teilnehmer.length > 0 ? 'Keine Nachricht an die Teilnehmer nötig (nichts für sie Wichtiges geändert).' : '',
         weg.length > 0 ? `Aus dem Termin genommen (mit Nachricht): ${weg.join(', ')}.` : '',
         (ergebnis.daten.ohneTelegram ?? []).length > 0 ? `Ohne Nachricht (Telegram nicht verbunden): ${ergebnis.daten.ohneTelegram.join(', ')}.` : '',
@@ -2157,6 +2165,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
         kunde: kunde ? { id: kunde.id, bereich: kunde.bereich, name: kundeName(kunde) } : null,
         trotzUeberschneidung: input.trotz_ueberschneidung === true,
         quelle: 'assistent',
+        ...gaesteEingabe(input),
       },
     })
     if (ergebnis.status === 409) return `Überschneidung: ${ergebnis.daten?.error} Nicht gebucht. Frag, ob trotzdem gebucht werden soll (dann trotz_ueberschneidung=true) oder ein anderer Zeitpunkt.`
@@ -2165,6 +2174,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     protokolliere(`Termin „${t.titel}" angelegt, ${berlinText(t.beginn, t.ende, t.ganztags)} (termin_id=${t.id})`)
     return [
       `Angelegt: „${t.titel}", ${berlinText(t.beginn, t.ende, t.ganztags)}. termin_id=${t.id}`,
+      gaesteZeile(ergebnis.daten),
       (ergebnis.daten.benachrichtigt ?? []).length > 0 ? `Per Telegram benachrichtigt: ${ergebnis.daten.benachrichtigt.join(', ')}.` : '',
       (ergebnis.daten.ohneTelegram ?? []).length > 0 ? `Ohne Nachricht (Telegram nicht verbunden): ${ergebnis.daten.ohneTelegram.join(', ')} — der Termin steht trotzdem in ihrem Kalender.` : '',
       uhrzeitOffen ? 'Vorläufig ganztägig eingetragen, weil die Uhrzeit noch fehlt — frag kurz danach und trag sie dann mit termin_aendern (beginn mit Uhrzeit) nach.' : '',

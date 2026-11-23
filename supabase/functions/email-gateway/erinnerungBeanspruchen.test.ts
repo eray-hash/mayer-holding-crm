@@ -247,3 +247,21 @@ Deno.test('To-do-Erinnerung: Versand gescheitert → Vermerk zurück, nächster 
   assertEquals((await sendeTodoErinnerungen(db, { sende, hatPrivatBot: async () => false })).gesendet, 1)
   assertEquals(n, 2)
 })
+
+Deno.test('Gäste: Erinnerungsmail 1 Stunde vorher an Kunde und externe Gäste, je einmal', async () => {
+  const db = new Db({
+    termine: [termin({
+      gast: { email: 'kunde@beispiel.test', name: 'Kunde', eingeladen: true, sequenz: 0 },
+      gaeste: [{ email: 'gast@beispiel.test', name: 'Gast', eingeladen: true, sequenz: 0 }, { email: 'nicht@beispiel.test', eingeladen: false }],
+      erinnert: { 'gast:kunde@beispiel.test': [1440], 'gast:gast@beispiel.test': [1440] },
+    })],
+    mitarbeiter: TEAM,
+    kalender_einstellungen: [],
+  })
+  const mails: string[] = []
+  const v = { sende: async () => true, hatPrivatBot: async () => false, sendeMail: async (to: string) => { mails.push(to) } }
+  await sendeErinnerungen(db, v)
+  assertEquals(mails.sort(), ['gast@beispiel.test', 'kunde@beispiel.test'])
+  await sendeErinnerungen(db, v)
+  assertEquals(mails.length, 2)
+})

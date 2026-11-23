@@ -16,6 +16,10 @@
 //   jeder verschickten Fassung hoch und bleibt auch nach einer Absage stehen, damit eine spätere neue
 //   Einladung derselben UID von den Kalendern wieder angenommen wird. Die interne Notiz (`beschreibung`)
 //   geht bewusst NICHT an den Kunden.
+// - Externe Gäste (23.11.2026): beliebige E-Mail-Adressen in `termine.gaeste` ([{ email, name, eingeladen, sequenz }]).
+//   Wie beim Kunden: Einladung mit Kalenderdatei, Änderung als Aktualisierung, Entfernen/Löschen als Absage.
+//   Erinnerungsmail an alle eingeladenen Gäste (auch den Kunden) 1 Tag und 1 Stunde vorher; erledigte Vorläufe stehen
+//   in `erinnert` unter dem Schlüssel `gast:<adresse>`.
 import type { Aufrufer } from './postfach.ts'
 import { icsAnhang } from '../_shared/ics.ts'
 import { privatBotAktiv, sendePrivat } from '../_shared/telegramPrivat.ts'
@@ -46,8 +50,15 @@ export type Termin = {
   quelle: string
   erinnert: Record<string, number[]>
   gast?: TerminGast | null
+  gaeste?: ExternerGast[] | null
   extern_uid?: string | null
 }
+
+/** Externer Gast eines Termins (keine Kundenakte nötig). */
+export type ExternerGast = { email: string; name?: string; eingeladen?: boolean; sequenz?: number }
+
+/** Erinnerungsmails an Gäste: 1 Tag und 1 Stunde vorher. */
+export const GAST_ERINNERUNGEN = [1440, 60]
 
 type Person = { email: string; name: string; chat: number | string | null }
 
@@ -137,6 +148,9 @@ export type TerminEingabe = {
   /** true: den verknüpften Kunden per Mail mit Kalenderdatei einladen. false: eine bestehende Einladung
    *  zurückziehen (Absage an den Kunden). Weggelassen: bisherigen Stand beibehalten. */
   gast_einladen?: boolean
+  /** Externe Gäste (E-Mail, optional Name). Angegeben = die vollständige Liste (Neue werden eingeladen, Fehlende
+   *  bekommen eine Absage). Weggelassen = unverändert. */
+  gaeste?: { email?: string; name?: string }[]
 }
 
 export type SpeicherErgebnis =
@@ -149,6 +163,9 @@ export type SpeicherErgebnis =
       gastEingeladen: boolean
       /** Erklärung, falls eine gewünschte Einladung nicht ging, oder Hinweis auf eine verschickte Absage. */
       gastHinweis?: string
+      /** Adressen externer Gäste, an die bei diesem Speichern eine Einladung/Aktualisierung ging. */
+      gaesteEingeladen?: string[]
+      gaesteHinweis?: string
     }
   | { ok: false; status: number; fehler: string; belegt?: string[] }
 
@@ -189,6 +206,35 @@ function icsFuerGast(t: Termin, organisator: { name: string; email: string }, ga
     },
     methode === 'CANCEL' ? 'absage.ics' : 'einladung.ics',
   )
+}
+
+/** Gäste-Angaben säubern: „Name <a@b.de>“ oder nur die Adresse; doppelte und ungültige fallen weg. */
+export function gaesteAusEingabe(eingabe: { email?: string; name?: string }[] | undefined): { gaeste: { email: string; name: string }[]; ungueltig: string[] } {
+  const gaeste: { email: string; name: string }[] = []
+  const ungueltig: string[] = []
+  for (const g of eingabe ?? []) {
+    const roh = String(g?.email ?? '').trim()
+    const m = roh.match(/^(.*?)<([^<>]+)>\s*$/)
+    const email = (m ? m[2] : roh).trim().toLowerCase()
+    const name = String(g?.name ?? (m ? m[1] : '')).trim().replace(/^"|"$/g, '')
+    if (!MAIL_MUSTER.test(email)) {
+      if (roh) ungueltig.push(roh)
+      continue
+    }
+    if (!gaeste.some((x) => x.email === email)) gaeste.push({ email, name })
+  }
+  return { gaeste, ungueltig }
+}
+
+export function erinnerungsMailText(t: Termin, gastName: string | undefined, absenderName: string, vorlauf: number): { betreff: string; text: string } {
+  const zeit = zeitraumText(t)
+  const anrede = gastName ? `Guten Tag ${gastName},` : 'Guten Tag,'
+  const eckdaten = [t.titel, zeit, t.ort ? `Ort: ${t.ort}` : ''].filter(Boolean).join('\n')
+  const wann = vorlauf >= 1440 ? 'bevorstehenden Termin' : 'Termin in einer Stunde'
+  return {
+    betreff: `Erinnerung: ${t.titel} – ${zeit}`,
+    text: `${anrede}\n\nwir möchten Sie an unseren ${wann} erinnern:\n\n${eckdaten}\n\nSollte etwas dazwischengekommen sein, antworten Sie gern einfach auf diese Mail.\n\nMit freundlichen Grüßen\n${absenderName}\nAndreas Mayer Holding`,
+  }
 }
 
 function gastMailText(art: 'neu' | 'geaendert' | 'abgesagt', t: Termin, gastName: string | undefined, absenderName: string): { betreff: string; text: string } {
@@ -300,7 +346,17 @@ export async function speichereTermin(admin: Db, a: Aufrufer, e: TerminEingabe, 
   }
 
   const gast = await gastAbgleichen(admin, a, team, e, vorher, termin, sichtbarGeaendert, sendeMail)
-  return { ok: true, termin: gast.termin, benachrichtigt, ohneTelegram, gastEingeladen: gast.eingeladen, ...(gast.hinweis ? { gastHinweis: gast.hinweis } : {}) }
+  const extern = await gaesteAbgleichen(admin, a, team, e, vorher, gast.termin, sichtbarGeaendert, sendeMail)
+  return {
+    ok: true,
+    termin: extern.termin,
+    benachrichtigt,
+    ohneTelegram,
+    gastEingeladen: gast.eingeladen,
+    ...(gast.hinweis ? { gastHinweis: gast.hinweis } : {}),
+    ...(extern.eingeladen.length > 0 ? { gaesteEingeladen: extern.eingeladen } : {}),
+    ...(extern.hinweis ? { gaesteHinweis: extern.hinweis } : {}),
+  }
 }
 
 // Einladung des Kunden nach dem Speichern abgleichen: neu einladen, Änderung nachschicken, oder (Kunde
@@ -389,6 +445,83 @@ async function gastAbgleichen(
   return { termin, eingeladen, ...(hinweise.length > 0 ? { hinweis: hinweise.join(' ') } : {}) }
 }
 
+// Externe Gäste abgleichen (wie gastAbgleichen, aber für eine Liste beliebiger Adressen).
+async function gaesteAbgleichen(
+  admin: Db,
+  a: Aufrufer,
+  team: Map<string, Person>,
+  e: TerminEingabe,
+  vorher: Termin | null,
+  termin: Termin,
+  sichtbarGeaendert: boolean,
+  sendeMail?: SendeMail,
+): Promise<{ termin: Termin; eingeladen: string[]; hinweis?: string }> {
+  const bisher = ((vorher?.gaeste ?? []) as ExternerGast[]).filter((g) => g?.email)
+  const soll = e.gaeste === undefined ? bisher.map((g) => ({ email: g.email, name: g.name ?? '' })) : gaesteAusEingabe(e.gaeste).gaeste
+  const ungueltig = e.gaeste === undefined ? [] : gaesteAusEingabe(e.gaeste).ungueltig
+  const kundeGast = (termin.gast ?? {}) as TerminGast
+  if (bisher.length === 0 && soll.length === 0 && ungueltig.length === 0 && !(kundeGast.eingeladen && kundeGast.email)) return { termin, eingeladen: [] }
+  const organisator = { name: team.get(a.email)?.name || a.name || a.email, email: termin.besitzer_email.toLowerCase() }
+  const hinweise: string[] = ungueltig.length > 0 ? [`Keine gültige E-Mail-Adresse: ${ungueltig.join(', ')}.`] : []
+  const eingeladen: string[] = []
+  const neu: ExternerGast[] = []
+  const nachBisher = new Map(bisher.map((g) => [g.email.toLowerCase(), g]))
+  // Wegfallende Gäste: Absage.
+  for (const g of bisher) {
+    if (soll.some((x) => x.email === g.email.toLowerCase())) continue
+    if (!g.eingeladen) continue
+    if (!sendeMail) { hinweise.push(`Absage an ${g.email} nicht möglich: kein Mailversand.`); continue }
+    const sequenz = (typeof g.sequenz === 'number' ? g.sequenz : 0) + 1
+    try {
+      const vorlage = vorher ?? termin
+      const { betreff, text } = gastMailText('abgesagt', vorlage, g.name, organisator.name)
+      await sendeMail(g.email, betreff, text, [icsFuerGast(vorlage, organisator, { email: g.email, name: g.name }, 'CANCEL', sequenz)])
+      hinweise.push(`Absage an ${g.email} verschickt.`)
+    } catch (err) {
+      hinweise.push(`Die Absage an ${g.email} konnte nicht verschickt werden: ${(err as Error)?.message ?? 'unbekannter Fehler'}`)
+    }
+  }
+  // Neue und gebliebene Gäste: einladen bzw. Änderung nachschicken.
+  const bisBeginn = (new Date(termin.beginn).getTime() - Date.now()) / 60000
+  const vorbei = GAST_ERINNERUNGEN.filter((m) => bisBeginn <= m)
+  const erinnertNeu: Record<string, number[]> = { ...((termin.erinnert ?? {}) as Record<string, number[]>) }
+  for (const g of soll) {
+    const alt = nachBisher.get(g.email)
+    const name = g.name || alt?.name || ''
+    let sequenz = typeof alt?.sequenz === 'number' ? alt.sequenz : -1
+    const neuDabei = !alt?.eingeladen
+    if ((neuDabei || sichtbarGeaendert) && sendeMail) {
+      sequenz++
+      try {
+        const { betreff, text } = gastMailText(neuDabei ? 'neu' : 'geaendert', termin, name || undefined, organisator.name)
+        await sendeMail(g.email, betreff, text, [icsFuerGast(termin, organisator, { email: g.email, name }, 'REQUEST', sequenz)])
+        eingeladen.push(g.email)
+        // Vorläufe, die schon verstrichen sind, gelten für diesen Gast als erledigt.
+        if (neuDabei || sichtbarGeaendert) erinnertNeu[`gast:${g.email}`] = [...new Set([...(neuDabei ? [] : erinnertNeu[`gast:${g.email}`] ?? []), ...vorbei])]
+        neu.push({ email: g.email, name, eingeladen: true, sequenz })
+      } catch (err) {
+        hinweise.push(`Die Einladung an ${g.email} konnte nicht verschickt werden: ${(err as Error)?.message ?? 'unbekannter Fehler'}`)
+        neu.push({ email: g.email, name, eingeladen: alt?.eingeladen ?? false, sequenz })
+      }
+    } else {
+      if ((neuDabei || sichtbarGeaendert) && !sendeMail) hinweise.push(`Keine Einladung an ${g.email}: kein Mailversand an dieser Stelle.`)
+      neu.push({ email: g.email, name, eingeladen: alt?.eingeladen ?? false, sequenz: alt?.sequenz })
+    }
+  }
+  // Auch der eingeladene Kunde: keine Erinnerung für Vorläufe, die beim Einladen schon verstrichen waren.
+  const kunde = (termin.gast ?? {}) as TerminGast
+  if (kunde.eingeladen && kunde.email && erinnertNeu[`gast:${kunde.email.toLowerCase()}`] === undefined) erinnertNeu[`gast:${kunde.email.toLowerCase()}`] = vorbei
+  const aenderung: Record<string, unknown> = {}
+  if (JSON.stringify(neu) !== JSON.stringify(bisher)) aenderung.gaeste = neu
+  if (JSON.stringify(erinnertNeu) !== JSON.stringify(termin.erinnert ?? {})) aenderung.erinnert = erinnertNeu
+  if (Object.keys(aenderung).length > 0) {
+    const { data, error } = await admin.from('termine').update(aenderung).eq('id', termin.id).select('*').single()
+    if (error) console.error('Gäste am Termin nicht gespeichert', termin.id, error.message)
+    else if (data) termin = data as Termin
+  }
+  return { termin, eingeladen, ...(hinweise.length > 0 ? { hinweis: hinweise.join(' ') } : {}) }
+}
+
 // Besitzer: Termin absagen (für alle). Teilnehmer: nur sich selbst austragen.
 // War ein Kunde eingeladen und ist `sendeMail` übergeben, bekommt er eine Absage mit Kalenderdatei.
 export async function loescheTermin(
@@ -415,6 +548,18 @@ export async function loescheTermin(
         gastAbgesagt = true
       } catch (err) {
         console.error('Absage an den Kunden fehlgeschlagen', id, (err as Error)?.message ?? err)
+      }
+    }
+    if (sendeMail) {
+      const organisator = { name: team.get(a.email)?.name || a.name || a.email, email: t.besitzer_email.toLowerCase() }
+      for (const g of ((t.gaeste ?? []) as ExternerGast[]).filter((x) => x?.eingeladen && x.email)) {
+        try {
+          const { betreff, text } = gastMailText('abgesagt', t, g.name, organisator.name)
+          await sendeMail(g.email, betreff, text, [icsFuerGast(t, organisator, { email: g.email, name: g.name }, 'CANCEL', (typeof g.sequenz === 'number' ? g.sequenz : 0) + 1)])
+          gastAbgesagt = true
+        } catch (err) {
+          console.error('Absage an Gast fehlgeschlagen', id, (err as Error)?.message ?? err)
+        }
       }
     }
     return { ok: true, art: 'abgesagt', gastAbgesagt }
@@ -478,6 +623,8 @@ export type ErinnerungsVersand = {
   sende?: (chat: number | string | null, text: string) => Promise<boolean>
   sendePrivat?: (chat: number | string | null, text: string) => Promise<boolean>
   hatPrivatBot?: (email: string) => Promise<boolean>
+  /** Erinnerungsmails an eingeladene Gäste (Kunde und externe). Ohne: keine Mails an Gäste. */
+  sendeMail?: SendeMail
 }
 
 // Vom Zeitplan jede Minute gerufen. Je Person und Termin geht pro Lauf höchstens EINE Erinnerung raus:
@@ -531,6 +678,23 @@ export async function sendeErinnerungen(admin: Db, versand: ErinnerungsVersand =
       const privat = privaterTermin && p === t.besitzer_email.toLowerCase() && (await hatPrivatBot(p))
       nachrichten.push({ p, chat: person.chat, text, privat, faellig })
     }
+    // Eingeladene Gäste (Kunde aus der Akte und externe): Erinnerungsmail 1 Tag und 1 Stunde vorher.
+    const mails: { schluessel: string; email: string; name?: string; vorlauf: number; faellig: number[] }[] = []
+    if (versand.sendeMail) {
+      const gaeste: { email: string; name?: string }[] = []
+      const kunde = (t.gast ?? {}) as TerminGast
+      if (kunde.eingeladen && kunde.email) gaeste.push({ email: kunde.email, name: kunde.name })
+      for (const g of (t.gaeste ?? []) as ExternerGast[]) if (g?.eingeladen && g.email && !gaeste.some((x) => x.email === g.email)) gaeste.push({ email: g.email, name: g.name })
+      for (const g of gaeste) {
+        const schluessel = `gast:${g.email.toLowerCase()}`
+        const schon = erinnert[schluessel] ?? []
+        const faellig = GAST_ERINNERUNGEN.filter((m) => bisBeginn <= m && !schon.includes(m)).sort((x, y) => x - y)
+        if (faellig.length === 0) continue
+        erinnert[schluessel] = [...new Set([...schon, ...faellig])]
+        if (t.ganztags && faellig[0] < 1440) continue
+        mails.push({ schluessel, email: g.email, name: g.name, vorlauf: faellig[0], faellig })
+      }
+    }
     if (stabil(erinnert) === stabil(alt ?? {})) continue
     // … dann beanspruchen (nur ein Lauf gewinnt, und ohne gespeicherten Stand keine Nachricht) …
     if (!(await beanspruche(admin, t.id, alt, erinnert))) continue
@@ -541,6 +705,19 @@ export async function sendeErinnerungen(admin: Db, versand: ErinnerungsVersand =
       if (ok) gesendet++
       // Privat und nicht zugestellt: beim nächsten Lauf erneut versuchen, nie ersatzweise über den Mayer-Bot.
       else if (n.privat) frei.set(n.p, n.faellig)
+    }
+    if (mails.length > 0 && versand.sendeMail) {
+      const absender = team.get(t.besitzer_email.toLowerCase())?.name || 'Ihr Ansprechpartner'
+      for (const m of mails) {
+        try {
+          const { betreff, text } = erinnerungsMailText(t, m.name, absender, m.vorlauf)
+          await versand.sendeMail(m.email, betreff, text)
+          gesendet++
+        } catch (err) {
+          console.error('Erinnerungsmail an Gast fehlgeschlagen', t.id, m.email, (err as Error)?.message ?? err)
+          frei.set(m.schluessel, m.faellig)
+        }
+      }
     }
     if (frei.size > 0) await gibFrei(admin, t.id, frei)
   }
