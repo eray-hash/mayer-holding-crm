@@ -101,7 +101,12 @@ Deno.test('Werkzeuge: privater Assistent bekommt nur seine Liste, Mayer-Werkzeug
   const privat = werkzeugListe({ briefe: true, outlook: true }, true)
   const namen = privat.map((w) => w.name)
   // Jeder Name der Liste gibt es wirklich (kein Tippfehler, der still ein Werkzeug verschwinden ließe).
-  for (const n of PRIVAT_BOT_WERKZEUGE) assert(voll.some((w) => w.name === n), `Werkzeug ${n} gibt es nicht`)
+  // Werkzeuge, die es nur im privaten Assistenten gibt (person_ueberblick, Verträge), stehen nur in dessen Liste.
+  for (const n of PRIVAT_BOT_WERKZEUGE) assert([...voll, ...privat].some((w) => w.name === n), `Werkzeug ${n} gibt es nicht`)
+  for (const n of ['person_ueberblick', 'vertrag_anlegen', 'vertraege_zeigen']) {
+    assert(namen.includes(n), `${n} fehlt im privaten Assistenten`)
+    assert(!voll.some((w) => w.name === n), `${n} gehört nicht in den Mayer-Assistenten`)
+  }
   for (const n of ['kunden_suchen', 'in_oeffentlich_holen', 'objekt_ins_mayer_crm', 'outlook_suche', 'outlook_mail_vorbereiten', 'brief_erstellen', 'todo_anlegen', 'termine_zeigen', 'kunde_loeschen', 'kunden_aus_liste']) {
     assert(namen.includes(n), `${n} fehlt im privaten Assistenten`)
   }

@@ -33,6 +33,9 @@ import { kollegenBenachrichtigen, type MitteilungsWege, schickeMitteilung, todoA
 import { fuehrePflegeWerkzeugAus, istPflegeWerkzeug, type PflegeAnfrage, PFLEGE_WERKZEUGE } from './pflegeWerkzeuge.ts'
 import { DOKUMENT_WERKZEUGE, fuehreDokumentWerkzeugAus, istDokumentWerkzeug } from './dokumentErstellen.ts'
 import { fuehreKvWerkzeugAus, istKvWerkzeug, KV_WERKZEUGE } from './kostenvoranschlagWerkzeuge.ts'
+import { fuehrePersonWerkzeugAus, istPersonWerkzeug, PERSON_WERKZEUGE } from './personUeberblick.ts'
+import { fuehreVertragWerkzeugAus, istVertragWerkzeug, VERTRAG_WERKZEUGE } from './vertragWerkzeuge.ts'
+import { fuehrePlanKnopfAus, istPlanKnopf } from '../email-gateway/privatTagesplan.ts'
 import { kvAkteHinweisNachAnlegen } from './kvAkteVorschlag.ts'
 import { fuehreWvWerkzeugAus, istWvWerkzeug, WV_WERKZEUGE } from './wiedervorlageWerkzeuge.ts'
 import { fuehreTagesplanWerkzeugAus, istTagesplanWerkzeug, TAGESPLAN_WERKZEUGE } from './tagesplanWerkzeuge.ts'
@@ -1717,6 +1720,9 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
 
   // PDF (Merkblatt, Schreiben, Zusammenfassung) erstellen und in der Akte ablegen — dokumentErstellen.ts.
   if (istDokumentWerkzeug(name)) return await fuehreDokumentWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
+  // Hasans Wünsche vom 23.11.2026 (nur im privaten Assistenten angeboten): alles zu einer Person, Verträge und Abos.
+  if (istPersonWerkzeug(name)) return await fuehrePersonWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere })
+  if (istVertragWerkzeug(name)) return await fuehreVertragWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute, privat: imPrivatBot() })
   // Kostenvoranschläge anlegen, auflisten, ändern — kostenvoranschlagWerkzeuge.ts.
   if (istKvWerkzeug(name)) {
     const kvErgebnis = await fuehreKvWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
@@ -3678,7 +3684,7 @@ export type WebBild = { base64: string; mediaType: 'image/jpeg' | 'image/png' | 
  * Hotmail) nur für Freigeschaltete; im privaten Assistenten nur dessen Liste (privatBot.ts).
  */
 export function werkzeugListe(privat: { briefe: boolean; outlook: boolean }, privatBot: boolean): { name: string }[] {
-  const alle = privat.briefe ? [...TOOLS, ...BRIEF_WERKZEUGE, ...OBJEKT_WERKZEUGE, ...(privat.outlook ? OUTLOOK_WERKZEUGE : [])] : TOOLS
+  const alle = privat.briefe ? [...TOOLS, ...BRIEF_WERKZEUGE, ...OBJEKT_WERKZEUGE, ...(privat.outlook ? OUTLOOK_WERKZEUGE : []), ...(privatBot ? [...PERSON_WERKZEUGE, ...VERTRAG_WERKZEUGE] : [])] : TOOLS
   // deno-lint-ignore no-explicit-any
   return privatBot ? werkzeugeFuerPrivatBot(alle as any[], istPrivatWerkzeug) : alle
 }
@@ -4343,6 +4349,14 @@ async function verarbeiteKnopf(knopf: any): Promise<void> {
   // „Bitte bestätigen“ (bt:…, email-gateway/bitteBestaetigen.ts und statusVorschlag.ts) — bitteBestaetigenWerkzeug.ts.
   if (istBestaetigenKnopf(knopf?.data)) {
     return await verarbeiteBestaetigenKnopf({ supabase: supa(), knopf, antworte, telegram: telegramMit(token), mailFunktion: callEmailGateway, wege: MITTEILUNGS_WEGE, heute: heuteBerlin() })
+  }
+  // Abend-Rückblick des privaten Tagesplans (pt:e:<todo_id> erledigt, pt:m:<todo_id> auf morgen) — nur im privaten Bot.
+  if (istPlanKnopf(knopf?.data)) {
+    if (!imPrivatBot()) return void (await antworte('Dieser Knopf gilt nur im privaten Assistenten.'))
+    const { data: ma } = await supa().from('mitarbeiter').select('email, aktiv').eq('telegram_chat_id', knopf?.message?.chat?.id).maybeSingle()
+    if (!ma?.aktiv || !ma.email) return void (await antworte('Nicht freigeschaltet.'))
+    const r = await fuehrePlanKnopfAus(supa(), String(ma.email), String(knopf.data)).catch(() => ({ ok: false, text: 'Das hat gerade nicht geklappt.' }))
+    return void (await antworte(r.text))
   }
   const m = /^(vb|vv):(vm_[A-Za-z0-9]+):([A-Za-z0-9]+)$/.exec(String(knopf?.data ?? ''))
   const chatId = knopf?.message?.chat?.id

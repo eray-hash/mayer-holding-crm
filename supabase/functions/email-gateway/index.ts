@@ -249,6 +249,19 @@ import { AUSFUEHRER } from './vormerkungen.ts'
 
 // Bereich Privat: einen CRM-Termin absagen, nachdem der Mitarbeiter die Vormerkung des Assistenten bestätigt hat
 // (hier registriert, weil die Absage an einen eingeladenen Kunden über sendMail geht).
+/** Vermerk in den Gesprächszustand des privaten Assistenten (privat_einstellungen.telegram_zustand.aktionen). */
+// deno-lint-ignore no-explicit-any
+async function merkePrivatAktion(admin: any, email: string, text: string): Promise<void> {
+  const ich = email.trim().toLowerCase()
+  const { data } = await admin.from('privat_einstellungen').select('telegram_zustand').eq('login_email', ich).maybeSingle()
+  const z = (data?.telegram_zustand && typeof data.telegram_zustand === 'object' ? data.telegram_zustand : { v: 3, zuege: [], aktionen: [] }) as { aktionen?: { z: string; text: string }[] }
+  const aktionen = [...(Array.isArray(z.aktionen) ? z.aktionen : []), { z: new Date().toISOString(), text: text.slice(0, 1500) }].slice(-30)
+  await admin.from('privat_einstellungen').update({ telegram_zustand: { ...z, aktionen } }).eq('login_email', ich)
+}
+
+// Fristen aus Behörden-/Versicherungspost (fristenRadar.ts): nach dem Klick auf „Ausführen“ entsteht das To-do.
+AUSFUEHRER.frist_todo = (admin, ich, p) => fristTodoAusfuehrer(admin, ich, p)
+
 AUSFUEHRER.crm_termin_absagen = async (admin, ich, p) => {
   const muster = ich.replace(/[\\%_]/g, (z) => `\\${z}`)
   const { data: m } = await admin.from('mitarbeiter').select('name, rolle, ist_admin').ilike('email', muster).maybeSingle()
@@ -284,6 +297,9 @@ import { pruefeKundenberichte } from './kundenbericht.ts'
 import { sendeTerminBriefings } from './terminBriefing.ts'
 import { tagesplanAktion } from './tagesplan.ts'
 import { sendeTagesplanMeldungen } from './tagesplanMeldungen.ts'
+import { hotmailZeilen, type PlanZusatz, sendePrivatTagesplaene } from './privatTagesplan.ts'
+import { FRISTEN_TITEL, fristenZeilen, fristTodoAusfuehrer, pruefeFristen } from './fristenRadar.ts'
+import { vertragsFristZeilen } from '../telegram-gateway/vertragWerkzeuge.ts'
 import { frageNachTerminen, frageUeberAssistent } from './nachTermin.ts'
 import { gespraechAkteSetzen, gespraechUebernehmen, gespraechVorbereitung } from './gespraechUebernehmen.ts'
 import { versendeAutoNachrichten } from './autoNachrichten.ts'
@@ -3495,6 +3511,26 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       EdgeRuntime.waitUntil(sendeTagesplanMeldungen(admin, { sende: sendeTelegram }).then((r) => {
         if (r.morgen > 0 || r.abend > 0 || r.fehler.length > 0) console.log(`Tagesablauf-Meldungen: ${r.morgen} morgens, ${r.abend} abends.`, r.fehler.join(' | '))
       }))
+      // Privater Tagesplan (privatTagesplan.ts, 23.11.2026, Hasans Wünsche 1, 2, 4, 6, 8): nur für Leute mit privatem Bot,
+      // jeden Tag inkl. Wochenende — morgens ab 8 Uhr (vorher Fristen-Radar über Hotmail), abends ab 21:30 mit Knöpfen
+      // „✓ Erledigt“/„→ Morgen“ und Rückfrage zu vage diktierten To-dos. Nur über den privaten Bot; wirft nie.
+      const fristenTeil: PlanZusatz = async (a, email, k) => {
+        await pruefeFristen(a, email).catch((err) => console.error('Fristen-Radar:', err))
+        const z = await fristenZeilen(a, email, k.jetzt)
+        return z.length ? [FRISTEN_TITEL, ...z] : []
+      }
+      const vertragTeil: PlanZusatz = async (a, email, k) => {
+        const z = await vertragsFristZeilen(a, email, k.datum)
+        return z.length ? ['Verträge — bald kündbar', ...z] : []
+      }
+      // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
+      EdgeRuntime.waitUntil(
+        sendePrivatTagesplaene(admin, new Date(), undefined, { zusatzMorgen: [hotmailZeilen, fristenTeil, vertragTeil] }).then(async (r) => {
+          if (r.morgen > 0 || r.abend > 0 || r.fehler.length > 0) console.log(`Privater Tagesplan: ${r.morgen} morgens, ${r.abend} abends.`, r.fehler.join(' | '))
+          // Rückfragen zu vagen To-dos in den privaten Gesprächsverlauf, damit der Assistent die Antwort zuordnet.
+          for (const rf of r.rueckfragen ?? []) await merkePrivatAktion(admin, rf.email, `Abend-Rückblick: nachgefragt, was bei diesen To-dos gemeint ist (todo_id ${rf.todoIds.join(', ')}). Antwortet er dazu, ergänze die Aufgabe mit todo_aendern.`).catch(() => {})
+        }),
+      )
       // Nachfrage nach Kundenterminen (nachTermin.ts): 10–20 Minuten nach dem Ende eines Termins mit Kundenakte fragt der
       // Assistent den Besitzer einmal „Wie lief der Termin …?“ — über telegram-gateway in seinen Gesprächsverlauf, damit er
       // die Antwort als Gesprächsprotokoll ablegt (nachTerminWerkzeug.ts). Ohne KI; wirft nie.

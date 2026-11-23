@@ -187,7 +187,7 @@ export const GRUPPEN: Record<GruppenName, Gruppe> = {
   },
   hotmail: {
     titel: 'Hotmail und Briefe (Bereich Privat)',
-    wofuer: 'eigenes Hotmail-Postfach lesen, ordnen, beantworten und ablegen, Briefe auf dem eigenen Briefbogen, privates Objekt ins Mayer-CRM',
+    wofuer: 'eigenes Hotmail-Postfach lesen, ordnen, beantworten und ablegen, Briefe auf dem eigenen Briefbogen, privates Objekt ins Mayer-CRM, alles zu einer Person, eigene Verträge und Abos',
     werkzeuge: [
       'outlook_suche',
       'outlook_posteingang',
@@ -201,6 +201,12 @@ export const GRUPPEN: Record<GruppenName, Gruppe> = {
       'outlook_ablegen',
       'brief_erstellen',
       'objekt_ins_mayer_crm',
+      // Hasans Wünsche vom 23.11.2026 — nur im privaten Assistenten, dort ist diese Gruppe immer geladen.
+      'person_ueberblick',
+      'vertrag_anlegen',
+      'vertrag_aendern',
+      'vertraege_zeigen',
+      'vertrag_loeschen',
     ],
     stichworte: /hotmail|outlook|privat|\bbrief\b|briefe\b|briefbogen|briefkopf|mein(e|em|en)? (post|mail)|mayer-crm|ins crm/,
   },

@@ -10,7 +10,7 @@
 //   Hotmail-Teil (hotmailBriefing.ts: Dringendes, neue Rechnungen, wichtige Mails, markierte — ohne Beträge).
 //   Benutzt jemand den privaten Assistenten (eigener Bot, _shared/telegramPrivat.ts), kommt der Hotmail-Teil
 //   stattdessen als eigene kurze „Privat-Übersicht“ über diesen Bot; die Mayer-Nachricht bleibt sonst gleich.
-//   Klappt das Senden dort nicht, geht die Privat-Übersicht als eigene Nachricht über den Mayer-Bot.
+//   Klappt das Senden dort nicht, geht sie verloren statt über den Mayer-Bot (Privates bleibt privat, 23.11.2026).
 // - Wochenbericht: freitags ab 16 Uhr (bis 19 Uhr), nur Geschäftsführung und Admins. Nur Zahlen.
 //   Nicht an Empfänger des Wochenrückblicks (wochenrueckblick.ts, Einstellung berichtAn): die bekommen nur den
 //   Rückblick (seit 22.11.2026 — vorher kamen freitags drei Berichte).
@@ -35,6 +35,7 @@
 
 import { hotmailAbschnitte } from './hotmailBriefing.ts'
 import { privatBotAktiv, sendePrivat } from '../_shared/telegramPrivat.ts'
+import { privatMorgenplanAktiv } from './privatTagesplan.ts'
 import { darfObjekt, istPrivatesObjekt, nurMayerObjekte, normalisiereAdresse } from '../_shared/privatZugriff.ts'
 import { wochenrueckblickAdressen } from './wochenrueckblickEmpfaenger.ts'
 import { ausgeblendeteListen } from './todoAbgleich.ts'
@@ -672,6 +673,9 @@ export async function morgenNachrichten(admin: Db, p: Person, daten: Daten, jetz
   const hotmail = await hotmailAbschnitte(admin, p.email, jetzt)
   const privat = p.chat != null && (await (privatAktiv ?? ((e: string) => privatBotAktiv(admin, e)))(p.email).catch(() => false))
   if (privat) {
+    // Hat die Person den neuen privaten Morgenplan (privatTagesplan.ts, jeden Tag inkl. Wochenende), bringt der die
+    // eigene Liste und den Hotmail-Teil — hier dann keine zweite Privat-Übersicht.
+    if (await privatMorgenplanAktiv(admin, p.email).catch(() => false)) return { mayer: morgenText(p, daten, jetzt, [], { eigeneListe: false }), privat: null }
     const eigene = aufgabenZeilen(p, daten, berlinZeit(jetzt).datum, 'privat')
     const teile = [...(eigene.length ? [{ titel: 'Eigene Aufgaben', zeilen: eigene }] : []), ...hotmail]
     return { mayer: morgenText(p, daten, jetzt, [], { eigeneListe: false }), privat: privatUebersichtText(p, teile, jetzt) }
@@ -914,8 +918,8 @@ async function lauf(admin: Db, sende: SendeFunktion, jetzt: Date, art: 'morgen' 
     }
     if (privat) {
       try {
-        // Privater Bot; klappt das nicht, als eigene Nachricht über den Mayer-Bot (nichts geht verloren).
-        if ((await sendePrivatBot(p.chat, privat)) === true || (await sende(p.chat, privat)) === true) zugestellt++
+        // Nur über den privaten Bot — nie ersatzweise über den Mayer-Bot (Erays Regel vom 21.11.2026: Privates bleibt privat).
+        if ((await sendePrivatBot(p.chat, privat)) === true) zugestellt++
         else console.error('Privat-Übersicht nicht zugestellt an', p.email)
       } catch (err) {
         console.error('Privat-Übersicht nicht zustellbar:', err instanceof Error ? err.message : err)
