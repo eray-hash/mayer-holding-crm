@@ -43,8 +43,8 @@ export const OUTLOOK_WERKZEUGE = [
   {
     name: 'outlook_suche',
     description:
-      'Durchsucht das private Hotmail/Outlook-Postfach des Mitarbeiters LIVE bei Microsoft — den ganzen Verlauf aller Ordner (Absender, Empfänger, Betreff, Text, Anhangnamen). Für Kunden-Suche: Name, Firma, E-Mail-Adresse oder Stichwort. Mayer-Geschäft ist ausgeblendet. Liefert mail_id und unterhaltung je Treffer.',
-    input_schema: { type: 'object', properties: { begriff: { type: 'string' }, anzahl: { type: 'number', description: 'Höchstens so viele Treffer (Standard 30, max 150).' } }, required: ['begriff'] },
+      'Durchsucht das private Hotmail/Outlook-Postfach des Mitarbeiters LIVE bei Microsoft — den ganzen Verlauf aller Ordner (Absender, Empfänger, Betreff, Text, Anhangnamen). Für Kunden-Suche: Name, Firma, E-Mail-Adresse oder Stichwort. Mayer-Geschäft ist ausgeblendet. Liefert mail_id und unterhaltung je Treffer und sagt, ob es weitere Treffer gibt. Fragt er nach allen Mails von oder an jemanden, nimm gleich anzahl=150 und sag in der Antwort, ob die Liste vollständig ist.',
+    input_schema: { type: 'object', properties: { begriff: { type: 'string' }, anzahl: { type: 'number', description: 'Höchstens so viele Treffer (Standard 30, max 150). Für „alle Mails mit X“: 150.' } }, required: ['begriff'] },
   },
   {
     name: 'outlook_posteingang',
@@ -168,7 +168,11 @@ function liste(daten: Record<string, unknown>, leer: string): string {
   const mails = (daten.mails ?? []) as Record<string, unknown>[]
   const aus = Number(daten.ausgeblendet ?? 0)
   if (!mails.length) return `${leer}${aus ? ` (${aus} Mayer-Mails ausgeblendet)` : ''}`
-  return `${mails.length} Mails${aus ? ` (${aus} Mayer-Mails ausgeblendet)` : ''}:\n${mails.map(zeile).join('\n')}`
+  const mehr = daten.mehr === true || daten.weiter === true
+  const hinweis = mehr
+    ? `\nACHTUNG: Es gibt WEITERE Treffer, die hier fehlen — das ist NICHT alles. Die Suche sortiert nach Treffergüte, also fehlen auch ältere oder neuere Mails. Fragt er nach „allen“ Mails, ruf das Werkzeug mit größerer anzahl erneut auf (outlook_suche bis 150). Nenn dann ausdrücklich, ob die Liste vollständig ist.`
+    : ''
+  return `${mails.length} Mails${aus ? ` (${aus} Mayer-Mails ausgeblendet)` : ''}${mehr ? ' — es gibt weitere Treffer' : ' — das sind alle Treffer'}:\n${mails.map(zeile).join('\n')}${hinweis}`
 }
 
 /** Führt ein Werkzeug aus. Gibt Text zurück oder Inhaltsblöcke (für PDF/Bild-Anhänge). */
