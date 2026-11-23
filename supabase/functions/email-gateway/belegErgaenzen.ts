@@ -247,8 +247,8 @@ export function bereinigeAuslese(roh: Record<string, unknown>, jetzt = new Date(
 
 // Modul E-Rechnung (abschaltbar, siehe src/module/eRechnung/README.md)
 /**
- * Angaben aus einer E-Rechnung — genau wie in der Datei, ohne KI. Beträge nur in Euro; bei einer Gutschrift keine
- * Beträge (sie mindert die Schuld, die Spalten kennen nur positive Rechnungsbeträge — die Notiz nennt die Gutschrift).
+ * Angaben aus einer E-Rechnung — genau wie in der Datei, ohne KI. Beträge nur in Euro; eine Gutschrift als Minusbetrag
+ * (sie mindert die Schuld; der Steuerberater-Export dreht bei negativen Beträgen Soll/Haben).
  */
 export function ausleseAusERechnung(d: ERechnungDaten): Auslese {
   const a: Auslese = { art: 'rechnung' }
@@ -258,10 +258,11 @@ export function ausleseAusERechnung(d: ERechnungDaten): Auslese {
   if (nr) a.rechnungsnummer = nr
   if (istDatum(d.datum)) a.datum = d.datum
   if (istDatum(d.faellig)) a.zahlungsziel = d.faellig
-  if (d.art !== 'Gutschrift' && /^(eur)?$/i.test(text(d.waehrung).trim())) {
-    if (Number.isFinite(d.brutto) && d.brutto > 0) a.brutto = Math.round(d.brutto * 100) / 100
-    if (Number.isFinite(d.netto) && d.netto > 0 && (a.brutto === undefined || d.netto <= a.brutto + 0.01)) a.netto = Math.round(d.netto * 100) / 100
-    if (Number.isFinite(d.steuer) && d.steuer >= 0) a.steuer = Math.round(d.steuer * 100) / 100
+  if (/^(eur)?$/i.test(text(d.waehrung).trim())) {
+    const vz = d.art === 'Gutschrift' ? -1 : 1
+    if (Number.isFinite(d.brutto) && d.brutto > 0) a.brutto = vz * Math.round(d.brutto * 100) / 100
+    if (Number.isFinite(d.netto) && d.netto > 0 && d.netto <= d.brutto + 0.01) a.netto = vz * Math.round(d.netto * 100) / 100
+    if (Number.isFinite(d.steuer) && d.steuer >= 0) a.steuer = vz * Math.round(d.steuer * 100) / 100
   }
   return a
 }
@@ -276,9 +277,9 @@ export function planeFelder(v: VerbZeile, a: Auslese): Record<string, string | n
   if (a.art === 'keine_rechnung' || a.art === 'nur_im_kundenkonto') return f
   const brutto = zahl(v.betrag_brutto)
   const netto = zahl(v.betrag_netto)
-  if (a.brutto !== undefined && (brutto === null || (brutto === 0 && a.brutto > 0))) f.betrag_brutto = a.brutto
+  if (a.brutto !== undefined && (brutto === null || (brutto === 0 && a.brutto !== 0))) f.betrag_brutto = a.brutto
   const bruttoNeu = (f.betrag_brutto as number | undefined) ?? brutto
-  if (a.netto !== undefined && (netto === null || (netto === 0 && a.netto > 0)) && (bruttoNeu === null || a.netto <= bruttoNeu + 0.01)) f.betrag_netto = a.netto
+  if (a.netto !== undefined && (netto === null || (netto === 0 && a.netto !== 0)) && (bruttoNeu === null || Math.abs(a.netto) <= Math.abs(bruttoNeu) + 0.01)) f.betrag_netto = a.netto
   if (a.rechnungsnummer && !text(v.rechnungsnummer).trim()) f.rechnungsnummer = a.rechnungsnummer
   if (a.datum && datumIstPlatzhalter(v) && a.datum !== text(v.datum).slice(0, 10)) f.datum = a.datum
   if (a.zahlungsziel && !text(v.zahlungsziel).trim() && v.status !== 'bezahlt') f.zahlungsziel = a.zahlungsziel

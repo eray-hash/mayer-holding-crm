@@ -339,8 +339,11 @@ Deno.test('E-Rechnung im Anhang: Modul aus oder Datei kaputt → wie bisher (ohn
   assertEquals(kaputt.tabellen.verbindlichkeiten.length, 0)
 })
 
-Deno.test('E-Rechnung: eigene Rechnung der Mayer Holding und Gutschriften sind keine Lieferantenrechnung', () => {
+Deno.test('E-Rechnung: eigene Rechnung der Mayer Holding ist keine Lieferantenrechnung, Gutschrift mit Minusbetrag', () => {
   assertEquals(verbindlichkeitAusERechnung(leseERechnung(eRechnung('Mayer Holding UG'))), null)
-  assertEquals(verbindlichkeitAusERechnung({ ...leseERechnung(eRechnung()), art: 'Gutschrift' }), null)
+  // Gutschrift: Minusbetrag (mindert die Schuld)
+  const gut = verbindlichkeitAusERechnung({ ...leseERechnung(eRechnung()), art: 'Gutschrift' })!
+  assertEquals(gut.istRechnung, true)
+  assert((gut.betragBrutto ?? 0) < 0 && (gut.betragNetto ?? 0) < 0)
   assertEquals(verbindlichkeitAusERechnung({ ...leseERechnung(eRechnung()), waehrung: 'USD' })?.betragBrutto, undefined)
 })

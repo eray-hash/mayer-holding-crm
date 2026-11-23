@@ -333,11 +333,12 @@ Text: ${text.slice(0, 1500)}`,
 type ErkannteVerbindlichkeit = { istRechnung: boolean; lieferant?: string; datum?: string; rechnungsnummer?: string; betragNetto?: number; betragBrutto?: number; zahlungsziel?: string }
 
 // Modul E-Rechnung (abschaltbar, siehe src/module/eRechnung/README.md)
-/** Angaben einer angehängten E-Rechnung als Lieferantenrechnung — null bei Gutschriften und bei eigenen Rechnungen der
- *  Mayer Holding (z. B. Kopie einer ausgehenden Rechnung); dann entscheidet wie bisher die KI. Beträge nur in Euro. */
+/** Angaben einer angehängten E-Rechnung als Lieferantenrechnung — null bei eigenen Rechnungen der Mayer Holding (z. B.
+ *  Kopie einer ausgehenden Rechnung); dann entscheidet wie bisher die KI. Beträge nur in Euro, Gutschriften als Minusbetrag. */
 export function verbindlichkeitAusERechnung(d: ERechnungDaten): ErkannteVerbindlichkeit | null {
   const verkaeufer = `${d.verkaeufer?.name ?? ''} ${d.verkaeufer?.email ?? ''}`
-  if (d.art !== 'Rechnung' || /mayer[\s-]*holding|amayer/i.test(verkaeufer)) return null
+  if (/mayer[\s-]*holding|amayer/i.test(verkaeufer)) return null
+  const vz = d.art === 'Gutschrift' ? -1 : 1
   const euro = /^(eur)?$/i.test(String(d.waehrung ?? '').trim())
   const datum = (s?: string) => (s && /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : undefined)
   return {
@@ -345,8 +346,8 @@ export function verbindlichkeitAusERechnung(d: ERechnungDaten): ErkannteVerbindl
     lieferant: d.verkaeufer?.name?.trim() || undefined,
     datum: datum(d.datum),
     rechnungsnummer: d.nummer?.trim() || undefined,
-    betragNetto: euro && d.netto > 0 ? d.netto : undefined,
-    betragBrutto: euro && d.brutto > 0 ? d.brutto : undefined,
+    betragNetto: euro && d.netto > 0 ? vz * d.netto : undefined,
+    betragBrutto: euro && d.brutto > 0 ? vz * d.brutto : undefined,
     zahlungsziel: datum(d.faellig),
   }
 }

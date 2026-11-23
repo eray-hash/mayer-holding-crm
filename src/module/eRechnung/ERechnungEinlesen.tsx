@@ -81,8 +81,9 @@ export function ERechnungEinlesenKnopf({ nurLesen, onAngelegt }: { nurLesen: boo
         lieferantEmail: daten.verkaeufer.email?.trim() || undefined,
         rechnungsnummer: daten.nummer.trim() || undefined,
         datum: daten.datum || today(),
-        betragNetto: daten.netto,
-        betragBrutto: daten.brutto,
+        // Gutschrift mindert die Schuld: als Minusbetrag (der Steuerberater-Export dreht dann Soll/Haben).
+        betragNetto: daten.art === 'Gutschrift' ? -Math.abs(daten.netto) : daten.netto,
+        betragBrutto: daten.art === 'Gutschrift' ? -Math.abs(daten.brutto) : daten.brutto,
         zahlungsziel: daten.faellig || undefined,
         notiz: eRechnungKurz(daten),
         geprueft: true,
@@ -154,7 +155,7 @@ function Vorschau({
         <div className="mb-3 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
           <AlertTriangle size={16} className="mt-0.5 shrink-0" />
           <span>
-            <span className="font-semibold">Achtung, das ist eine Gutschrift</span> — keine Rechnung zum Bezahlen. Hier bekommt Mayer Holding Geld zurück bzw. verrechnet. Bitte prüfen, ob sie wirklich als Verbindlichkeit eingetragen werden soll.
+            <span className="font-semibold">Achtung, das ist eine Gutschrift</span> — keine Rechnung zum Bezahlen. Sie wird mit Minusbetrag eingetragen, weil Mayer Holding Geld zurückbekommt oder verrechnet.
           </span>
         </div>
       )}
