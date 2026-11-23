@@ -59,6 +59,7 @@ export type MailZeile = {
   mail_datum?: string | null
   erstellt_am?: string | null
   anhaenge?: unknown
+  scan_status?: string | null
 }
 
 export type AkteZeile = { id: string; bereich: string; firma?: string | null; ansprechpartner?: string | null; email?: string | null }
@@ -76,6 +77,8 @@ export type Kontext = {
   gesendet: GesendetZeile[]
   /** Nachrichtenkennung (normalisiert) → Akten, zu denen sie gehört (gesendet oder schon zugeordnet). */
   kennungAkten: Map<string, Set<string>>
+  /** Scanner-Adressen (scan_eingang.absender): deren Mails bearbeitet der Scan-Eingang (scanEingang.ts), nicht dieser Schritt. */
+  scanAbsender?: Set<string>
 }
 
 export type Kandidat = { kundeId: string; bereich: string; name: string; grund: string }
@@ -274,6 +277,15 @@ export function betreffIstAktenName(betreff: string | null | undefined, a: AkteZ
   return imBetreff.every((w) => [...imNamen].some((n) => aehnlich(w, n)))
 }
 
+/** Teiltreffer für den Scan-Eingang: ein Namenswort des Betreffs (4+ Buchstaben) steckt im Namen der Akte —
+ *  „Bauer Schebek“ findet auch die Akte „Christine Schebek“. Nur als Auswahl für die KI, nie für sicheres Zuordnen. */
+export function betreffNenntTeilDesNamens(betreff: string | null | undefined, a: AkteZeile): boolean {
+  const imBetreff = namensWoerter(normBetreff(betreff), true).filter((w) => w.length >= 4)
+  if (imBetreff.length === 0) return false
+  const imNamen = [a.ansprechpartner, a.firma].flatMap((n) => namensWoerter(String(n ?? ''), false)).filter((w) => w.length >= 4)
+  return imBetreff.some((w) => imNamen.some((n) => aehnlich(w, n)))
+}
+
 function hatAnhaenge(m: MailZeile): boolean {
   return Array.isArray(m.anhaenge) && m.anhaenge.length > 0
 }
@@ -287,6 +299,8 @@ export function entscheide(m: MailZeile, k: Kontext, jetzt = new Date()): Entsch
   if (m.zugewiesener_kunde_id) return { art: 'nichts', grund: 'schon zugeordnet' }
   if (m.ignoriert) return { art: 'nichts', grund: 'ausgeblendet' }
   const von = adresseNorm(m.von)
+  // Scans vom Bürokopierer teilt und verteilt scanEingang.ts; nur wenn das scheiterte, prüft dieser Schritt sie.
+  if (k.scanAbsender?.has(von) && m.scan_status !== 'fehler') return { art: 'nichts', grund: 'Scan-Eingang' }
   const hinweise = rundschreibenHinweise(m)
   const relevanzLeer = !m.relevanz
   const unwichtig = m.relevanz === 'nicht_relevant'
@@ -407,11 +421,12 @@ export function entscheide(m: MailZeile, k: Kontext, jetzt = new Date()): Entsch
 
 export async function ladeKontext(admin: Admin, mails: MailZeile[], jetzt = new Date()): Promise<Kontext> {
   const seit = new Date(jetzt.getTime() - GESENDET_FENSTER_TAGE * TAG_MS).toISOString()
-  const [akten, team, gesendet] = await Promise.all([
+  const [akten, team, gesendet, scan] = await Promise.all([
     // Seitenweise (die Datenbank liefert höchstens 1000 Zeilen je Abfrage; ein limit(3000) hilft nicht).
     alleZeilen(() => admin.from('kunden').select('id, bereich, firma, ansprechpartner, email').neq('bereich', 'privat')),
     admin.from('mitarbeiter').select('name, email'),
     alleZeilen(() => admin.from('gesendete_emails').select('message_id, an, betreff, kunde_id, gesendet_am').is('besitzer_email', null).gte('gesendet_am', seit), { ordnung: ['gesendet_am', 'id'], aufsteigend: false, hoechstens: 3000 }),
+    admin.from('scan_eingang').select('aktiv, absender').eq('id', 'standard').maybeSingle(),
   ])
   if (akten.error) throw new Error(`Akten nicht lesbar: ${akten.error.message}`)
   if (team.error) throw new Error(`Mitarbeiter nicht lesbar: ${team.error.message}`)
@@ -463,7 +478,8 @@ export async function ladeKontext(admin: Admin, mails: MailZeile[], jetzt = new 
       for (const z of (einzeln.data ?? []) as VerlaufZeile[]) merke(z.message_id, z.zugewiesener_kunde_id)
     }
   }
-  return { akten: (akten.data ?? []) as AkteZeile[], mitarbeiterAdressen, eigeneWoerter, eigeneDomains, gesendet: ausAkten, kennungAkten }
+  const scanAbsender = new Set<string>(scan?.data?.aktiv ? ((scan.data.absender ?? []) as string[]).map((a) => String(a).trim().toLowerCase()) : [])
+  return { akten: (akten.data ?? []) as AkteZeile[], mitarbeiterAdressen, eigeneWoerter, eigeneDomains, gesendet: ausAkten, kennungAkten, scanAbsender }
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -492,7 +508,7 @@ export type ZuordnungsErgebnis = {
   entscheidungen?: { id: string; von: string; betreff: string; entscheidung: Entscheidung }[]
 }
 
-const SPALTEN = 'id, message_id, von, von_name, betreff, ausschnitt, rohdaten, relevanz, ignoriert, besitzer_email, zugewiesener_kunde_id, mail_datum, erstellt_am, anhaenge'
+const SPALTEN = 'id, message_id, von, von_name, betreff, ausschnitt, rohdaten, relevanz, ignoriert, besitzer_email, zugewiesener_kunde_id, mail_datum, erstellt_am, anhaenge, scan_status'
 
 /** Prüft neue Mails im gemeinsamen Postfach (siehe Kopf der Datei). Wirft nie. */
 export async function ordneNeueMailsZu(admin: Admin, opts: ZuordnungsOptionen = {}): Promise<ZuordnungsErgebnis> {

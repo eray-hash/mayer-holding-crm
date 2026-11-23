@@ -241,6 +241,7 @@ import {
 import { loescheTermin, sendeErinnerungen, sendeTelegram, speichereTermin } from './kalender.ts'
 import { ordneTermineZu, terminZuordnenAktion } from './terminZuordnung.ts'
 import { ordneNeueMailsZu } from './mailZuordnung.ts'
+import { verarbeiteScanEingang, type ScanDienste, type Wahl } from './scanEingang.ts'
 import { pruefePrivatePost } from './privatPostZuordnung.ts'
 import { aboLink, kalenderAboAntwort } from './kalenderAbo.ts'
 import { FREMD_AKTIONEN, fremdKalenderAbruf, fremdKalenderAktion } from './fremdKalender.ts'
@@ -2796,6 +2797,7 @@ type ScanTeildokument = {
   kategorie: string
   erkannter_name?: string
   erkanntes_datum?: string
+  kurzinhalt?: string
   vorgeschlagener_dateiname: string
   rechnung?: RechnungsDaten
 }
@@ -2814,6 +2816,27 @@ type ScanAufteilung = {
 // erkannt. Seitenzählung ist 1-basiert. Erkennt das Modell nur EIN zusammenhängendes Dokument,
 // kommt trotzdem ein einzelner Eintrag zurück, der den gesamten Seitenbereich abdeckt — das
 // Aufteilen wird dann zu einem Durchlauf ohne echte Trennung.
+// Dienste für den Scan-Eingang (scanEingang.ts): Aufteilen wie bei Telegram, Wahl der Akte mit Sonnet (wenige Wörter, wichtig).
+function scanDienste(): ScanDienste {
+  return {
+    teile: (b64, name, seiten) => splitScanDokument(b64, name, seiten),
+    waehle: (aufgabe) =>
+      callClaudeTool<Wahl>(aufgabe, {
+        name: 'akte_waehlen',
+        description: 'Ordnet jedes Schriftstück eines Scans einer Akte zu (oder einer neuen Akte im gewählten Bereich).',
+        input_schema: {
+          type: 'object',
+          properties: {
+            zuordnung: { type: 'array', items: { type: 'object', properties: { teil: { type: 'integer' }, akte: { type: 'integer', description: 'Nummer aus der Aktenliste, 0 = neue Akte' } }, required: ['teil', 'akte'] } },
+            neue_akte_bereich: { type: 'string', enum: ['beratung', 'erben', 'immobilienkunden', 'finanzierungen', 'betriebsuebergabe', 'betriebsformen', 'akademie'] },
+            begruendung: { type: 'string' },
+          },
+          required: ['zuordnung'],
+        },
+      }, 1024, 'claude-sonnet-5-5', 'auto'),
+  }
+}
+
 async function splitScanDokument(mediaBase64: string, dateiname: string, seitenzahl: number): Promise<ScanAufteilung> {
   return callClaudeTool<ScanAufteilung>(
     [
@@ -2849,6 +2872,7 @@ Prüfe außerdem jede Seite darauf, ob sie verdreht eingescannt wurde, und liste
                 kategorie: { type: 'string' },
                 erkannter_name: { type: 'string' },
                 erkanntes_datum: { type: 'string' },
+                kurzinhalt: { type: 'string', description: 'Ein kurzer Satz auf Deutsch, worum es inhaltlich geht (Thema, Vorgang, beteiligte Firma/Objekt), z. B. „Gesprächsprotokoll zur Nachfolgeplanung der Firma X“.' },
                 vorgeschlagener_dateiname: { type: 'string' },
                 rechnung: {
                   type: 'object',
@@ -2883,7 +2907,7 @@ Prüfe außerdem jede Seite darauf, ob sie verdreht eingescannt wurde, und liste
         required: ['dokumente'],
       },
     },
-    4096,
+    8192,
     'claude-sonnet-5-5',
     'auto',
   )
@@ -3578,6 +3602,12 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       // Post-Zuordnung (mailZuordnung.ts): neue Mails im gemeinsamen Postfach nur bei sicherem Treffer einer Akte
       // zuordnen (Absender = Adresse genau einer Akte, Antwort im Verlauf einer Akte), unsichere als Vorschlag fürs
       // Postfach, Rundschreiben ohne KI-Einordnung ausblenden. Ohne KI und ohne Nachrichten; jede Mail einmal; wirft nie.
+      // Scan-Eingang (scanEingang.ts): eingescannte Papierakten vom Bürokopierer (Betreff = Name der Akte) aufteilen,
+      // lesen und Teil für Teil in die passende Akte legen — je Lauf eine Mail; wirft nie.
+      // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
+      EdgeRuntime.waitUntil(verarbeiteScanEingang(admin, scanDienste(), { hoechstens: 3, budgetMs: 150_000 }).then((r) => {
+        if (r.bearbeitet > 0 || r.fehler.length > 0) console.log(`Scan-Eingang: ${r.bearbeitet} Mails, ${r.teile} Teile, ${r.neueAkten} neue Akten.`, r.fehler.join(' | '))
+      }))
       // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
       EdgeRuntime.waitUntil(ordneNeueMailsZu(admin, { hoechstens: 25, zeitBudgetMs: 30_000 }).then((r) => {
         if (r.zugeordnet > 0 || r.vorschlaege > 0 || r.rundschreiben > 0 || r.fehler.length > 0) console.log(`Post-Zuordnung: ${r.geprueft} geprüft, ${r.zugeordnet} zugeordnet, ${r.vorschlaege} Vorschläge, ${r.rundschreiben} Rundschreiben.`, r.fehler.join(' | '))
@@ -5269,6 +5299,18 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       return new Response(JSON.stringify(ergebnis), { headers })
     }
 
+    // Scan-Eingang von Hand (scanEingang.ts), nur Geschäftsführung/Dienstschlüssel: { action: 'scan_eingang_lauf' } bearbeitet die
+    // nächste offene Scan-Mail; { mailIds: [...], ersetzen: true } teilt schon zugeordnete Scan-Mails nachträglich auf.
+    if (body.action === 'scan_eingang_lauf') {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const aufrufer = await ermittleAufrufer(req, admin, body)
+      if (!aufrufer) return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
+      if (!aufrufer.istGf) return keinRecht(headers)
+      const mailIds = Array.isArray(body.mailIds) ? (body.mailIds as unknown[]).map(String).slice(0, 20) : undefined
+      const ergebnis = await verarbeiteScanEingang(admin, scanDienste(), { hoechstens: 1, budgetMs: 140_000, mailIds, ersetzen: body.ersetzen === true })
+      return new Response(JSON.stringify(ergebnis), { headers })
+    }
+
     // Gesprächs-App „Mayer Gespräch“ (gespraechUebernehmen.ts) — nur mit eigenem Login: Auswertung in die Akte übernehmen,
     // Aufnahme einer Akte zuordnen bzw. neue Akte anlegen, Briefing zur Vorbereitung eines Termins.
     if (body.action === 'gespraech_uebernehmen' || body.action === 'gespraech_akte_setzen' || body.action === 'gespraech_vorbereitung') {
@@ -5667,7 +5709,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       return new Response(JSON.stringify({ ok: true }), { headers })
     }
 
-    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "public_objekt_portal", "public_objekt_portal_zustimmen", "public_objekt_portal_dokument", "public_objekt_portal_besichtigung", "bewertung_recherche_start", "bewertung_recherche_schritt", "kunden_umfeld_recherche", "steuer_analyse_start", "steuer_analyse_schritt", "dokument_lesen", "dokument_inhalte", "postfaecher_liste", "postfach_verbinden", "postfach_trennen", "postfach_abruf", "postfach_ordner", "mail_zuordnen", "mail_freigeben", "mail_anhang_url", "termin_speichern", "termin_loeschen", "termin_erinnerungen", "tagesmeldung_test", "kontoauszug_auslesen", "kontoauszug_abgleich_auslesen", "rendite_marktvergleich", "checkliste_vorschlag", "todos_priorisieren", "willkommen_jetzt", "auto_nachricht_jetzt", "anfrage_pruefen_jetzt", "akte_zu_objekt", "mail_zuordnung_lauf", "wochenrueckblick_test", "wochenrueckblick_einstellung", "chance_vorschlaege", "stammdaten_nachtrag", "beleg_ergaenzen", "dubletten", "neuanfrage_einschaetzung", "kv_zuordnen", "termin_zuordnen", "datensicherung", "tagesplan", "public_seminar_termin", "public_seminar_anmelden", "public_unterschrift_laden", "public_unterschrift_absenden", "gesendet_abruf", "bereichspostfach_ueberfuehren", "kontrollbericht_test", "abend_rueckblick_test" oder "firmenwissen_answer"' }), { status: 400, headers })
+    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "public_objekt_portal", "public_objekt_portal_zustimmen", "public_objekt_portal_dokument", "public_objekt_portal_besichtigung", "bewertung_recherche_start", "bewertung_recherche_schritt", "kunden_umfeld_recherche", "steuer_analyse_start", "steuer_analyse_schritt", "dokument_lesen", "dokument_inhalte", "postfaecher_liste", "postfach_verbinden", "postfach_trennen", "postfach_abruf", "postfach_ordner", "mail_zuordnen", "mail_freigeben", "mail_anhang_url", "termin_speichern", "termin_loeschen", "termin_erinnerungen", "tagesmeldung_test", "kontoauszug_auslesen", "kontoauszug_abgleich_auslesen", "rendite_marktvergleich", "checkliste_vorschlag", "todos_priorisieren", "willkommen_jetzt", "auto_nachricht_jetzt", "anfrage_pruefen_jetzt", "akte_zu_objekt", "mail_zuordnung_lauf", "wochenrueckblick_test", "wochenrueckblick_einstellung", "chance_vorschlaege", "stammdaten_nachtrag", "beleg_ergaenzen", "dubletten", "neuanfrage_einschaetzung", "kv_zuordnen", "termin_zuordnen", "datensicherung", "tagesplan", "public_seminar_termin", "public_seminar_anmelden", "public_unterschrift_laden", "public_unterschrift_absenden", "gesendet_abruf", "bereichspostfach_ueberfuehren", "kontrollbericht_test", "abend_rueckblick_test", "scan_eingang_lauf" oder "firmenwissen_answer"' }), { status: 400, headers })
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }
