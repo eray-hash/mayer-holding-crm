@@ -306,7 +306,8 @@ import { pruefeMahnVorschlaege } from './mahnVorschlag.ts'
 import { aktuellePerson, kiAufruf, mitAnlass, setzeAnlass, setzePerson, setzePrivat } from '../_shared/kiVerbrauch.ts'
 import { darfObjekt, darfPrivatKunde, istPrivaterKunde, istPrivatesObjekt } from '../_shared/privatZugriff.ts'
 import { alleZeilen } from '../_shared/alleZeilen.ts'
-import { AM_STUECK_BYTES, fehlerNachAbbruch, istWeiteresTextFormat, MAX_TEILE, PDF_MAX_BYTES, reiheDokumentEin, seitenJeTeil, setzeHaengendeDokumenteFort, SOFORT_HOECHSTENS, teileFuer, weitererDateiText } from './dokumentLesen.ts'
+import { entschlackeSeiten } from './pdfSeiten.ts'
+import { AM_STUECK_BYTES, fehlerNachAbbruch, gruppiereSeiten, istWeiteresTextFormat, MAX_TEILE, PDF_MAX_BYTES, reiheDokumentEin, SEITEN_JE_TEIL, setzeHaengendeDokumenteFort, SOFORT_HOECHSTENS, teileFuer, weitererDateiText } from './dokumentLesen.ts'
 import { heuteBerlin } from '../_shared/heuteBerlin.ts'
 
 const ALLOWED_ORIGINS = [
@@ -1577,9 +1578,23 @@ async function leseDokument(ref: DokumentRef, teil: number, umleitungen: number,
     } catch {
       seiten = 0 // beschädigt oder ungewöhnlich aufgebaut: als Ganzes versuchen
     }
-    const teileGesamt = teileFuer(seiten, bytes.length)
-    const jeTeil = seitenJeTeil(seiten, bytes.length)
     if (!quelle && bytes.length > AM_STUECK_BYTES) throw new Error('Datei größer als 20 MB und nicht in Seiten zerlegbar')
+    // Große PDFs: Teile nach der tatsächlichen Größe jeder Seite (gleich bei jedem Aufruf, also fortsetzbar).
+    let gruppen: [number, number][] | null = null
+    if (quelle && bytes.length > AM_STUECK_BYTES && seiten > 1) {
+      entschlackeSeiten(quelle) // jede Seite nur mit ihren eigenen Bildern (siehe pdfSeiten.ts)
+      const groessen: number[] = []
+      for (let i = 0; i < seiten; i++) {
+        const einzeln = await PDFDocument.create()
+        const [seite] = await einzeln.copyPages(quelle, [i])
+        einzeln.addPage(seite)
+        groessen.push((await einzeln.save()).length)
+      }
+      gruppen = gruppiereSeiten(groessen)
+    }
+    const teileGesamt = gruppen ? Math.min(MAX_TEILE, gruppen.length) : teileFuer(seiten)
+    const bereichVon = (t: number): [number, number] => (gruppen ? gruppen[t] : [t * SEITEN_JE_TEIL, Math.min(seiten, (t + 1) * SEITEN_JE_TEIL)])
+    const gelesenBis = gruppen ? gruppen[teileGesamt - 1][1] : Math.min(seiten, MAX_TEILE * SEITEN_JE_TEIL)
     // Mit einer anderen Aufteilung begonnen (z. B. vor dem 23.11.2026 mit 8 Seiten je Teil): von vorn.
     if (teil > 0 && (teil >= teileGesamt || (vorhanden?.teile_gesamt && vorhanden.teile_gesamt !== teileGesamt))) {
       await stosseDokumentLesenAn(ref, { teil: 0, umleitungen: 0, fortsetzen: true })
@@ -1588,8 +1603,7 @@ async function leseDokument(ref: DokumentRef, teil: number, umleitungen: number,
     let teilBytes = bytes
     let bereich = ''
     if (teileGesamt > 1 && quelle) {
-      const von = teil * jeTeil
-      const bis = Math.min(seiten, von + jeTeil)
+      const [von, bis] = bereichVon(teil)
       const ziel = await PDFDocument.create()
       for (const seite of await ziel.copyPages(quelle, Array.from({ length: bis - von }, (_, i) => von + i))) ziel.addPage(seite)
       teilBytes = await ziel.save()
@@ -1611,7 +1625,7 @@ async function leseDokument(ref: DokumentRef, teil: number, umleitungen: number,
     const aktuell = aktuellRoh as any
     const teile: Record<string, string> = { ...(aktuell?.teile ?? {}), [String(teil)]: abschrift.inhalt }
     const fertig = teil + 1 >= teileGesamt
-    const abgeschnitten = seiten > MAX_TEILE * jeTeil ? `\n\n[Hinweis: Das Dokument hat ${seiten} Seiten; gelesen wurden die ersten ${MAX_TEILE * jeTeil}.]` : ''
+    const abgeschnitten = seiten > gelesenBis ? `\n\n[Hinweis: Das Dokument hat ${seiten} Seiten; gelesen wurden die ersten ${gelesenBis}.]` : ''
     await admin
       .from('dokument_inhalte')
       .update({

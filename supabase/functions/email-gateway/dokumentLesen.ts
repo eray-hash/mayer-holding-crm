@@ -40,17 +40,31 @@ export const PDF_MAX_BYTES = 60 * 1024 * 1024
 /** Zielgröße eines Teils großer PDFs. */
 export const TEIL_ZIEL_BYTES = 12 * 1024 * 1024
 
-/** Seiten je Teil: normal SEITEN_JE_TEIL, bei großen PDFs so wenige, dass ein Teil etwa TEIL_ZIEL_BYTES hat. */
-export function seitenJeTeil(seiten: number, bytes = 0): number {
-  if (!(seiten > 0) || bytes <= AM_STUECK_BYTES) return SEITEN_JE_TEIL
-  return Math.max(1, Math.min(SEITEN_JE_TEIL, Math.floor((seiten * TEIL_ZIEL_BYTES) / bytes)))
+/** In wie viele Teile ein PDF mit `seiten` Seiten zerlegt wird (bis SEITEN_JE_TEIL + 2 Seiten am Stück). */
+export function teileFuer(seiten: number): number {
+  return seiten > SEITEN_JE_TEIL + 2 ? Math.min(MAX_TEILE, Math.ceil(seiten / SEITEN_JE_TEIL)) : 1
 }
 
-/** In wie viele Teile ein PDF mit `seiten` Seiten zerlegt wird (bis SEITEN_JE_TEIL + 2 Seiten am Stück; große
- *  PDFs über AM_STUECK_BYTES immer in kleineren Teilen, seit 23.11.2026 — vorher wurden sie gar nicht gelesen). */
-export function teileFuer(seiten: number, bytes = 0): number {
-  if (bytes > AM_STUECK_BYTES && seiten > 1) return Math.min(MAX_TEILE, Math.ceil(seiten / seitenJeTeil(seiten, bytes)))
-  return seiten > SEITEN_JE_TEIL + 2 ? Math.min(MAX_TEILE, Math.ceil(seiten / SEITEN_JE_TEIL)) : 1
+/**
+ * Große PDFs (über AM_STUECK_BYTES, seit 23.11.2026 — vorher gar nicht gelesen): Seiten nach ihrer tatsächlichen
+ * Größe zu Teilen bündeln, höchstens SEITEN_JE_TEIL Seiten und etwa TEIL_ZIEL_BYTES je Teil (gescannte Seiten
+ * sind sehr unterschiedlich groß). Liefert [von, bis) je Teil; eine einzelne zu große Seite bildet einen eigenen Teil.
+ */
+export function gruppiereSeiten(groessen: number[], zielBytes = TEIL_ZIEL_BYTES, maxSeiten = SEITEN_JE_TEIL): [number, number][] {
+  const gruppen: [number, number][] = []
+  let von = 0
+  let summe = 0
+  for (let i = 0; i < groessen.length; i++) {
+    const g = groessen[i]
+    if (i > von && (summe + g > zielBytes || i - von >= maxSeiten)) {
+      gruppen.push([von, i])
+      von = i
+      summe = 0
+    }
+    summe += g
+  }
+  if (groessen.length > 0) gruppen.push([von, groessen.length])
+  return gruppen
 }
 
 type TeilStand = { teile?: Record<string, string> | null; teile_gesamt?: number | null; seiten?: number | null }

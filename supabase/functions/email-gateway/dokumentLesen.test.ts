@@ -11,7 +11,7 @@ import {
   MAX_VERSUCHE,
   nameZumLesen,
   reiheDokumentEin,
-  seitenJeTeil,
+  gruppiereSeiten,
   setzeHaengendeDokumenteFort,
   teileFuer,
   urlAusSchluessel,
@@ -32,16 +32,17 @@ Deno.test('teileFuer: bis 6 Seiten am Stück, darüber Teile zu 4 Seiten, höchs
   assertEquals(teileFuer(12), 3)
   assertEquals(teileFuer(48), 12)
   assertEquals(teileFuer(106), 16)
-  // Große PDFs: kleinere Teile (Ziel etwa 12 MB je Teil), höchstens 16.
+})
+
+Deno.test('gruppiereSeiten: nach tatsächlicher Seitengröße, höchstens 4 Seiten und etwa 12 MB je Teil', () => {
   const mb = 1024 * 1024
-  assertEquals(teileFuer(10, 35 * mb), 4) // 3 Seiten je Teil
-  assertEquals(teileFuer(3, 36 * mb), 3) // jede Seite einzeln
-  assertEquals(teileFuer(1, 36 * mb), 1)
-  assertEquals(teileFuer(40, 50 * mb), 10) // 4 Seiten je Teil (höchstens SEITEN_JE_TEIL)
-  assertEquals(teileFuer(30, 59 * mb), 8) // knapp 2 MB je Seite: 4 Seiten je Teil
-  assertEquals(teileFuer(12, 59 * mb), 6) // knapp 5 MB je Seite: 2 Seiten je Teil
-  assertEquals(seitenJeTeil(10, 35 * mb), 3)
-  assertEquals(seitenJeTeil(10, 5 * mb), 4)
+  // Ungleich große Scans: kleine Seiten zusammen, große allein.
+  assertEquals(gruppiereSeiten([1, 1, 1, 9, 8, 7, 1, 1].map((x) => x * mb)), [[0, 4], [4, 5], [5, 8]])
+  // Höchstens 4 Seiten je Teil.
+  assertEquals(gruppiereSeiten(Array(9).fill(0.5 * mb)), [[0, 4], [4, 8], [8, 9]])
+  // Eine einzelne übergroße Seite bildet einen eigenen Teil.
+  assertEquals(gruppiereSeiten([2 * mb, 25 * mb, 2 * mb]), [[0, 1], [1, 2], [2, 3]])
+  assertEquals(gruppiereSeiten([]), [])
 })
 
 Deno.test('ersterOffenerTeil: setzt beim ersten fehlenden Teil fort, sonst von vorn', () => {
@@ -261,4 +262,21 @@ Deno.test('Webseite: Text ohne Skripte und Gestaltung', async () => {
   assertStringIncludes(text, 'Angebot\nPreis: 5€')
   assertStringIncludes(text, 'A\tB')
   assert(!text.includes('x()'))
+})
+
+Deno.test('entschlackeSeiten: jede Seite behält nur die Bilder, die sie zeichnet', async () => {
+  const { PDFDocument, PDFName, PDFDict } = await import('npm:pdf-lib@1.17.1')
+  const { entschlackeSeiten } = await import('./pdfSeiten.ts')
+  const doc = await PDFDocument.create()
+  // Zwei Seiten mit einem gemeinsamen Verzeichnis zweier „Bilder“ (leere Formulare), jede zeichnet nur eins.
+  const form = (n: number) => doc.context.register(doc.context.stream('', { Type: 'XObject', Subtype: 'Form', BBox: [0, 0, n, n] }))
+  const gemeinsam = doc.context.obj({ XObject: { Im1: form(1), Im2: form(2) } })
+  for (const name of ['Im1', 'Im2']) {
+    const seite = doc.addPage()
+    seite.node.set(PDFName.of('Resources'), gemeinsam)
+    seite.node.set(PDFName.of('Contents'), doc.context.register(doc.context.stream(`q /${name} Do Q`)))
+  }
+  assertEquals(entschlackeSeiten(doc), 2)
+  const namen = doc.getPages().map((s) => ((s.node.lookup(PDFName.of('Resources')) as InstanceType<typeof PDFDict>).lookup(PDFName.of('XObject')) as InstanceType<typeof PDFDict>).keys().map((k) => k.decodeText()))
+  assertEquals(namen, [['Im1'], ['Im2']])
 })
