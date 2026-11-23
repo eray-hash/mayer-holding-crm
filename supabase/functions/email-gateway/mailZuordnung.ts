@@ -11,7 +11,10 @@
 //        Mail, die wir aus dieser Akte geschickt haben (gesendete_emails.kunde_id) oder eine Mail, die schon dieser
 //        Akte zugeordnet ist, oder
 //     c) der Betreff eine Antwort („AW:“, „Re:“) auf eine Mail aus genau einer Akte ist UND der Absender genau der
-//        Empfänger dieser Mail war (für abgeholte Mails ohne Kopfzeilen).
+//        Empfänger dieser Mail war (für abgeholte Mails ohne Kopfzeilen), oder
+//     d) Scan-Eingang (23.11.2026): der Betreff ist genau der Name genau einer Akte („Max Muster“, auch „Muster, Max“,
+//        „Max Muster Teil 2“) und die Mail hat Anhänge — so schicken Kollegen eingescannte Papierakten an info@.
+//        Gilt auch für Absender ohne Akte und für Mails, die die KI als unwichtig eingestuft hat.
 //     Geschrieben wird über ordneMailZu (postfach.ts) — dieselbe Zuordnung wie das Werkzeug mail_zuordnen,
 //     samt Verlaufseintrag und Anhängen in den Dokumenten der Akte.
 //  2. Unsichere Kandidaten (an diese Adresse wurde aus einer Akte geschrieben, gleiche Firmen-Domain, Name im
@@ -55,6 +58,7 @@ export type MailZeile = {
   zugewiesener_kunde_id?: string | null
   mail_datum?: string | null
   erstellt_am?: string | null
+  anhaenge?: unknown
 }
 
 export type AkteZeile = { id: string; bereich: string; firma?: string | null; ansprechpartner?: string | null; email?: string | null }
@@ -227,6 +231,44 @@ export function nameImText(a: AkteZeile, textWoerter: Set<string>, eigene: Set<s
   return null
 }
 
+/** Wörter, die beim Scan-Eingang neben dem Namen im Betreff stehen dürfen („Teil 2“, „Scan“, „Akte“ …). */
+const SCAN_FUELLWOERTER = new Set([
+  'teil', 'scan', 'scans', 'akte', 'kundenakte', 'ordner', 'unterlagen', 'dokument', 'dokumente', 'seite', 'seiten', 'nr',
+  'und', 'fortsetzung', 'rest', 'von', 'bis', 'kunde', 'mappe', 'eingescannt',
+])
+const ANREDE = new Set(['herr', 'frau', 'dr', 'prof', 'familie', 'fam'])
+
+function namensWoerter(s: string, fuell: boolean): string[] {
+  return woerter(s).filter((w) => !/^\d+$/.test(w) && w.length >= 2 && !ANREDE.has(w) && !ALLGEMEIN.has(w) && !(fuell && SCAN_FUELLWOERTER.has(w)))
+}
+
+function gleicheMenge(a: string[], b: string[]): boolean {
+  const x = new Set(a)
+  const y = new Set(b)
+  return x.size === y.size && [...x].every((w) => y.has(w))
+}
+
+/** Ist der Betreff (ohne Füllwörter wie „Teil 2“) genau der Name dieser Akte? Reihenfolge egal („Muster, Max“). */
+export function betreffIstAktenName(betreff: string | null | undefined, a: AkteZeile): boolean {
+  const roh = normBetreff(betreff)
+  if (!roh) return false
+  const ganz = normText(roh)
+  const imBetreff = namensWoerter(roh, true)
+  for (const name of [a.ansprechpartner, a.firma]) {
+    const n = String(name ?? '').trim()
+    if (!n) continue
+    // Ganz genau gleich (auch einteilige Firmennamen), sonst gleiche Namenswörter — mindestens zwei.
+    if (normText(n).length >= 4 && ganz === normText(n)) return true
+    const imNamen = namensWoerter(n, false)
+    if (imNamen.length >= 2 && gleicheMenge(imBetreff, imNamen)) return true
+  }
+  return false
+}
+
+function hatAnhaenge(m: MailZeile): boolean {
+  return Array.isArray(m.anhaenge) && m.anhaenge.length > 0
+}
+
 // ---------------------------------------------------------------------------------------------------
 // Entscheidung je Mail (rein, ohne Datenbank)
 // ---------------------------------------------------------------------------------------------------
@@ -286,6 +328,15 @@ export function entscheide(m: MailZeile, k: Kontext, jetzt = new Date()): Entsch
         name: akteName(a),
         grund: istRundschreiben ? 'Absender ist in der Akte hinterlegt, die Mail sieht aber nach Rundschreiben aus' : 'Absender ist in der Akte hinterlegt, die Mail wurde aber als unwichtig eingestuft',
       }],
+    }
+  }
+
+  // d) Scan-Eingang: Betreff ist genau der Name einer Akte, die Mail hat Anhänge.
+  if (!istRundschreiben && hatAnhaenge(m)) {
+    const treffer = k.akten.filter((a) => betreffIstAktenName(m.betreff, a))
+    if (treffer.length === 1) return { art: 'zuordnen', kundeId: treffer[0].id, weg: 'betreff', grund: 'Betreff ist der Name der Akte (Scan-Eingang)' }
+    if (treffer.length > 1 && treffer.length <= HOECHSTENS_KANDIDATEN) {
+      return { art: 'vorschlag', kandidaten: treffer.map((a) => ({ kundeId: a.id, bereich: a.bereich, name: akteName(a), grund: 'Betreff ist der Name dieser Akte (gleicher Name in mehreren Akten)' })) }
     }
   }
 
@@ -416,7 +467,7 @@ export type ZuordnungsErgebnis = {
   entscheidungen?: { id: string; von: string; betreff: string; entscheidung: Entscheidung }[]
 }
 
-const SPALTEN = 'id, message_id, von, von_name, betreff, ausschnitt, rohdaten, relevanz, ignoriert, besitzer_email, zugewiesener_kunde_id, mail_datum, erstellt_am'
+const SPALTEN = 'id, message_id, von, von_name, betreff, ausschnitt, rohdaten, relevanz, ignoriert, besitzer_email, zugewiesener_kunde_id, mail_datum, erstellt_am, anhaenge'
 
 /** Prüft neue Mails im gemeinsamen Postfach (siehe Kopf der Datei). Wirft nie. */
 export async function ordneNeueMailsZu(admin: Admin, opts: ZuordnungsOptionen = {}): Promise<ZuordnungsErgebnis> {

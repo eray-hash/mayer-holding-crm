@@ -5,6 +5,7 @@ import { FalscheDatenbank, type Zeile } from '../_shared/testDoppel.ts'
 import {
   type Kontext,
   type MailZeile,
+  betreffIstAktenName,
   entscheide,
   istAntwortBetreff,
   kennungNorm,
@@ -295,4 +296,27 @@ Deno.test('Lauf: Zeit um — nicht geprüfte Mails werden wieder freigegeben und
   assert(db.tabelle('eingegangene_emails').every((z) => z.zuordnung_geprueft_am === null))
   const r2 = await ordneNeueMailsZu(db, { jetzt: JETZT })
   assertEquals([r2.geprueft, r2.zugeordnet], [2, 2])
+})
+
+Deno.test('Scan-Eingang: Betreff ist genau der Name einer Akte und die Mail hat Anhänge → sicher zuordnen', () => {
+  const scan = [{ filename: 'scan.pdf', size: 1000, url: 'x' }]
+  const akte = { id: 'k_t', bereich: 'beratung', firma: 'Anna Beispiel', ansprechpartner: 'Anna Beispiel', email: null }
+  assert(betreffIstAktenName('Anna Beispiel', akte))
+  assert(betreffIstAktenName('Beispiel, Anna', akte))
+  assert(betreffIstAktenName('WG: Anna Beispiel Teil 2', akte))
+  assert(betreffIstAktenName('Kundenakte Anna Beispiel (3)', akte))
+  assert(!betreffIstAktenName('Anna', akte))
+  assert(!betreffIstAktenName('Anna Beispiel und Otto Muster', akte))
+  const k = kontext({ akten: [...kontext().akten, akte] })
+  // Fremder Absender ohne Akte, KI hat die Mail als unwichtig eingestuft — trotzdem in die Akte.
+  const e = entscheide(mail({ von: 'kollege@scanbuero.test', betreff: 'Anna Beispiel', anhaenge: scan, relevanz: 'nicht_relevant' }) as MailZeile, k, JETZT)
+  assertEquals(e.art, 'zuordnen')
+  if (e.art === 'zuordnen') assertEquals(e.kundeId, 'k_t')
+  // Ohne Anhang: kein sicherer Treffer.
+  assertEquals(entscheide(mail({ von: 'kollege@scanbuero.test', betreff: 'Anna Beispiel' }) as MailZeile, k, JETZT).art !== 'zuordnen', true)
+  // Gleicher Name in zwei Akten → Vorschlag mit beiden.
+  const zwei = kontext({ akten: [...k.akten, { ...akte, id: 'k_t2', bereich: 'erben' }] })
+  const v = entscheide(mail({ von: 'kollege@scanbuero.test', betreff: 'Anna Beispiel', anhaenge: scan }) as MailZeile, zwei, JETZT)
+  assertEquals(v.art, 'vorschlag')
+  if (v.art === 'vorschlag') assertEquals(v.kandidaten.map((x) => x.kundeId).sort(), ['k_t', 'k_t2'])
 })
