@@ -49,6 +49,7 @@ export const PRIVAT_BOT_WERKZEUGE: readonly string[] = [
   'datei_lesen',
   'gespraechsprotokoll_anlegen',
   'dokument_erstellen',
+  'diagramm_erstellen',
   'termine_zeigen',
   'termin_anlegen',
   'termin_absagen',

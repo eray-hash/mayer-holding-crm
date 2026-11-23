@@ -295,13 +295,13 @@ async function tabelleErstellen(input: any, k: DokumentKontext): Promise<string>
 
 // ---------- Ziel der Ablage: Kundenakte oder Objektakte ----------
 
-type Ziel =
+export type Ziel =
   | { art: 'akte'; akte: AkteZeile; name: string; fuer?: string; privatBesitzer?: string }
   | { art: 'objekt'; objekt: ObjektZeile; ordner: string; name: string; fuer?: string; privatBesitzer?: string }
 
 /** Kundenakte (kunde_id) oder Objektakte (objekt_id, hat Vorrang) laden und Rechte prüfen. privatBesitzer gesetzt = eigene private Ablage. */
 // deno-lint-ignore no-explicit-any
-async function ladeZiel(k: DokumentKontext, input: any, standardOrdner: string): Promise<Ziel | string> {
+export async function ladeZiel(k: DokumentKontext, input: any, standardOrdner: string): Promise<Ziel | string> {
   const objektId = String(input?.objekt_id ?? '').trim()
   if (objektId) {
     const ordner = ordnerAusEingabe(input?.ordner, standardOrdner)
@@ -323,7 +323,7 @@ async function ladeZiel(k: DokumentKontext, input: any, standardOrdner: string):
   }
 }
 
-async function legeAb(
+export async function legeAb(
   k: DokumentKontext,
   ziel: Ziel,
   heute: string,

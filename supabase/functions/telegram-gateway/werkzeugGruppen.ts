@@ -169,8 +169,8 @@ export const GRUPPEN: Record<GruppenName, Gruppe> = {
   dateien: {
     titel: 'Dateien verwalten',
     wofuer: 'Dateien verschieben, umbenennen, löschen, an Kollegen schicken, nicht zugeordnete Dateien, Dateien aussortieren, Links öffnen, Tabellen erstellen',
-    werkzeuge: ['datei_verschieben', 'datei_umbenennen', 'datei_loeschen', 'datei_an_kollegen', 'unzugeordnete_dateien', 'dateien_aussortieren', 'link_oeffnen', 'tabelle_erstellen'],
-    stichworte: /datei|verschieb|umbenenn|loesch|falsche[nr]? akte|ungeklaert|unzugeordnet|liegengeblieben|aussortier|tabelle|excel|\bcsv\b|https?:\/\/|www\.|drive|dropbox|\blink/,
+    werkzeuge: ['datei_verschieben', 'datei_umbenennen', 'datei_loeschen', 'datei_an_kollegen', 'unzugeordnete_dateien', 'dateien_aussortieren', 'link_oeffnen', 'tabelle_erstellen', 'diagramm_erstellen'],
+    stichworte: /diagramm|mind-?map|schaubild|organigramm|struktogramm|ablaufplan|flussdiagramm|zeitstrahl|brainstorm|skizz|zeichne|grafik|\bbild\b|baumdiagramm|entscheidungsbaum|datei|verschieb|umbenenn|loesch|falsche[nr]? akte|ungeklaert|unzugeordnet|liegengeblieben|aussortier|tabelle|excel|\bcsv\b|https?:\/\/|www\.|drive|dropbox|\blink/,
   },
   aktenpflege: {
     titel: 'Aktenpflege',

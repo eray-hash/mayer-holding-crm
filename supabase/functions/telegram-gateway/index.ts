@@ -32,6 +32,7 @@ import { loescheTelegramNachricht, sensibelHinweis, sensibleArt, sensiblerEingan
 import { kollegenBenachrichtigen, type MitteilungsWege, schickeMitteilung, todoAendern, todoAnlegen, todoErledigen } from './teamWerkzeuge.ts'
 import { fuehrePflegeWerkzeugAus, istPflegeWerkzeug, type PflegeAnfrage, PFLEGE_WERKZEUGE } from './pflegeWerkzeuge.ts'
 import { DOKUMENT_WERKZEUGE, fuehreDokumentWerkzeugAus, istDokumentWerkzeug } from './dokumentErstellen.ts'
+import { DIAGRAMM_WERKZEUG, fuehreDiagrammAus, istDiagrammWerkzeug } from './diagrammWerkzeug.ts'
 import { fuehreKvWerkzeugAus, istKvWerkzeug, KV_WERKZEUGE } from './kostenvoranschlagWerkzeuge.ts'
 import { fuehrePersonWerkzeugAus, istPersonWerkzeug, PERSON_WERKZEUGE } from './personUeberblick.ts'
 import { fuehreVertragWerkzeugAus, istVertragWerkzeug, VERTRAG_WERKZEUGE } from './vertragWerkzeuge.ts'
@@ -1654,6 +1655,7 @@ export const TOOLS = [
   },
   ...PFLEGE_WERKZEUGE,
   ...DOKUMENT_WERKZEUGE,
+  DIAGRAMM_WERKZEUG,
   ...KV_WERKZEUGE,
   ...WV_WERKZEUGE,
   ...TAGESPLAN_WERKZEUGE,
@@ -1738,7 +1740,10 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
   const protokolliere = (text: string) => state.aktionen.push({ z: new Date().toISOString(), text })
 
   // PDF (Merkblatt, Schreiben, Zusammenfassung) erstellen und in der Akte ablegen — dokumentErstellen.ts.
-  if (istDokumentWerkzeug(name)) return await fuehreDokumentWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
+  // Dateien gehen über den Bot, mit dem gerade gesprochen wird (privater Assistent → privater Bot, nie der Mayer-Bot).
+  if (istDokumentWerkzeug(name)) return await fuehreDokumentWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute, botToken: botToken(BOT_TOKEN) })
+  // Diagramme (Mindmap, Ablauf, Organigramm …) als Bild in den Chat und auf Wunsch in die Akte — diagrammWerkzeug.ts.
+  if (istDiagrammWerkzeug(name)) return await fuehreDiagrammAus(input ?? {}, { supabase, mitarbeiter, protokolliere, heute, botToken: botToken(BOT_TOKEN) ?? null })
   // Hasans Wünsche vom 23.11.2026 (nur im privaten Assistenten angeboten): alles zu einer Person, Verträge und Abos.
   if (istPersonWerkzeug(name)) return await fuehrePersonWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere })
   if (istVertragWerkzeug(name)) return await fuehreVertragWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute, privat: imPrivatBot() })
@@ -4753,6 +4758,22 @@ export const bearbeiteAnfrage = (req: Request): Promise<Response> => mitAnlass(a
 
   // Prüfung der Abschrift (Groq/Whisper) ohne Anmeldung im Browser: nur mit dem Dienst-Schlüssel.
   // Speichert nichts, gibt nur den erkannten Text zurück.
+  // Prüfung des Diagramm-Zeichners auf dem Server (Zeichenprogramm und Schrift laden), ohne etwas zu senden.
+  if (body?.intern === 'diagramm_test') {
+    if (!internDienst) return new Response('Unauthorized', { status: 401 })
+    try {
+      const { pruefeEingabe, baueSvg, alsPng, alsPdf } = await import('./diagramm.ts')
+      const e = pruefeEingabe(body.eingabe ?? { art: 'mindmap', titel: 'Probe', knoten: { text: 'Mitte', kinder: [{ text: 'Ast' }] } })
+      if (typeof e === 'string') return new Response(JSON.stringify({ ok: false, fehler: e }), { status: 400 })
+      const t0 = Date.now()
+      const { svg, b, h } = baueSvg(e)
+      const png = await alsPng(svg, b, h)
+      const pdf = await alsPdf(png, e.titel)
+      return new Response(JSON.stringify({ ok: true, png: png.length, pdf: pdf.length, ms: Date.now() - t0 }), { headers: { 'content-type': 'application/json' } })
+    } catch (err) {
+      return new Response(JSON.stringify({ ok: false, fehler: err instanceof Error ? err.message : String(err) }), { status: 502 })
+    }
+  }
   if (body?.intern === 'transkription_test') {
     const schluessel = (req.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '').trim()
     if (!istDienstSchluessel(schluessel)) return new Response('Unauthorized', { status: 401 })
