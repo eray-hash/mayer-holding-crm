@@ -28,6 +28,7 @@ import { deDatum, erzeugeRechnungPdf, mahnstufeName, rechnungPdfDateiname } from
 import { empfaengerZeilen, useRechnungAktionen } from './aktionen'
 import { RechnungFormular } from './RechnungFormular'
 import { MahnungModal, RechnungSendenModal, ZahlungErfassenModal } from './RechnungDialoge'
+import { XRechnungKnopf } from '../../module/eRechnung/XRechnungKnopf' // Modul E-Rechnung (abschaltbar, siehe src/module/eRechnung/README.md)
 
 type Dialog = 'senden' | 'zahlung' | 'mahnung' | 'bearbeiten' | null
 
@@ -117,6 +118,8 @@ export function RechnungDetail({ rechnungId, onClose }: { rechnungId: string; on
           <button type="button" onClick={pdfHerunterladen} className={`${knopf} border-slate-200 bg-white text-slate-700 hover:bg-slate-50`}>
             <Download size={15} /> PDF herunterladen
           </button>
+          {/* Modul E-Rechnung (abschaltbar, siehe src/module/eRechnung/README.md) */}
+          <XRechnungKnopf rechnung={r} className={`${knopf} border-slate-200 bg-white text-slate-700 hover:bg-slate-50`} />
           {r.status !== 'Bezahlt' && (
             <button type="button" disabled={nurLesen} onClick={() => setDialog('zahlung')} className={`${knopf} border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100`}>
               <Banknote size={15} /> Zahlung erfassen

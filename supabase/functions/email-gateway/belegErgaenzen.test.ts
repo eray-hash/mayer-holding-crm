@@ -6,6 +6,7 @@ import { assert, assertEquals, assertStringIncludes } from 'jsr:@std/assert@1'
 import { PDFDocument } from 'npm:pdf-lib@1.17.1'
 import { falscheDatenbank, type Zeile } from '../_shared/testDoppel.ts'
 import { belegLuecken, erkanntAus, fehltKurz, istUnvollstaendig } from '../_shared/belegLuecken.ts'
+import { erzeugeXRechnung, kaeuferAusAnschrift, verkaeuferAusBriefkopf } from '../_shared/eRechnung/erzeugen.ts'
 import {
   belegErgaenzenAktion,
   belegVorschau,
@@ -308,4 +309,118 @@ Deno.test('Aktion: nur Geschäftsführung; Vorschau zählt ohne KI und ohne Schr
   assertEquals((r.daten as Lose).geprueft, 1)
   assertEquals(verb(db, 'v-ionos').automatisch_erkannt, null)
   assert(verb(db, 'v-paypal').beleg)
+})
+
+// ---------------------------------------------------------------------------------------------
+// Modul E-Rechnung (abschaltbar, siehe src/module/eRechnung/README.md)
+
+const LIEFERANT = verkaeuferAusBriefkopf(
+  { name: 'Beispiel Lieferant', fusszeilen: ['Beispiel Lieferant GmbH · Musterstraße 3 · 89075 Ulm', 'Sparkasse · IBAN: DE02 1203 0000 0000 2020 51 · Steuernummer 88 123 456 789', 'Tel.: 0731 123 456 · GF: Erika Muster'] },
+  'rechnung@beispiel.de',
+)
+const E_RECHNUNG = erzeugeXRechnung({
+  nummer: 'RE-2026-077', datum: '2026-11-20', faellig: '2026-12-04', verkaeufer: LIEFERANT.verkaeufer, iban: LIEFERANT.iban,
+  kaeufer: kaeuferAusAnschrift('Mayer Holding UG\nSchwabstr. 3\n89075 Ulm', 'Mayer Holding UG', 'info@amayer-holding.com'), kaeuferReferenz: 'k1',
+  positionen: [{ bezeichnung: 'Beratung', menge: 2.5, einheit: 'Stunde', einzelpreis: 120 }], ustSatz: 19,
+})
+
+/** Eine Verbindlichkeit (Lieferant nur Absenderadresse, Datum = Anlegetag) mit Mail; Anhänge nach Wunsch. */
+async function eRechnungsDatenbank(o: { modul: boolean | null; xml?: string; pdf?: 'zugferd' | 'einfach' }): Promise<Db> {
+  const anhaenge: Lose[] = []
+  if (o.xml !== undefined) anhaenge.push({ filename: 'xrechnung.xml', size: 5000, contentType: 'text/xml', url: `${OEFFENTLICH}/er/xrechnung.xml` })
+  if (o.pdf) anhaenge.push({ filename: 'Rechnung_RE-2026-077.pdf', size: 5000, contentType: 'application/pdf', url: `${OEFFENTLICH}/er/Rechnung.pdf` })
+  const db = falscheDatenbank({
+    verbindlichkeiten: [
+      verbindlichkeit('v-er', { lieferant: 'rechnung@beispiel.de', lieferant_email: 'rechnung@beispiel.de', datum: '2026-11-22', erstellt_am: '2026-11-22T08:00:00+00:00' }),
+    ],
+    eingegangene_emails: [mail('v-er', { von: 'rechnung@beispiel.de', von_name: 'Beispiel Lieferant', betreff: 'Ihre Rechnung RE-2026-077', anhaenge })],
+    crm_module: o.modul === null ? [] : [{ id: 'e_rechnung', aktiv: o.modul }],
+  })
+  if (o.xml !== undefined) await db.storage.from('email-anhaenge').upload('er/xrechnung.xml', new TextEncoder().encode(o.xml), { contentType: 'text/xml' })
+  if (o.pdf === 'einfach') await db.storage.from('email-anhaenge').upload('er/Rechnung.pdf', await kleinesPdf(), { contentType: 'application/pdf' })
+  if (o.pdf === 'zugferd') {
+    // ZUGFeRD-PDF: die XML als eingebettete Datei (ungepackt, wie im Test von pdfXml.ts)
+    const pdf = new TextEncoder().encode(`%PDF-1.4\n7 0 obj\n<< /Length 8 0 R /Type /EmbeddedFile >>\nstream\n${E_RECHNUNG}\nendstream\nendobj\n%%EOF`)
+    await db.storage.from('email-anhaenge').upload('er/Rechnung.pdf', pdf, { contentType: 'application/pdf' })
+  }
+  return db
+}
+
+const KI_FUER_ER = { 'Beispiel Lieferant': { art: 'rechnung', lieferant: 'Von der KI GmbH', rechnungsnummer: 'KI-1', rechnungsdatum: '2026-11-19', betrag_brutto: 1, waehrung: 'EUR' } }
+
+Deno.test('E-Rechnung (XML) im Anhang: Angaben genau aus der Datei, kein KI-Aufruf, XML als Beleg', async () => {
+  const db = await eRechnungsDatenbank({ modul: true, xml: E_RECHNUNG })
+  const ki = falscheKi(KI_FUER_ER)
+  const r = await pruefeBelege(db, { ki }, { jetzt: JETZT })
+  assertEquals(r.fehler, [])
+  assertEquals(ki.aufrufe.length, 0)
+  const v = verb(db, 'v-er')
+  assertEquals(v.lieferant, 'Beispiel Lieferant GmbH')
+  assertEquals(v.rechnungsnummer, 'RE-2026-077')
+  assertEquals(v.datum, '2026-11-20')
+  assertEquals(v.zahlungsziel, '2026-12-04')
+  assertEquals([v.betrag_netto, v.betrag_brutto], [300, 357])
+  assertEquals(v.geprueft, null)
+  assertEquals(v.beleg.name, 'xrechnung.xml')
+  assertEquals(v.beleg.typ, 'application/xml')
+  assertEquals(new TextDecoder().decode(db.ablage.get('kunden-dokumente')!.get(v.beleg.url)!.bytes), E_RECHNUNG)
+  const e = erkanntAus(v.automatisch_erkannt)!
+  assertEquals([e.stand, e.art, e.beleg], ['fertig', 'e-rechnung', 'mail_anhang'])
+  assertEquals(e.felder?.sort(), ['betrag_brutto', 'betrag_netto', 'datum', 'lieferant', 'rechnungsnummer', 'zahlungsziel'])
+  assertStringIncludes(v.notiz, 'Automatisch ergänzt am 22.11.2026: Beleg (Anhang der Mail „xrechnung.xml“)')
+  assertStringIncludes(v.notiz, 'E-Rechnung (XRechnung/ZUGFeRD) genau übernommen · IBAN DE02120300000000202051')
+  // Läuft auch ganz ohne KI-Schlüssel
+  const ohneKi = await eRechnungsDatenbank({ modul: true, xml: E_RECHNUNG })
+  const r2 = await pruefeBelege(ohneKi, {}, { jetzt: JETZT })
+  assertEquals(r2.fehler, [])
+  assertEquals(verb(ohneKi, 'v-er').rechnungsnummer, 'RE-2026-077')
+})
+
+Deno.test('E-Rechnung: ZUGFeRD-PDF wird Beleg; bei XML und PDF bevorzugt die PDF; Geprüftes bleibt', async () => {
+  const zugferd = await eRechnungsDatenbank({ modul: true, pdf: 'zugferd' })
+  const ki = falscheKi(KI_FUER_ER)
+  await pruefeBelege(zugferd, { ki }, { jetzt: JETZT })
+  assertEquals(ki.aufrufe.length, 0)
+  assertEquals(verb(zugferd, 'v-er').beleg.typ, 'application/pdf')
+  assertEquals(verb(zugferd, 'v-er').betrag_brutto, 357)
+
+  const beides = await eRechnungsDatenbank({ modul: true, xml: E_RECHNUNG, pdf: 'einfach' })
+  await pruefeBelege(beides, { ki }, { jetzt: JETZT })
+  assertEquals(ki.aufrufe.length, 0)
+  assertEquals(verb(beides, 'v-er').beleg.name, 'Rechnung_RE-2026-077.pdf')
+  assertEquals(verb(beides, 'v-er').rechnungsnummer, 'RE-2026-077')
+
+  const geprueft = await eRechnungsDatenbank({ modul: true, xml: E_RECHNUNG })
+  verb(geprueft, 'v-er').geprueft = true
+  await pruefeBelege(geprueft, { ki }, { jetzt: JETZT })
+  assertEquals(verb(geprueft, 'v-er').rechnungsnummer, null)
+  assertEquals(verb(geprueft, 'v-er').lieferant, 'rechnung@beispiel.de')
+  assertEquals(verb(geprueft, 'v-er').beleg.typ, 'application/xml')
+})
+
+Deno.test('E-Rechnung bei ausgeschaltetem Modul (oder ohne Eintrag): KI wie bisher', async () => {
+  for (const modul of [false, null]) {
+    const db = await eRechnungsDatenbank({ modul, xml: E_RECHNUNG, pdf: 'einfach' })
+    const ki = falscheKi(KI_FUER_ER)
+    const r = await pruefeBelege(db, { ki }, { jetzt: JETZT })
+    assertEquals(r.fehler, [])
+    assertEquals(ki.aufrufe.length, 1)
+    const v = verb(db, 'v-er')
+    assertEquals(v.rechnungsnummer, 'KI-1')
+    assertEquals(v.lieferant, 'Von der KI GmbH')
+    assertEquals(v.beleg.name, 'Rechnung_RE-2026-077.pdf')
+    assertEquals(erkanntAus(v.automatisch_erkannt)?.art, 'rechnung')
+    assert(!String(v.notiz).includes('E-Rechnung'))
+  }
+})
+
+Deno.test('Kaputte E-Rechnung: KI wie bisher', async () => {
+  const db = await eRechnungsDatenbank({ modul: true, xml: E_RECHNUNG.slice(0, Math.floor(E_RECHNUNG.length / 2)), pdf: 'einfach' })
+  const ki = falscheKi(KI_FUER_ER)
+  const r = await pruefeBelege(db, { ki }, { jetzt: JETZT })
+  assertEquals(r.fehler, [])
+  assertEquals(ki.aufrufe.length, 1)
+  assertEquals(verb(db, 'v-er').rechnungsnummer, 'KI-1')
+  assertEquals(verb(db, 'v-er').beleg.name, 'Rechnung_RE-2026-077.pdf')
+  assertEquals(erkanntAus(verb(db, 'v-er').automatisch_erkannt)?.art, 'rechnung')
 })

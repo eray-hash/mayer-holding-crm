@@ -10,6 +10,7 @@ import { brauchtDateiLink, holeAnhangUrl } from '../../lib/emailGateway'
 import { ladeKundenDokumentHoch, erzeugeKundenDownloadUrl } from '../../lib/kundenDokumenteStorage'
 import { KontoauszugAbgleichKnopf } from '../../components/rechnungen/KontoauszugAbgleich'
 import { SteuerberaterExportKnopf } from '../../components/rechnungen/SteuerberaterExport'
+import { ERechnungEinlesenKnopf } from '../../module/eRechnung/ERechnungEinlesen' // Modul E-Rechnung (abschaltbar, siehe src/module/eRechnung/README.md)
 import type { Verbindlichkeit, VerbindlichkeitStatus } from '../../types'
 import { erkanntAus, fehltKurz, istUnvollstaendig, type ErkanntInfo } from '../../../supabase/functions/_shared/belegLuecken.ts'
 
@@ -137,6 +138,8 @@ export function Verbindlichkeiten() {
         <div className="flex flex-wrap gap-2">
           <KontoauszugAbgleichKnopf />
           <SteuerberaterExportKnopf />
+          {/* Modul E-Rechnung (abschaltbar, siehe src/module/eRechnung/README.md) */}
+          <ERechnungEinlesenKnopf nurLesen={nutzer.nurLesen} onAngelegt={setOffenId} />
           {!nutzer.nurLesen && <PrimaryButton onClick={() => setNeu(true)}><Plus size={15} /> Neue Verbindlichkeit</PrimaryButton>}
         </div>
       </div>

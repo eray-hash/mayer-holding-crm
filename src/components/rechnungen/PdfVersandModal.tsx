@@ -5,7 +5,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { Download, Mail, Printer } from 'lucide-react'
 import { Field, Modal, PrimaryButton, SecondaryButton, inputClass } from '../ui'
 import { herunterladen } from '../../lib/briefe'
-import { isEmailGatewayConfigured } from '../../lib/emailGateway'
+import { isEmailGatewayConfigured, type MailAnhang } from '../../lib/emailGateway'
 import { useRechnungAktionen } from './aktionen'
 
 export type VersandErgebnis = { weg: 'email' | 'pdf'; an?: string; dokument?: { kundeId: string; dokumentId: string; name: string } }
@@ -21,6 +21,7 @@ export function PdfVersandModal({
   oben,
   pruefen,
   nurPdfHinweis,
+  weitereAnhaenge,
   onErledigt,
   onClose,
 }: {
@@ -36,6 +37,8 @@ export function PdfVersandModal({
   /** Fehlermeldung, wenn noch etwas fehlt — sonst leer. */
   pruefen?: () => string
   nurPdfHinweis: string
+  /** Modul E-Rechnung (abschaltbar, siehe src/module/eRechnung/README.md): weitere Anhänge beim Versand per E-Mail (z. B. XRechnung). */
+  weitereAnhaenge?: () => MailAnhang[]
   onErledigt: (e: VersandErgebnis) => void
   onClose: () => void
 }) {
@@ -80,7 +83,7 @@ export function PdfVersandModal({
     try {
       const blob = erzeugePdf()
       if (weg === 'email') {
-        await pdfSenden({ an, betreff, text, blob, dateiname, kundeId })
+        await pdfSenden({ an, betreff, text, blob, dateiname, kundeId, weitereAnhaenge: weitereAnhaenge?.() })
       } else {
         herunterladen(blob, dateiname)
       }

@@ -1,7 +1,9 @@
 // Tests: Prüfung neuer Mails im gemeinsamen Postfach (mailEingang.ts). Datenbank im Speicher (mit ilike, das
 // testDoppel.ts nicht kennt), KI als nachgebaute Antwort — ohne Netz.
 import { assert, assertEquals, assertStringIncludes } from 'jsr:@std/assert@1'
-import { absenderHinweis, klassifiziereEingang, likeMaskiert, nachDemSpeichern, versucheAutomatischeZuordnung } from './mailEingang.ts'
+import { absenderHinweis, klassifiziereEingang, likeMaskiert, nachDemSpeichern, verbindlichkeitAusERechnung, versucheAutomatischeZuordnung } from './mailEingang.ts'
+import { erzeugeXRechnung, kaeuferAusAnschrift, verkaeuferAusBriefkopf } from './eRechnung/erzeugen.ts'
+import { leseERechnung } from './eRechnung/lesen.ts'
 
 type Zeile = Record<string, unknown>
 
@@ -24,6 +26,16 @@ class Db {
   nachLesen: ((tabelle: string) => void) | null = null
   /** Tabelle, deren Änderungen scheitern sollen (Fehler der Datenbank nachstellen). */
   updateScheitertIn: string | null = null
+  /** Dateien im Speicher je „eimer/pfad“ (für E-Rechnungs-Anhänge). */
+  dateien = new Map<string, Uint8Array>()
+  readonly storage = {
+    from: (eimer: string) => ({
+      download: (pfad: string) => {
+        const b = this.dateien.get(`${eimer}/${pfad}`)
+        return Promise.resolve(b ? { data: new Blob([b as BlobPart]), error: null } : { data: null, error: { message: 'nicht gefunden' } })
+      },
+    }),
+  }
   constructor(t: Record<string, Zeile[]>) {
     this.tabellen = t
   }
@@ -278,4 +290,57 @@ Deno.test('Zuordnung: scheitert das Ergänzen der Akte, bleibt die Mail unzugeor
   const z = await nachDemSpeichern(db, 'm1', { messageId: '<1@x>', von: 'a@firma.de', vonName: 'A', betreff: 'Frage', text: 'Text', anhaenge: [] }, 'kunde')
   assertEquals(z, null)
   assertEquals(db.tabellen.eingegangene_emails[0].zugewiesener_kunde_id, null)
+})
+
+// ---------------------------------------------------------------------------------------------
+// Modul E-Rechnung (abschaltbar, siehe src/module/eRechnung/README.md)
+
+Deno.env.set('SUPABASE_URL', 'https://test.supabase.co')
+
+function eRechnung(verkaeuferName = 'Beispiel Lieferant GmbH'): string {
+  const { verkaeufer, iban } = verkaeuferAusBriefkopf(
+    { name: verkaeuferName, fusszeilen: [`${verkaeuferName} · Musterstraße 3 · 89075 Ulm`, 'Sparkasse · IBAN: DE02 1203 0000 0000 2020 51 · Steuernummer 88 123 456 789', 'Tel.: 0731 123 456 · GF: Erika Muster'] },
+    'rechnung@beispiel.de',
+  )
+  return erzeugeXRechnung({
+    nummer: 'RE-2026-077', datum: '2026-11-20', faellig: '2026-12-04', verkaeufer, iban,
+    kaeufer: kaeuferAusAnschrift('Mayer Holding UG\nSchwabstr. 3\n89075 Ulm', 'Mayer Holding UG', 'info@amayer-holding.com'), kaeuferReferenz: 'k1',
+    positionen: [{ bezeichnung: 'Beratung', menge: 2.5, einheit: 'Stunde', einzelpreis: 120 }], ustSatz: 19,
+  })
+}
+
+function eRechnungsDb(modul: boolean, xml: string): Db {
+  const db = new Db({ mitarbeiter: [], kunden: [], eingegangene_emails: [{ id: 'm1', message_id: '<1@x>' }], verbindlichkeiten: [], crm_module: [{ id: 'e_rechnung', aktiv: modul }] })
+  db.dateien.set('email-anhaenge/er/xrechnung.xml', new TextEncoder().encode(xml))
+  return db
+}
+
+const ER_MAIL = {
+  messageId: '<1@x>', von: 'rechnung@beispiel.de', vonName: 'Beispiel Lieferant', betreff: 'Unterlagen', text: 'Guten Tag, anbei wie besprochen.',
+  anhaenge: [{ filename: 'xrechnung.xml', size: 5000, contentType: 'application/xml', url: 'https://test.supabase.co/storage/v1/object/public/email-anhaenge/er/xrechnung.xml' }],
+}
+
+Deno.test('E-Rechnung im Anhang: Mail wird Lieferantenrechnung mit genauen Angaben, auch ohne KI und ohne Hinweis im Text', async () => {
+  const db = eRechnungsDb(true, eRechnung())
+  await nachDemSpeichern(db, 'm1', ER_MAIL, 'nicht_relevant')
+  assertEquals(db.tabellen.verbindlichkeiten.length, 1)
+  const v = db.tabellen.verbindlichkeiten[0]
+  assertEquals([v.lieferant, v.lieferant_email, v.rechnungsnummer, v.datum, v.zahlungsziel], ['Beispiel Lieferant GmbH', 'rechnung@beispiel.de', 'RE-2026-077', '2026-11-20', '2026-12-04'])
+  assertEquals([v.betrag_netto, v.betrag_brutto, v.quelle, v.quell_email_id], [300, 357, 'email-automatisch', '<1@x>'])
+})
+
+Deno.test('E-Rechnung im Anhang: Modul aus oder Datei kaputt → wie bisher (ohne KI-Schlüssel keine Verbindlichkeit)', async () => {
+  const aus = eRechnungsDb(false, eRechnung())
+  await nachDemSpeichern(aus, 'm1', ER_MAIL, 'nicht_relevant')
+  assertEquals(aus.tabellen.verbindlichkeiten.length, 0)
+  const xml = eRechnung()
+  const kaputt = eRechnungsDb(true, xml.slice(0, Math.floor(xml.length / 2)))
+  await nachDemSpeichern(kaputt, 'm1', ER_MAIL, 'nicht_relevant')
+  assertEquals(kaputt.tabellen.verbindlichkeiten.length, 0)
+})
+
+Deno.test('E-Rechnung: eigene Rechnung der Mayer Holding und Gutschriften sind keine Lieferantenrechnung', () => {
+  assertEquals(verbindlichkeitAusERechnung(leseERechnung(eRechnung('Mayer Holding UG'))), null)
+  assertEquals(verbindlichkeitAusERechnung({ ...leseERechnung(eRechnung()), art: 'Gutschrift' }), null)
+  assertEquals(verbindlichkeitAusERechnung({ ...leseERechnung(eRechnung()), waehrung: 'USD' })?.betragBrutto, undefined)
 })

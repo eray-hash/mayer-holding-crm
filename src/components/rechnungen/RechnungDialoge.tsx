@@ -18,6 +18,8 @@ import {
 } from '../../lib/rechnungPdf'
 import { empfaengerZeilen, useRechnungAktionen } from './aktionen'
 import { PdfVersandModal } from './PdfVersandModal'
+import { ERechnungVersandHinweis } from '../../module/eRechnung/ERechnungVersandHinweis' // Modul E-Rechnung (abschaltbar, siehe src/module/eRechnung/README.md)
+import { useXRechnungFuerVersand, xRechnungAlsAnhang } from '../../module/eRechnung/ausRechnung' // Modul E-Rechnung (abschaltbar, siehe src/module/eRechnung/README.md)
 import type { MahnstufeId, Rechnung, RechnungMahnung } from '../../types'
 
 const ANREDE = 'Sehr geehrte Damen und Herren,'
@@ -33,6 +35,7 @@ export function RechnungSendenModal({ rechnung, onClose }: { rechnung: Rechnung;
   const empfaenger = empfaengerZeilen(rechnung, akte)
   const offen = offenerBetrag(rechnung) || rechnung.betragBrutto
   const dateiname = rechnungPdfDateiname(rechnung)
+  const eRechnung = useXRechnungFuerVersand(rechnung) // Modul E-Rechnung (abschaltbar, siehe src/module/eRechnung/README.md) — null, wenn das Modul aus ist
 
   const mailText = `${ANREDE}\n\nanbei erhalten Sie unsere Rechnung Nr. ${rechnung.nummer} vom ${deDatum(rechnung.datum)} über ${euroText(rechnung.betragBrutto)}.\nBitte überweisen Sie den Betrag von ${euroText(offen)} bis zum ${deDatum(rechnung.zahlungsziel)} auf das in der Rechnung genannte Konto.\n\nBei Fragen zur Rechnung sind wir gerne für Sie da.\n\nMit freundlichen Grüßen\n${nutzer.name}`
 
@@ -47,6 +50,8 @@ export function RechnungSendenModal({ rechnung, onClose }: { rechnung: Rechnung;
       erzeugePdf={() => erzeugeRechnungPdf(rechnung, { briefkopf, empfaenger, absender: absender.trim() || nutzer.name, anrede })}
       pruefen={() => (empfaenger.length < 2 ? 'Auf der Rechnung fehlt die Anschrift des Kunden. Bitte erst unter „Bearbeiten“ eintragen.' : '')}
       nurPdfHinweis="Das PDF wird heruntergeladen und in der Akte abgelegt. Die Rechnung gilt danach als versendet (z. B. per Post oder von Hand übergeben)."
+      // Modul E-Rechnung (abschaltbar, siehe src/module/eRechnung/README.md)
+      weitereAnhaenge={eRechnung?.ok ? () => [xRechnungAlsAnhang(eRechnung)] : undefined}
       oben={
         <div className="mb-3 rounded-lg border border-slate-200 p-3">
           <div className="mb-2 text-xs font-medium text-slate-500">Empfänger auf der Rechnung</div>
@@ -63,6 +68,8 @@ export function RechnungSendenModal({ rechnung, onClose }: { rechnung: Rechnung;
               <input className={inputClass} value={absender} onChange={(e) => setAbsender(e.target.value)} />
             </Field>
           </div>
+          {/* Modul E-Rechnung (abschaltbar, siehe src/module/eRechnung/README.md) */}
+          {eRechnung && <ERechnungVersandHinweis ergebnis={eRechnung} />}
         </div>
       }
       onErledigt={({ weg, an, dokument }) => {

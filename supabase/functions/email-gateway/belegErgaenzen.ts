@@ -19,6 +19,11 @@
 //    „Automatisch ergänzt am … — bitte prüfen“. „Angaben stimmen“ (geprueft) setzt weiterhin nur ein Mensch;
 //    bereits geprüfte Verbindlichkeiten bekommen höchstens den Beleg, ihre Angaben bleiben unangetastet.
 //
+//  - Modul E-Rechnung (abschaltbar, 23.11.2026): Ist das Modul an und hängt an der Mail eine E-Rechnung (.xml oder
+//    ZUGFeRD-PDF mit eingebetteter XML), werden die Angaben GENAU aus der Datei übernommen statt per KI (kein
+//    KI-Aufruf); gleiche Regel, welche Felder gefüllt werden dürfen. Beleg: bevorzugt die PDF, sonst die XML.
+//    Kennzeichnung automatisch_erkannt.art = 'e-rechnung'. Ist das Modul aus oder die Datei nicht lesbar: KI wie bisher.
+//
 // Takt: vom Minuten-Zeitplan (termin_erinnerungen) gerufen, höchstens alle 2 Minuten und dann bis zu 3
 // Verbindlichkeiten. Einmaliger Lauf für alle: Aktion beleg_ergaenzen (nur Geschäftsführung) mit Vorschau.
 // Beide teilen sich einen Merker in abteilung_eintraege ('beleg_ergaenzen_stand') mit Sperre bis
@@ -30,6 +35,9 @@ import { htmlZuText } from '../_shared/signaturDaten.ts'
 import { eigenerSpeicher } from '../_shared/speicherPfad.ts'
 import { VERBINDLICHKEIT_KATEGORIEN } from '../_shared/datevExport.ts'
 import { angabenAusZeile, belegLuecken, erkanntAus, FELD_NAMEN, hatBeleg } from '../_shared/belegLuecken.ts'
+// Modul E-Rechnung (abschaltbar, siehe src/module/eRechnung/README.md)
+import { eRechnungAusAnhaengen, type GefundeneERechnung, istXmlAnhang } from '../_shared/eRechnung/modul.ts'
+import { type ERechnungDaten, eRechnungKurz } from '../_shared/eRechnung/lesen.ts'
 
 // deno-lint-ignore no-explicit-any
 type Db = any
@@ -234,6 +242,27 @@ export function bereinigeAuslese(roh: Record<string, unknown>, jetzt = new Date(
   }
   const kat = text(roh.kategorie).trim()
   if ((VERBINDLICHKEIT_KATEGORIEN as readonly string[]).includes(kat)) a.kategorie = kat
+  return a
+}
+
+// Modul E-Rechnung (abschaltbar, siehe src/module/eRechnung/README.md)
+/**
+ * Angaben aus einer E-Rechnung — genau wie in der Datei, ohne KI. Beträge nur in Euro; bei einer Gutschrift keine
+ * Beträge (sie mindert die Schuld, die Spalten kennen nur positive Rechnungsbeträge — die Notiz nennt die Gutschrift).
+ */
+export function ausleseAusERechnung(d: ERechnungDaten): Auslese {
+  const a: Auslese = { art: 'rechnung' }
+  const lieferant = text(d.verkaeufer?.name).trim().slice(0, 120)
+  if (lieferant) a.lieferant = lieferant
+  const nr = text(d.nummer).trim().slice(0, 60)
+  if (nr) a.rechnungsnummer = nr
+  if (istDatum(d.datum)) a.datum = d.datum
+  if (istDatum(d.faellig)) a.zahlungsziel = d.faellig
+  if (d.art !== 'Gutschrift' && /^(eur)?$/i.test(text(d.waehrung).trim())) {
+    if (Number.isFinite(d.brutto) && d.brutto > 0) a.brutto = Math.round(d.brutto * 100) / 100
+    if (Number.isFinite(d.netto) && d.netto > 0 && (a.brutto === undefined || d.netto <= a.brutto + 0.01)) a.netto = Math.round(d.netto * 100) / 100
+    if (Number.isFinite(d.steuer) && d.steuer >= 0) a.steuer = Math.round(d.steuer * 100) / 100
+  }
   return a
 }
 
@@ -511,7 +540,7 @@ export type Ergebnis = {
   lieferant: string
   beleg: 'mail_anhang' | 'mail_text' | null
   felder: string[]
-  art: Auslese['art'] | null
+  art: Auslese['art'] | 'e-rechnung' | null
   fehler?: string
 }
 
@@ -523,21 +552,41 @@ export async function ergaenzeVerbindlichkeit(admin: Db, v: VerbZeile, h: BelegH
   const erg: Ergebnis = { id: v.id, lieferant: text(v.lieferant), beleg: null, felder: [], art: null }
   const mail = v.quell_email_id ? await ladeMail(admin, v.quell_email_id) : null
   if (!mail) throw new Error('Original-Mail nicht gefunden')
-  const quelle = belegQuelle(v, mail)
-  const lade = h.ladeBytes ?? ((url: string) => standardLadeBytes(admin, url))
+  let quelle = belegQuelle(v, mail)
+  // Jede Datei höchstens einmal laden (die E-Rechnungs-Suche und der Beleg brauchen oft dieselbe PDF).
+  const geladen = new Map<string, Promise<Uint8Array>>()
+  const ladeRoh = h.ladeBytes ?? ((url: string) => standardLadeBytes(admin, url))
+  const lade = (url: string) => {
+    if (!geladen.has(url)) geladen.set(url, ladeRoh(url))
+    return geladen.get(url)!
+  }
+
+  // Modul E-Rechnung (abschaltbar, siehe src/module/eRechnung/README.md): Angaben genau aus der Datei statt per KI.
+  // Beleg: die ZUGFeRD-PDF selbst, sonst eine andere Rechnungs-PDF der Mail, sonst die XML.
+  const eRechnung: GefundeneERechnung | null = await eRechnungAusAnhaengen(admin, mail.anhaenge, lade)
+  if (eRechnung && !hatBeleg(v)) {
+    const pdf = istPdf(eRechnung.anhang) ? eRechnung.anhang : waehleRechnungsAnhang(mail.anhaenge)
+    quelle = { art: 'mail_anhang', anhang: pdf && istPdf(pdf) ? pdf : eRechnung.anhang }
+  }
+
   // KI: wenn Angaben fehlen, oder um bei reinen Mail-Belegen zu entscheiden, ob es ein Beleg ist.
   const angabenFehlen = v.geprueft !== true && brauchtErgaenzung({ ...v, beleg: { url: 'x' } })
-  const kiNoetig = angabenFehlen || quelle?.art === 'mail_text'
+  const kiNoetig = !eRechnung && (angabenFehlen || quelle?.art === 'mail_text')
   if (kiNoetig && !h.ki) throw new Error('KI-Schlüssel fehlt')
 
   // Datei des Rechnungs-Anhangs — für den Beleg (muss sich laden lassen) und als Vorlage für die KI
   // (auch wenn schon ein Beleg von Hand da ist).
-  const anhang = waehleRechnungsAnhang(mail.anhaenge)
+  const anhang = quelle?.art === 'mail_anhang' ? quelle.anhang : waehleRechnungsAnhang(mail.anhaenge)
   let anhangBytes: Uint8Array | null = null
   if (anhang && quelle?.art === 'mail_anhang') anhangBytes = await lade(text(anhang.url))
   else if (anhang && kiNoetig) anhangBytes = await lade(text(anhang.url)).catch(() => null)
 
   let auslese: Auslese | null = null
+  // Modul E-Rechnung (abschaltbar, siehe src/module/eRechnung/README.md)
+  if (eRechnung) {
+    auslese = ausleseAusERechnung(eRechnung.daten)
+    erg.art = 'e-rechnung'
+  }
   if (kiNoetig && h.ki) {
     let dateiBlock: KiBlock | null = null
     if (anhang && anhangBytes) {
@@ -570,8 +619,11 @@ export async function ergaenzeVerbindlichkeit(admin: Db, v: VerbZeile, h: BelegH
   let beleg: { name: string; url: string; typ: string } | null = null
   let belegArt: BelegQuelle = null
   if (quelle?.art === 'mail_anhang' && anhangBytes && auslese?.art !== 'keine_rechnung') {
-    const name = text(quelle.anhang.filename) || 'Rechnung.pdf'
-    beleg = await legeBelegAb(admin, anhangBytes, name, text(quelle.anhang.contentType) || (istPdf(quelle.anhang) ? 'application/pdf' : 'application/octet-stream'))
+    // Modul E-Rechnung (abschaltbar, siehe src/module/eRechnung/README.md): eine XML-Rechnung als application/xml.
+    const xml = istXmlAnhang(quelle.anhang) && !istPdf(quelle.anhang)
+    const name = text(quelle.anhang.filename) || (xml ? 'Rechnung.xml' : 'Rechnung.pdf')
+    const typ = xml ? 'application/xml' : text(quelle.anhang.contentType) || (istPdf(quelle.anhang) ? 'application/pdf' : 'application/octet-stream')
+    beleg = await legeBelegAb(admin, anhangBytes, name, typ)
     belegArt = quelle
   } else if (quelle?.art === 'mail_text' && auslese && (auslese.art === 'rechnung' || auslese.art === 'zahlungsbeleg')) {
     const bytes = await pdfAusMail(mail, jetzt)
@@ -600,13 +652,15 @@ export async function ergaenzeVerbindlichkeit(admin: Db, v: VerbZeile, h: BelegH
       erg.beleg = belegArt?.art ?? null
     }
   }
-  const zeile = notizZeile(heuteBerlin(jetzt), auslese, erg.felder, erg.beleg ? belegArt : null)
+  let zeile = notizZeile(heuteBerlin(jetzt), auslese, erg.felder, erg.beleg ? belegArt : null)
+  // Modul E-Rechnung (abschaltbar, siehe src/module/eRechnung/README.md): Herkunft der Angaben in derselben Zeile.
+  if (eRechnung) zeile = `${zeile || `Automatisch geprüft am ${datumDe(heuteBerlin(jetzt))}:`} ${eRechnungKurz(eRechnung.daten).replace(/\.?\s*$/, '.')}`
   if (zeile) aenderung.notiz = text(f.notiz).trim() ? `${text(f.notiz).trim()}\n${zeile}` : zeile
   const bisher = erkanntAus(f.automatisch_erkannt)
   aenderung.automatisch_erkannt = {
     stand: 'fertig',
     am: jetzt.toISOString(),
-    art: auslese?.art ?? null,
+    art: eRechnung ? 'e-rechnung' : (auslese?.art ?? null),
     felder: erg.felder,
     beleg: erg.beleg,
     versuche: (bisher?.versuche ?? 0) + 1,

@@ -4,6 +4,9 @@
 // inbound-email/index.ts; der Inhalt der Funktionen ist unverändert übernommen.
 import { kiAufruf } from './kiVerbrauch.ts'
 import { heuteBerlin } from './heuteBerlin.ts'
+// Modul E-Rechnung (abschaltbar, siehe src/module/eRechnung/README.md)
+import { eRechnungAusAnhaengen } from './eRechnung/modul.ts'
+import type { ERechnungDaten } from './eRechnung/lesen.ts'
 
 // klassifiziereRelevanz: Live-Gegenstück zu scripts/cleanup-inbox.mjs (dort nur als manueller Einmal-Lauf für den
 // historischen Rückstand): klassifiziert jede neu eingehende Mail direkt beim Eingang, damit das
@@ -327,6 +330,27 @@ Text: ${text.slice(0, 1500)}`,
   }
 }
 
+type ErkannteVerbindlichkeit = { istRechnung: boolean; lieferant?: string; datum?: string; rechnungsnummer?: string; betragNetto?: number; betragBrutto?: number; zahlungsziel?: string }
+
+// Modul E-Rechnung (abschaltbar, siehe src/module/eRechnung/README.md)
+/** Angaben einer angehängten E-Rechnung als Lieferantenrechnung — null bei Gutschriften und bei eigenen Rechnungen der
+ *  Mayer Holding (z. B. Kopie einer ausgehenden Rechnung); dann entscheidet wie bisher die KI. Beträge nur in Euro. */
+export function verbindlichkeitAusERechnung(d: ERechnungDaten): ErkannteVerbindlichkeit | null {
+  const verkaeufer = `${d.verkaeufer?.name ?? ''} ${d.verkaeufer?.email ?? ''}`
+  if (d.art !== 'Rechnung' || /mayer[\s-]*holding|amayer/i.test(verkaeufer)) return null
+  const euro = /^(eur)?$/i.test(String(d.waehrung ?? '').trim())
+  const datum = (s?: string) => (s && /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : undefined)
+  return {
+    istRechnung: true,
+    lieferant: d.verkaeufer?.name?.trim() || undefined,
+    datum: datum(d.datum),
+    rechnungsnummer: d.nummer?.trim() || undefined,
+    betragNetto: euro && d.netto > 0 ? d.netto : undefined,
+    betragBrutto: euro && d.brutto > 0 ? d.brutto : undefined,
+    zahlungsziel: datum(d.faellig),
+  }
+}
+
 export type MailPruefung = {
   relevanz: 'kunde' | 'nicht_relevant'
   zuordnung: { kundeId: string; bereich: string; kundeName: string } | null
@@ -355,14 +379,19 @@ export async function nachDemSpeichern(supabase: any, zeilenId: string | null, m
   const zuordnung = relevanz === 'kunde' ? await versucheAutomatischeZuordnung(supabase, m.von, m.vonName, m.betreff, m.text, m.anhaenge, zeilenId) : null
   // Läuft bewusst unabhängig von relevanz — eine Lieferantenrechnung ist für den Posteingang
   // "nicht_relevant", für die Buchhaltung aber hochrelevant.
-  const verbindlichkeit = await erkenneEingehendeVerbindlichkeit(m.vonName, m.von, m.betreff, m.text, m.anhaenge)
+  // Modul E-Rechnung (abschaltbar, siehe src/module/eRechnung/README.md): Hängt eine lesbare E-Rechnung an, ist die Mail
+  // eine Lieferantenrechnung, auch wenn der Mailtext das nicht hergibt — Angaben genau aus der Datei, ohne KI. Modul aus,
+  // keine oder unlesbare E-Rechnung: wie bisher. Den Beleg legt später belegErgaenzen.ts (email-gateway) ab.
+  const eRechnung = await eRechnungAusAnhaengen(supabase, m.anhaenge)
+  const ausERechnung = eRechnung ? verbindlichkeitAusERechnung(eRechnung.daten) : null
+  const verbindlichkeit: ErkannteVerbindlichkeit | null = ausERechnung ?? (await erkenneEingehendeVerbindlichkeit(m.vonName, m.von, m.betreff, m.text, m.anhaenge))
   if (verbindlichkeit?.istRechnung) {
     const { error } = await supabase.from('verbindlichkeiten').insert({
       id: crypto.randomUUID(),
-      lieferant: m.vonName,
+      lieferant: verbindlichkeit.lieferant || m.vonName,
       lieferant_email: m.von,
       rechnungsnummer: verbindlichkeit.rechnungsnummer ?? null,
-      datum: heuteBerlin(),
+      datum: verbindlichkeit.datum ?? heuteBerlin(),
       betrag_netto: verbindlichkeit.betragNetto ?? null,
       betrag_brutto: verbindlichkeit.betragBrutto ?? null,
       zahlungsziel: verbindlichkeit.zahlungsziel ?? null,

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { MeinPostfachAbschnitt } from '../../components/PostfachEinstellungen'
+import { ZusatzModuleAbschnitt } from '../../module/ZusatzModule'
 import { AlertTriangle, Camera, CheckCircle2, Lock, Plane, Send, Trash2, User } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { useAuth } from '../../context/AuthContext'
@@ -668,6 +669,9 @@ export function MeinProfil() {
       )}
 
       {isSupabaseConfigured && <MeinPostfachAbschnitt />}
+
+      {/* Zusatzmodule (z. B. E-Rechnung) ein- und ausschalten — siehe src/module/modulSchalter.ts */}
+      {isSupabaseConfigured && session && <ZusatzModuleAbschnitt />}
     </div>
   )
 }

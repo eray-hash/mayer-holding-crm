@@ -3,7 +3,7 @@
 import { useCallback } from 'react'
 import { useApp, type AppData } from '../../context/AppContext'
 import { findeAkte, useKvNutzer, type KvAkte } from '../KostenvoranschlaegeSection'
-import { sendEmail, type SendEmailKundeKontext } from '../../lib/emailGateway'
+import { sendEmail, type MailAnhang, type SendEmailKundeKontext } from '../../lib/emailGateway'
 import { ladeKundenDokumentHoch } from '../../lib/kundenDokumenteStorage'
 import { briefkopfAus } from '../../data/briefkopf'
 import { today, uid } from '../../lib/dates'
@@ -89,7 +89,8 @@ export function useRechnungAktionen() {
 
   /** Sendet das PDF als Anhang an den Kunden (über das gemeinsame Postfach). */
   const pdfSenden = useCallback(
-    async (p: { an: string; betreff: string; text: string; blob: Blob; dateiname: string; kundeId: string }) => {
+    // weitereAnhaenge: Modul E-Rechnung (abschaltbar, siehe src/module/eRechnung/README.md) — z. B. die XRechnung als XML
+    async (p: { an: string; betreff: string; text: string; blob: Blob; dateiname: string; kundeId: string; weitereAnhaenge?: MailAnhang[] }) => {
       const akte = findeAkte(state, p.kundeId)
       const inhalt = mitSignatur(p.text, state.profil.signaturHtml)
       const base64 = await blobZuBase64(p.blob)
@@ -101,7 +102,7 @@ export function useRechnungAktionen() {
         kundeName: akte?.kunde.firma,
         ohneRechnungsErkennung: true,
       }
-      await sendEmail(p.an.trim(), p.betreff.trim(), inhalt.text, inhalt.html, kontext, [{ filename: p.dateiname, contentBase64: base64, contentType: 'application/pdf' }])
+      await sendEmail(p.an.trim(), p.betreff.trim(), inhalt.text, inhalt.html, kontext, [{ filename: p.dateiname, contentBase64: base64, contentType: 'application/pdf' }, ...(p.weitereAnhaenge ?? [])])
     },
     [state],
   )
