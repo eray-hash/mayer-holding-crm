@@ -91,6 +91,7 @@ import { ABEND_RUECKBLICK_WERKZEUGE, fuehreAbendRueckblickWerkzeugAus, istAbendR
 import { istAbendKnopf } from '../email-gateway/abendRueckblick.ts'
 import { hatUhrzeit, istVorlaeufig, notizOhneHinweis, ohneZusatz, vorlaeufigeNotiz, vorlaeufigerTitel } from './uhrzeitOffen.ts'
 import { nurDaumen, reagiereMitDaumen } from './bestaetigung.ts'
+import { namensHinweis, type HoleMails } from './namensHinweis.ts'
 
 const BOT_TOKEN = Deno.env.get('TELEGRAM_BOT_TOKEN')
 const WEBHOOK_SECRET = Deno.env.get('TELEGRAM_WEBHOOK_SECRET')
@@ -245,6 +246,20 @@ async function callEmailGateway(action: string, body: Record<string, unknown>): 
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error(data?.error ?? `email-gateway-Fehler (${res.status})`)
   return data
+}
+
+// Mails aus dem verbundenen Postfach für die Namensliste (nur Absender/Empfänger werden verwendet).
+const mailsFuerNamen: HoleMails = async (ich, ordner) => {
+  const seiten = await Promise.all([0, 100].map((ab) => callEmailGateway('outlook_liste', { ordner, anzahl: 100, ab, imAuftragVon: ich }).catch(() => ({ mails: [] }))))
+  return seiten.flatMap((s) => (Array.isArray(s?.mails) ? s.mails : []))
+}
+
+// Arbeit, die nach der Antwort weiterlaufen darf (ohne Laufzeit-Hilfe einfach im Hintergrund).
+function nachDerAntwort(arbeit: Promise<unknown>): void {
+  // deno-lint-ignore no-explicit-any
+  const laufzeit = (globalThis as any).EdgeRuntime
+  if (laufzeit?.waitUntil) laufzeit.waitUntil(arbeit)
+  else arbeit.catch(() => undefined)
 }
 
 // ---------- Kleine Helfer ----------
@@ -4525,7 +4540,9 @@ async function verarbeiteNachricht(supabase: Supa, message: any, chatId: number,
   if (message.voice && !weitergeleitet && kannAbhoeren()) {
     try {
       const ton = await telegramDateiHerunterladen(message.voice.file_id)
-      if (ton) gesprochen = await transkribiere(ton, `sprachnachricht_${Date.now()}.ogg`, message.voice.mime_type ?? 'audio/ogg')
+      // Namensliste als Schreibhilfe (Kollegen; im privaten Assistenten dazu eigene Kontakte und häufige Mail-Partner).
+      const hinweis = ton ? await namensHinweis(supabase, mitarbeiter, privatBot, privatBot ? mailsFuerNamen : undefined, nachDerAntwort) : ''
+      if (ton) gesprochen = await transkribiere(ton, `sprachnachricht_${Date.now()}.ogg`, message.voice.mime_type ?? 'audio/ogg', hinweis)
     } catch (err) {
       console.error('Sprachnachricht konnte nicht abgehört werden:', err)
     }
