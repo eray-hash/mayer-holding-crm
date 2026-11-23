@@ -218,6 +218,7 @@ import {
   absenderVon,
   abzuholendePostfaecher,
   anhangUrl,
+  aufruferDarfBereich,
   darfNutzen,
   diagnostizierePostfach,
   ermittleAufrufer,
@@ -229,6 +230,7 @@ import {
   listePostfaecher,
   ordneMailZu,
   ordneOffeneMailsZu,
+  postfachArt,
   pruefeOrdnerAufbau,
   rufeAlleAb,
   rufePostfachAb,
@@ -319,6 +321,9 @@ import { pruefeWunschAnalyse, wunschAnalyseTest } from './wunschAnalyse.ts'
 import { pruefeSuperuserWochenbericht, superuserAuswertung, superuserWochenberichtTest } from './superuser.ts'
 import { datensicherungAktion, pruefeNaechtlicheSicherung } from './datensicherung.ts'
 import { pruefeWochenrueckblick, wochenrueckblickEinstellung, wochenrueckblickTest } from './wochenrueckblick.ts'
+import { kontrollberichtTest, pruefeKontrollberichte } from './kontrollbericht.ts'
+import { ueberfuehreInsBereichspostfach } from './bereichspostfach.ts'
+import { istSuperuser } from './superuser.ts'
 import { GESPRAECH_AKTIONEN, gespraechAktion, gespraechMinutentakt } from './gespraechPipeline.ts'
 import { pruefeRechnungVorschlaege, pruefeRechnungVorschlagHinweis } from './rechnungVorschlaege.ts'
 import { pruefeMahnVorschlaege } from './mahnVorschlag.ts'
@@ -3396,14 +3401,18 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       let absender: MailAbsender | undefined
       let postfachId = STANDARD_ID
       let persoenlich = false
+      // Bereichspostfach (postfach.ts): die gesendete Mail ist nur für Mitarbeiter dieses Bereichs sichtbar.
+      let postfachBereich: string | null = null
       if (body.postfachId && body.postfachId !== STANDARD_ID) {
         const fach = await ladePostfach(supabase, String(body.postfachId))
         if (!fach || !fach.aktiv) {
           return new Response(JSON.stringify({ error: 'Dieses Absender-Postfach gibt es nicht (mehr).' }), { status: 400, headers })
         }
         if (!darfNutzen(fach, aufrufer)) {
-          return new Response(JSON.stringify({ error: 'Von diesem Postfach darf nur sein Besitzer senden.' }), { status: 403, headers })
+          const meldung = postfachArt(fach) === 'bereich' ? 'Von diesem Bereichspostfach senden nur die Geschäftsführung und der Verantwortliche.' : 'Von diesem Postfach darf nur sein Besitzer senden.'
+          return new Response(JSON.stringify({ error: meldung }), { status: 403, headers })
         }
+        postfachBereich = postfachArt(fach) === 'bereich' ? fach.bereich ?? null : null
         absender = await absenderVon(supabase, fach)
         postfachId = fach.id
         persoenlich = !!fach.besitzer_email
@@ -3457,6 +3466,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
           kunde_id: kundeId ?? null,
           kunde_name: kundeName ?? null,
           postfach_id: postfachId,
+          ...(postfachBereich ? { postfach_bereich: postfachBereich } : {}),
           // Mail an einen privaten Kontakt (auch über das gemeinsame Postfach): nur für den Absender sichtbar.
           besitzer_email: privat ? aufrufer!.email : anPrivatKontakt ? (aufrufer?.email ?? (aktuellePerson() || null)) : null,
           von: absender?.adresse ?? Deno.env.get('SMTP_USER') ?? null,
@@ -3727,6 +3737,13 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       })
       // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
       EdgeRuntime.waitUntil(rueckblickLauf)
+      // Täglicher Kontrollbericht „Mitarbeiter X an Empfänger Y“ (kontrollbericht.ts): werktags ab der eingestellten Stunde
+      // (Vorgabe 18 Uhr) einmal am Tag über den Mayer-Bot, nur an die Empfänger der Einstellung; ohne KI; außerhalb des
+      // Fensters höchstens alle zehn Minuten ein Blick auf die Einstellung; wirft nie.
+      // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
+      EdgeRuntime.waitUntil(pruefeKontrollberichte(admin, sendeTelegram).then((r) => {
+        if (r.gesendet > 0) console.log(`Kontrollbericht: ${r.gesendet} gesendet.`)
+      }))
       // Wünsche und Probleme der Mitarbeiter: Auswertung alle zwei Stunden, Bericht an die Admins ab 18 Uhr —
       // siehe wunschAnalyse.ts. Im Hintergrund (der KI-Aufruf dauert); außerhalb der Stunden ohne Datenbankzugriff; wirft nie.
       // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
@@ -3878,8 +3895,9 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       const token = (req.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '').trim()
       let erlaubt = istDienstSchluessel(token) || !!aufrufer?.istGf
       if (!erlaubt && aufrufer && postfachId) {
-        const { data: fach } = await admin.from('postfaecher').select('besitzer_email').eq('id', postfachId).maybeSingle()
-        erlaubt = !!fach?.besitzer_email && String(fach.besitzer_email).toLowerCase() === aufrufer.email.toLowerCase()
+        const { data: fach } = await admin.from('postfaecher').select('besitzer_email, verantwortlich_email').eq('id', postfachId).maybeSingle()
+        const zustaendig = fach?.besitzer_email ?? fach?.verantwortlich_email
+        erlaubt = !!zustaendig && String(zustaendig).toLowerCase() === aufrufer.email.toLowerCase()
       }
       if (!erlaubt) return new Response(JSON.stringify({ error: 'Nur für die Geschäftsführung oder den Besitzer des Postfachs.' }), { status: 403, headers })
       const tage = Number(body.tage) > 0 ? Math.min(365, Number(body.tage)) : undefined
@@ -4014,7 +4032,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
         const ergebnis = await verbindePostfach(admin, aufrufer, body)
         if (!ergebnis.ok) return new Response(JSON.stringify({ error: ergebnis.fehler }), { status: 400, headers })
         const fach = await ladePostfach(admin, ergebnis.id)
-        if (fach?.besitzer_email) {
+        if (fach && postfachArt(fach) !== 'gemeinsam') {
           // Die ersten Mails gleich im Hintergrund holen, damit das Postfach nicht leer startet.
           // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
           EdgeRuntime.waitUntil(rufePostfachAb(admin, fach))
@@ -4023,7 +4041,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       }
       if (body.action === 'postfach_ordner') {
         const fach = await ladePostfach(admin, String(body.postfachId ?? ''))
-        const eigenes = !!fach && !!fach.besitzer_email && fach.besitzer_email.toLowerCase() === aufrufer.email
+        const eigenes = !!fach && (postfachArt(fach) === 'persoenlich' ? String(fach.besitzer_email).toLowerCase() === aufrufer.email : postfachArt(fach) === 'bereich' && darfNutzen(fach, aufrufer))
         if (!fach || !(eigenes || aufrufer.istGf)) return new Response(JSON.stringify({ error: 'Dieses Postfach kannst du nicht einsehen.' }), { status: 403, headers })
         if (typeof body.aufbauVon === 'number') return new Response(JSON.stringify(await pruefeOrdnerAufbau(admin, fach, body.aufbauVon, Number(body.abUid) || 1)), { headers })
         const ergebnis = await listeOrdner(admin, fach, eigenes || !fach.besitzer_email)
@@ -4037,7 +4055,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       }
       if (body.action === 'postfach_abruf') {
         const fach = await ladePostfach(admin, String(body.postfachId))
-        if (!fach || !fach.besitzer_email || !darfNutzen(fach, aufrufer)) {
+        if (!fach || postfachArt(fach) === 'gemeinsam' || !darfNutzen(fach, aufrufer)) {
           return new Response(JSON.stringify({ error: 'Dieses Postfach kannst du nicht abrufen.' }), { status: 403, headers })
         }
         // Gerade erst abgeholt (Zeitplan oder ein anderer Aufruf)? Dann nicht doppelt arbeiten.
@@ -4050,6 +4068,12 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       }
       if (body.action === 'mail_zuordnen') {
         if (!(await darfKundeServer(admin, aufrufer.email, body.kundeId))) return keinRecht(headers)
+        // Mails eines Bereichspostfachs nur mit dem Recht für diesen Bereich (wie die Datenbankregel).
+        {
+          const kennung = String(body.mailId ?? '')
+          const { data: fachMail } = await admin.from('eingegangene_emails').select('postfach_bereich').eq(/^[0-9a-f-]{36}$/i.test(kennung) ? 'id' : 'message_id', kennung).limit(1).maybeSingle()
+          if (fachMail?.postfach_bereich && !aufruferDarfBereich(aufrufer, fachMail.postfach_bereich)) return keinRecht(headers)
+        }
         const ergebnis = await ordneMailZu(admin, String(body.mailId ?? ''), String(body.kundeId ?? ''), aufrufer.name || aufrufer.email)
         if (!ergebnis.ok) return new Response(JSON.stringify({ error: ergebnis.fehler }), { status: 400, headers })
         return new Response(JSON.stringify(ergebnis), { headers })
@@ -5158,6 +5182,57 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       return new Response(JSON.stringify(ergebnis), { headers })
     }
 
+    // Persönliches Postfach → Bereichspostfach (bereichspostfach.ts), nur Dienstschlüssel oder Superuser. Vorgabe Trockenlauf
+    // (nichts schreiben); { trocken: false } = echter Lauf, je Aufruf eine Portion; { weiter: true } ruft sich selbst nach,
+    // bis alles überführt und geprüft ist (höchstens 20 Glieder). Beispiel:
+    //   { action: 'bereichspostfach_ueberfuehren', postfachId: 'pf_immo-40-amayer-2d-holding-2e-com', bereich: 'immobilien' }
+    if (body.action === 'bereichspostfach_ueberfuehren') {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const token = (req.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '').trim()
+      if (!istDienstSchluessel(token)) {
+        const aufrufer = await ermittleAufrufer(req, admin, body)
+        if (!aufrufer) return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
+        if (!(await istSuperuser(admin, aufrufer.email))) return new Response(JSON.stringify({ error: 'Nur für Superuser.' }), { status: 403, headers })
+      }
+      const trocken = body.trocken !== false
+      const ergebnis = await ueberfuehreInsBereichspostfach(admin, {
+        postfachId: String(body.postfachId ?? ''),
+        bereich: String(body.bereich ?? ''),
+        trocken,
+        hoechstens: Number(body.hoechstens) || 60,
+        zeitBudgetMs: 100_000,
+      })
+      const kette = Math.max(0, Number(body.kette) || 0)
+      if (!trocken && body.weiter === true && ergebnis.fehler.length === 0 && (ergebnis.mails.offen > 0 || ergebnis.zuordnung.offen > 0) && kette < 20) {
+        const geheim = Deno.env.get('CRM_SHARED_SECRET')
+        // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
+        EdgeRuntime.waitUntil(
+          fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/email-gateway`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', authorization: `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`, ...(geheim ? { 'x-crm-secret': geheim } : {}) },
+            body: JSON.stringify({ action: 'bereichspostfach_ueberfuehren', postfachId: body.postfachId, bereich: body.bereich, trocken: false, weiter: true, kette: kette + 1, hoechstens: body.hoechstens }),
+          }).catch((err) => console.error('Überführung: Folgeaufruf fehlgeschlagen:', err)),
+        )
+      }
+      console.log(`Bereichspostfach ${trocken ? '(Trockenlauf)' : ''}: ${ergebnis.mails.ueberfuehrt} Mails überführt, offen ${ergebnis.mails.offen}; Zuordnung ${ergebnis.zuordnung.zugeordnet} zugeordnet, ${ergebnis.zuordnung.vorschlaege} Vorschläge.`, ergebnis.fehler.slice(0, 3).join(' | '))
+      return new Response(JSON.stringify(ergebnis), { status: ergebnis.ok || trocken ? 200 : 500, headers })
+    }
+
+    // Kontrollbericht (kontrollbericht.ts) ansehen, ohne zu senden — nur Dienstschlüssel oder Superuser.
+    // { mitarbeiter?: E-Mail (sonst alle Einträge der Einstellung), jetzt?: Zeitpunkt }
+    if (body.action === 'kontrollbericht_test') {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const token = (req.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '').trim()
+      if (!istDienstSchluessel(token)) {
+        const aufrufer = await ermittleAufrufer(req, admin, body)
+        if (!aufrufer) return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
+        if (!(await istSuperuser(admin, aufrufer.email))) return new Response(JSON.stringify({ error: 'Nur für Superuser.' }), { status: 403, headers })
+      }
+      const ergebnis = await kontrollberichtTest(admin, { mitarbeiter: body.mitarbeiter, jetzt: body.jetzt })
+      if (!ergebnis.ok) return new Response(JSON.stringify({ error: ergebnis.fehler }), { status: ergebnis.status, headers })
+      return new Response(JSON.stringify(ergebnis), { headers })
+    }
+
     if (body.action === 'mail_zuordnung_lauf') {
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
       const aufrufer = await ermittleAufrufer(req, admin, body)
@@ -5568,7 +5643,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       return new Response(JSON.stringify({ ok: true }), { headers })
     }
 
-    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "public_objekt_portal", "public_objekt_portal_zustimmen", "public_objekt_portal_dokument", "public_objekt_portal_besichtigung", "bewertung_recherche_start", "bewertung_recherche_schritt", "kunden_umfeld_recherche", "steuer_analyse_start", "steuer_analyse_schritt", "dokument_lesen", "dokument_inhalte", "postfaecher_liste", "postfach_verbinden", "postfach_trennen", "postfach_abruf", "postfach_ordner", "mail_zuordnen", "mail_freigeben", "mail_anhang_url", "termin_speichern", "termin_loeschen", "termin_erinnerungen", "tagesmeldung_test", "kontoauszug_auslesen", "kontoauszug_abgleich_auslesen", "rendite_marktvergleich", "checkliste_vorschlag", "todos_priorisieren", "willkommen_jetzt", "auto_nachricht_jetzt", "anfrage_pruefen_jetzt", "akte_zu_objekt", "mail_zuordnung_lauf", "wochenrueckblick_test", "wochenrueckblick_einstellung", "chance_vorschlaege", "stammdaten_nachtrag", "beleg_ergaenzen", "dubletten", "neuanfrage_einschaetzung", "kv_zuordnen", "termin_zuordnen", "datensicherung", "tagesplan", "public_seminar_termin", "public_seminar_anmelden", "public_unterschrift_laden", "public_unterschrift_absenden", "gesendet_abruf" oder "firmenwissen_answer"' }), { status: 400, headers })
+    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "public_objekt_portal", "public_objekt_portal_zustimmen", "public_objekt_portal_dokument", "public_objekt_portal_besichtigung", "bewertung_recherche_start", "bewertung_recherche_schritt", "kunden_umfeld_recherche", "steuer_analyse_start", "steuer_analyse_schritt", "dokument_lesen", "dokument_inhalte", "postfaecher_liste", "postfach_verbinden", "postfach_trennen", "postfach_abruf", "postfach_ordner", "mail_zuordnen", "mail_freigeben", "mail_anhang_url", "termin_speichern", "termin_loeschen", "termin_erinnerungen", "tagesmeldung_test", "kontoauszug_auslesen", "kontoauszug_abgleich_auslesen", "rendite_marktvergleich", "checkliste_vorschlag", "todos_priorisieren", "willkommen_jetzt", "auto_nachricht_jetzt", "anfrage_pruefen_jetzt", "akte_zu_objekt", "mail_zuordnung_lauf", "wochenrueckblick_test", "wochenrueckblick_einstellung", "chance_vorschlaege", "stammdaten_nachtrag", "beleg_ergaenzen", "dubletten", "neuanfrage_einschaetzung", "kv_zuordnen", "termin_zuordnen", "datensicherung", "tagesplan", "public_seminar_termin", "public_seminar_anmelden", "public_unterschrift_laden", "public_unterschrift_absenden", "gesendet_abruf", "bereichspostfach_ueberfuehren", "kontrollbericht_test" oder "firmenwissen_answer"' }), { status: 400, headers })
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }

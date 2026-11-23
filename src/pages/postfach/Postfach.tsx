@@ -14,13 +14,14 @@ import { matchKundeByEmail, suggestKunde } from '../../lib/matchKunde'
 import { KUNDEN_BEREICHE, kundeBereichLabel } from '../../data/kundenBereiche'
 import { useBereichsRechte } from '../../lib/bereichsRechte'
 import { getHauptpfad } from '../../data/statusNetworks'
+import { bereichLabel } from '../../data/bereiche'
 import { uid, today, addDays, fmtDateTime } from '../../lib/dates'
 import { MITARBEITER } from '../../data/constants'
 import { SendEmailModal } from '../../components/SendEmailModal'
 import { MailVorlagenModal } from '../../components/MailVorlagenModal'
 import { MailAnhangLink } from '../../components/MailAnhangLink'
 import { PrimaryButton, SecondaryButton, EmptyState, inputClass } from '../../components/ui'
-import type { EingegangeneEmail, GesendeteEmail, KundeBereich, VorgeschlagenerLead } from '../../types'
+import type { Bereich, EingegangeneEmail, GesendeteEmail, KundeBereich, VorgeschlagenerLead } from '../../types'
 
 type Ordner = 'posteingang' | 'gesendet' | 'leads' | 'vorschlaege'
 
@@ -86,9 +87,13 @@ export function Postfach() {
   const [query, setQuery] = useState('')
   const [suche, setSuche] = useState(false)
   const [posteingangSucheIds, setPosteingangSucheIds] = useState<Set<string> | null>(null)
+  // Bereichspostfächer (z. B. immo@… für Immobilien): '' = alle Postfächer, sonst nur Mails dieses Bereichspostfachs.
+  const [fachFilter, setFachFilter] = useState('')
+  const bereichsFaecher = [...new Set(state.eingegangeneEmails.map((e) => e.postfachBereich).filter((b): b is string => !!b))]
 
   const mailsOhneSuche = [...state.eingegangeneEmails]
     .filter((e) => !e.ignoriert)
+    .filter((e) => !fachFilter || e.postfachBereich === fachFilter)
     .sort((a, b) => (b.datum < a.datum ? -1 : b.datum > a.datum ? 1 : 0))
   const mails = posteingangSucheIds ? mailsOhneSuche.filter((m) => posteingangSucheIds.has(m.messageId)) : mailsOhneSuche
 
@@ -403,6 +408,18 @@ export function Postfach() {
               </button>
             </div>
 
+            {ordner === 'posteingang' && bereichsFaecher.length > 0 && (
+              <div className="border-b border-slate-100 px-2 pt-2">
+                <select className={`${inputClass} py-1.5 text-xs`} value={fachFilter} onChange={(e) => setFachFilter(e.target.value)} aria-label="Postfach auswählen">
+                  <option value="">Alle Postfächer</option>
+                  {bereichsFaecher.map((b) => (
+                    <option key={b} value={b}>
+                      Nur Postfach {bereichLabel(b as Bereich)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
             {(ordner === 'posteingang' || ordner === 'gesendet') && (
               <div className="relative border-b border-slate-100 p-2">
                 <Search size={13} className="pointer-events-none absolute left-5 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -438,6 +455,11 @@ export function Postfach() {
                         <span className="flex-shrink-0 text-[11px] text-slate-400">{fmtDateTime(mail.datum).split(',')[0]}</span>
                       </div>
                       <div className="truncate text-xs text-slate-600">{mail.betreff}</div>
+                      {mail.postfachBereich && (
+                        <div className="mt-1 inline-flex items-center gap-1 rounded bg-slate-100 px-1.5 text-[10px] font-medium text-slate-500">
+                          <Building2 size={10} /> Postfach {bereichLabel(mail.postfachBereich as Bereich)}
+                        </div>
+                      )}
                       {mail.zugewiesen && (
                         <div className="mt-1 flex items-center gap-1 text-[11px] font-medium text-emerald-600">
                           <Check size={11} /> {mail.zugewiesen.kundeName}

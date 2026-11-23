@@ -4,6 +4,8 @@ import { ladePostfaecher, trennePostfach, type PostfachInfo } from '../lib/email
 import { usePostfaecher, ladePostfaecherNeu } from '../lib/postfaecher'
 import { useAuth } from '../context/AuthContext'
 import { fmtDateTime } from '../lib/dates'
+import { bereichLabel } from '../data/bereiche'
+import type { Bereich } from '../types'
 import { PostfachVerbinden } from './PostfachVerbinden'
 import { Card, Modal, PrimaryButton, SecondaryButton } from './ui'
 
@@ -15,7 +17,8 @@ export function MeinPostfachAbschnitt() {
   const { postfaecher, eigenes, geladen, fehler } = usePostfaecher()
   const loginAdresse = (session?.user.email ?? '').toLowerCase()
   // Wer sich mit der Adresse des gemeinsamen Postfachs anmeldet, hat kein "eigenes" zu verbinden.
-  const loginIstGemeinsam = postfaecher.some((p) => p.gemeinsam && p.adresse.toLowerCase() === loginAdresse)
+  // Ebenso, wenn die Login-Adresse ein Bereichspostfach ist (z. B. immo@… für Immobilien).
+  const loginIstGemeinsam = postfaecher.some((p) => (p.gemeinsam || !!p.bereich) && p.adresse.toLowerCase() === loginAdresse)
   const [trennt, setTrennt] = useState(false)
   const [meldung, setMeldung] = useState('')
 
@@ -98,7 +101,7 @@ export function PostfachEinrichtenHinweis() {
     spaeter = false
   }
   // Kein Hinweis für jemanden, dessen Login-Adresse selbst das gemeinsame Postfach ist.
-  const loginIstGemeinsam = postfaecher.some((p) => p.gemeinsam && p.adresse.toLowerCase() === email)
+  const loginIstGemeinsam = postfaecher.some((p) => (p.gemeinsam || !!p.bereich) && p.adresse.toLowerCase() === email)
   // Auch nicht für Adressen bei Microsoft oder Google — die lassen sich mit Passwort nicht anbinden.
   const nichtAnbindbar = /@(outlook|hotmail|live|msn|gmail|googlemail)\./.test(email)
   if (!email || !geladen || zu || spaeter || nichtAnbindbar || (loginIstGemeinsam && !verbunden) || (eigenes && !verbunden)) return null
@@ -168,13 +171,15 @@ export function PostfaecherVerwaltung() {
             <li key={p.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2 text-sm">
               {p.gemeinsam ? <Users size={14} className="text-slate-400" /> : <Mail size={14} className="text-slate-400" />}
               <span className="font-medium text-slate-800">{p.adresse}</span>
-              <span className="text-xs text-slate-500">{p.gemeinsam ? 'gemeinsam' : `persönlich — ${p.besitzer}`}</span>
+              <span className="text-xs text-slate-500">
+                {p.gemeinsam ? 'gemeinsam' : p.bereich ? `Bereich ${bereichLabel(p.bereich as Bereich)}${p.besitzer ? ` — betreut von ${p.besitzer}` : ''}` : `persönlich — ${p.besitzer}`}
+              </span>
               {p.letzterFehler ? (
                 <span className="text-xs text-amber-700">Abruf gestört</span>
               ) : (
                 <span className="text-xs text-emerald-600">{p.bereit ? 'verbunden' : 'Zugang fehlt'}</span>
               )}
-              {p.id !== 'standard' && p.gemeinsam && (
+              {p.id !== 'standard' && (p.gemeinsam || !!p.bereich) && (
                 <button onClick={() => trennen(p)} className="ml-auto text-xs text-slate-400 hover:text-rose-600">
                   Trennen
                 </button>

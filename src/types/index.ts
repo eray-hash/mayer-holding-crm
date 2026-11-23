@@ -828,6 +828,8 @@ export type EingegangeneEmail = {
   zugewiesen?: { bereich: KundeBereich; kundeId: string; kundeName: string }
   ignoriert?: boolean
   postfachId?: string
+  /** Mail aus einem Bereichspostfach (z. B. 'immobilien' für immo@…). */
+  postfachBereich?: string
 }
 
 // Textvorlage für den E-Mail-Versand (Postfach/Kundenakte) mit Platzhaltern wie {{firma}} und

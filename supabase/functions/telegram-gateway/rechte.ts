@@ -72,6 +72,12 @@ export function darfBereich(m: RechteMitarbeiter, bereich: string | null | undef
   return BEREICH_IDS.includes(id) && (m.bereiche ?? []).includes(id)
 }
 
+/** Mail aus einem Bereichspostfach (eingegangene_emails.postfach_bereich, z. B. immo@… → 'immobilien'): nur wer den
+ *  Bereich darf — wie die Datenbankregel rechte_bereich_eingegangene_emails. Ohne Bereich (gemeinsames Postfach) immer. */
+export function darfPostfachBereich(m: RechteMitarbeiter, bereich: string | null | undefined): boolean {
+  return !bereich || darfBereich(m, bereich)
+}
+
 /** Darf der Mitarbeiter diese Kundenakte sehen und ändern? Die Sammelakten immer, private Akten nur ihr Besitzer.
  *  Im privaten Assistenten (nurPrivat) nur die eigenen privaten Akten — auch keine Sammelakten. */
 export function darfAkte(m: RechteMitarbeiter, akte: AkteFuerRechte): boolean {

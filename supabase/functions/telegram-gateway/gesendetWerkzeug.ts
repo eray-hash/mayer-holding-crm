@@ -10,7 +10,7 @@
 //   nur wenn deren Bereich freigegeben ist (die Sammelakten immer). Einem privaten Kontakt zugeordnete
 //   Mails nur für dessen Verantwortlichen.
 // - Zeilen mit besitzer_email (persönliches Postfach): nur für den Besitzer selbst.
-import { darfAkte, nichtFreigegeben, type RechteMitarbeiter } from './rechte.ts'
+import { darfAkte, darfPostfachBereich, nichtFreigegeben, type RechteMitarbeiter } from './rechte.ts'
 import { datumDeutsch, VOLLTEXT_HOECHSTENS } from './mailWerkzeuge.ts'
 
 // deno-lint-ignore no-explicit-any
@@ -63,6 +63,8 @@ export type GesendetZeile = {
   von?: string | null
   quelle?: string | null
   postfach_id?: string | null
+  /** Gesendet aus einem Bereichspostfach: nur für Mitarbeiter dieses Bereichs. */
+  postfach_bereich?: string | null
 }
 
 export type AkteKurz = { bereich: string | null; verantwortlich_email: string | null }
@@ -70,6 +72,7 @@ export type AkteKurz = { bereich: string | null; verantwortlich_email: string | 
 /** Darf `ich` (Adresse des Mitarbeiters, klein) diese gesendete Mail sehen? `akten`: nachgeschlagene Akten zu kunde_id. */
 export function darfGesendeteSehen(m: RechteMitarbeiter, ich: string, z: GesendetZeile, akten: Map<string, AkteKurz>): boolean {
   if (z.besitzer_email) return !!ich && z.besitzer_email.trim().toLowerCase() === ich
+  if (!darfPostfachBereich(m, z.postfach_bereich)) return false
   if (!z.kunde_id) return true
   const akte = akten.get(z.kunde_id)
   const bereich = z.kunde_bereich || akte?.bereich
@@ -113,7 +116,7 @@ function suchwort(roh: unknown): string {
   return String(roh ?? '').replace(/[,()%*"\\]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100)
 }
 
-const SPALTEN = 'id, an, an_name, betreff, text, gesendet_am, kunde_id, kunde_bereich, kunde_name, besitzer_email, von, quelle, postfach_id'
+const SPALTEN = 'id, an, an_name, betreff, text, gesendet_am, kunde_id, kunde_bereich, kunde_name, besitzer_email, von, quelle, postfach_id, postfach_bereich'
 const KEIN_KUNDE = 'Fehler: Es gibt keinen Kunden mit dieser kunde_id. Ermittle die richtige ID mit kunden_suchen.'
 
 function herkunft(z: GesendetZeile): string {

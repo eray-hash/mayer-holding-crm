@@ -21,6 +21,8 @@
 //     mailer-daemon …) werden wie in der bestehenden Kette als relevanz = 'nicht_relevant' markiert — aber nur,
 //     wenn die KI-Einordnung noch fehlt (relevanz leer). Ein „kunde“ der KI wird nicht überstimmt.
 //
+// Bereichspostfächer (postfaecher.bereich, z. B. immo@amayer-holding.com seit 23.11.2026) zählen hier wie das gemeinsame
+// Postfach: ihre Mails haben keinen Besitzer, sichtbar sind sie nur für den Bereich (postfach_bereich).
 // Ohne KI, ohne Nachrichten. Private Postfächer (besitzer_email gesetzt) bleiben unberührt — sie gehören ihrem
 // Besitzer, eine Zuordnung zur gemeinsamen Akte geht dort nur über „In öffentlichen Bereich übernehmen“.
 // Jede Mail wird genau einmal geprüft: Vor der Arbeit wird sie über zuordnung_geprueft_am beansprucht (nur wer die
@@ -401,6 +403,8 @@ export type ZuordnungsOptionen = {
   trockenlauf?: boolean
   zeitBudgetMs?: number
   jetzt?: Date
+  /** Nur Mails dieses Postfachs (postfaecher.id) — für die einmalige Überführung ins Bereichspostfach (bereichspostfach.ts). */
+  postfachId?: string
 }
 
 export type ZuordnungsErgebnis = {
@@ -428,6 +432,7 @@ export async function ordneNeueMailsZu(admin: Admin, opts: ZuordnungsOptionen = 
       .is('besitzer_email', null)
       .is('zugewiesener_kunde_id', null)
       .gte('erstellt_am', seit)
+    if (opts.postfachId) abfrage = abfrage.eq('postfach_id', opts.postfachId)
     if (!opts.trockenlauf) abfrage = abfrage.is('zuordnung_geprueft_am', null)
     const { data: offen, error } = await abfrage.order('erstellt_am', { ascending: true }).limit(grenze)
     if (error) throw new Error(`Postfach nicht lesbar: ${error.message}`)

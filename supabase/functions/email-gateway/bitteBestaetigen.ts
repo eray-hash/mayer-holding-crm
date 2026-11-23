@@ -44,7 +44,7 @@ import {
 import { vorschlagSichtbar, type ZuordnungVorschlag } from '../_shared/terminZuordnungKern.ts'
 import { type EingangKandidat, haeufigkeitAus, type Merkmale, merkmaleAus, ordnerFuer, vorschlaegeFuer, woerter } from '../_shared/eingangVorschlagKern.ts'
 import { alleZeilen } from '../_shared/alleZeilen.ts'
-import { darfAkte, darfObjekt, type RechteMitarbeiter, SAMMELAKTEN } from '../telegram-gateway/rechte.ts'
+import { darfAkte, darfObjekt, darfPostfachBereich, type RechteMitarbeiter, SAMMELAKTEN } from '../telegram-gateway/rechte.ts'
 import { darfZiel } from '../telegram-gateway/privatPostWerkzeug.ts'
 import { inhaltSchluessel } from './akteZuObjekt.ts'
 import { berlinZeit } from './tagesmeldung.ts'
@@ -175,9 +175,11 @@ type MailZeile = {
   ignoriert: boolean | null
   zugewiesener_kunde_id: string | null
   zuordnung_vorschlag: { art?: string; status?: string; kandidaten?: { kundeId: string; bereich?: string; name?: string; grund?: string; sicher?: boolean }[] } | null
+  /** Bereichspostfach (z. B. immo@… → 'immobilien'): Vorschlag nur an Empfänger mit diesem Bereich. */
+  postfach_bereich?: string | null
 }
 
-const MAIL_SPALTEN = 'id, message_id, von, von_name, betreff, mail_datum, ignoriert, zugewiesener_kunde_id, zuordnung_vorschlag'
+const MAIL_SPALTEN = 'id, message_id, von, von_name, betreff, mail_datum, ignoriert, zugewiesener_kunde_id, zuordnung_vorschlag, postfach_bereich'
 
 function absender(m: MailZeile): string {
   const name = String(m.von_name ?? '').trim()
@@ -237,7 +239,7 @@ export async function gemeinsameMailKandidaten(admin: Db, team: Person[], kunden
     const akte = k ? kunden.get(String(k.kundeId)) : undefined
     if (!akte || akte.bereich === 'privat' || SAMMELAKTEN.includes(akte.id)) continue
     const p = verantwortlicher(team, akte.verantwortlich_email, akte.verantwortlich)
-    if (!p || !darfAkte(p, akte)) continue
+    if (!p || !darfAkte(p, akte) || !darfPostfachBereich(p, m.postfach_bereich)) continue
     const liste = je.get(adresse(p.email)) ?? []
     liste.push({
       art: 'mail',

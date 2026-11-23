@@ -10,6 +10,13 @@
 //   und sind nur für den Besitzer sichtbar, bis er sie in den öffentlichen Bereich holt.
 // - Anhänge persönlicher Mails liegen in einem nicht öffentlichen Ablageort; einen Link gibt es nur
 //   über `anhangUrl`, das vorher prüft, ob der Fragende die Mail sehen darf.
+// - Bereichspostfächer (seit 23.11.2026, erstes: immo@amayer-holding.com für den Bereich Immobilien):
+//   `postfaecher.bereich` gesetzt, `besitzer_email` leer. Ihre Mails laufen durch dieselbe Prüfung und
+//   Zuordnung wie das gemeinsame Postfach (Relevanz, eindeutige Akte, Lieferantenrechnung), tragen aber
+//   `postfach_bereich` — sehen dürfen sie nur Mitarbeiter mit diesem Bereich (Datenbankregel
+//   rechte_bereich_eingegangene_emails, im Assistenten darfBereich). Senden darf die Geschäftsführung und
+//   der Verantwortliche (`postfaecher.verantwortlich_email`). Kalender-Übernahme und private Vorschläge
+//   persönlicher Postfächer gelten dort nicht; die eigenen Ordner werden weiter abgeholt.
 import { istSichererPfad } from '../_shared/speicherPfad.ts'
 import { ImapFlow } from 'npm:imapflow@1'
 import nodemailer from 'npm:nodemailer@6'
@@ -27,6 +34,10 @@ export type Postfach = {
   adresse: string
   anzeige_name: string
   besitzer_email: string | null
+  /** Bereichspostfach: Kennung des Bereichs (z. B. 'immobilien'); dann ist besitzer_email leer. */
+  bereich?: string | null
+  /** Wer ein Bereichspostfach betreut (darf senden, sieht die Ordnernamen). */
+  verantwortlich_email?: string | null
   smtp_host: string
   smtp_port: number
   imap_host: string
@@ -44,7 +55,7 @@ export type Postfach = {
   abruf_laeuft_seit?: string | null
 }
 
-export type Aufrufer = { email: string; name: string; istGf: boolean }
+export type Aufrufer = { email: string; name: string; istGf: boolean; /** Freigegebene Bereiche (mitarbeiter.bereiche). */ bereiche?: string[] }
 export type MailAbsender = { adresse: string; anzeigeName?: string; host: string; port: number; benutzer: string; passwort: string }
 
 export const STANDARD_ID = 'standard'
@@ -101,9 +112,14 @@ export async function ermittleAufrufer(req: Request, admin: Db, body: Record<str
   }
   if (!email) return null
   const muster = email.toLowerCase().replace(/[\\%_]/g, (z: string) => `\\${z}`)
-  const { data: zeile } = await admin.from('mitarbeiter').select('name, email, aktiv, rolle, ist_admin').ilike('email', muster).maybeSingle()
+  const { data: zeile } = await admin.from('mitarbeiter').select('name, email, aktiv, rolle, ist_admin, bereiche').ilike('email', muster).maybeSingle()
   if (!zeile?.aktiv) return null
-  return { email: String(zeile.email).toLowerCase(), name: zeile.name ?? '', istGf: zeile.rolle === 'geschaeftsfuehrung' || !!zeile.ist_admin }
+  return {
+    email: String(zeile.email).toLowerCase(),
+    name: zeile.name ?? '',
+    istGf: zeile.rolle === 'geschaeftsfuehrung' || !!zeile.ist_admin,
+    bereiche: Array.isArray(zeile.bereiche) ? zeile.bereiche.map((b: unknown) => String(b)) : [],
+  }
 }
 
 // ---------- Postfächer lesen ----------
@@ -134,9 +150,38 @@ export async function ladePostfach(admin: Db, id: string): Promise<Postfach | nu
   return (data as Postfach | null) ?? null
 }
 
+export type PostfachArt = 'gemeinsam' | 'bereich' | 'persoenlich'
+
+/** Gemeinsam (für alle), Bereichspostfach (Mitarbeiter eines Bereichs) oder persönlich (ein Besitzer). */
+export function postfachArt(p: Pick<Postfach, 'besitzer_email' | 'bereich'>): PostfachArt {
+  if (p.besitzer_email) return 'persoenlich'
+  return p.bereich ? 'bereich' : 'gemeinsam'
+}
+
+/** Darf der Aufrufer den Bereich sehen? Geschäftsführung und Admins immer ("immobilienkunden" zählt als "immobilien"). */
+export function aufruferDarfBereich(a: Aufrufer | null, bereich: string | null | undefined): boolean {
+  if (!bereich) return true
+  if (!a) return false
+  if (a.istGf) return true
+  const id = bereich === 'immobilienkunden' ? 'immobilien' : bereich
+  return (a.bereiche ?? []).includes(id)
+}
+
+/** Darf der Aufrufer das Postfach sehen (Liste der Postfächer, Mails darin)? */
+export function darfSehen(p: Postfach, a: Aufrufer | null): boolean {
+  const art = postfachArt(p)
+  if (art === 'gemeinsam') return true
+  if (art === 'bereich') return aufruferDarfBereich(a, p.bereich)
+  return !!a && a.email === String(p.besitzer_email).toLowerCase()
+}
+
+/** Darf der Aufrufer von diesem Postfach senden bzw. es abrufen? Bereichspostfach: Geschäftsführung und Verantwortlicher. */
 export function darfNutzen(p: Postfach, a: Aufrufer | null): boolean {
-  if (!p.besitzer_email) return true
-  return !!a && a.email === p.besitzer_email.toLowerCase()
+  const art = postfachArt(p)
+  if (art === 'gemeinsam') return true
+  if (!a) return false
+  if (art === 'bereich') return a.istGf || (!!p.verantwortlich_email && a.email === p.verantwortlich_email.toLowerCase())
+  return a.email === String(p.besitzer_email).toLowerCase()
 }
 
 async function passwortVon(admin: Db, p: Postfach): Promise<string> {
@@ -173,6 +218,8 @@ export type PostfachInfo = {
   gemeinsam: boolean
   eigenes: boolean
   besitzer: string | null
+  /** Bereichspostfach: Kennung des Bereichs, sonst null. */
+  bereich: string | null
   bereit: boolean
   kannSenden: boolean
   holtAb: boolean
@@ -188,21 +235,29 @@ export async function listePostfaecher(admin: Db, a: Aufrufer, alle: boolean): P
   const { data: geheim } = await admin.from('postfach_geheimnisse').select('postfach_id')
   const mitPasswort = new Set(((geheim ?? []) as { postfach_id: string }[]).map((g) => g.postfach_id))
   return ((zeilen ?? []) as Postfach[])
-    .filter((p) => darfNutzen(p, a) || (alle && a.istGf))
-    .map((p) => ({
-      id: p.id,
-      adresse: p.adresse,
-      anzeigeName: p.anzeige_name ?? '',
-      gemeinsam: !p.besitzer_email,
-      eigenes: !!p.besitzer_email && p.besitzer_email.toLowerCase() === a.email,
-      besitzer: p.besitzer_email,
-      bereit: p.geheimnis_name ? !!Deno.env.get(p.geheimnis_name) : mitPasswort.has(p.id),
-      kannSenden: !!p.smtp_host,
-      holtAb: !!p.besitzer_email || p.id !== STANDARD_ID,
-      letzterAbruf: p.letzter_abruf,
-      letzterFehler: p.letzter_fehler,
-      ordner: !!p.besitzer_email && p.besitzer_email.toLowerCase() === a.email ? Object.keys(p.ordner_stand ?? {}).sort((x, y) => x.localeCompare(y, 'de')) : [],
-    }))
+    .filter((p) => darfSehen(p, a) || (alle && a.istGf))
+    .map((p) => {
+      const art = postfachArt(p)
+      const eigenes = art === 'persoenlich' && String(p.besitzer_email).toLowerCase() === a.email
+      // Ordnernamen: beim eigenen Postfach und beim Verantwortlichen eines Bereichspostfachs.
+      const betreut = art === 'bereich' && !!p.verantwortlich_email && p.verantwortlich_email.toLowerCase() === a.email
+      return {
+        id: p.id,
+        adresse: p.adresse,
+        anzeigeName: p.anzeige_name ?? '',
+        gemeinsam: art === 'gemeinsam',
+        eigenes,
+        besitzer: art === 'bereich' ? p.verantwortlich_email ?? null : p.besitzer_email,
+        bereich: art === 'bereich' ? p.bereich ?? null : null,
+        bereit: p.geheimnis_name ? !!Deno.env.get(p.geheimnis_name) : mitPasswort.has(p.id),
+        // Als Absender nur, wer von dort senden darf (Bereichspostfach: Geschäftsführung und Verantwortlicher).
+        kannSenden: !!p.smtp_host && darfNutzen(p, a),
+        holtAb: art !== 'gemeinsam' || p.id !== STANDARD_ID,
+        letzterAbruf: p.letzter_abruf,
+        letzterFehler: p.letzter_fehler,
+        ordner: eigenes || betreut ? Object.keys(p.ordner_stand ?? {}).sort((x, y) => x.localeCompare(y, 'de')) : [],
+      }
+    })
 }
 
 // ---------- Mail-Server zur Adresse finden ----------
@@ -360,7 +415,11 @@ export async function verbindePostfach(
   if (alt?.besitzer_email && alt.besitzer_email.toLowerCase() !== a.email && !(gemeinsam && a.istGf)) {
     return { ok: false, fehler: 'Dieses Postfach ist bereits mit einem anderen Mitarbeiter verbunden.' }
   }
-  if (alt && !alt.besitzer_email && !a.istGf) return { ok: false, fehler: 'Diese Adresse ist ein gemeinsames Postfach — das verwaltet die Geschäftsführung.' }
+  // Bereichspostfach: neu verbinden (z. B. nach Passwortwechsel) darf die Geschäftsführung und der Verantwortliche;
+  // es bleibt dabei ein Bereichspostfach (bereich und verantwortlich_email werden unten nicht überschrieben).
+  const istBereich = !!alt && postfachArt(alt) === 'bereich'
+  if (istBereich && !darfNutzen(alt!, a)) return { ok: false, fehler: 'Diese Adresse ist ein Bereichspostfach — das verwaltet die Geschäftsführung.' }
+  if (alt && !alt.besitzer_email && !istBereich && !a.istGf) return { ok: false, fehler: 'Diese Adresse ist ein gemeinsames Postfach — das verwaltet die Geschäftsführung.' }
 
   const eigeneAngabe = eingabe.imapHost?.trim() && eingabe.smtpHost?.trim() ? [{ imap: eingabe.imapHost.trim(), smtp: eingabe.smtpHost.trim() }] : null
   const suche = eigeneAngabe ? { vorschlaege: eigeneAngabe } : await findeServer(adresse)
@@ -400,8 +459,8 @@ export async function verbindePostfach(
   const zeile = {
     id,
     adresse,
-    anzeige_name: (eingabe.anzeigeName ?? '').trim() || (gemeinsam ? alt?.anzeige_name ?? '' : a.name),
-    besitzer_email: gemeinsam ? null : a.email,
+    anzeige_name: (eingabe.anzeigeName ?? '').trim() || (gemeinsam || istBereich ? alt?.anzeige_name ?? '' : a.name),
+    besitzer_email: gemeinsam || istBereich ? null : a.email,
     smtp_host: treffer.smtp,
     smtp_port: treffer.smtpPort,
     imap_host: treffer.imap,
@@ -657,7 +716,9 @@ export async function rufePostfachAb(
   const ordnerStand: Record<string, OrdnerStand> = { ...(p.ordner_stand ?? {}) }
   const abgebrochenBei = Number(p.in_arbeit_uid ?? 0)
   const abgebrochenIn = p.in_arbeit_ordner ?? POSTEINGANG
-  const gemeinsam = !p.besitzer_email
+  const art = postfachArt(p)
+  // Gemeinsam UND Bereichspostfach: Mails ohne Besitzer, öffentliche Ablage, Prüfung und Zuordnung wie im Hauptpostfach.
+  const gemeinsam = art !== 'persoenlich'
   const standSpalten = () => ({ ...(posteingangUid ? { letzte_uid: posteingangUid, uid_gueltigkeit: posteingangGueltig } : {}), ordner_stand: ordnerStand })
   let bytes = 0
   let bearbeitet = 0
@@ -721,7 +782,7 @@ export async function rufePostfachAb(
           continue
         }
         // Beim ersten Abholen eines Ordners nichts, was älter als ein Jahr ist.
-        if (neuStart && !gemeinsam && umschlag.date && Date.now() - new Date(umschlag.date).getTime() > ERSTER_ABRUF_HOECHSTALTER) {
+        if (neuStart && art !== 'gemeinsam' && umschlag.date && Date.now() - new Date(umschlag.date).getTime() > ERSTER_ABRUF_HOECHSTALTER) {
           hoechste = n.uid
           merke(hoechste, gueltig)
           erledigt++
@@ -749,6 +810,8 @@ export async function rufePostfachAb(
             rohdaten: { quelle: 'imap', uid: n.uid, an: adressen(umschlag.to), cc: adressen(umschlag.cc), ...(istPosteingang ? {} : { ordner: pfad }) },
             postfach_id: p.id,
             besitzer_email: p.besitzer_email,
+            // Nur bei Bereichspostfächern: die Spalte gibt es erst mit supabase/sql/runde6_immo_postfach.sql.
+            ...(art === 'bereich' ? { postfach_bereich: p.bereich } : {}),
           }
           const hierAbgebrochen = n.uid === abgebrochenBei && pfad === abgebrochenIn
           if (n.size > ZU_GROSS || hierAbgebrochen) {
@@ -860,9 +923,9 @@ export async function rufePostfachAb(
       posteingangGueltig = gueltig
     })
 
-    // Persönliche Postfächer: auch die eigenen Ordner, in die der Besitzer seine Mails sortiert.
-    // Gesendet, Entwürfe, Papierkorb und Spam bleiben außen vor. Gemeinsame Postfächer: nur Posteingang.
-    if (!gemeinsam && !nurPruefen && !voll) {
+    // Persönliche und Bereichspostfächer: auch die eigenen Ordner, in die der Besitzer bzw. Verantwortliche seine
+    // Mails sortiert. Gesendet, Entwürfe, Papierkorb und Spam bleiben außen vor. Gemeinsame Postfächer: nur Posteingang.
+    if (art !== 'gemeinsam' && !nurPruefen && !voll) {
       // deno-lint-ignore no-explicit-any
       const ordner: any[] = await zeitlimit(client.list({ statusQuery: { messages: true, uidNext: true, uidValidity: true } }), 30000, 'Der Mail-Server hat die Ordnerliste nicht rechtzeitig geliefert.')
       const vorhandene = new Set<string>()
@@ -941,7 +1004,7 @@ export async function listeOrdner(admin: Db, p: Postfach, mitNamen: boolean): Pr
         const art = String(o.path).toUpperCase() === 'INBOX' ? 'Posteingang' : arten[String(o.specialUse ?? '')] ?? 'eigener Ordner'
         const name = mitNamen || art !== 'eigener Ordner' ? String(o.path) : `Ordner ${++eigene}`
         const posteingang = String(o.path).toUpperCase() === POSTEINGANG
-        return { name, art, mails: Number(o.status?.messages ?? 0), wirdAbgeholt: posteingang || (!!p.besitzer_email && istEigenerOrdner(o)) }
+        return { name, art, mails: Number(o.status?.messages ?? 0), wirdAbgeholt: posteingang || (postfachArt(p) !== 'gemeinsam' && istEigenerOrdner(o)) }
       })
     return { ordner }
   } catch (err) {
@@ -1181,6 +1244,10 @@ export async function zieheBesitzUm(admin: Db, alt: string, neu: string): Promis
     const { error } = await admin.from(tabelle).update({ besitzer_email: nach }).eq('besitzer_email', von)
     if (error) console.error('Besitz-Umzug fehlgeschlagen', tabelle, error.message)
   }
+  {
+    const { error } = await admin.from('postfaecher').update({ verantwortlich_email: nach }).eq('verantwortlich_email', von)
+    if (error) console.error('Besitz-Umzug fehlgeschlagen', 'postfaecher (verantwortlich)', error.message)
+  }
   const { error } = await admin.from('kunden').update({ verantwortlich_email: nach }).eq('bereich', 'privat').eq('verantwortlich_email', von)
   if (error) console.error('Besitz-Umzug fehlgeschlagen', 'kunden', error.message)
 }
@@ -1188,7 +1255,7 @@ export async function zieheBesitzUm(admin: Db, alt: string, neu: string): Promis
 // Zieht die Anhänge einer Mail aus der privaten Ablage in die der öffentlichen Mails um, damit sie
 // danach wie jeder andere Mail-Anhang funktionieren (Akte, Einlesen, Assistent).
 // deno-lint-ignore no-explicit-any
-export async function veroeffentlicheAnhaenge(admin: Db, anhaenge: any): Promise<any> {
+export async function veroeffentlicheAnhaenge(admin: Db, anhaenge: any, o: { privatBehalten?: boolean } = {}): Promise<any> {
   if (!Array.isArray(anhaenge) || anhaenge.length === 0) return anhaenge ?? null
   const ergebnis = []
   for (const anhang of anhaenge) {
@@ -1211,7 +1278,8 @@ export async function veroeffentlicheAnhaenge(admin: Db, anhaenge: any): Promise
       ergebnis.push(anhang)
       continue
     }
-    await admin.storage.from(ANHANG_ABLAGE).remove([pfad])
+    // privatBehalten: die private Datei bleibt liegen (Überführung ins Bereichspostfach löscht nichts).
+    if (!o.privatBehalten) await admin.storage.from(ANHANG_ABLAGE).remove([pfad])
     ergebnis.push({ ...anhang, url: admin.storage.from(OEFFENTLICHE_ABLAGE).getPublicUrl(ziel).data.publicUrl })
   }
   return ergebnis
@@ -1250,8 +1318,10 @@ export async function anhangUrl(admin: Db, a: Aufrufer, verweis: string): Promis
   if (!verweis.startsWith(ANHANG_VORSATZ)) return null
   const pfad = verweis.slice(ANHANG_VORSATZ.length)
   const fach = pfad.split('/')[0]
-  const { data } = await admin.from('eingegangene_emails').select('besitzer_email').eq('postfach_id', fach).contains('anhaenge', JSON.stringify([{ url: verweis }]))
-  const sichtbar = ((data ?? []) as { besitzer_email: string | null }[]).some((m) => !m.besitzer_email || m.besitzer_email.toLowerCase() === a.email)
+  const { data } = await admin.from('eingegangene_emails').select('besitzer_email, postfach_bereich').eq('postfach_id', fach).contains('anhaenge', JSON.stringify([{ url: verweis }]))
+  const sichtbar = ((data ?? []) as { besitzer_email: string | null; postfach_bereich?: string | null }[]).some((m) =>
+    m.besitzer_email ? m.besitzer_email.toLowerCase() === a.email : aufruferDarfBereich(a, m.postfach_bereich),
+  )
   if (!sichtbar) return null
   const { data: link } = await admin.storage.from(ANHANG_ABLAGE).createSignedUrl(pfad, 3600)
   return link?.signedUrl ?? null

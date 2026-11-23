@@ -25,6 +25,8 @@ export type EingegangeneMail = {
   ignoriert?: boolean
   /** In welchem Postfach die Mail angekommen ist (leer bei älteren Mails). */
   postfachId?: string
+  /** Mail aus einem Bereichspostfach (z. B. immo@… → 'immobilien'); nur Mitarbeiter dieses Bereichs sehen sie. */
+  postfachBereich?: string
   /** Ordner des Postfachs, aus dem die Mail stammt; leer = Posteingang. */
   ordner?: string
 }
@@ -130,7 +132,10 @@ export type PostfachInfo = {
   /** Gemeinsames Postfach (für alle) — sonst gehört es einem Mitarbeiter. */
   gemeinsam: boolean
   eigenes: boolean
+  /** Persönlich: Besitzer. Bereichspostfach: wer es betreut. */
   besitzer: string | null
+  /** Bereichspostfach (z. B. 'immobilien' für immo@…): für alle Mitarbeiter dieses Bereichs; sonst null. */
+  bereich?: string | null
   /** Zugang hinterlegt. */
   bereit: boolean
   /** Als Absender nutzbar. Falsch bei Anbietern, die den Versand von unserem Server sperren (z. B. Telekom) — dann nur Empfang. */

@@ -28,11 +28,12 @@ type Row = {
   zugewiesener_kunde_name: string | null
   ignoriert: boolean | null
   postfach_id: string | null
+  postfach_bereich?: string | null
   ordner?: string | null
 }
 
 const SELECT_SPALTEN =
-  'id, message_id, von, von_name, betreff, mail_datum, ausschnitt, anhaenge, zugewiesener_kunde_id, zugewiesener_bereich, zugewiesener_kunde_name, ignoriert, postfach_id'
+  'id, message_id, von, von_name, betreff, mail_datum, ausschnitt, anhaenge, zugewiesener_kunde_id, zugewiesener_bereich, zugewiesener_kunde_name, ignoriert, postfach_id, postfach_bereich'
 
 function toMail(row: Row): EingegangeneMail {
   return {
@@ -49,6 +50,7 @@ function toMail(row: Row): EingegangeneMail {
         : undefined,
     ignoriert: row.ignoriert ?? undefined,
     postfachId: row.postfach_id ?? undefined,
+    postfachBereich: row.postfach_bereich ?? undefined,
     ordner: row.ordner ?? undefined,
   }
 }

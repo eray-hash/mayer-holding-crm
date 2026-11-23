@@ -38,9 +38,11 @@ export type MailZeile = {
   zugewiesener_kunde_id?: string | null
   zugewiesener_kunde_name?: string | null
   zugewiesener_bereich?: string | null
+  /** Mail aus einem Bereichspostfach (z. B. immo@… → 'immobilien'): nur für Mitarbeiter dieses Bereichs. */
+  postfach_bereich?: string | null
 }
 
-export const MAIL_SPALTEN = 'id, message_id, von, von_name, betreff, mail_datum, ausschnitt, anhaenge, rohdaten, besitzer_email, postfach_id, zugewiesener_kunde_id, zugewiesener_kunde_name, zugewiesener_bereich'
+export const MAIL_SPALTEN = 'id, message_id, von, von_name, betreff, mail_datum, ausschnitt, anhaenge, rohdaten, besitzer_email, postfach_id, zugewiesener_kunde_id, zugewiesener_kunde_name, zugewiesener_bereich, postfach_bereich'
 
 /** HTML grob in lesbaren Text; Links bleiben als „Text (Adresse)" erhalten — wichtig für Einladungen. */
 export function htmlZuText(html: string): string {

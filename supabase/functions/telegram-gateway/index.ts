@@ -24,7 +24,7 @@ import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2.1
 import { PDFDocument, degrees } from 'npm:pdf-lib@1.17.1'
 import { aktuellePerson, kiAufruf, mitAnlass, setzeAnlass, setzePerson, setzePrivat } from '../_shared/kiVerbrauch.ts'
 import { entschaerfe, kuerze as kuerzeWunsch, merkeWunsch } from '../_shared/wuensche.ts'
-import { type AkteFuerRechte, bereichName, darfAkte, darfBereich, darfObjekt, darfObjekte, freigegebeneBereiche, istEingeschraenkt, istEigene, istFremdePrivatakte, istPrivat, istUnsichtbaresObjekt, nichtFreigegeben, ohneNurPrivat, SAMMELAKTEN, siehtAlleBereiche } from './rechte.ts'
+import { type AkteFuerRechte, bereichName, darfAkte, darfBereich, darfObjekt, darfPostfachBereich, darfObjekte, freigegebeneBereiche, istEingeschraenkt, istEigene, istFremdePrivatakte, istPrivat, istUnsichtbaresObjekt, nichtFreigegeben, ohneNurPrivat, SAMMELAKTEN, siehtAlleBereiche } from './rechte.ts'
 import { aufgabenUebersicht } from './aufgaben.ts'
 import { type AbteilungZeile, alleObjektDokumente, lesenVonSelbst, leseRef, OBJEKT_SPALTEN, objektakteText, objektStatus, type ObjektRow, sucheObjekte } from './objektakte.ts'
 import { richteFotoAus } from './bildDrehung.ts'
@@ -1525,11 +1525,12 @@ export const TOOLS = [
   {
     name: 'gemeinsames_postfach',
     description:
-      'Liest das GEMEINSAME Postfach der Firma (info@…), das alle Mitarbeiter sehen. Ohne mail_id: die zuletzt eingegangenen Mails (Werbung ist ausgeblendet), auf Wunsch eingegrenzt nach Absender, Name oder Betreff. Mit mail_id: der volle Text einer Mail samt Liste ihrer Anhänge. Nutze das, sobald jemand fragt, welche Mails gekommen sind, oder sagt, dass von einem Kunden eine Mail (mit Unterlagen) gekommen ist. Private Postfächer der Mitarbeiter sind hier nicht enthalten.',
+      'Liest das GEMEINSAME Postfach der Firma (info@…) samt der Bereichspostfächer (z. B. immo@… für den Bereich Immobilien — nur sichtbar, wenn der Bereich freigegeben ist). Ohne mail_id: die zuletzt eingegangenen Mails (Werbung ist ausgeblendet), auf Wunsch eingegrenzt nach Absender, Name oder Betreff oder auf ein Bereichspostfach. Mit mail_id: der volle Text einer Mail samt Liste ihrer Anhänge. Nutze das, sobald jemand fragt, welche Mails gekommen sind, oder sagt, dass von einem Kunden eine Mail (mit Unterlagen) gekommen ist. Private Postfächer der Mitarbeiter sind hier nicht enthalten.',
     input_schema: {
       type: 'object',
       properties: {
         suche: { type: 'string', description: 'Optional: Absender-Adresse, Name oder Wort aus dem Betreff.' },
+        bereichspostfach: { type: 'string', description: 'Optional: nur Mails aus dem Bereichspostfach dieses Bereichs, z. B. "immobilien" (immo@…).' },
         tage: { type: 'number', description: 'Wie viele Tage zurück (Standard 7, höchstens 60).' },
         mail_id: { type: 'string', description: 'Kennung einer Mail aus der Liste, um sie ganz zu lesen.' },
       },
@@ -2270,13 +2271,15 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
       if (!kennung || kennung.length > 400 || /[\s"]/.test(kennung)) return 'Fehler: mail_id ist ungültig — exakt aus der Liste von gemeinsames_postfach übernehmen.'
       const { data: m } = await supabase
         .from('eingegangene_emails')
-        .select('id, von, von_name, betreff, mail_datum, ausschnitt, anhaenge, rohdaten, zugewiesener_kunde_id, zugewiesener_kunde_name, zugewiesener_bereich')
+        .select('id, von, von_name, betreff, mail_datum, ausschnitt, anhaenge, rohdaten, zugewiesener_kunde_id, zugewiesener_kunde_name, zugewiesener_bereich, postfach_bereich')
         .eq(istKennung(kennung) ? 'id' : 'message_id', kennung)
         .is('besitzer_email', null)
         .limit(1)
         .maybeSingle()
       const keineMail = 'Fehler: Diese Mail gibt es im gemeinsamen Postfach nicht.'
       if (!m) return keineMail
+      // Bereichspostfach: nur mit freigegebenem Bereich (wie die Datenbankregel), sonst gibt es die Mail nicht.
+      if (!darfPostfachBereich(mitarbeiter, m.postfach_bereich)) return keineMail
       // Einer Akte zugeordnete Mails nur, wenn der Mitarbeiter die Akte sehen darf (Bereich freigegeben
       // bzw. eigener privater Kontakt) — das gilt auch für Geschäftsführung und Admins.
       const gesperrt = await pruefeZuordnung(supabase, mitarbeiter, m.zugewiesener_kunde_id, m.zugewiesener_bereich, keineMail)
@@ -2300,11 +2303,16 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     const suche = String(input.suche ?? '').replace(/[,()%]/g, ' ').trim()
     let abfrage = supabase
       .from('eingegangene_emails')
-      .select('id, von, von_name, betreff, mail_datum, ausschnitt, anhaenge, zugewiesener_kunde_id, zugewiesener_kunde_name, zugewiesener_bereich')
+      .select('id, von, von_name, betreff, mail_datum, ausschnitt, anhaenge, zugewiesener_kunde_id, zugewiesener_kunde_name, zugewiesener_bereich, postfach_bereich')
       .is('besitzer_email', null)
       .or('relevanz.is.null,relevanz.neq.nicht_relevant')
       .gte('mail_datum', new Date(Date.now() - tage * 86400000).toISOString())
     if (suche) abfrage = abfrage.or(`betreff.ilike.%${suche}%,von.ilike.%${suche}%,von_name.ilike.%${suche}%`)
+    const nurFach = String(input.bereichspostfach ?? '').trim().toLowerCase()
+    if (nurFach) {
+      if (!darfPostfachBereich(mitarbeiter, nurFach)) return nichtFreigegeben(nurFach, mitarbeiter.name)
+      abfrage = abfrage.eq('postfach_bereich', nurFach === 'immobilienkunden' ? 'immobilien' : nurFach)
+    }
     const { data, error } = await abfrage.order('mail_datum', { ascending: false }).limit(60)
     if (error) return `Fehler beim Lesen des Postfachs: ${error.message}`
     // Vom Mail-Anbieter als Werbung markierte Mails weglassen.
@@ -2314,6 +2322,8 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     // Kollegen zugeordnet sind, fallen still weg.
     const nachgeschlagen = await bereicheDerAkten(supabase, roh.filter((m) => m.zugewiesener_kunde_id).map((m) => String(m.zugewiesener_kunde_id)))
     roh = roh.filter((m) => darfZuordnung(mitarbeiter, m.zugewiesener_kunde_id, m.zugewiesener_bereich, nachgeschlagen))
+    // Mails aus Bereichspostfächern, deren Bereich nicht freigegeben ist, fallen ebenso still weg.
+    roh = roh.filter((m) => darfPostfachBereich(mitarbeiter, m.postfach_bereich))
     const liste = roh.slice(0, 20)
     if (liste.length === 0) return `Im gemeinsamen Postfach liegt aus den letzten ${tage} Tagen keine ${suche ? 'passende ' : ''}Mail.`
     const weitere = roh.length > 20 || (data ?? []).length >= 60
@@ -2325,6 +2335,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
         datum: datumDeutsch(m.mail_datum),
         anhaenge: anhaengeVon(m).length,
         akte: m.zugewiesener_kunde_id ? `${m.zugewiesener_kunde_name} (kunde_id=${m.zugewiesener_kunde_id})` : 'keine',
+        ...(m.postfach_bereich ? { postfach: `Bereichspostfach ${bereichName(m.postfach_bereich)}` } : {}),
         anfang: String(m.ausschnitt ?? '').replace(/\s+/g, ' ').slice(0, 200),
       })),
     ))
@@ -2346,6 +2357,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     if (!mail) {
       const { data } = await supabase.from('eingegangene_emails').select(MAIL_SPALTEN).eq(istUuid ? 'id' : 'message_id', kennung).is('besitzer_email', null).limit(1).maybeSingle()
       mail = (data as MailZeile | null) ?? null
+      if (mail && !darfPostfachBereich(mitarbeiter, mail.postfach_bereich)) return keineMail
       if (mail) {
         const gesperrt = await pruefeZuordnung(supabase, mitarbeiter, mail.zugewiesener_kunde_id, mail.zugewiesener_bereich, keineMail)
         if (gesperrt) return gesperrt
@@ -2360,7 +2372,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
       const { an, cc } = empfaengerVon(mail)
       return JSON.stringify({
         mail_id: privat ? mail.message_id ?? mail.id : mail.id,
-        postfach: privat ? 'privat (nur dieser Mitarbeiter)' : 'gemeinsam',
+        postfach: privat ? 'privat (nur dieser Mitarbeiter)' : mail.postfach_bereich ? `Bereichspostfach ${bereichName(mail.postfach_bereich)}` : 'gemeinsam',
         von: `${mail.von_name ?? ''} <${mail.von ?? ''}>`,
         an,
         cc,
@@ -2455,8 +2467,9 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     const mailId = String(input.mail_id ?? '').trim()
     const istKennung = /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(mailId)
     const { data: vorher } = mailId
-      ? await supabase.from('eingegangene_emails').select('zugewiesener_kunde_id, zugewiesener_bereich').eq(istKennung ? 'id' : 'message_id', mailId).is('besitzer_email', null).limit(1).maybeSingle()
+      ? await supabase.from('eingegangene_emails').select('zugewiesener_kunde_id, zugewiesener_bereich, postfach_bereich').eq(istKennung ? 'id' : 'message_id', mailId).is('besitzer_email', null).limit(1).maybeSingle()
       : { data: null }
+    if (vorher && !darfPostfachBereich(mitarbeiter, vorher.postfach_bereich)) return 'Fehler: Diese Mail gibt es im gemeinsamen Postfach nicht.'
     const gesperrt = await pruefeZuordnung(supabase, mitarbeiter, vorher?.zugewiesener_kunde_id, vorher?.zugewiesener_bereich, 'Fehler: Diese Mail gibt es im gemeinsamen Postfach nicht.')
     if (gesperrt) return gesperrt
     // Über die Mail-Funktion: dort werden die Anhänge in die Akte gelegt und der Verlauf ergänzt.

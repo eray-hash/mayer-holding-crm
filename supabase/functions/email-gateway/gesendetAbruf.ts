@@ -5,6 +5,7 @@
 //
 // - Gemeinsame Postfächer (das Hauptpostfach `standard` und weitere ohne Besitzer): Zeilen ohne
 //   `besitzer_email`, sichtbar für alle (in Akten nach den üblichen Bereichsrechten).
+// - Bereichspostfächer (postfaecher.bereich): wie gemeinsame, aber mit `postfach_bereich` (sichtbar nur für den Bereich).
 // - Persönliche Postfächer: Zeilen mit `besitzer_email` des Besitzers — nur er sieht sie (wie seine
 //   abgeholten Eingangs-Mails), bis er sie selbst in den öffentlichen Bereich holt.
 // - Doppelt wird nichts: `message_id` (eindeutig) trägt die Message-ID der Mail (persönliche Postfächer
@@ -527,6 +528,8 @@ async function holePostfach(
             gesendet_am: datum,
             postfach_id: p.id,
             besitzer_email: besitzer,
+            // Bereichspostfach (postfach.ts): nur für Mitarbeiter dieses Bereichs sichtbar.
+            ...(p.bereich && !besitzer ? { postfach_bereich: p.bereich } : {}),
             von: vonAdresse,
             message_id: kennung,
             quelle: 'postfach',

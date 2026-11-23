@@ -340,6 +340,7 @@ export class FalscheDatenbank {
           const weg = pfade.filter((p) => fach().delete(p))
           return Promise.resolve({ data: weg.map((name) => ({ name })), error: null })
         },
+        getPublicUrl: (pfad: string) => ({ data: { publicUrl: `https://test.supabase.co/storage/v1/object/public/${eimer}/${pfad}` } }),
       }
     },
   }
