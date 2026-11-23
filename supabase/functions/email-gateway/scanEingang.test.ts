@@ -1,6 +1,6 @@
 // Scan-Eingang (scanEingang.ts): reine Hilfen ohne Netz.
 import { assert, assertEquals, assertStringIncludes } from 'jsr:@std/assert@1'
-import { betreffIstName, dateiSicher, nameAusBetreff, pfadAusUrl, wahlAufgabe } from './scanEingang.ts'
+import { nameFuerNeueAkte, betreffIstName, dateiSicher, nameAusBetreff, pfadAusUrl, wahlAufgabe } from './scanEingang.ts'
 
 Deno.test('Name der neuen Akte aus dem Betreff', () => {
   assertEquals(nameAusBetreff('anna beispiel'), 'Anna Beispiel')
@@ -35,4 +35,10 @@ Deno.test('Nur Betreffe, die nach einem Namen aussehen', () => {
   assert(!betreffIstName(''))
   assert(!betreffIstName('Scan'))
   assert(!betreffIstName('test'))
+})
+
+Deno.test('Neue Akte: Name aus dem Scan, wenn der Betreff einen Tippfehler hat', () => {
+  assertEquals(nameFuerNeueAkte('fam.musetr', ['Otto und Eva Muster', undefined]), 'Otto und Eva Muster')
+  assertEquals(nameFuerNeueAkte('fam. muster', [undefined]), 'Familie Muster')
+  assertEquals(nameFuerNeueAkte('anna beispiel', ['Ganz Anders GmbH']), 'Anna Beispiel')
 })

@@ -13,7 +13,7 @@
 // mit scan_status 'fehler' liegen und die gewöhnliche Post-Zuordnung (mailZuordnung.ts) kümmert sich um sie.
 import { degrees, PDFDocument } from 'npm:pdf-lib@1.17.1'
 import { entschlackeSeiten } from './pdfSeiten.ts'
-import { akteName, betreffIstAktenName, betreffNenntTeilDesNamens, normBetreff, type AkteZeile } from './mailZuordnung.ts'
+import { aehnlich, akteName, betreffIstAktenName, betreffNenntTeilDesNamens, normBetreff, normText, type AkteZeile } from './mailZuordnung.ts'
 import { heuteBerlin } from '../_shared/heuteBerlin.ts'
 import { alleZeilen } from '../_shared/alleZeilen.ts'
 
@@ -74,6 +74,24 @@ type Anhang = { filename?: string; size?: number; contentType?: string; url?: st
 export function nameAusBetreff(betreff: string | null | undefined): string {
   const b = normBetreff(betreff).replace(/\b(teil|scan|scans|akte|kundenakte|ordner)\b\s*\d*/gi, ' ').replace(/[()[\]]/g, ' ').replace(/\s+/g, ' ').trim()
   return b.split(' ').filter(Boolean).map((w) => (/^(von|van|de|zu|und)$/i.test(w) ? w.toLowerCase() : w.charAt(0).toUpperCase() + w.slice(1))).join(' ')
+}
+
+/** Fast gleiches Wort: ein Tippfehler oder zwei vertauschte Buchstaben („zetll“/„zettl“). */
+function fastGleich(a: string, b: string): boolean {
+  if (a.length < 4 || b.length < 4) return a === b
+  return aehnlich(a, b) || (a.length === b.length && [...a].sort().join('') === [...b].sort().join(''))
+}
+
+/** Name für eine neue Akte: der im Scan erkannte Name, wenn er zum Betreff passt (Betreff mit Tippfehler, „fam.“),
+ *  sonst der Betreff. */
+export function nameFuerNeueAkte(betreff: string, erkannt: (string | undefined)[]): string {
+  const imBetreff = normText(normBetreff(betreff)).split(' ').filter((w) => w.length >= 4)
+  for (const n of erkannt) {
+    const name = String(n ?? '').trim()
+    if (!name || name.length > 80) continue
+    if (normText(name).split(' ').some((w) => imBetreff.some((b) => fastGleich(w, b)))) return name
+  }
+  return nameAusBetreff(betreff).replace(/^Fam\.?\s*/i, 'Familie ')
 }
 
 export function dateiSicher(name: string): string {
@@ -221,6 +239,7 @@ async function bearbeiteMail(admin: Admin, dienste: ScanDienste, m: MailZeile, e
 
   // 1. Aufteilen und lesen.
   const teile: FertigerTeil[] = []
+  const erkannteNamen: (string | undefined)[] = []
   for (const a of anhaenge) {
     const pfad = pfadAusUrl(String(a.url))
     if (!pfad) throw new Error(`Anhang nicht im Speicher: ${a.filename}`)
@@ -236,6 +255,7 @@ async function bearbeiteMail(admin: Admin, dienste: ScanDienste, m: MailZeile, e
       continue
     }
     const aufteilung = await dienste.teile(base64(bytes), name, seiten)
+    erkannteNamen.push(aufteilung.erkannter_name, aufteilung.erkannte_firma)
     const drehung = new Map<number, number>()
     for (const d of aufteilung.seiten_drehung ?? []) if ([90, 180, 270].includes(d?.grad)) drehung.set(d.seite, d.grad)
     const bereiche = (aufteilung.dokumente ?? []).filter((t) => t.start_seite >= 1 && t.end_seite <= seiten && t.start_seite <= t.end_seite)
@@ -282,7 +302,7 @@ async function bearbeiteMail(admin: Admin, dienste: ScanDienste, m: MailZeile, e
   const heute = heuteBerlin()
   let neueAkte: AkteZeile | null = null
   if (kandidaten.length === 0) {
-    const name = nameAusBetreff(betreff) || 'Unbekannt (Scan)'
+    const name = nameFuerNeueAkte(betreff, erkannteNamen) || 'Unbekannt (Scan)'
     const id = `k_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`
     const { error } = await admin.from('kunden').insert({
       id,

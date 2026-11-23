@@ -246,7 +246,7 @@ function namensWoerter(s: string, fuell: boolean): string[] {
 }
 
 /** Gleiches Wort, bei längeren Wörtern auch mit einem Tippfehler („Schebek“/„Schebeck“). */
-function aehnlich(a: string, b: string): boolean {
+export function aehnlich(a: string, b: string): boolean {
   if (a === b) return true
   if (a.length < 5 || b.length < 5 || Math.abs(a.length - b.length) > 1) return false
   // Abstand höchstens 1 (ein Zeichen anders, zu viel oder zu wenig).
