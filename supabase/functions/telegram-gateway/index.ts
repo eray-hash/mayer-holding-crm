@@ -2148,7 +2148,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
       .join(' ')
   }
 
-  // Listen nie stillschweigend kürzen (23.11.2026: Hasan bekam 11 von 68 Mails an Herrn Bosler, ohne Hinweis).
+  // Listen nie stillschweigend kürzen (23.11.2026: Hasan bekam 11 von 68 Mails an Herrn Muster, ohne Hinweis).
   const mehrHinweis = (gezeigt: number, gesamt?: number) =>
     `\nACHTUNG: Das sind nur ${gezeigt}${gesamt ? ` von ${gesamt}` : ''} Treffern — es gibt WEITERE. Nicht als vollständig darstellen: mit suche bzw. Zeitraum eingrenzen und erneut abfragen, oder ausdrücklich sagen, dass die Liste nicht vollständig ist.`
 

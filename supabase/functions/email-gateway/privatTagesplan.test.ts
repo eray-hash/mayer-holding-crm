@@ -60,7 +60,7 @@ function welt(extra: Record<string, Zeile[]> = {}): FalscheDatenbank {
       todo('t_ms_aus', 'Markierte Mail', { erledigen_bis: '2026-11-25', ms_id: 'M2', ms_liste_id: 'L-flag' }),
       todo('t_bereich', 'Beratung für Hasan', { erledigen_bis: '2026-11-25', bereich: 'beratung' }),
       todo('t_fremd', 'Quirins Aufgabe', { erledigen_bis: '2026-11-25', besitzer_email: QUIRIN }),
-      todo('t_vage', 'Bosler?', { erstellt_am: '2026-11-28', kunde_projekt: null }),
+      todo('t_vage', 'Muster?', { erstellt_am: '2026-11-28', kunde_projekt: null }),
     ],
     termine: [
       termin('tm_privat', 'Zahnarzt', '2026-11-28T09:00:00Z', '2026-11-28T10:00:00Z', { ort: 'Ulm' }),
@@ -122,14 +122,14 @@ Deno.test('Sortierung: überfällig vor heute, dann Prio A–D (ohne zuletzt), d
 })
 
 Deno.test('Vagheit: „unklar“, „Details“, „?“, „…“, 1–2 Wörter ohne Zusammenhang', () => {
-  assert(istVage({ aufgabe: 'Bosler?' }))
+  assert(istVage({ aufgabe: 'Muster?' }))
   assert(istVage({ aufgabe: 'Steuer unklar mit Berater' }))
   assert(istVage({ aufgabe: 'Details zum Vertrag klären lassen' }))
   assert(istVage({ aufgabe: 'Wegen dem Ding …' }))
   assert(istVage({ aufgabe: 'Anrufen' }))
-  assert(istVage({ aufgabe: 'Bosler anrufen' }))
-  assertFalse(istVage({ aufgabe: 'Bosler anrufen', kunde_projekt: 'Hausverkauf Neu-Ulm' }))
-  assertFalse(istVage({ aufgabe: 'Herrn Bosler wegen Kaufvertrag zurückrufen' }))
+  assert(istVage({ aufgabe: 'Muster anrufen' }))
+  assertFalse(istVage({ aufgabe: 'Muster anrufen', kunde_projekt: 'Hausverkauf Neu-Ulm' }))
+  assertFalse(istVage({ aufgabe: 'Herrn Muster wegen Kaufvertrag zurückrufen' }))
   assertFalse(istVage({ aufgabe: '' }))
 })
 
@@ -265,7 +265,7 @@ Deno.test('Abend-Rückblick: erledigt heute, offen mit Knöpfen, morgen steht an
   assertStringIncludes(text, 'Morgen steht an:')
   assertStringIncludes(text, 'Familienfest')
   assertStringIncludes(text, 'Morgen fällig Steuer (Privat) – fällig morgen · Prio A')
-  assertStringIncludes(text, 'Bei diesen fehlt noch etwas: „Bosler?“')
+  assertStringIncludes(text, 'Bei diesen fehlt noch etwas: „Muster?“')
   assertStringIncludes(text, 'sag mir kurz, was gemeint ist')
   // deno-lint-ignore no-explicit-any
   const tasten = (extra as any).reply_markup.inline_keyboard as { text: string; callback_data: string }[][]

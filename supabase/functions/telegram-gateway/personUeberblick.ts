@@ -1,4 +1,4 @@
-// Personen-Akte auf Zuruf (Wunsch von Hasan, 23.11.2026): „Was läuft mit Herrn Bosler?“, „Was habe ich an
+// Personen-Akte auf Zuruf (Wunsch von Hasan, 23.11.2026): „Was läuft mit Herrn Muster?“, „Was habe ich an
 // Herrn X geschickt?“ — eine kompakte, VOLLSTÄNDIGE Übersicht zu einer Person für den privaten Assistenten.
 //
 // Anlass: Am 23.11.2026 kamen auf so eine Frage nur 11 von 68 Mails, weil die Hotmail-Suche nach 30 Treffern
@@ -54,7 +54,7 @@ export const PERSON_WERKZEUGE = [
     input_schema: {
       type: 'object',
       properties: {
-        name: { type: 'string', description: 'Name der Person (z. B. "Bosler", "Thomas Bosler") oder ihre E-Mail-Adresse(n).' },
+        name: { type: 'string', description: 'Name der Person (z. B. "Muster", "Thomas Muster") oder ihre E-Mail-Adresse(n).' },
         nur: { type: 'string', enum: ['mails', 'alles'], description: 'mails = nur Mails; alles (Vorgabe) = auch Kontaktakte, Termine, To-dos, Notizen, Protokolle.' },
         richtung: { type: 'string', enum: ['gesendet', 'empfangen', 'beide'], description: 'gesendet = was er ihr geschickt hat; empfangen = was sie ihm geschickt hat; beide (Vorgabe).' },
         seit: { type: 'string', description: 'Optional: nur ab diesem Datum (JJJJ-MM-TT).' },
@@ -235,6 +235,8 @@ function vertraeglich(a: Set<string>, b: Set<string>): boolean {
 }
 
 /** Fasst Adressen/Kontakte zu Personen zusammen. Mehr als eine Person = mehrdeutig. */
+const ALLGEMEINE_POSTFAECHER = /^(info|kontakt|office|mail|post|service|support|buero|buro|verwaltung|vertrieb|noreply|no-reply|newsletter|team|hallo|hello|zentrale|empfang)\b/
+
 export function personenBilden(kandidaten: Kandidat[], teile: string[]): Kandidat[] {
   const eltern = kandidaten.map((_, i) => i)
   const wurzel = (i: number): number => (eltern[i] === i ? i : (eltern[i] = wurzel(eltern[i])))
@@ -244,6 +246,10 @@ export function personenBilden(kandidaten: Kandidat[], teile: string[]): Kandida
   const vn = kandidaten.map((k) => vornamenVon(k, teile))
   // Gleicher Kontakt = gleiche Person.
   for (let i = 0; i < kandidaten.length; i++) for (let j = i + 1; j < kandidaten.length; j++) if ([...kandidaten[i].kontakte].some((x) => kandidaten[j].kontakte.has(x))) vereine(i, j)
+  // Gleicher persönlicher Adress-Teil vor dem @ (z. B. max.muster@bank-a.de und max.muster@firma-b.de) = gleiche
+  // Person, auch wenn ein Anzeigename nur die Firma nennt („Muster Bank“). Allgemeine Postfächer zählen nicht.
+  const lokal = kandidaten.map((k) => new Set([...k.adressen].map((a) => a.split('@')[0].toLowerCase()).filter((l) => l.length >= 5 && !ALLGEMEINE_POSTFAECHER.test(l))))
+  for (let i = 0; i < kandidaten.length; i++) for (let j = i + 1; j < kandidaten.length; j++) if ([...lokal[i]].some((l) => lokal[j].has(l))) vereine(i, j)
   // Verträgliche Vornamen (gleich oder Initiale) = gleiche Person.
   for (let i = 0; i < kandidaten.length; i++) for (let j = i + 1; j < kandidaten.length; j++) if (vn[i].size && vn[j].size && vertraeglich(vn[i], vn[j])) vereine(i, j)
   const gruppenVon = () => {
@@ -404,8 +410,13 @@ export async function fuehrePersonWerkzeugAus(name: string, input: Record<string
   } else {
     luecken.push('kein Microsoft-Konto verbunden — Hotmail wurde nicht durchsucht')
   }
+  // Sind alle Adress-Suchen vollständig, fehlt bei einer übervollen NAMENS-Suche höchstens eine reine Erwähnung — die Mails
+  // mit der Person selbst sind dann komplett (Muster: Name > 250 Treffer, beide Adressen vollständig, 68 von 68 gesendet).
+  const adressSuchen = suchen.filter((s) => s.begriff.includes('@'))
+  const adressenKomplett = adressSuchen.length > 0 && adressSuchen.every((s) => !s.fehler && !s.mehr)
   for (const s of suchen) {
     if (s.fehler) luecken.push(`Hotmail-Suche nach „${s.begriff}“ fehlgeschlagen (${s.fehler})`)
+    else if (s.mehr && adressenKomplett && !s.begriff.includes('@')) hinweise.push(`Mails, in denen „${s.begriff}“ nur erwähnt wird, können fehlen (mehr als ${SUCHE_HOECHSTENS} Treffer) — die Mails mit der Person selbst sind vollständig.`)
     else if (s.mehr) luecken.push(`die Hotmail-Suche nach „${s.begriff}“ hat mehr als ${SUCHE_HOECHSTENS} Treffer (nur ${SUCHE_HOECHSTENS} gelesen)`)
   }
   const ausgeblendet = Math.max(0, ...suchen.map((s) => s.ausgeblendet))
@@ -564,11 +575,16 @@ export async function fuehrePersonWerkzeugAus(name: string, input: Record<string
   let jahr = ''
   const jahrAnzahl = new Map<string, number>()
   for (const e of liste) jahrAnzahl.set(isoTag(e.datum).slice(0, 4) || '?', (jahrAnzahl.get(isoTag(e.datum).slice(0, 4) || '?') ?? 0) + 1)
+  // Mit Kennung (je ~150 Zeichen) passen nur ~40 Mails hinein. Passt die Liste ohne Kennung ganz, lieber alle ohne Kennung
+  // zeigen — eine einzelne Mail findet der Assistent danach gezielt mit outlook_suche (Betreff).
+  const ohneKennung = liste.reduce((summe, e) => summe + 30 + Math.min(90, e.betreff.length), 0)
+  const mitKennung = liste.reduce((summe, e) => summe + 30 + Math.min(90, e.betreff.length) + e.kennung.length, 0)
+  const kennungZeigen = mitKennung <= platz || ohneKennung > platz
   for (const e of liste) {
     const j = isoTag(e.datum).slice(0, 4) || '?'
     const ueberschrift = j !== jahr ? `${j} (${jahrAnzahl.get(j)}):` : ''
     const tag = deTag(e.datum).slice(0, 6)
-    const zeile = `- ${tag} ${RICHTUNG_TEXT[e.richtung]} | ${e.betreff.replace(/\s+/g, ' ').slice(0, 90)}${e.anhang ? ' | Anhang' : ''} | ${e.kennung}`
+    const zeile = `- ${tag} ${RICHTUNG_TEXT[e.richtung]} | ${e.betreff.replace(/\s+/g, ' ').slice(0, 90)}${e.anhang ? ' | Anhang' : ''}${kennungZeigen ? ` | ${e.kennung}` : ''}`
     const neu = (ueberschrift ? ueberschrift.length + 1 : 0) + zeile.length + 1
     if (laenge + neu > platz) break
     if (ueberschrift) zeilen.push(ueberschrift)

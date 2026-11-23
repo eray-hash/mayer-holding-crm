@@ -226,7 +226,7 @@ export async function outlookAktion(admin: Db, ich: string, body: Record<string,
     const anzahl = Math.min(Math.max(Number(body.anzahl) || 50, 10), 250)
     // Volltextsuche über alle Ordner (Absender, Empfänger, Betreff, Text, Anhänge) — der ganze Verlauf, nicht nur Abgeholtes.
     // Einen mehr holen als verlangt: So weiß der Assistent, ob es weitere Treffer gibt (23.11.2026: bei „alle Mails an
-    // Herrn Bosler“ kamen 11 von rund 80, ohne Hinweis, dass die Liste unvollständig war).
+    // Herrn Muster“ kamen 11 von rund 80, ohne Hinweis, dass die Liste unvollständig war).
     const roh = await graphAlle<Mail>(admin, ich, `/me/messages?$search="${encodeURIComponent(begriff)}"&$select=${FELDER}&$top=50`, anzahl + 1)
     const mehr = roh.length > anzahl
     const mails = roh.slice(0, anzahl)
