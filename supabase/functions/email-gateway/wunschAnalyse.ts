@@ -227,7 +227,8 @@ Deine Aufgabe:
 - ein Werkzeug mit Fehler oder abgelehnt endet und die Bitte danach nicht doch noch erledigt wird;
 - der Mitarbeiter dieselbe Bitte wiederholt oder umformuliert;
 - der Mitarbeiter aufgibt oder es selbst macht („dann mach ich's selbst“);
-- eine Rückfrage des Assistenten offen bleibt und die Sache nicht erledigt ist.
+- eine Rückfrage des Assistenten zu einer Bitte des Mitarbeiters offen bleibt und die Sache nicht erledigt ist.
+Kein Punkt sind Angebote, die der Assistent von sich aus macht, ohne dass der Mitarbeiter darum gebeten hat (z. B. „Soll ich daraus noch eine Aufgabe machen?“), wenn der Mitarbeiter nicht darauf eingeht — das ist seine Entscheidung, kein Mangel des CRM.
 Ausdrückliche Wünsche („wäre gut, wenn …“, „Wunsch: …“, „könnte das CRM …“) sind ebenfalls ein Punkt.
 3. Erfüllte Bitten lässt du weg. Ebenso: Gruß, Dank, beantwortete Fragen; Fälle, in denen es einen Kunden schlicht nicht gibt, eine Angabe fehlte oder ein Bereich für den Mitarbeiter bewusst nicht freigegeben ist (kein Mangel des CRM, außer er beschwert sich darüber); Bitten, bei denen der Assistent sagt, er habe sie als Wunsch für die Geschäftsführung notiert (die sind schon erfasst).
 4. Fasse gleiche Punkte zusammen, auch über Personen hinweg, und zähle, wie oft sie vorkamen.

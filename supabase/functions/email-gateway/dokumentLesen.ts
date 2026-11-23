@@ -33,8 +33,23 @@ export const SEITEN_JE_TEIL = 4
 /** Höchstens so viele Teile je Dokument (zusammen 64 Seiten, wie vorher mit 8 × 8). */
 export const MAX_TEILE = 16
 
-/** In wie viele Teile ein PDF mit `seiten` Seiten zerlegt wird (bis SEITEN_JE_TEIL + 2 Seiten am Stück). */
-export function teileFuer(seiten: number): number {
+/** Bis zu dieser Größe geht eine Datei am Stück an die KI (die Anfrage darf höchstens rund 32 MB haben). */
+export const AM_STUECK_BYTES = 20 * 1024 * 1024
+/** Größere PDFs (gescannte Mietverträge, Kontoauszüge …) werden seitenweise gelesen — bis zu dieser Größe. */
+export const PDF_MAX_BYTES = 60 * 1024 * 1024
+/** Zielgröße eines Teils großer PDFs. */
+export const TEIL_ZIEL_BYTES = 12 * 1024 * 1024
+
+/** Seiten je Teil: normal SEITEN_JE_TEIL, bei großen PDFs so wenige, dass ein Teil etwa TEIL_ZIEL_BYTES hat. */
+export function seitenJeTeil(seiten: number, bytes = 0): number {
+  if (!(seiten > 0) || bytes <= AM_STUECK_BYTES) return SEITEN_JE_TEIL
+  return Math.max(1, Math.min(SEITEN_JE_TEIL, Math.floor((seiten * TEIL_ZIEL_BYTES) / bytes)))
+}
+
+/** In wie viele Teile ein PDF mit `seiten` Seiten zerlegt wird (bis SEITEN_JE_TEIL + 2 Seiten am Stück; große
+ *  PDFs über AM_STUECK_BYTES immer in kleineren Teilen, seit 23.11.2026 — vorher wurden sie gar nicht gelesen). */
+export function teileFuer(seiten: number, bytes = 0): number {
+  if (bytes > AM_STUECK_BYTES && seiten > 1) return Math.min(MAX_TEILE, Math.ceil(seiten / seitenJeTeil(seiten, bytes)))
   return seiten > SEITEN_JE_TEIL + 2 ? Math.min(MAX_TEILE, Math.ceil(seiten / SEITEN_JE_TEIL)) : 1
 }
 
@@ -48,7 +63,8 @@ type TeilStand = { teile?: Record<string, string> | null; teile_gesamt?: number 
 export function ersterOffenerTeil(z: TeilStand): number {
   const gesamt = Number(z.teile_gesamt ?? 0)
   if (!(gesamt > 1) || !z.teile || typeof z.teile !== 'object') return 0
-  if (z.seiten && teileFuer(Number(z.seiten)) !== gesamt) return 0
+  // Weniger Teile als heute üblich = alte, gröbere Aufteilung (mehr Teile haben große PDFs, die passen).
+  if (z.seiten && gesamt < teileFuer(Number(z.seiten))) return 0
   for (let i = 0; i < gesamt; i++) if (!(String(i) in z.teile)) return i
   // Alle Teile da, nur das Abschließen fehlte: den letzten noch einmal lesen, das schließt ab.
   return gesamt - 1

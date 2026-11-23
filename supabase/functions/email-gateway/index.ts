@@ -306,7 +306,7 @@ import { pruefeMahnVorschlaege } from './mahnVorschlag.ts'
 import { aktuellePerson, kiAufruf, mitAnlass, setzeAnlass, setzePerson, setzePrivat } from '../_shared/kiVerbrauch.ts'
 import { darfObjekt, darfPrivatKunde, istPrivaterKunde, istPrivatesObjekt } from '../_shared/privatZugriff.ts'
 import { alleZeilen } from '../_shared/alleZeilen.ts'
-import { fehlerNachAbbruch, istWeiteresTextFormat, MAX_TEILE, reiheDokumentEin, SEITEN_JE_TEIL, setzeHaengendeDokumenteFort, SOFORT_HOECHSTENS, teileFuer, weitererDateiText } from './dokumentLesen.ts'
+import { AM_STUECK_BYTES, fehlerNachAbbruch, istWeiteresTextFormat, MAX_TEILE, PDF_MAX_BYTES, reiheDokumentEin, seitenJeTeil, setzeHaengendeDokumenteFort, SOFORT_HOECHSTENS, teileFuer, weitererDateiText } from './dokumentLesen.ts'
 import { heuteBerlin } from '../_shared/heuteBerlin.ts'
 
 const ALLOWED_ORIGINS = [
@@ -1540,7 +1540,10 @@ async function leseDokument(ref: DokumentRef, teil: number, umleitungen: number,
       if (startFehler) throw new Error(`Ablage für Dokument-Inhalte nicht erreichbar: ${startFehler.message}`)
     }
     const bytes = await ladeDokumentBytes(admin, ref.url)
-    if (bytes.length > 20 * 1024 * 1024) throw new Error('Datei größer als 20 MB')
+    // PDFs werden seitenweise gelesen und dürfen größer sein; alles andere geht am Stück an die KI.
+    if (art === 'pdf' ? bytes.length > PDF_MAX_BYTES : bytes.length > AM_STUECK_BYTES) {
+      throw new Error(`Datei größer als ${Math.round((art === 'pdf' ? PDF_MAX_BYTES : AM_STUECK_BYTES) / 1048576)} MB`)
+    }
 
     if (art === 'buero') {
       const text = bueroDateiText(ref.name, ref.typ, bytes, 200_000) ?? (await weitererDateiText(ref.name, ref.typ, bytes, 200_000)) ?? ''
@@ -1574,7 +1577,9 @@ async function leseDokument(ref: DokumentRef, teil: number, umleitungen: number,
     } catch {
       seiten = 0 // beschädigt oder ungewöhnlich aufgebaut: als Ganzes versuchen
     }
-    const teileGesamt = teileFuer(seiten)
+    const teileGesamt = teileFuer(seiten, bytes.length)
+    const jeTeil = seitenJeTeil(seiten, bytes.length)
+    if (!quelle && bytes.length > AM_STUECK_BYTES) throw new Error('Datei größer als 20 MB und nicht in Seiten zerlegbar')
     // Mit einer anderen Aufteilung begonnen (z. B. vor dem 23.11.2026 mit 8 Seiten je Teil): von vorn.
     if (teil > 0 && (teil >= teileGesamt || (vorhanden?.teile_gesamt && vorhanden.teile_gesamt !== teileGesamt))) {
       await stosseDokumentLesenAn(ref, { teil: 0, umleitungen: 0, fortsetzen: true })
@@ -1583,11 +1588,12 @@ async function leseDokument(ref: DokumentRef, teil: number, umleitungen: number,
     let teilBytes = bytes
     let bereich = ''
     if (teileGesamt > 1 && quelle) {
-      const von = teil * SEITEN_JE_TEIL
-      const bis = Math.min(seiten, von + SEITEN_JE_TEIL)
+      const von = teil * jeTeil
+      const bis = Math.min(seiten, von + jeTeil)
       const ziel = await PDFDocument.create()
       for (const seite of await ziel.copyPages(quelle, Array.from({ length: bis - von }, (_, i) => von + i))) ziel.addPage(seite)
       teilBytes = await ziel.save()
+      if (teilBytes.length > AM_STUECK_BYTES) throw new Error(`Datei größer als 20 MB je Seite (Seiten ${von + 1}–${bis})`)
       bereich = ` Dir liegen die Seiten ${von + 1} bis ${bis} von insgesamt ${seiten} vor; nummeriere die Seiten entsprechend ab ${von + 1}.${teil > 0 ? ' Lass die Zeilen ZUSAMMENFASSUNG und ART leer, sie stehen schon beim ersten Teil.' : ''}`
     }
     const antwort = await callClaudeResearch(
@@ -1605,7 +1611,7 @@ async function leseDokument(ref: DokumentRef, teil: number, umleitungen: number,
     const aktuell = aktuellRoh as any
     const teile: Record<string, string> = { ...(aktuell?.teile ?? {}), [String(teil)]: abschrift.inhalt }
     const fertig = teil + 1 >= teileGesamt
-    const abgeschnitten = seiten > MAX_TEILE * SEITEN_JE_TEIL ? `\n\n[Hinweis: Das Dokument hat ${seiten} Seiten; gelesen wurden die ersten ${MAX_TEILE * SEITEN_JE_TEIL}.]` : ''
+    const abgeschnitten = seiten > MAX_TEILE * jeTeil ? `\n\n[Hinweis: Das Dokument hat ${seiten} Seiten; gelesen wurden die ersten ${MAX_TEILE * jeTeil}.]` : ''
     await admin
       .from('dokument_inhalte')
       .update({

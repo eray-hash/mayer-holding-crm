@@ -11,6 +11,7 @@ import {
   MAX_VERSUCHE,
   nameZumLesen,
   reiheDokumentEin,
+  seitenJeTeil,
   setzeHaengendeDokumenteFort,
   teileFuer,
   urlAusSchluessel,
@@ -31,6 +32,16 @@ Deno.test('teileFuer: bis 6 Seiten am Stück, darüber Teile zu 4 Seiten, höchs
   assertEquals(teileFuer(12), 3)
   assertEquals(teileFuer(48), 12)
   assertEquals(teileFuer(106), 16)
+  // Große PDFs: kleinere Teile (Ziel etwa 12 MB je Teil), höchstens 16.
+  const mb = 1024 * 1024
+  assertEquals(teileFuer(10, 35 * mb), 4) // 3 Seiten je Teil
+  assertEquals(teileFuer(3, 36 * mb), 3) // jede Seite einzeln
+  assertEquals(teileFuer(1, 36 * mb), 1)
+  assertEquals(teileFuer(40, 50 * mb), 10) // 4 Seiten je Teil (höchstens SEITEN_JE_TEIL)
+  assertEquals(teileFuer(30, 59 * mb), 8) // knapp 2 MB je Seite: 4 Seiten je Teil
+  assertEquals(teileFuer(12, 59 * mb), 6) // knapp 5 MB je Seite: 2 Seiten je Teil
+  assertEquals(seitenJeTeil(10, 35 * mb), 3)
+  assertEquals(seitenJeTeil(10, 5 * mb), 4)
 })
 
 Deno.test('ersterOffenerTeil: setzt beim ersten fehlenden Teil fort, sonst von vorn', () => {
@@ -41,6 +52,8 @@ Deno.test('ersterOffenerTeil: setzt beim ersten fehlenden Teil fort, sonst von v
   assertEquals(ersterOffenerTeil({ teile: { '0': 'a', '1': 'b', '2': 'c', '3': 'd' }, teile_gesamt: 6, seiten: 48 }), 0)
   // Alle Teile da, nur der Abschluss fehlte: letzten Teil wiederholen.
   assertEquals(ersterOffenerTeil({ teile: { '0': 'a', '1': 'b', '2': 'c' }, teile_gesamt: 3, seiten: 12 }), 2)
+  // Großes PDF (mehr, kleinere Teile): weiter beim offenen Teil.
+  assertEquals(ersterOffenerTeil({ teile: { '0': 'a' }, teile_gesamt: 4, seiten: 10 }), 1)
 })
 
 // ---------- Fehler ----------
