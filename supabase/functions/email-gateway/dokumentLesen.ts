@@ -195,23 +195,27 @@ export async function setzeHaengendeDokumenteFort(
     const jetztIso = new Date(jetzt).toISOString()
     const hoechstens = h.gleichzeitig ?? GLEICHZEITIG
 
-    const { data: laufend, error: e1 } = await admin.from('dokument_inhalte').select('schluessel').eq('status', 'laeuft').gte('aktualisiert_am', frischAb).limit(hoechstens)
+    const { data: laufend, error: e1 } = await admin.from('dokument_inhalte').select('schluessel, gross').eq('status', 'laeuft').gte('aktualisiert_am', frischAb).limit(hoechstens)
     if (e1) throw new Error(e1.message)
     ergebnis.laufend = (laufend ?? []).length
+    // Große Dateien (gross, gesetzt beim ersten Herunterladen) nur einzeln: zwei gleichzeitig sprengen den Speicher
+    // eines Server-Prozesses, und beide brechen ohne Meldung ab (23.11.2026).
+    let grossUnterwegs = ((laufend ?? []) as { gross?: boolean }[]).some((z) => z.gross)
     const frei = hoechstens - ergebnis.laufend
     if (frei <= 0) return ergebnis
 
     const { data, error } = await admin
       .from('dokument_inhalte')
-      .select('schluessel, name, versuche, teile, teile_gesamt, seiten, fehler, aktualisiert_am')
+      .select('schluessel, name, versuche, teile, teile_gesamt, seiten, fehler, aktualisiert_am, gross')
       .eq('status', 'laeuft')
       .lt('aktualisiert_am', haengtVor)
       .order('aktualisiert_am', { ascending: true })
       .limit(frei + 10)
     if (error) throw new Error(error.message)
 
-    for (const z of (data ?? []) as (TeilStand & { schluessel: string; name: string | null; versuche: number | null; fehler: string | null })[]) {
+    for (const z of (data ?? []) as (TeilStand & { schluessel: string; name: string | null; versuche: number | null; fehler: string | null; gross?: boolean })[]) {
       if (ergebnis.angestossen >= frei) break
+      if (z.gross && grossUnterwegs) continue // wartet, bis die andere große Datei fertig ist
       const versuche = Number(z.versuche ?? 0)
       const url = urlAusSchluessel(z.schluessel, basisUrl)
       if (versuche >= MAX_VERSUCHE || !url) {
@@ -233,6 +237,7 @@ export async function setzeHaengendeDokumenteFort(
       if (e2 || !(geholt ?? []).length) continue
       await h.stosseAn({ url, name: nameZumLesen(z.name, z.schluessel) }, { teil: ersterOffenerTeil(z), umleitungen: 0, fortsetzen: true })
       ergebnis.angestossen++
+      if (z.gross) grossUnterwegs = true
     }
   } catch (err) {
     console.error('Dokumente lesen: Fortsetzen im Minutentakt fehlgeschlagen:', err)

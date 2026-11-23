@@ -280,3 +280,20 @@ Deno.test('entschlackeSeiten: jede Seite behält nur die Bilder, die sie zeichne
   const namen = doc.getPages().map((s) => ((s.node.lookup(PDFName.of('Resources')) as InstanceType<typeof PDFDict>).lookup(PDFName.of('XObject')) as InstanceType<typeof PDFDict>).keys().map((k) => k.decodeText()))
   assertEquals(namen, [['Im1'], ['Im2']])
 })
+
+Deno.test('Minutentakt: große Dateien nur einzeln, kleine laufen daneben weiter', async () => {
+  const db = falscheDatenbank({
+    dokument_inhalte: [
+      zeile('kunden-dokumente/k/gross1.pdf', { aktualisiert_am: WARTESCHLANGE_ZEIT, versuche: 0, gross: true }),
+      zeile('kunden-dokumente/k/gross2.pdf', { aktualisiert_am: WARTESCHLANGE_ZEIT, versuche: 0, gross: true }),
+      zeile('kunden-dokumente/k/klein.pdf', { aktualisiert_am: vor(60), versuche: 0 }),
+    ],
+  })
+  const a = aufzeichner()
+  const r = await setzeHaengendeDokumenteFort(db, { stosseAn: a.stosseAn, basisUrl: BASIS, jetzt: JETZT })
+  assertEquals(r.angestossen, 2)
+  assertEquals(a.aufrufe.map((x) => x.url), ['k/gross1.pdf', 'k/klein.pdf'])
+  // Nächster Takt: gross1 läuft noch frisch → gross2 wartet weiter.
+  const r2 = await setzeHaengendeDokumenteFort(db, { stosseAn: a.stosseAn, basisUrl: BASIS, jetzt: JETZT + 60_000, gleichzeitig: 5 })
+  assertEquals(r2.angestossen, 0)
+})
