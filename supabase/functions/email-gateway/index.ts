@@ -306,8 +306,8 @@ import { pruefeMahnVorschlaege } from './mahnVorschlag.ts'
 import { aktuellePerson, kiAufruf, mitAnlass, setzeAnlass, setzePerson, setzePrivat } from '../_shared/kiVerbrauch.ts'
 import { darfObjekt, darfPrivatKunde, istPrivaterKunde, istPrivatesObjekt } from '../_shared/privatZugriff.ts'
 import { alleZeilen } from '../_shared/alleZeilen.ts'
-import { entschlackeSeiten } from './pdfSeiten.ts'
-import { AM_STUECK_BYTES, fehlerNachAbbruch, gruppiereSeiten, istWeiteresTextFormat, MAX_TEILE, PDF_MAX_BYTES, reiheDokumentEin, SEITEN_JE_TEIL, setzeHaengendeDokumenteFort, SOFORT_HOECHSTENS, teileFuer, weitererDateiText } from './dokumentLesen.ts'
+import { entschlackeSeiten, geschaetzteSeitenGroessen } from './pdfSeiten.ts'
+import { AM_STUECK_BYTES, fehlerNachAbbruch, gruppiereSeiten, HAENGT_NACH_MS, istWeiteresTextFormat, LAEUFT_FRISCH_MS, MAX_TEILE, PDF_MAX_BYTES, reiheDokumentEin, SEITEN_JE_TEIL, setzeHaengendeDokumenteFort, SOFORT_HOECHSTENS, teileFuer, weitererDateiText } from './dokumentLesen.ts'
 import { heuteBerlin } from '../_shared/heuteBerlin.ts'
 
 const ALLOWED_ORIGINS = [
@@ -1541,6 +1541,19 @@ async function leseDokument(ref: DokumentRef, teil: number, umleitungen: number,
       if (startFehler) throw new Error(`Ablage für Dokument-Inhalte nicht erreichbar: ${startFehler.message}`)
     }
     const bytes = await ladeDokumentBytes(admin, ref.url)
+    // Große Dateien nur einzeln: Zwei große Scans gleichzeitig sprengen den Speicher eines Server-Prozesses — beide
+    // Läufe brachen dann ohne jede Meldung ab (23.11.2026). Arbeitet schon eine andere große Datei, zurück in die
+    // Warteschlange: Der Minutentakt nimmt diese in ein bis vier Minuten wieder auf (ohne Versuch zu verbrauchen).
+    if (teil === 0 && bytes.length > AM_STUECK_BYTES) {
+      await admin.from('dokument_inhalte').update({ gross: true }).eq('schluessel', schluessel)
+      const frisch = new Date(Date.now() - LAEUFT_FRISCH_MS).toISOString()
+      const { data: andere } = await admin.from('dokument_inhalte').select('schluessel').eq('gross', true).eq('status', 'laeuft').gt('aktualisiert_am', frisch).neq('schluessel', schluessel).limit(1)
+      if (andere && andere.length > 0) {
+        const zurueck = Date.now() - HAENGT_NACH_MS + (60 + Math.floor(Math.random() * 180)) * 1000
+        await admin.from('dokument_inhalte').update({ versuche: Math.max(0, versucheJetzt - 1), fehler: 'Wartet, bis eine andere große Datei gelesen ist', aktualisiert_am: new Date(zurueck).toISOString() }).eq('schluessel', schluessel)
+        return
+      }
+    }
     // PDFs werden seitenweise gelesen und dürfen größer sein; alles andere geht am Stück an die KI.
     if (art === 'pdf' ? bytes.length > PDF_MAX_BYTES : bytes.length > AM_STUECK_BYTES) {
       throw new Error(`Datei größer als ${Math.round((art === 'pdf' ? PDF_MAX_BYTES : AM_STUECK_BYTES) / 1048576)} MB`)
@@ -1583,14 +1596,7 @@ async function leseDokument(ref: DokumentRef, teil: number, umleitungen: number,
     let gruppen: [number, number][] | null = null
     if (quelle && bytes.length > AM_STUECK_BYTES && seiten > 1) {
       entschlackeSeiten(quelle) // jede Seite nur mit ihren eigenen Bildern (siehe pdfSeiten.ts)
-      const groessen: number[] = []
-      for (let i = 0; i < seiten; i++) {
-        const einzeln = await PDFDocument.create()
-        const [seite] = await einzeln.copyPages(quelle, [i])
-        einzeln.addPage(seite)
-        groessen.push((await einzeln.save()).length)
-      }
-      gruppen = gruppiereSeiten(groessen)
+      gruppen = gruppiereSeiten(geschaetzteSeitenGroessen(quelle))
     }
     const teileGesamt = gruppen ? Math.min(MAX_TEILE, gruppen.length) : teileFuer(seiten)
     const bereichVon = (t: number): [number, number] => (gruppen ? gruppen[t] : [t * SEITEN_JE_TEIL, Math.min(seiten, (t + 1) * SEITEN_JE_TEIL)])

@@ -22,6 +22,35 @@ function inhaltText(doc: PDFDocument, inhalt: unknown): string | null {
   return text
 }
 
+function streamGroesse(doc: PDFDocument, x: unknown): number {
+  const s = x instanceof PDFRef ? doc.context.lookup(x) : x
+  return s instanceof PDFRawStream ? s.contents.length : s instanceof PDFStream ? s.getContentsSize() : 0
+}
+
+/**
+ * Geschätzte Größe jeder Seite in Bytes (ihre Bilder/Formulare plus Seiteninhalt) — ohne Probespeichern, das auf
+ * dem Server zu viel Rechenzeit kostete (Abbruch ohne Meldung, 23.11.2026). Nach entschlackeSeiten aufrufen.
+ */
+export function geschaetzteSeitenGroessen(doc: PDFDocument): number[] {
+  return doc.getPages().map((seite) => {
+    try {
+      const knoten = seite.node
+      let summe = 0
+      const inhalt = knoten.get(PDFName.of('Contents'))
+      const wurzel = inhalt instanceof PDFRef ? doc.context.lookup(inhalt) : inhalt
+      if (wurzel instanceof PDFArray) for (let i = 0; i < wurzel.size(); i++) summe += streamGroesse(doc, wurzel.get(i))
+      else summe += streamGroesse(doc, wurzel)
+      const res = knoten.lookup(PDFName.of('Resources')) ?? knoten.getInheritableAttribute(PDFName.of('Resources'))
+      const resDict = res instanceof PDFRef ? doc.context.lookup(res) : res
+      const xo = resDict instanceof PDFDict ? resDict.lookup(PDFName.of('XObject')) : undefined
+      if (xo instanceof PDFDict) for (const k of xo.keys()) summe += streamGroesse(doc, xo.get(k))
+      return summe
+    } catch {
+      return 0
+    }
+  })
+}
+
 /** Verkleinert die Verzeichnisse der Bilder je Seite auf das Benutzte. Gibt die Zahl der geänderten Seiten zurück. */
 export function entschlackeSeiten(doc: PDFDocument): number {
   let geaendert = 0
