@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { AlertTriangle, Check, Link2, Unlink, RefreshCw } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
-import { gleicheJetztAb, starteMsAnmeldung, trenneMsKonto, useMsStatus, type AbgleichLauf } from '../../lib/microsoftKonto'
+import { gleicheJetztAb, setzeToDoListen, starteMsAnmeldung, trenneMsKonto, useMsStatus, type AbgleichLauf, type ToDoListeStand } from '../../lib/microsoftKonto'
 import { PrimaryButton, SecondaryButton } from '../../components/ui'
 import { fmtDateTime } from '../../lib/dates'
 import { BriefboegenVerwalten } from '../../components/BriefboegenVerwalten'
@@ -117,6 +117,7 @@ function Inhalt() {
             </div>
             <AbgleichZeile titel="To Do" lauf={status.abgleich?.todo} />
             <AbgleichZeile titel="Kalender" lauf={status.abgleich?.kalender} />
+            {status.todoListen && status.todoListen.length > 0 && <ToDoListenAuswahl ich={ich} listen={status.todoListen} />}
             <div className="flex flex-wrap gap-2">
               <SecondaryButton
                 onClick={async () => {
@@ -161,6 +162,69 @@ function AbgleichZeile({ titel, lauf }: { titel: string; lauf?: AbgleichLauf }) 
       {titel}: zuletzt {fmtDateTime(lauf.am)} · {lauf.vonMicrosoft} von Microsoft, {lauf.nachMicrosoft} nach Microsoft, {lauf.geloescht} gelöscht
       {lauf.konflikte ? `, ${lauf.konflikte} gleichzeitig geändert (jüngere Fassung gewann)` : ''}
       {lauf.fehler?.length ? <span className="text-amber-700"> · Probleme: {lauf.fehler.join(' | ')}</span> : null}
+    </div>
+  )
+}
+
+/** Welche Listen aus Microsoft To Do abgeglichen werden (Runde 6). Ausgeschlossene Listen holt der Abgleich nicht mehr;
+ *  was schon übernommen ist, bleibt gespeichert und ist in der To-Do-Liste nur ausgeblendet (dort „Anzeigen“). */
+function ToDoListenAuswahl({ ich, listen }: { ich: string; listen: ToDoListeStand[] }) {
+  const [aus, setAus] = useState<Set<string>>(() => new Set(listen.filter((l) => l.aus).map((l) => l.id)))
+  const [offen, setOffen] = useState(false)
+  const [speichert, setSpeichert] = useState(false)
+  const [fehler, setFehler] = useState('')
+  const vorher = listen.filter((l) => l.aus).map((l) => l.id).sort().join('|')
+  const geaendert = [...aus].sort().join('|') !== vorher
+  async function speichern() {
+    setFehler('')
+    setSpeichert(true)
+    try {
+      await setzeToDoListen(ich, [...aus])
+    } catch (e) {
+      setFehler(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSpeichert(false)
+    }
+  }
+  const ausgeschlossen = listen.filter((l) => l.aus).length
+  return (
+    <div className="rounded-lg border border-slate-200 p-3 text-sm">
+      <button type="button" className="flex w-full items-center justify-between text-left font-medium text-slate-700" onClick={() => setOffen((o) => !o)}>
+        <span>To-Do-Listen: {listen.length - ausgeschlossen} von {listen.length} werden abgeglichen</span>
+        <span className="text-xs text-accent-700">{offen ? 'Schließen' : 'Auswählen'}</span>
+      </button>
+      {offen && (
+        <div className="mt-3 space-y-2">
+          <p className="text-xs text-slate-500">
+            Nicht angehakte Listen holt das CRM nicht mehr. Schon übernommene Aufgaben daraus bleiben gespeichert, werden aber in deiner To-Do-Liste und in der
+            Morgen-Übersicht ausgeblendet. Gelöscht wird nichts.
+          </p>
+          <div className="max-h-64 space-y-1 overflow-y-auto">
+            {listen.map((l) => (
+              <label key={l.id} className="flex items-center gap-2 text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={!aus.has(l.id)}
+                  onChange={(e) => setAus((a) => {
+                    const n = new Set(a)
+                    if (e.target.checked) n.delete(l.id)
+                    else n.add(l.id)
+                    return n
+                  })}
+                />
+                <span>{l.name || 'Liste ohne Namen'}</span>
+                {l.markiert && <span className="text-xs text-slate-400">(markierte Mails)</span>}
+              </label>
+            ))}
+          </div>
+          <div className="flex items-center gap-2">
+            <PrimaryButton onClick={speichern} disabled={!geaendert || speichert}>
+              <Check size={16} /> Auswahl speichern
+            </PrimaryButton>
+            {fehler && <span className="text-xs text-red-600">{fehler}</span>}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

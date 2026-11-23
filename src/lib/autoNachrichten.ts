@@ -174,6 +174,7 @@ export const AUTO_PLATZHALTER: { name: string; bedeutung: string }[] = [
   { name: 'Uhrzeit', bedeutung: 'z. B. „14:00 Uhr“' },
   { name: 'Makler', bedeutung: 'wer die Besichtigung macht, sonst der Verantwortliche des Objekts' },
   { name: 'Makler-Telefon', bedeutung: 'Telefon dieses Mitarbeiters (aus „Mein Profil“)' },
+  { name: 'Telefon-Satz', bedeutung: 'ganzer Satz: „Telefonisch erreichen Sie mich unter …“ bei eigener Nummer, sonst „… uns unter …“ mit der Firmennummer' },
   { name: 'Makler-E-Mail', bedeutung: 'E-Mail dieses Mitarbeiters' },
   { name: 'Portal-Link', bedeutung: 'persönlicher Link zum Interessenten-Portal, falls einer besteht' },
   { name: 'Angebot', bedeutung: 'Kaufpreisangebot, z. B. „349.500 €“' },

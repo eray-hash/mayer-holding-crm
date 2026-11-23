@@ -5,24 +5,11 @@ import { Card, Field, inputClass, PrimaryButton, SecondaryButton } from './ui'
 import { druckeBlatt } from '../lib/blattDruck'
 import { fmtDate, fmtEUR, today } from '../lib/dates'
 import type { Objekt, ObjektKurzpruefung } from '../types'
+import { KURZPRUEFUNG_ZEILEN } from '../../supabase/functions/_shared/kurzpruefungKern.ts'
 
-// Die Zeilen der Papiervorlage; jede hat die drei Spalten „Ist", „Marktwert" und „unser Ergebnis".
-const ZEILEN: { id: string; label: string }[] = [
-  { id: 'preis', label: 'Preis' },
-  { id: 'preisProQm', label: 'Preis pro m²' },
-  { id: 'lageMikro', label: 'Lage – unmittelbare Umgebung' },
-  { id: 'lageMakro', label: 'Lage – Stadt/Region (A, B, C, D)' },
-  { id: 'baujahr', label: 'Baujahr' },
-  { id: 'zustand', label: 'Zustand' },
-  { id: 'sanierung', label: 'Anstehende Sanierung' },
-  { id: 'mieteProQm', label: 'Miete pro m²' },
-  { id: 'vermietungsstand', label: 'Vermietungsstand' },
-  { id: 'rendite', label: 'Rendite' },
-  { id: 'kaufpreisfaktor', label: 'Kaufpreisfaktor' },
-  { id: 'vermarktbarkeit', label: 'Vermarktbarkeit' },
-  { id: 'sonstiges', label: 'Sonstiges' },
-  { id: 'investorensicht', label: 'Investorensicht' },
-]
+// Die Zeilen der Papiervorlage; jede hat die drei Spalten „Ist", „Marktwert" und „unser Ergebnis". Gemeinsam mit dem
+// Assistenten (kurzpruefung_ausfuellen fragt dieselben Punkte per Telegram ab und speichert im gleichen Format).
+const ZEILEN = KURZPRUEFUNG_ZEILEN
 
 function leer(o: Objekt): ObjektKurzpruefung {
   return {

@@ -14,6 +14,16 @@ export type MsStatus = {
   letzterFehler?: string | null
   letzterErfolg?: string | null
   abgleich?: { todo?: AbgleichLauf; kalender?: AbgleichLauf }
+  /** Listen in Microsoft To Do; aus = wird nicht abgeglichen und in der To-Do-Liste ausgeblendet. */
+  todoListen?: ToDoListeStand[]
+}
+
+export type ToDoListeStand = { id: string; name: string; aus: boolean; markiert: boolean }
+
+/** Welche To-Do-Listen nicht abgeglichen werden (Kennungen). Bereits übernommene Aufgaben bleiben, nur ausgeblendet. */
+export async function setzeToDoListen(email: string, aus: string[]): Promise<void> {
+  await callAuthenticated({ action: 'ms_todo_listen_setzen', aus })
+  await ladeMsStatus(email)
 }
 
 export type AbgleichLauf = { am: string; vonMicrosoft: number; nachMicrosoft: number; geloescht: number; konflikte: number; fehler: string[] }

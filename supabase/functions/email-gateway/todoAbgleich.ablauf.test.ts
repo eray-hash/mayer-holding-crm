@@ -6,7 +6,7 @@
 import { assert, assertEquals, assertExists, assertNotEquals } from 'jsr:@std/assert@1'
 import { berlinZuUtc, GRAPH } from '../_shared/microsoft.ts'
 import { type FalscheDatenbank, falscheDatenbank, falschesMicrosoft, jsonAntwort, type MsAnfrage, type MsRouter, TEST_DIENST_SCHLUESSEL, verbundenesKonto, type Zeile } from '../_shared/testDoppel.ts'
-import { abgleichHash, type CrmAufgabe, gleicheTodosAb, type MsAufgabe, type TodoBericht } from './todoAbgleich.ts'
+import { abgleichHash, type CrmAufgabe, gleicheTodosAb, type MsAufgabe, setzeListenWahl, type TodoBericht } from './todoAbgleich.ts'
 
 Deno.env.set('MS_CLIENT_ID', 'test-client-id')
 Deno.env.set('MS_CLIENT_SECRET', 'test-client-geheim')
@@ -204,6 +204,7 @@ class FalschesToDo {
     if (!teil && a.methode === 'POST') return jsonAntwort(structuredClone(this.anlegen(liste, a.json as Record<string, unknown>)), 201)
     const e = teil ? this.aufgaben.get(teil) : undefined
     if (!e || e.liste !== liste) return nichtDa()
+    if (a.methode === 'GET') return structuredClone(e.t)
     if (a.methode === 'PATCH') return structuredClone(this.aendern(teil, a.json as Record<string, unknown>))
     if (a.methode === 'DELETE') {
       this.loeschen(teil)
@@ -592,3 +593,49 @@ Deno.test('6b) Im CRM gelöscht, in To Do zwischendurch geändert → am Ende au
   assertEquals(w.db.tabelle('ms_loeschungen'), [])
   await ruhig(w)
 })
+
+// ---------- Runde 6: Listen-Auswahl, „Flagged Emails“ ----------
+
+const MARKIERT = 'L-flagged'
+
+Deno.test('10) „Flagged Emails“ standardmäßig nicht übernommen; schon übernommene bleiben unverändert (nichts gelöscht)', async () => {
+  const w = await neueWelt()
+  w.todo.listen.push({ id: MARKIERT, displayName: 'Flagged Emails', wellknownListName: 'flaggedEmails' })
+  const alt = Date.now() - 10 * 60e3
+  w.todo.anlegen(MARKIERT, { title: 'Mail von 2020' }, alt)
+  // Aus einem früheren Abgleich schon im CRM (vor der Listen-Auswahl übernommen):
+  const frueher = w.todo.anlegen(MARKIERT, { title: 'Alte markierte Mail' }, alt)
+  w.db.tabelle('todos').push(todo('p_flag', 'Alte markierte Mail', { ms_id: frueher.id, ms_liste_id: MARKIERT, ms_liste_name: 'Flagged Emails', ms_geaendert: frueher.lastModifiedDateTime, ms_hash: await abgleichHash({ aufgabe: 'Alte markierte Mail', erledigt_am: null, erledigen_bis: null, prio: null, aktueller_stand: null, erinnern_um: null }) }))
+  const r = await lauf(w)
+  assertEquals(r.bericht.fehler, [])
+  assertEquals(nachTitel(w, 'Mail von 2020'), undefined)
+  assertExists(zeile(w, 'p_flag'), 'schon übernommene Aufgabe gelöscht')
+  assert(!r.aufrufe.some((a) => a.weg.includes(`/lists/${MARKIERT}/tasks/delta`)), 'ausgeschlossene Liste abgefragt')
+  const stand = w.db.tabelle('ms_konten')[0].stand as Record<string, unknown>
+  const listen = stand.todoListen as { id: string; name: string; aus: boolean; markiert: boolean }[]
+  assertEquals(listen.find((l) => l.id === MARKIERT), { id: MARKIERT, name: 'Flagged Emails', aus: true, markiert: true })
+  assertEquals((stand.todoDelta as Record<string, string>)[MARKIERT], undefined)
+  await ruhig(w)
+
+  // Wieder eingeschlossen: neu abgeglichen, ohne Doppel.
+  await setzeListenWahl(w.db, ICH, [])
+  const r2 = await lauf(w)
+  assertEquals(r2.bericht.fehler, [])
+  assertExists(nachTitel(w, 'Mail von 2020'))
+  assertEquals(w.db.tabelle('todos').filter((z) => z.aufgabe === 'Alte markierte Mail').length, 1)
+})
+
+Deno.test('11) In eine ausgeschlossene Liste verschoben → im CRM nicht gelöscht, nur die neue Liste gemerkt', async () => {
+  const w = await abgeglicheneWelt()
+  await setzeListenWahl(w.db, ICH, [EINKAUF])
+  await lauf(w)
+  const zahnarzt = nachTitel(w, 'Zahnarzt')!
+  w.todo.verschieben(String(zahnarzt.ms_id), EINKAUF)
+  const r = await lauf(w)
+  assertEquals(r.bericht.fehler, [])
+  const nachher = zeile(w, String(zahnarzt.id))
+  assertExists(nachher, 'verschobene Aufgabe gelöscht')
+  assertEquals(nachher!.ms_liste_id, EINKAUF)
+  assertEquals(r.bericht.geloescht, 0)
+})
+

@@ -905,6 +905,9 @@ export type ToDoEintrag = {
   /** Nur vom Server gesetzt (todoPriorisierung.ts): Kurzbegründung und Zeitpunkt der automatischen Priorisierung. */
   prioGrund?: string
   prioAm?: string
+  /** Nur lesen: Liste in Microsoft To Do, aus der die Aufgabe stammt (ms_liste_id) — ausgeblendete Listen zeigt die
+   *  To-Do-Liste nur auf Wunsch (Runde 6, Abgleich email-gateway/todoAbgleich.ts). Wird nie zurückgeschrieben. */
+  msListeId?: string
 }
 
 // ---------- Arbeitsorganisation der Abteilung (Tabelle abteilung_eintraege: je Eintrag eine Zeile) ----------

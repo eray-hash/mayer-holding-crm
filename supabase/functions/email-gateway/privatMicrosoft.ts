@@ -4,14 +4,14 @@ import { ermittleAufrufer } from './postfach.ts'
 import { OUTLOOK_AKTIONEN, outlookAktion } from './outlook.ts'
 import { AUSFUEHRER, bestaetige, merkeVor, offeneVormerkungen, verwerfe } from './vormerkungen.ts'
 import { istDienstSchluessel } from './tagesmeldung.ts'
-import { gleicheTodosAb } from './todoAbgleich.ts'
+import { gleicheTodosAb, setzeListenWahl } from './todoAbgleich.ts'
 import { gleicheKalenderAb } from './kalenderAbgleich.ts'
 import { anmeldungAbschliessen, anmeldungStarten, graph, msEingerichtet, MsFehler, msErlaubt, MsNichtVerbunden, msStatus, msTrennen } from '../_shared/microsoft.ts'
 
 // deno-lint-ignore no-explicit-any
 type Db = any
 
-export const ABGLEICH_AKTIONEN = new Set(['ms_abgleich_jetzt', 'privat_systemcheck'])
+export const ABGLEICH_AKTIONEN = new Set(['ms_abgleich_jetzt', 'privat_systemcheck', 'ms_todo_listen_setzen'])
 export const VORMERK_AKTIONEN = new Set(['vormerkungen_liste', 'vormerkung_anlegen', 'vormerkung_bestaetigen', 'vormerkung_verwerfen', 'outlook_senden'])
 export const MS_AKTIONEN = new Set(['ms_status', 'ms_anmelden_start', 'ms_trennen', ...OUTLOOK_AKTIONEN, ...VORMERK_AKTIONEN, ...ABGLEICH_AKTIONEN])
 
@@ -33,6 +33,8 @@ export async function msAktion(req: Request, admin: Db, body: Record<string, unk
     }
     if (OUTLOOK_AKTIONEN.has(String(body.action))) return antwort(await outlookAktion(admin, ich, body), headers)
     if (body.action === 'ms_abgleich_jetzt') return antwort(await gleicheAb(admin, ich), headers)
+    // Welche To-Do-Listen abgeglichen werden (Runde 6): `aus` = Kennungen der ausgeschlossenen Listen. Nichts wird gelöscht.
+    if (body.action === 'ms_todo_listen_setzen') return antwort({ ok: true, todoListen: await setzeListenWahl(admin, ich, body.aus) }, headers)
     if (body.action === 'privat_systemcheck') return antwort(await systemcheck(admin, ich), headers)
     if (VORMERK_AKTIONEN.has(String(body.action))) {
       // Mit dem Dienst-Schlüssel ruft nur die eigene Telegram-Funktion auf (Assistent oder Knopf). Bestätigen geht

@@ -39,6 +39,7 @@ import { fuehreTagesplanWerkzeugAus, istTagesplanWerkzeug, TAGESPLAN_WERKZEUGE }
 import { fuehreProfilWerkzeugAus, istProfilWerkzeug, nachfrageAnhaengen, PROFIL_WERKZEUGE, profilNachfrage } from './profilWerkzeuge.ts'
 import { DUBLETTEN_WERKZEUGE, fuehreDublettenWerkzeugAus, istDublettenWerkzeug } from './dublettenWerkzeug.ts'
 import { fuehrePrivatPostWerkzeugAus, istPrivatPostWerkzeug, PRIVAT_POST_WERKZEUGE } from './privatPostWerkzeug.ts'
+import { BESTAETIGEN_WERKZEUGE, fuehreBestaetigenWerkzeugAus, istBestaetigenKnopf, istBestaetigenWerkzeug, telegramMit, verarbeiteBestaetigenKnopf } from './bitteBestaetigenWerkzeug.ts'
 import { fuehreStammdatenWerkzeugAus, istStammdatenWerkzeug, STAMMDATEN_WERKZEUGE } from './stammdatenWerkzeug.ts'
 import { fuehreTodoAufraeumenWerkzeugAus, istTodoAufraeumenWerkzeug, TODO_AUFRAEUMEN_WERKZEUGE } from './todoAufraeumenWerkzeug.ts'
 import { fuehreUnterschriftWerkzeugAus, istUnterschriftWerkzeug, UNTERSCHRIFT_WERKZEUGE } from './unterschriftWerkzeug.ts'
@@ -79,6 +80,12 @@ import { gleichesGeheimnis, merkePrivatBotAktiv } from '../_shared/telegramPriva
 import { vonBase64 } from '../_shared/geheim.ts'
 import { datumDeutsch, empfaengerVon, findeEmpfaenger, ladeAnhaengeFuerVersand, MAIL_SPALTEN, type MailZeile, volltextVon, VOLLTEXT_HOECHSTENS, type WeiterleitungEntwurf, weiterleitungsBetreff, weiterleitungsText } from './mailWerkzeuge.ts'
 import { alleZeilen } from '../_shared/alleZeilen.ts'
+// Runde 6 (23.11.2026): Neuanfragen einstufen, fehlende Kontaktdaten, Kurzprüfung im Chat, „Uhrzeit offen“, reine Bestätigungen.
+import { fuehreLeadWerkzeugAus, istLeadWerkzeug, LEAD_WERKZEUGE } from './leadWerkzeug.ts'
+import { fuehreKontaktLueckenWerkzeugAus, istKontaktLueckenWerkzeug, KONTAKT_LUECKEN_WERKZEUGE } from './kontaktLueckenWerkzeug.ts'
+import { fuehreKurzpruefungWerkzeugAus, istKurzpruefungWerkzeug, KURZPRUEFUNG_WERKZEUGE } from './kurzpruefungWerkzeug.ts'
+import { hatUhrzeit, istVorlaeufig, notizOhneHinweis, ohneZusatz, vorlaeufigeNotiz, vorlaeufigerTitel } from './uhrzeitOffen.ts'
+import { nurDaumen, reagiereMitDaumen } from './bestaetigung.ts'
 
 const BOT_TOKEN = Deno.env.get('TELEGRAM_BOT_TOKEN')
 const WEBHOOK_SECRET = Deno.env.get('TELEGRAM_WEBHOOK_SECRET')
@@ -1453,6 +1460,7 @@ export const TOOLS = [
         notiz: { type: 'string' },
         kunde_id: { type: 'string', description: 'Optional: Kundenakte, zu der der Termin gehört.' },
         trotz_ueberschneidung: { type: 'boolean' },
+        uhrzeit_offen: { type: 'boolean', description: 'true = Tag steht fest, Uhrzeit noch nicht: vorläufiger ganztägiger Eintrag mit „(Uhrzeit offen)“ im Titel (beginn = JJJJ-MM-TT). Später mit termin_aendern die Uhrzeit nachtragen.' },
       },
       required: ['titel', 'beginn'],
     },
@@ -1631,6 +1639,7 @@ export const TOOLS = [
   ...PROFIL_WERKZEUGE,
   ...DUBLETTEN_WERKZEUGE,
   ...PRIVAT_POST_WERKZEUGE,
+  ...BESTAETIGEN_WERKZEUGE,
   ...STAMMDATEN_WERKZEUGE,
   ...TODO_AUFRAEUMEN_WERKZEUGE,
   ...UNTERSCHRIFT_WERKZEUGE,
@@ -1663,6 +1672,9 @@ export const TOOLS = [
   ...NEUIGKEITEN_WERKZEUGE,
   ...RENDITE_WERKZEUGE,
   ...GESENDET_WERKZEUGE,
+  ...LEAD_WERKZEUGE,
+  ...KONTAKT_LUECKEN_WERKZEUGE,
+  ...KURZPRUEFUNG_WERKZEUGE,
   {
     name: 'todo_erledigen',
     description: 'Hakt ein offenes To-do ab (eigene Liste oder freigegebene Bereichsliste), nur wenn es wirklich erledigt ist — nicht, um es zu korrigieren (dafür todo_aendern). Mit todo_id oder einem Suchbegriff aus dem Aufgabentext; bei mehreren Treffern kommt eine Liste zum Nachfragen.',
@@ -1722,6 +1734,8 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
   if (istDublettenWerkzeug(name)) return await fuehreDublettenWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
   // Vorschläge im eigenen privaten Postfach (Akte vermutet, Rundschreiben) — privatPostWerkzeug.ts.
   if (istPrivatPostWerkzeug(name)) return await fuehrePrivatPostWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute, mailFunktion: callEmailGateway })
+  // „Bitte bestätigen“-Vorschläge (Termin/Mail/Datei → Akte, Statuswechsel) — bitteBestaetigenWerkzeug.ts.
+  if (istBestaetigenWerkzeug(name)) return await fuehreBestaetigenWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute, mailFunktion: callEmailGateway, telegram: telegramMit(botToken(BOT_TOKEN)) })
   // Vorschläge für Stammdaten aus Mail-Signaturen auflisten, übernehmen, verwerfen — stammdatenWerkzeug.ts.
   if (istStammdatenWerkzeug(name)) return await fuehreStammdatenWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
   // Eigene To-do-Liste aufräumen (Doppel, alt, überfällig, sieht erledigt aus) — todoAufraeumenWerkzeug.ts.
@@ -1851,6 +1865,12 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
   }
   // Gesendete Mails (auch aus Outlook über info@ verschickt) — gesendetWerkzeug.ts.
   if (istGesendetWerkzeug(name)) return await fuehreGesendetWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter })
+  // Runde 6: Neuanfrage der Beratung einstufen (qualifiziert / passt nicht / später) — leadWerkzeug.ts.
+  if (istLeadWerkzeug(name)) return await fuehreLeadWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
+  // Runde 6: Akten ohne Telefon/E-Mail, tägliche Nachfrage an/aus — kontaktLueckenWerkzeug.ts (Kern _shared/kontaktLuecken.ts).
+  if (istKontaktLueckenWerkzeug(name)) return await fuehreKontaktLueckenWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
+  // Runde 6: Vorab-Kurzprüfung eines Objekts im Chat ausfüllen — kurzpruefungWerkzeug.ts (Kern _shared/kurzpruefungKern.ts).
+  if (istKurzpruefungWerkzeug(name)) return await fuehreKurzpruefungWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
 
   // Wunsch an das CRM für die Geschäftsführung (Tabelle wuensche, siehe _shared/wuensche.ts). Kein
   // Bereichsbezug; gleiche offene Wünsche werden hochgezählt statt doppelt angelegt.
@@ -2009,7 +2029,13 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
       const altBeginn = new Date(vorher.beginn)
       const altEnde = new Date(vorher.ende)
       const dauer = altEnde.getTime() - altBeginn.getTime()
-      const ganztags = typeof input.ganztags === 'boolean' ? input.ganztags : vorher.ganztags === true
+      // Runde 6: Vorläufiger Eintrag „(Uhrzeit offen)“ bekommt eine Uhrzeit → normaler Termin, Zusatz aus Titel und Notiz.
+      const wirdFest = istVorlaeufig(vorher.titel) && hatUhrzeit(input.beginn) && input.ganztags !== true
+      if (wirdFest) {
+        if (input.titel === undefined) input.titel = ohneZusatz(vorher.titel)
+        if (input.notiz === undefined) input.notiz = notizOhneHinweis(vorher.beschreibung)
+      }
+      const ganztags = wirdFest ? false : typeof input.ganztags === 'boolean' ? input.ganztags : vorher.ganztags === true
       let beginn: Date | null
       let ende: Date | null
       if (ganztags) {
@@ -2067,9 +2093,15 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
         .join(' ')
     }
 
-    const beginn = berlinZuZeitpunkt(String(input.beginn ?? ''))
+    // Runde 6: Tag bekannt, Uhrzeit nicht → vorläufiger ganztägiger Eintrag „(Uhrzeit offen)“ (uhrzeitOffen.ts).
+    const uhrzeitOffen = input.uhrzeit_offen === true
+    const beginn = berlinZuZeitpunkt(uhrzeitOffen ? String(input.beginn ?? '').slice(0, 10) : String(input.beginn ?? ''))
     if (!beginn) return 'Fehler: beginn muss das Format JJJJ-MM-TTTHH:MM haben.'
-    const ganztags = input.ganztags === true
+    const ganztags = input.ganztags === true || uhrzeitOffen
+    if (uhrzeitOffen) {
+      input.titel = vorlaeufigerTitel(String(input.titel ?? ''))
+      input.notiz = vorlaeufigeNotiz(input.notiz)
+    }
     const ende = ganztags ? new Date(beginn.getTime() + 86400000) : (berlinZuZeitpunkt(String(input.ende ?? '')) ?? new Date(beginn.getTime() + 3600000))
     const teilnehmer: string[] = []
     for (const angabe of Array.isArray(input.teilnehmer) ? input.teilnehmer : []) {
@@ -2103,6 +2135,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
       `Angelegt: „${t.titel}", ${berlinText(t.beginn, t.ende, t.ganztags)}. termin_id=${t.id}`,
       (ergebnis.daten.benachrichtigt ?? []).length > 0 ? `Per Telegram benachrichtigt: ${ergebnis.daten.benachrichtigt.join(', ')}.` : '',
       (ergebnis.daten.ohneTelegram ?? []).length > 0 ? `Ohne Nachricht (Telegram nicht verbunden): ${ergebnis.daten.ohneTelegram.join(', ')} — der Termin steht trotzdem in ihrem Kalender.` : '',
+      uhrzeitOffen ? 'Vorläufig ganztägig eingetragen, weil die Uhrzeit noch fehlt — frag kurz danach und trag sie dann mit termin_aendern (beginn mit Uhrzeit) nach.' : '',
     ]
       .filter(Boolean)
       .join(' ')
@@ -3514,7 +3547,7 @@ So arbeitest du:
 - Erfinde nichts. Was nicht in Werkzeug-Ergebnissen oder im Gespräch steht, weißt du nicht. Ob es einen Kunden gibt oder nicht, sagst du erst, nachdem du mit kunden_suchen nachgesehen hast. Ob es ein Objekt gibt oder nicht, sagst du erst nach objekte_suchen.
 - Die Bereiche der Holding heißen: Unternehmensberatung, Immobilien, Erben, Betriebsübergabe, Betriebsformen, Akademie, Finanzierungen. Verwende im Gespräch diese Namen.
 - Frühere Antworten: Werkzeug-Ergebnisse aus früheren Zügen sind im Verlauf gekürzt (Vermerk „GEKÜRZT“). Fehlt darin etwas, das du früher genannt hast, war es nicht erfunden — du hattest damals das vollständige Ergebnis. Nimm eine frühere Aussage nur zurück, wenn ein ERNEUTER Werkzeugaufruf zeigt, dass sie falsch war. Korrigiere nie ungefragt nebenbei in einer Antwort zu einem anderen Thema; bist du unsicher, prüf es mit dem Werkzeug nach oder frag, ob du nachsehen sollst.
-- Kalender: Jeder Mitarbeiter hat seinen eigenen Kalender. Du zeigst und buchst Termine mit termine_zeigen, termin_anlegen und termin_absagen. Uhrzeiten sind immer deutsche Ortszeit. Fehlt für einen neuen Termin der Tag oder die Uhrzeit, frag kurz nach, statt zu raten; ohne genannte Dauer gilt eine Stunde. Soll ein Kollege dabei sein, sieh vorher mit termine_zeigen (person) nach, ob er frei ist, und schlag bei Belegung einen freien Zeitpunkt vor. Von fremden Terminen kennst du nur die Uhrzeit — sag dann „ist belegt“, nie mehr. Soll ein bestehender Termin anders heißen, verschoben werden, einen anderen Ort oder andere Teilnehmer bekommen, nimm termin_aendern — nie absagen und neu anlegen. Ganztägige Einträge (Erinnerungen) blockieren keine Termine mit Uhrzeit.
+- Kalender: Jeder Mitarbeiter hat seinen eigenen Kalender. Du zeigst und buchst Termine mit termine_zeigen, termin_anlegen und termin_absagen. Uhrzeiten sind immer deutsche Ortszeit. Fehlt für einen neuen Termin der Tag, frag kurz nach, statt zu raten. Steht der Tag fest, aber die Uhrzeit nicht, trag sofort einen vorläufigen Eintrag ein (termin_anlegen mit uhrzeit_offen=true, beginn = JJJJ-MM-TT; er steht ganztägig mit „(Uhrzeit offen)“ im Titel im Kalender) und frag danach in einem kurzen Satz nach der Uhrzeit; nennt er sie, trag sie mit termin_aendern nach (beginn mit Uhrzeit — Titel und Notiz werden dann bereinigt). Ohne genannte Dauer gilt eine Stunde. Soll ein Kollege dabei sein, sieh vorher mit termine_zeigen (person) nach, ob er frei ist, und schlag bei Belegung einen freien Zeitpunkt vor. Von fremden Terminen kennst du nur die Uhrzeit — sag dann „ist belegt“, nie mehr. Soll ein bestehender Termin anders heißen, verschoben werden, einen anderen Ort oder andere Teilnehmer bekommen, nimm termin_aendern — nie absagen und neu anlegen. Ganztägige Einträge (Erinnerungen) blockieren keine Termine mit Uhrzeit.
 - Terminvorschläge in Dateien, Mails und Bildschirmfotos: Steht in einer geschickten Datei, einem Foto oder einer Mail ein Terminvorschlag (z. B. „Freitag, 27.11.2026, Besprechung in Ulm“), sprich ihn von dir aus an, auch wenn du die Datei nur ablegen solltest. Prüf ihn mit freie_zeiten (mit Uhrzeit: vorschlag; ohne Uhrzeit: von = bis = dieser Tag, dann nennst du die freien Zeiten; Kollegen, die dabei sein sollen, unter personen) und sag kurz, ob er passt oder was stattdessen frei ist. Biete dann an, den Termin einzutragen (termin_anlegen mit Ort und der Akte als kunde_id, falls bekannt) und eine Antwort an den Absender vorzubereiten (mail_vorbereiten mit kunden_ids = seine Akte: Zusage oder Gegenvorschlag mit freien Zeiten). Trag nichts ein und bereite keine Antwort vor, bevor der Mitarbeiter zugestimmt hat; gesendet wird wie immer erst nach seiner ausdrücklichen Freigabe. Fehlt der Tag oder ist er mehrdeutig, frag nach. freie_zeiten berücksichtigt CRM-Termine (beim Mitarbeiter selbst auch die aus Outlook übernommenen) und den eigenen Kalender, den er im CRM verbunden hat; von Kollegen nennst du nur „belegt“.
 - Gemeinsames Postfach: Du kannst das gemeinsame Postfach der Firma lesen (gemeinsames_postfach). Sagt jemand, von einem Kunden sei eine Mail gekommen, oder fragt nach Unterlagen aus einer Mail, sieh dort nach, statt zu sagen, dass dir nichts vorliegt. Mails bekannter Absender werden automatisch ihrer Akte zugeordnet, die Anhänge liegen dann in den Dokumenten der Akte. Ist eine Mail noch keiner Akte zugeordnet und ist klar, zu wem sie gehört, ordne sie mit mail_zuordnen zu; ist es unklar, frag nach. Den Inhalt von Anhängen liest du über die Akte (dokument_inhalt), nicht über das Postfach.
 - Mails ganz lesen und weiterleiten: Die Postfach-Listen zeigen nur den Anfang. Geht es um Einzelheiten (Termin, Uhrzeit, Ort, Link, Betrag, Frist), lies die Mail mit mail_lesen ganz, bevor du antwortest — sag nie, du sähest nur den Anfang. Will jemand eine Mail an einen Kollegen oder eine Adresse weiterleiten, nimm mail_weiterleiten: erst die Fassung zeigen, erst nach seiner Zustimmung in der nächsten Nachricht mit senden=true senden.
@@ -3560,6 +3593,7 @@ So arbeitest du:
 - Kontoauszug abgleichen: Schickt ein Mitarbeiter einen Kontoauszug der Holding (PDF, Foto oder CSV-Export der Bank) und will wissen, welche Rechnungen bezahlt sind, nimm kontoauszug_abgleichen mit dem pfad. Der erste Aufruf bucht nichts, sondern liefert Vorschläge mit Kennung (v…), Sicherheit und Grund. Zeig sie knapp (zuerst die sicheren, Skonto und Unklares ausdrücklich nennen) und frag, welche gebucht werden sollen. Erst nach seinem Ja rufst du es erneut mit bestaetigt=true und genau den freigegebenen vorschlag_ids auf („alle sicheren“ = alle Kennungen unter SICHER). Erfinde keine Kennungen. Kontoauszüge von Kunden gehören nicht hierher.
 - Rendite und Kaufpreis eines Objekts: Für „Rechne mir die Rendite für Remstal“, „Lohnt sich das?“, „Was bleibt bei 13 € Pacht?“ oder „Ist der Preis je m² günstig?“ such das Objekt mit objekte_suchen und nimm rendite_rechnen. Gib nur an, was der Mitarbeiter nennt oder ändert (Miete/Pacht, Finanzierung, Kosten); den Rest nimmt das Werkzeug aus der Akte und aus den gespeicherten Eingaben. Eine Miete oder Pacht aus einer Einschätzung oder Marktrecherche ist keine echte Miete — rechne damit nur, wenn der Mitarbeiter das als Annahme will, und sag das dazu. Rechne nicht selbst nach; nenne Kaufpreis je m², Faktor, Brutto- und Nettorendite, bei Finanzierung Cashflow im Monat und Eigenkapitalrendite, und immer die Annahmen. Für Vergleichswerte vor Ort (Preis je m², übliche Miete/Pacht mit Quellen) markt_vergleich=true — das dauert ein bis zwei Minuten, das Ergebnis steht danach in der Akte. Als PDF (als_pdf=true) landet die Zusammenfassung im Ordner „Kostenaufstellung“. Sagt jemand, ein Prüfstein (Genehmigung, Brandschutz, Möblierung, Miet- oder Pachtvertrag, Instandhaltungsstau) sei geklärt, hake ihn mit rendite_pruefstein ab.
 - Vollständigkeit von Objektakten: Für „Was fehlt bei meinen Objekten?“, „Ist Objekt X vollständig?“ oder „Welche Objekte in Vermarktung sind unvollständig?“ nimm objekt_luecken (mit objekt_id für ein Objekt, sonst wer: ich/Name/alle; nur_aktive für Vorbereitung und Vermarktung). Nenne die Prozentzahl und die wichtigsten fehlenden Punkte, nicht die ganze Liste. Biete an, was du selbst erledigen kannst: Kaufpreis, Adresse, Objektart, Eigentümer und Verantwortlicher über objekt_aendern, Fotos über fotos_ins_objekt, Titelbild über titelbild_vorschlagen/bild_reihenfolge_setzen, Exposé über expose_erstellen, Energieausweis und Grundbuch über dateien_ins_objekt. Fläche/Zimmer und die Nummern des Inserats gehen nur im CRM. Den Montags-Hinweis schaltest du nur auf ausdrücklichen Wunsch mit wochenhinweis an oder aus.
+- Kurzprüfung von Objekten: Die Vorab-Kurzprüfung eines Objekts (lohnt sich der Auftrag?) füllst du mit kurzpruefung_ausfuellen aus — „Kurzprüfung für Geislingen“: erst ohne antworten aufrufen und genau die genannte nächste Frage stellen (immer nur einen Punkt, kurz), dann seine Antwort mit antworten speichern und die nächste Frage stellen. Bei Tabellenzeilen fragst du Ist, Marktwert und unser Ergebnis zusammen; was er nicht nennt, bleibt leer. Weiß er etwas nicht, trag "–" ein. Will er aufhören, ist das in Ordnung — das Gespeicherte bleibt. Ohne objekt_id zeigt das Werkzeug die Akquise-Objekte ohne Kurzprüfung. Kommt der Montags-Hinweis „Wochenhinweis Kurzprüfung“ und er nennt ein Objekt, fang damit an. Den Hinweis schaltest du nur auf ausdrücklichen Wunsch mit wochenhinweis an oder aus.
 - Partner und Vermittler: Im CRM gibt es ein Verzeichnis aller Vermittler, Makler, Tippgeber, Notare, Steuerberater, Banken und Gutachter (Seite „Partner und Vermittler“) mit Kontakt, vereinbarter Provision und den Akten bzw. Objekten, die sie gebracht haben. Fragt jemand „Wer hat uns Kunde X vermittelt?“ oder „Von wem kam das Objekt Y?“, nimm partner_suchen mit kunde_id bzw. objekt_id; für einen Namen, eine Firma oder Telefonnummer partner_suchen mit suchbegriff, für alles zu einem Partner partner_suchen mit partner_id. Nennt jemand einen neuen Vermittler oder Makler (auch per Visitenkarte oder Mail-Signatur), leg ihn mit partner_anlegen an — meldet das Werkzeug einen ähnlichen Eintrag, nimm diesen oder frag nach, bevor du trotzdem=true setzt. „Akte X hat uns Azad vermittelt“ oder „das Objekt kam von Makler Dick“ → partner_zuordnen (kunde_id oder objekt_id; Rolle vermittelt, angeboten oder beraten). Mit demselben Werkzeug trägst du eine vereinbarte Provision, einen Betrag oder den Stand ein („Provision an Azad für die Bäckerei ist bezahlt“ → provision_status bezahlt). Provision und Betrag nur, wenn sie genannt werden; nichts erfinden. „Welche Provisionen schulden wir noch?“ → provisionen_offen. Partner löschen geht nur im CRM durch die Geschäftsführung.
 - Umsatzvorschau und Provisionen: Für „Was kommt diesen Monat rein?“, „Wie sieht das Quartal aus?“, „Welche Provisionen erwarten wir bis Jahresende?“ oder „Umsatz Immobilien dieses Jahr?“ nimm umsatz_vorschau (zeitraum monat, quartal oder jahr; optional bereich). Alle Beträge sind netto. Nenne zuerst den erwarteten Gesamtbetrag, dann wie er sich zusammensetzt (schon in Rechnung gestellt, Angebote nach Chance, Provision nach Stand) und die größten Posten mit Begründung. Erwähne die Lücken (Angebote ohne Chance, Objekte ohne Kaufpreis oder ohne hinterlegte Provision), denn sie machen die Vorschau ungenauer. Erfinde keine Zahlen und rechne nicht selbst nach. Für einzelne offene Rechnungen bleibt rechnungen_offen zuständig.
 - Rechnungsvorschläge: Für „Welche Rechnungen müssen noch raus?“, „Haben wir vergessen, etwas abzurechnen?“ oder „Was ist noch nicht in Rechnung gestellt?“ nimm rechnung_vorschlaege. Es nennt angenommene Kostenvoranschläge, erledigte Aufträge, Seminarteilnahmen und Provisionen beurkundeter Objekte ohne Rechnung, mit Betrag (netto), Grund und Link. Rechnungen legst du nicht selbst an: Nenne den Link ins CRM, dort wird die Rechnung vorausgefüllt erstellt oder der Vorschlag verworfen. „Wochenhinweis Rechnungen aus/an“ → rechnung_vorschlaege mit wochenhinweis=false/true. Für schon gestellte, offene Rechnungen bleibt rechnungen_offen zuständig.
@@ -3576,7 +3610,9 @@ So arbeitest du:
 - Eigenes Profil: Mit mein_profil_aendern änderst du nur die Angaben des Mitarbeiters, mit dem du schreibst (Telefon, Mobil, Funktion, Signatur) — nie die eines Kollegen; bittet er darum, sag ihm, dass das jeder selbst in „Mein Profil“ oder hier im Chat macht. Hast du ihn nach seiner Telefonnummer gefragt und schickt er eine Nummer (auch ohne weitere Worte), speicherst du sie sofort mit mein_profil_aendern (telefon) und bestätigst kurz. Will er sie nicht angeben, akzeptierst du das und fragst nicht noch einmal. Die Signatur ersetzt du nur, wenn er es ausdrücklich will.
 - Stammdaten aus E-Mail-Signaturen: Das CRM liest die Signaturen in den Mails der Kunden und trägt fehlende Telefonnummern, Anschriften und E-Mail-Adressen selbst in die Akte ein (Verlaufseintrag „… aus E-Mail-Signatur vom … ergänzt“). Vorhandene Angaben überschreibt es nie; nennt eine Signatur etwas anderes, entsteht ein Vorschlag. Mit stammdaten_vorschlaege (aktion „auflisten“) zeigst du die offenen Vorschläge, mit „uebernehmen“ trägst du den neuen Wert ein — nur, wenn der Mitarbeiter das ausdrücklich will, und nenne vorher neuen und bisherigen Wert —, mit „verwerfen“ lehnst du ihn ab.
 - Doppelte Akten: Fragt jemand, ob es Akten doppelt gibt oder einen Kunden zweimal, nimm dubletten_finden (nur lesen) und zeig die Gruppen mit Gründen. Zusammenführen weiterhin nur mit kunden_zusammenfuehren und erst nach ausdrücklicher Bestätigung. Liegen die Akten in verschiedenen Bereichen, frag zuerst, ob die Person bewusst in beiden Bereichen geführt wird; sonst erst kunde_bereich_wechseln. Nebeneinander vergleichen und „keine Dublette“ merken kann die Geschäftsführung auf der Seite Dubletten im CRM.
+- Fehlende Kontaktdaten: Für „Wo fehlen Telefonnummern?“ oder „Welche Akten kann ich nicht erreichen?“ nimm kontakt_luecken. Das CRM fragt außerdem werktags über dich nach („Kurze Frage zu deinen Akten – hier fehlen Kontaktdaten“); im Verlauf steht davor eine Systemmeldung „Im Auftrag von Kontakt-Nachfrage k_… k_…“ mit den Kennungen der Akten. Nennt der Mitarbeiter darauf eine Nummer oder Adresse (Text oder Sprachnachricht), trag sie sofort mit kunde_aendern (telefon bzw. email) in die passende dieser Akten ein und bestätige in einer Zeile; bei Hörfehlern in Zahlen oder Adressen lies sie zur Sicherheit noch einmal vor. Weiß er es nicht, ist das in Ordnung — dann nichts eintragen und nicht nachbohren. Mit nachfrage=false/true schaltet er die Nachfrage für sich ab oder an („Kontakt-Nachfrage aus“).
 - Wiedervorlagen: Jede Kundenakte hat im CRM einen Reiter „Wiedervorlagen“ (wann muss bei wem nachgefasst werden). Viele davon legt das CRM selbst an und hakt sie selbst ab, z. B. bei einem Statuswechsel der Akte, wenn ein Kostenvoranschlag erstellt oder angenommen wird, Unterlagen angefordert oder eingegangen sind, eine Rechnung verschickt oder bezahlt ist, ein Termin eingetragen oder etwas unterschrieben wurde — die musst du nicht anlegen. Fragt jemand „Was ist heute fällig?“, „Welche Wiedervorlagen habe ich diese Woche?“ oder „Was liegt bei Akte X noch an?“, nimm wiedervorlagen_auflisten (für „heute“ nur_faellig=true, für „ich“ zustaendig="ich"). Sagt er „Leg mir eine Wiedervorlage an …“ oder „erinnere mich, bei Kunde X am Freitag nachzufassen“, nimm wiedervorlage_anlegen mit kunde_id und Datum. Sagt er, eine Wiedervorlage ist „erledigt“, hak sie mit wiedervorlage_erledigen ab; will er sie auf später legen, nimm wiedervorlage_verschieben. Die id holst du vorher mit wiedervorlagen_auflisten; passen mehrere, frag nach. Private Kontakte haben keine Wiedervorlagen (dafür todo_anlegen). Für die Gesamtsicht über alle Aufgaben bleibt aufgaben_uebersicht; dort stehen die Wiedervorlagen mit drin.
+- Neuanfragen einstufen: Für jede Neuanfrage der Unternehmensberatung legt das CRM nach zwei Tagen die Wiedervorlage „Neuanfrage prüfen“ an. Antwortet der Mitarbeiter dazu kurz mit „qualifiziert“ / „passt“, „passt nicht“ oder „später“ (auch „in zwei Wochen nochmal“), nimm lead_einstufen mit der Akte (ergebnis qualifiziert, passt_nicht oder spaeter; bei „später“ mit tage, falls er eine Frist nennt) — ohne Rückfrage, wenn klar ist, welche Akte gemeint ist; sonst kurz nachfragen. Nur Status, die es gibt: Erstkontakt, Nicht qualifiziert, Wiedervorlage.
 - Statusbericht an den Kunden: Mit statusbericht_entwurf (kunde_id, optional seit) zeigst du den Entwurf des Berichts „Stand Ihres Projekts“ — was seit dem letzten Bericht passiert ist, die nächsten Schritte, was wir noch vom Kunden brauchen, Ampel. Gib den Entwurf so wieder und nenne den Link aus der Antwort: Prüfen, ändern und senden (E-Mail mit PDF oder nur PDF) geht nur im CRM, du selbst sendest den Bericht nie. Hinweise „nur für den Mitarbeiter“ sind für ihn, nicht für den Kunden. Die wöchentliche Erinnerung stellt man im CRM im Fenster „Statusbericht an Kunden“ ein.
 - Termin ↔ Akte: Das CRM ordnet Termine selbst einer Akte zu, wenn die E-Mail-Adresse eines Gastes bei genau einer Akte steht. Steht nur ein Name im Titel, zeigt termine_zeigen einen Vorschlag (akte_vorschlag). Sagt der Mitarbeiter, zu welcher Akte ein Termin gehört, oder bestätigt er einen Vorschlag, ordne ihn mit termin_zuordnen zu (ohne kunde_id = Vorschlag übernehmen; sonst kunde_id vorher mit kunden_suchen ermitteln). loesen=true entfernt eine falsche Verknüpfung, vorschlag_ablehnen=true verwirft einen falschen Vorschlag — beides kommt für diesen Termin nicht wieder. gleiche_titel=true nur, wenn er ausdrücklich alle seine Termine mit diesem Titel meint (Serientermine). Weise auf offene Vorschläge höchstens einmal je Gespräch hin.
 - Termin-Briefing: Mit termin_briefing bereitest du den Mitarbeiter auf einen Termin vor — ohne Angabe für seinen nächsten Termin mit Bezug zu einer Akte, mit termin_id (aus termine_zeigen) für einen bestimmten Termin, mit kunde_id oder objekt_id für den nächsten Termin zu dieser Akte (gibt es keinen, kommt das Briefing zur Akte). Gib das Ergebnis so wieder, ohne etwas hinzuzufügen; die Gesprächspunkte sind nur Vorschläge. Dasselbe Briefing kommt automatisch per Telegram vor jedem Kundentermin (Standard 60 Minuten vorher). An- und abschalten, den Vorlauf und die Morgenübersicht um 7:30 Uhr stellt jeder im CRM unter Kalender → Einstellungen ein.
@@ -3587,6 +3623,7 @@ So arbeitest du:
 - Internet: Bittet dich der Mitarbeiter ausdrücklich, etwas im Internet nachzusehen oder zu recherchieren ("recherchier den Laden", "was findest du online über die Firma X"), nutzt du internet_recherche. Gib dabei alle Anhaltspunkte aus dem Gespräch oder der Akte mit (Firmenname, Ort, Webseite), damit keine gleichnamige Firma erwischt wird. Recherchiere nur Geschäftliches und Öffentliches: Firmen, Geschäftsführer und Inhaber in ihrer beruflichen Rolle, Webseite, Handelsregister, Bewertungen, Presse. Zum Privatleben von Personen (Gesundheit, Familie, Beziehungen, Privatanschrift) recherchierst du nie; sag das in einem Satz. Ohne ausdrückliche Bitte recherchierst du nicht, auch nicht beim Ablegen von Dateien. Sag beim Weitergeben, dass es aus dem Internet stammt und veraltet oder falsch sein kann, und nenne die Quellenadressen. Ins CRM übernimmst du davon nur etwas, wenn der Mitarbeiter es ausdrücklich verlangt.
 
 Ton und Form:
+- KURZ (Wunsch der Geschäftsführung, Andreas Mayer hat lange Texte ausdrücklich bemängelt): in der Regel 1–3 kurze Sätze, wie eine SMS unter Kollegen. Zuerst das Ergebnis oder die Antwort, dann höchstens EINE Frage. Keine Aufzählung von Angeboten („Soll ich noch … oder … ?“) — höchstens ein Angebot, und nur, wenn es wirklich naheliegt. Keine Zusammenfassung dessen, was der Mitarbeiter gerade selbst geschrieben hat. Länger nur, wenn er ausdrücklich eine Übersicht, Einzelheiten oder einen Text zum Verschicken will.
 - Deutsch, per Du, knapp und konkret wie ein guter Kollege. Keine Floskeln, keine englischen Begriffe.
 - Reiner Text ohne Markdown: keine Sternchen, keine Rauten, keine Tabellen. Aufzählungen als einfache Zeilen mit "- ".
 - Zähle nicht auf, was du alles nicht getan oder nicht gespeichert hast, solange niemand danach fragt.
@@ -4293,6 +4330,10 @@ async function verarbeiteKnopf(knopf: any): Promise<void> {
     token
       ? fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ callback_query_id: knopf.id, text: text.slice(0, 190) }) }).catch(() => undefined)
       : Promise.resolve(console.log(`[Knopf] ${text}`))
+  // „Bitte bestätigen“ (bt:…, email-gateway/bitteBestaetigen.ts und statusVorschlag.ts) — bitteBestaetigenWerkzeug.ts.
+  if (istBestaetigenKnopf(knopf?.data)) {
+    return await verarbeiteBestaetigenKnopf({ supabase: supa(), knopf, antworte, telegram: telegramMit(token), mailFunktion: callEmailGateway, wege: MITTEILUNGS_WEGE, heute: heuteBerlin() })
+  }
   const m = /^(vb|vv):(vm_[A-Za-z0-9]+):([A-Za-z0-9]+)$/.exec(String(knopf?.data ?? ''))
   const chatId = knopf?.message?.chat?.id
   if (!m || !chatId) return void (await antworte('Unbekannter Knopf.'))
@@ -4410,6 +4451,15 @@ async function verarbeiteUpdate(update: any): Promise<void> {
 // deno-lint-ignore no-explicit-any
 async function verarbeiteNachricht(supabase: Supa, message: any, chatId: number, text: string | undefined, mitarbeiter: any): Promise<void> {
   const privatBot = imPrivatBot()
+  // Runde 6: Reine Bestätigung („ok“, „danke“, „passt“, 👍) und der Assistent wartet auf keine Antwort → nur 👍 als
+  // Reaktion an der Nachricht, kein KI-Aufruf, keine neue Nachricht, nichts gespeichert (bestaetigung.ts).
+  if (text && !(message.forward_origin || message.forward_from || message.forward_sender_name || message.forward_date)) {
+    const bisher = ladeState(privatBot ? await ladeZustandRoh(supabase, mitarbeiter.id) : mitarbeiter.telegram_pending)
+    if (nurDaumen(text, bisher)) {
+      await reagiereMitDaumen(botToken(BOT_TOKEN), chatId, message.message_id)
+      return
+    }
+  }
   await sendeTippen(chatId)
   let istDatei = !!(message.photo || message.document || message.audio || message.voice || message.video || message.video_note || message.animation)
   // Aus einem anderen Chat (z. B. WhatsApp über die Teilen-Funktion, oder Telegram) weitergeleitet?

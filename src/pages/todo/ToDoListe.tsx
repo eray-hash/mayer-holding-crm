@@ -33,6 +33,7 @@ import {
 } from '../../../supabase/functions/_shared/todoAufraeumen.ts'
 import { alleZeilen } from '../../lib/alleZeilen'
 import { HeuteEinplanenKnopf } from '../../components/tagesplan/HeuteEinplanenKnopf'
+import { useMsStatus } from '../../lib/microsoftKonto'
 
 // Zwei Arten von Listen teilen sich dieselbe Tabelle/Komponente:
 // - Privat: eigene, isolierte Liste pro Mitarbeiter (RLS: besitzer_email), optional mit Lese-/
@@ -166,9 +167,21 @@ function ToDoListeKern({ scope }: { scope: Scope }) {
   const darfSchreiben = meinRecht === 'eigentuemer' || meinRecht === 'schreiben'
   const darfLoeschen = scope.kind === 'bereich' ? true : meinRecht === 'eigentuemer'
 
-  const listenEintraege = useMemo(
+  // Ausgeblendete Listen aus Microsoft To Do (Runde 6, z. B. „Flagged Emails“): übernommene Aufgaben bleiben gespeichert,
+  // stehen aber nur auf Wunsch in der eigenen Liste. Welche Listen abgeglichen werden: Privat → Einstellungen.
+  const { status: ms } = useMsStatus(scope.kind === 'privat' && isSupabaseConfigured ? eigeneEmail.toLowerCase() : undefined)
+  const ausgeblendeteListen = useMemo(() => new Set((ms?.todoListen ?? []).filter((l) => l.aus).map((l) => l.id)), [ms])
+  const [zeigeAusgeblendete, setZeigeAusgeblendete] = useState(false)
+  const alleListenEintraege = useMemo(
     () => (scope.kind === 'bereich' ? state.todos.filter((t) => t.bereich === scope.bereich) : state.todos.filter((t) => !t.bereich && t.besitzerEmail === aktiveListe)),
     [state.todos, scope, aktiveListe],
+  )
+  const istAusgeblendet = (t: ToDoEintrag) => scope.kind === 'privat' && aktiveListe === eigeneEmail && !!t.msListeId && ausgeblendeteListen.has(t.msListeId)
+  const ausgeblendetOffen = alleListenEintraege.filter((t) => !t.erledigtAm && istAusgeblendet(t)).length
+  const listenEintraege = useMemo(
+    () => (zeigeAusgeblendete ? alleListenEintraege : alleListenEintraege.filter((t) => !istAusgeblendet(t))),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [alleListenEintraege, zeigeAusgeblendete, ausgeblendeteListen, aktiveListe, eigeneEmail, scope.kind],
   )
   const offen = useMemo(() => listenEintraege.filter((t) => !t.erledigtAm), [listenEintraege])
   const erledigt = useMemo(() => listenEintraege.filter((t) => t.erledigtAm), [listenEintraege])
@@ -376,6 +389,17 @@ function ToDoListeKern({ scope }: { scope: Scope }) {
           Erledigt
         </button>
       </div>
+      {ausgeblendetOffen > 0 && (
+        <p className="-mt-2 mb-4 text-xs text-slate-500">
+          {zeigeAusgeblendete
+            ? `${ausgeblendetOffen.toLocaleString('de-DE')} offene Aufgaben aus ausgeblendeten Microsoft-Listen werden mit angezeigt.`
+            : `${ausgeblendetOffen.toLocaleString('de-DE')} offene Aufgaben aus ausgeblendeten Microsoft-Listen (z. B. markierte Mails) sind ausgeblendet.`}{' '}
+          <button type="button" className="font-medium text-accent-700 hover:underline" onClick={() => setZeigeAusgeblendete((z) => !z)}>
+            {zeigeAusgeblendete ? 'Wieder ausblenden' : 'Anzeigen'}
+          </button>
+          {' · Auswahl der Listen: Privat → Einstellungen.'}
+        </p>
+      )}
 
       {/* Unter sm: Karten statt der 15-spaltigen Excel-Tabelle — auf Handy-Breite ist die
           Tabelle selbst mit sticky Spalten kaum benutzbar (zu viel horizontales Scrollen für

@@ -96,15 +96,18 @@ export const KERN: readonly string[] = [
   // und „was ist neu im CRM“.
   'mein_profil_aendern',
   'neuigkeiten_im_crm',
+  // Runde 6: Antwort auf die Wiedervorlage „Neuanfrage prüfen“ kommt meist ohne Stichwort („passt nicht“, „später“) —
+  // ein Statuswechsel wie kunde_aendern, deshalb im Kern.
+  'lead_einstufen',
 ]
 
 export const GRUPPEN: Record<GruppenName, Gruppe> = {
   objekte: {
     titel: 'Immobilien-Objekte',
-    wofuer: 'Objektakten anlegen und ändern, Unterlagen und Fotos ins Objekt, Titelbild und Reihenfolge, Exposé, Kundenakte in Objektakte umziehen, was in Objektakten fehlt',
-    werkzeuge: ['objekt_anlegen', 'objekt_aendern', 'dateien_ins_objekt', 'akte_in_objekt_umwandeln', 'expose_erstellen', 'fotos_ins_objekt', 'titelbild_vorschlagen', 'bild_reihenfolge_setzen', 'objekt_luecken'],
+    wofuer: 'Objektakten anlegen und ändern, Unterlagen und Fotos ins Objekt, Titelbild und Reihenfolge, Exposé, Kundenakte in Objektakte umziehen, was in Objektakten fehlt, Vorab-Kurzprüfung im Chat ausfüllen',
+    werkzeuge: ['objekt_anlegen', 'objekt_aendern', 'dateien_ins_objekt', 'akte_in_objekt_umwandeln', 'expose_erstellen', 'fotos_ins_objekt', 'titelbild_vorschlagen', 'bild_reihenfolge_setzen', 'objekt_luecken', 'kurzpruefung_ausfuellen'],
     stichworte:
-      /objekt|immobili|expose|\bfotos?\b|\bbilder?\b|titelbild|grundriss|wohnung|\bhaus\b|haeuser|grundstueck|\bmfh\b|\befh\b|\betw\b|gewerbeeinheit|halle\b|baujahr|wohnflaeche|makler|alleinauftrag|reihenfolge|vollstaendig/,
+      /kurzpruef|akquise|objekt|immobili|expose|\bfotos?\b|\bbilder?\b|titelbild|grundriss|wohnung|\bhaus\b|haeuser|grundstueck|\bmfh\b|\befh\b|\betw\b|gewerbeeinheit|halle\b|baujahr|wohnflaeche|makler|alleinauftrag|reihenfolge|vollstaendig/,
   },
   vermarktung: {
     titel: 'Vermarktung',
@@ -171,16 +174,16 @@ export const GRUPPEN: Record<GruppenName, Gruppe> = {
   },
   aktenpflege: {
     titel: 'Aktenpflege',
-    wofuer: 'Kunden aus einer Liste anlegen, Akte in einen anderen Bereich verschieben, Akten zusammenführen, doppelte Akten finden, Stammdaten aus Mail-Signaturen',
-    werkzeuge: ['kunden_aus_liste', 'kunde_bereich_wechseln', 'kunden_zusammenfuehren', 'dubletten_finden', 'stammdaten_vorschlaege'],
+    wofuer: 'Kunden aus einer Liste anlegen, Akte in einen anderen Bereich verschieben, Akten zusammenführen, doppelte Akten finden, Stammdaten aus Mail-Signaturen, Akten ohne Telefon oder E-Mail',
+    werkzeuge: ['kunden_aus_liste', 'kunde_bereich_wechseln', 'kunden_zusammenfuehren', 'dubletten_finden', 'stammdaten_vorschlaege', 'kontakt_luecken'],
     stichworte:
-      /liste|tabelle|excel|\bcsv\b|import|mehrere kunden|(diese|folgende|neue) kunden|kunden auf einmal|bereich|nach (erben|immobilien|akademie|finanzierung|unternehmensberatung|betriebs)|zusammenfuehr|zusammenleg|dieselbe|derselbe|doppelt|dublette|zweimal|signatur|stammdaten/,
+      /kontaktdaten|kontakt-?nachfrage|ohne (telefon|e-?mail|nummer)|fehlt (die )?(telefon|nummer|e-?mail)|nicht erreichbar|liste|tabelle|excel|\bcsv\b|import|mehrere kunden|(diese|folgende|neue) kunden|kunden auf einmal|bereich|nach (erben|immobilien|akademie|finanzierung|unternehmensberatung|betriebs)|zusammenfuehr|zusammenleg|dieselbe|derselbe|doppelt|dublette|zweimal|signatur|stammdaten/,
   },
   nachfassen: {
     titel: 'Nachfassen',
-    wofuer: 'Wiedervorlagen, To-do-Liste aufräumen, Stand der Online-Unterschriften, Statusbericht an den Kunden',
-    werkzeuge: ['wiedervorlagen_auflisten', 'wiedervorlage_anlegen', 'wiedervorlage_erledigen', 'wiedervorlage_verschieben', 'todos_aufraeumen', 'unterschrift_status', 'statusbericht_entwurf'],
-    stichworte: /wiedervorlage|nachfass|nachhak|erinner|aufraeum|\braeum.{0,40}\bauf\b|to-?dos?.{0,30}(weg|streich)|was kann weg|von (meiner|der) liste|unterschrift|unterschrieb|unterzeichn|vertrag|vollmacht|vereinbarung|statusbericht|zwischenstand|bericht/,
+    wofuer: 'Wiedervorlagen, To-do-Liste aufräumen, Stand der Online-Unterschriften, Statusbericht an den Kunden, „Bitte bestätigen“-Vorschläge (Zuordnung, Statuswechsel)',
+    werkzeuge: ['wiedervorlagen_auflisten', 'wiedervorlage_anlegen', 'wiedervorlage_erledigen', 'wiedervorlage_verschieben', 'todos_aufraeumen', 'unterschrift_status', 'statusbericht_entwurf', 'vorschlaege_bestaetigen'],
+    stichworte: /wiedervorlage|nachfass|nachhak|erinner|aufraeum|\braeum.{0,40}\bauf\b|to-?dos?.{0,30}(weg|streich)|was kann weg|von (meiner|der) liste|unterschrift|unterschrieb|unterzeichn|vertrag|vollmacht|vereinbarung|statusbericht|zwischenstand|bericht|vorschlaege_bestaetigen|bitte bestaetigen|andere akte/,
   },
   hotmail: {
     titel: 'Hotmail und Briefe (Bereich Privat)',
@@ -248,6 +251,8 @@ export const ABSATZ_GRUPPE: readonly [string, GruppenName][] = [
   ['- Links:', 'dateien'],
   ['- Stammdaten aus E-Mail-Signaturen:', 'aktenpflege'],
   ['- Doppelte Akten:', 'aktenpflege'],
+  ['- Fehlende Kontaktdaten:', 'aktenpflege'],
+  ['- Kurzprüfung von Objekten:', 'objekte'],
   ['- Wiedervorlagen:', 'nachfassen'],
   ['- To-dos aufräumen:', 'nachfassen'],
   ['- Statusbericht an den Kunden:', 'nachfassen'],

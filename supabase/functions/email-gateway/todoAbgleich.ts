@@ -8,6 +8,12 @@
 //   todo_ms_loeschung merkt es in ms_loeschungen → in To Do gelöscht. Wandert eine Aufgabe in einen Mayer-Bereich,
 //   verschwindet sie aus To Do (Mayer-Daten gehören nicht ins private Microsoft-Konto).
 // - Neu aus To Do kommen nur offene Aufgaben; neue CRM-Aufgaben landen in der Standardliste von To Do.
+// - Listen-Auswahl je Konto (Runde 6, 23.11.2026): Hasan hatte 2.609 offene Aufgaben, 1.321 davon aus der Liste
+//   „Flagged Emails“ (markierte Mails, Fristen ab 2020). Ausgeschlossene Listen werden nicht mehr abgeglichen; was
+//   aus ihnen schon im CRM liegt, bleibt unverändert stehen (nichts wird gelöscht) und gilt nur als ausgeblendet
+//   (erkennbar an ms_liste_id; Morgen-Übersicht und To-Do-Liste lassen es weg). Ohne eigene Wahl ist nur
+//   „Flagged Emails“ (wellknownListName flaggedEmails) ausgeschlossen. Wahl in ms_konten.stand.todoListenWahl
+//   (Kennungen der ausgeschlossenen Listen), die Liste aller Listen schreibt jeder Lauf nach stand.todoListen.
 import { graph, graphAlle, isoZuMsZeit, MsFehler, msZeitZuIso } from '../_shared/microsoft.ts'
 
 // deno-lint-ignore no-explicit-any
@@ -97,6 +103,36 @@ export function nachMicrosoft(a: CrmAufgabe): Record<string, unknown> {
   }
 }
 
+export type ToDoListe = { id: string; displayName?: string; wellknownListName?: string }
+/** Eintrag in ms_konten.stand.todoListen (für Einstellungen, Morgen-Übersicht und To-Do-Liste). */
+export type ListenEintrag = { id: string; name: string; aus: boolean; markiert: boolean }
+
+/** Ist das die Liste der markierten Mails („Flagged Emails“ / „Gekennzeichnete E-Mail“)? */
+export function istMarkierteMails(l: ToDoListe): boolean {
+  return l.wellknownListName === 'flaggedEmails'
+}
+
+/**
+ * Kennungen der Listen, die NICHT abgeglichen werden. `wahl` = gespeicherte Wahl (ms_konten.stand.todoListenWahl):
+ * ein Feld mit Kennungen gilt genau so; ohne Wahl ist nur die Liste der markierten Mails ausgeschlossen.
+ */
+export function ausgeschlosseneListen(listen: ToDoListe[], wahl: unknown): Set<string> {
+  if (Array.isArray(wahl)) return new Set(wahl.map(String).filter((id) => listen.some((l) => l.id === id)))
+  return new Set(listen.filter(istMarkierteMails).map((l) => l.id))
+}
+
+/** Kennungen der ausgeblendeten Listen aus ms_konten.stand (für alle, die Aufgaben anzeigen). */
+export function ausgeblendeteListen(stand: unknown): Set<string> {
+  // deno-lint-ignore no-explicit-any
+  const l = (stand as any)?.todoListen
+  return new Set(Array.isArray(l) ? l.filter((e: ListenEintrag) => e?.aus === true && e.id).map((e: ListenEintrag) => String(e.id)) : [])
+}
+
+/** stand.todoListen aus den Listen und der Auswahl. */
+export function listenEintraege(listen: ToDoListe[], aus: Set<string>): ListenEintrag[] {
+  return listen.map((l) => ({ id: l.id, name: l.displayName ?? '', aus: aus.has(l.id), markiert: istMarkierteMails(l) }))
+}
+
 const SPALTEN = 'id, aufgabe, erledigt_am, erledigen_bis, prio, aktueller_stand, erinnern_um, bereich, besitzer_email, ms_id, ms_liste_id, ms_hash, ms_geaendert, ms_crm_geaendert'
 
 function neueId(): string {
@@ -115,9 +151,13 @@ export async function gleicheTodosAb(admin: Db, ich: string, budgetMs = 60_000):
   const stand = (konto?.stand ?? {}) as Record<string, unknown>
   const deltas = { ...((stand.todoDelta ?? {}) as Record<string, string>) }
 
-  const listen = await graphAlle<{ id: string; displayName?: string; wellknownListName?: string }>(admin, ich, '/me/todo/lists?$top=100', 200)
+  const listen = await graphAlle<ToDoListe>(admin, ich, '/me/todo/lists?$top=100', 200)
   const standard = listen.find((l) => l.wellknownListName === 'defaultList') ?? listen[0]
   const listenName = new Map(listen.map((l) => [l.id, l.displayName ?? '']))
+  // Listen-Auswahl: ausgeschlossene Listen werden nicht abgeglichen (ihr Stand wird verworfen — wird eine Liste wieder
+  // eingeschlossen, beginnt ihr Abgleich neu, ohne Doppel, weil vorhandene Aufgaben über ms_id erkannt werden).
+  const aus = ausgeschlosseneListen(listen, stand.todoListenWahl)
+  for (const id of aus) delete deltas[id]
 
   // Eigene, abgeglichene CRM-Aufgaben (auch solche, die inzwischen in einem Bereich liegen).
   // Seitenweise: Die Datenbank liefert höchstens 1000 Zeilen je Abfrage (Hasan hat über 2.600 Aufgaben).
@@ -139,6 +179,7 @@ export async function gleicheTodosAb(admin: Db, ich: string, budgetMs = 60_000):
   const entfernt: { id: string; liste: string }[] = []
   for (const liste of listen) {
     if (Date.now() - start > budgetMs) break
+    if (aus.has(liste.id)) continue
     let url = deltas[liste.id] ?? `/me/todo/lists/${encodeURIComponent(liste.id)}/tasks/delta`
     try {
       for (let seite = 0; seite < 40 && url; seite++) {
@@ -206,6 +247,13 @@ export async function gleicheTodosAb(admin: Db, ich: string, budgetMs = 60_000):
   for (const r of entfernt) {
     const a = nachMsId.get(r.id)
     if (!a || behandelt.has(r.id) || a.ms_liste_id !== r.liste) continue
+    // In eine ausgeschlossene Liste verschoben? Dann nicht löschen, nur die neue Liste merken (gilt dann als ausgeblendet).
+    const neueListe = await findeInListen(admin, ich, r.id, [...aus])
+    if (neueListe) {
+      await admin.from('todos').update({ ms_liste_id: neueListe, ms_liste_name: listenName.get(neueListe) ?? '' }).eq('id', a.id)
+      a.ms_liste_id = neueListe
+      continue
+    }
     if (a.bereich || (await abgleichHash(a)) !== a.ms_hash) {
       // Im CRM geändert oder schon in einem Bereich: nicht löschen, nur die Verknüpfung lösen (wird ggf. neu angelegt).
       await admin.from('todos').update({ ms_id: null, ms_liste_id: null, ms_hash: null, ms_geaendert: null }).eq('id', a.id)
@@ -270,8 +318,37 @@ export async function gleicheTodosAb(admin: Db, ich: string, budgetMs = 60_000):
   const { data: jetzt } = await admin.from('ms_konten').select('stand').eq('login_email', ich).maybeSingle()
   await admin
     .from('ms_konten')
-    .update({ stand: { ...((jetzt?.stand ?? {}) as Record<string, unknown>), todoDelta: deltas, todoLauf: { am: new Date().toISOString(), ...b, fehler: b.fehler.slice(0, 5) } } })
+    .update({ stand: { ...((jetzt?.stand ?? {}) as Record<string, unknown>), todoDelta: deltas, todoListen: listenEintraege(listen, ausgeschlosseneListen(listen, (jetzt?.stand as Record<string, unknown> | undefined)?.todoListenWahl)), todoLauf: { am: new Date().toISOString(), ...b, fehler: b.fehler.slice(0, 5) } } })
     .eq('login_email', ich)
   return b
 }
 
+/** Liegt die Aufgabe in einer dieser Listen? Gibt die Kennung der Liste zurück, sonst ''. Wirft nie. */
+async function findeInListen(admin: Db, ich: string, msId: string, listen: string[]): Promise<string> {
+  for (const liste of listen) {
+    try {
+      await graph(admin, ich, `/me/todo/lists/${encodeURIComponent(liste)}/tasks/${encodeURIComponent(msId)}`)
+      return liste
+    } catch {
+      // nicht in dieser Liste (404) oder nicht erreichbar — dann wie bisher
+    }
+  }
+  return ''
+}
+
+/**
+ * Listen-Auswahl speichern (Aktion ms_todo_listen_setzen, nur für das eigene Konto). `aus` = Kennungen der Listen,
+ * die nicht abgeglichen werden sollen. Übernommene Aufgaben bleiben unverändert in todos (nur ausgeblendet).
+ * Gibt die neue Liste der Listen zurück.
+ */
+export async function setzeListenWahl(admin: Db, ich: string, aus: unknown): Promise<ListenEintrag[]> {
+  const ids = Array.isArray(aus) ? [...new Set(aus.map(String).map((x) => x.trim()).filter(Boolean))].slice(0, 200) : null
+  if (!ids) throw new Error('aus muss eine Liste von Kennungen sein.')
+  const { data: konto } = await admin.from('ms_konten').select('stand').eq('login_email', ich).maybeSingle()
+  if (!konto) throw new Error('Kein Microsoft-Konto verbunden.')
+  const stand = (konto.stand ?? {}) as Record<string, unknown>
+  const bisher = (Array.isArray(stand.todoListen) ? stand.todoListen : []) as ListenEintrag[]
+  const neu = bisher.map((l) => ({ ...l, aus: ids.includes(l.id) }))
+  await admin.from('ms_konten').update({ stand: { ...stand, todoListenWahl: ids, todoListen: neu } }).eq('login_email', ich)
+  return neu
+}

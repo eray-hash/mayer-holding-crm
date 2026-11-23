@@ -40,6 +40,8 @@ export type MsStatus = {
   letzterFehler?: string | null
   letzterErfolg?: string | null
   abgleich?: { todo?: unknown; kalender?: unknown }
+  /** Listen in Microsoft To Do und ob sie abgeglichen werden (email-gateway/todoAbgleich.ts, Runde 6). */
+  todoListen?: { id: string; name: string; aus: boolean; markiert: boolean }[]
 }
 
 type Zugang = { erneuerung: string; zugang?: string; ablauf?: number }
@@ -80,6 +82,7 @@ export async function msStatus(admin: Db, email: string): Promise<MsStatus> {
     letzterFehler: data.letzter_fehler,
     letzterErfolg: data.letzter_erfolg,
     abgleich: { todo: data.stand?.todoLauf, kalender: data.stand?.kalenderLauf },
+    todoListen: Array.isArray(data.stand?.todoListen) ? data.stand.todoListen : undefined,
   }
 }
 

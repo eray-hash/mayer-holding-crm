@@ -695,6 +695,8 @@ function rowToTodo(row: any): ToDoEintrag {
     prioQuelle: row.prio_quelle === 'hand' || row.prio_quelle === 'auto' ? row.prio_quelle : undefined,
     prioGrund: row.prio_grund ?? undefined,
     prioAm: row.prio_am ?? undefined,
+    // Nur lesen (todoToRow schreibt es nie): Herkunftsliste in Microsoft To Do, für ausgeblendete Listen.
+    msListeId: row.ms_liste_id ?? undefined,
   }
 }
 

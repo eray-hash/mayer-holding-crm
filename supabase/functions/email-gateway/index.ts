@@ -270,6 +270,9 @@ import { pruefeStammdaten, stammdatenNachtragAktion } from './stammdatenErgaenze
 import { belegErgaenzenAktion, haikuAuslesen, pruefeBelege } from './belegErgaenzen.ts'
 import { istDienstSchluessel, sendeTagesmeldungen, tagesmeldungTest } from './tagesmeldung.ts'
 import { pruefeObjektLueckenHinweis } from './objektLueckenHinweis.ts'
+// Runde 6: tägliche Kontakt-Nachfrage und Wochenhinweis Kurzprüfung (Schalter assistent_hinweis_einstellung, Vorgabe aus).
+import { frageNachKontakten } from './kontaktNachfrage.ts'
+import { pruefeKurzpruefungHinweis } from './kurzpruefungHinweis.ts'
 import { pruefeBonitaet } from './bonitaet.ts'
 import { lieseKontoauszug } from './kontoauszug.ts'
 import { lieseAuszugFuerAbgleich } from './abgleichAuslesen.ts'
@@ -303,6 +306,8 @@ import { pruefeWochenrueckblick, wochenrueckblickEinstellung, wochenrueckblickTe
 import { GESPRAECH_AKTIONEN, gespraechAktion, gespraechMinutentakt } from './gespraechPipeline.ts'
 import { pruefeRechnungVorschlaege, pruefeRechnungVorschlagHinweis } from './rechnungVorschlaege.ts'
 import { pruefeMahnVorschlaege } from './mahnVorschlag.ts'
+import { sendeBitteBestaetigen } from './bitteBestaetigen.ts'
+import { pruefeStatusVorschlaege } from './statusVorschlag.ts'
 import { aktuellePerson, kiAufruf, mitAnlass, setzeAnlass, setzePerson, setzePrivat } from '../_shared/kiVerbrauch.ts'
 import { darfObjekt, darfPrivatKunde, istPrivaterKunde, istPrivatesObjekt } from '../_shared/privatZugriff.ts'
 import { alleZeilen } from '../_shared/alleZeilen.ts'
@@ -3536,6 +3541,16 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       EdgeRuntime.waitUntil(pruefePrivatePost(admin, { hoechstens: 40, zeitBudgetMs: 25_000 }).then((r) => {
         if (r.geprueft > 0 || r.fehler.length > 0) console.log(`Private Post: ${r.geprueft} geprüft, ${r.vorschlaege} Vorschläge, ${r.rundschreiben} Rundschreiben.`, r.fehler.join(' | '))
       }))
+      // „Bitte bestätigen“ (bitteBestaetigen.ts): werktags ab 8:20 je Empfänger höchstens 5 offene Zuordnungsvorschläge
+      // (Termin, persönliches/gemeinsames Postfach, Ungeklärte Eingänge) mit Knöpfen; Statusvorschläge (statusVorschlag.ts)
+      // aus Ereignissen, höchstens alle 15 Minuten. Beides nur bei eingeschaltetem Schalter (telegram_vorschlaege,
+      // Zeile „einstellung“; Standard AUS) und nur an die eingetragenen Empfänger. Ohne KI; wirft nie.
+      // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
+      EdgeRuntime.waitUntil(sendeBitteBestaetigen(admin).then(async (r) => {
+        if (r.gesendet > 0 || r.fehler.length > 0) console.log(`Bitte bestätigen: ${r.gesendet} Vorschläge an ${r.personen} Person(en).`, r.fehler.join(' | '))
+        const s = await pruefeStatusVorschlaege(admin)
+        if (s.gesendet > 0 || s.fehler.length > 0) console.log(`Statusvorschläge: ${s.gesendet} gesendet.`, s.fehler.join(' | '))
+      }))
       // Anfragenmanager (anfragenManager.ts): neue Mails im gemeinsamen Postfach auf Objektanfragen prüfen —
       // Akte, Zugang zum Interessenten-Portal und Telegram-Hinweis an den Verantwortlichen. Höchstens fünf Mails
       // je Lauf, keine neue Mail nach 50 Sekunden; jede Mail wird vorher beansprucht (nie doppelt). Im Hintergrund
@@ -3623,6 +3638,21 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       // Verantwortlichen, höchstens einmal pro Woche, je Mitarbeiter abschaltbar; außerhalb des Fensters ohne Datenbankzugriff; wirft nie.
       const objektLuecken = await pruefeObjektLueckenHinweis(admin, sendeTelegram)
       if (objektLuecken.gesendet > 0 || objektLuecken.meldungen.length > 0) console.log(`Objekt-Wochenhinweis: ${objektLuecken.gesendet} gesendet.`, objektLuecken.meldungen.join(' | '))
+      // Runde 6: Werktags 10:30–12 Uhr „Zu Akte X fehlen Telefon und E-Mail – weißt du sie?“ (kontaktNachfrage.ts) und montags
+      // 9–11 Uhr „Akquise-Objekte ohne Kurzprüfung“ (kurzpruefungHinweis.ts) — beide über den Assistenten in seinen Verlauf,
+      // nur bei eingeschaltetem Schalter (assistent_hinweis_einstellung: aus | superuser = Probelauf | alle), je Person
+      // abschaltbar, höchstens einmal am Tag bzw. in der Woche; außerhalb der Fenster ohne Datenbankzugriff; ohne KI; werfen nie.
+      {
+        const frage = frageUeberAssistent(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+        // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
+        EdgeRuntime.waitUntil(frageNachKontakten(admin, { frage }).then((r) => {
+          if (r.gefragt > 0 || r.fehler.length > 0) console.log(`Kontakt-Nachfrage: ${r.gefragt} gestellt.`, r.fehler.join(' | '))
+        }))
+        // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
+        EdgeRuntime.waitUntil(pruefeKurzpruefungHinweis(admin, { frage }).then((r) => {
+          if (r.gesendet > 0 || r.fehler.length > 0) console.log(`Kurzprüfung-Hinweis: ${r.gesendet} gesendet.`, r.fehler.join(' | '))
+        }))
+      }
       // Rechnungsvorschläge (rechnungVorschlaege.ts): alle fünf Minuten angenommene Kostenvoranschläge, erledigte Akten,
       // Seminarteilnahmen und beurkundete Objekte ohne Rechnung als Vorschlag ablegen (idempotent, ohne KI, ohne Nachrichten).
       // Montags 9–12 Uhr höchstens einmal je Person „N Rechnungen sind fällig zu stellen“ per Telegram (Standard: an für die
@@ -3730,6 +3760,20 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
       const ergebnis = await wunschAnalyseTest(admin, sendeTelegram, { senden: body.senden, stunden: body.stunden, schreiben: body.schreiben, jetzt: body.jetzt })
       return new Response(JSON.stringify(ergebnis), { headers })
+    }
+    if (body.action === 'bitte_bestaetigen_test') {
+      // Trockenlauf „Bitte bestätigen“ / Statusvorschläge zur Freigabe der Texte: schreibt nichts, sendet nichts.
+      // { email } = Zuordnungsvorschläge, die diese Person heute bekäme; { status: true, tage? } = Statusvorschläge
+      // aus den Ereignissen der letzten Tage (Vorgabe 7). Nur mit dem Dienst-Schlüssel.
+      const token = (req.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '').trim()
+      if (!istDienstSchluessel(token)) return new Response(JSON.stringify({ error: 'Nur mit dem Dienst-Schlüssel.' }), { status: 401, headers })
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      if (body.status === true) {
+        const tage = Math.min(30, Math.max(1, Number(body.tage) || 7))
+        return new Response(JSON.stringify(await pruefeStatusVorschlaege(admin, { trockenSeit: new Date(Date.now() - tage * 86_400_000) })), { headers })
+      }
+      if (typeof body.email !== 'string' || !body.email.trim()) return new Response(JSON.stringify({ error: 'email fehlt' }), { status: 400, headers })
+      return new Response(JSON.stringify(await sendeBitteBestaetigen(admin, { trockenFuer: body.email })), { headers })
     }
     if (body.action === 'tagesmeldung_test') {
       // Probelauf für EINE Person, sofort (ohne 8-Uhr-Fenster, Wochentag und Einstellungen) und ohne die

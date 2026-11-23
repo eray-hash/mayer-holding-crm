@@ -24,6 +24,12 @@
 //   Datenbank): Wiedervorlagen, Aufgaben und Treffer aus Bereichen, die jemand nicht sehen darf, fehlen.
 //   Private Objekte (objekte.privat_besitzer) und private Treffer (art „privat_treffer“) nur an ihren
 //   Besitzer; Zahlen für alle (Wochenbericht) ohne private Objekte.
+// - Eigene To-do-Liste und Microsoft To Do (Runde 6, 23.11.2026) — „Privat bleibt privat“ wie todoAufraeumenHinweis.ts:
+//   Aufgaben aus Microsoft To Do (todos.ms_id) stehen nie in der Nachricht über den Mayer-Bot. Nutzt die Person den
+//   privaten Assistenten, gilt ihre ganze eigene Liste als privat: sie kommt nur in die Privat-Übersicht über den
+//   privaten Bot (dort auch Microsoft-Aufgaben). Microsoft-Aufgaben älter als 90 Tage und solche aus ausgeblendeten
+//   Listen (ms_konten.stand.todoListen, z. B. „Flagged Emails“) fehlen ganz. Reihenfolge: heute Fälliges, dann die
+//   neuesten Überfälligen zuerst (vorher kamen Fristen aus 2020 zuerst).
 // - Nie Mailtexte oder Inhalte von Dokumenten — nur Titel und Namen.
 // - Wirft nie: Fehler stehen im Protokoll, der nächste Takt versucht es erneut.
 
@@ -31,6 +37,8 @@ import { hotmailAbschnitte } from './hotmailBriefing.ts'
 import { privatBotAktiv, sendePrivat } from '../_shared/telegramPrivat.ts'
 import { darfObjekt, istPrivatesObjekt, nurMayerObjekte, normalisiereAdresse } from '../_shared/privatZugriff.ts'
 import { wochenrueckblickAdressen } from './wochenrueckblickEmpfaenger.ts'
+import { ausgeblendeteListen } from './todoAbgleich.ts'
+import { alleZeilen } from '../_shared/alleZeilen.ts'
 
 // Der Dienst-Zugang zur Datenbank — wie in gesuchTreffer.ts.
 // deno-lint-ignore no-explicit-any
@@ -293,7 +301,7 @@ type KundeZeile = {
 }
 type ObjektZeile = { id: string; bezeichnung?: string | null; adresse?: string | null; verantwortlich?: string | null; follow_up?: FollowUp | null; activities?: unknown; privat_besitzer?: string | null }
 type TerminZeile = { id: string; titel?: string | null; beginn: string; ende: string; ganztags?: boolean | null; ort?: string | null; kunde_name?: string | null; besitzer_email?: string | null; teilnehmer?: unknown }
-type TodoZeile = { id: string; besitzer_email?: string | null; bereich?: string | null; aufgabe?: string | null; kunde_projekt?: string | null; zustaendig?: string | null; erledigt_am?: string | null; erledigen_bis?: string | null; geplante_wiedervorlage?: string | null }
+type TodoZeile = { id: string; besitzer_email?: string | null; bereich?: string | null; aufgabe?: string | null; kunde_projekt?: string | null; zustaendig?: string | null; erledigt_am?: string | null; erledigen_bis?: string | null; geplante_wiedervorlage?: string | null; ms_id?: string | null; ms_liste_id?: string | null }
 type EintragZeile = { id: string; daten?: unknown }
 type RechnungZeile = { id: string; datum?: string | null; zahlungsziel?: string | null; status?: string | null; mahnstufe?: string | null; betrag_brutto?: number | string | null }
 type LeadZeile = { id: string; status?: string | null; erstellt_am?: string | null }
@@ -310,7 +318,13 @@ export type Daten = {
   ungeklaert: number
   /** Zeitpunkt des stillen Erststands der Treffer — was dort festgehalten wurde, ist nicht „neu“. */
   trefferErststand: string | null
+  /** Je Login (klein) die ausgeblendeten Listen aus Microsoft To Do (ms_konten.stand.todoListen). Fehlt = keine. */
+  ausgeblendeteListen?: Map<string, Set<string>>
+  /** Offene, heute fällige oder überfällige Einträge der Tabelle wiedervorlagen (Runde 6). Fehlt = keine. */
+  wiedervorlagen?: WvZeile[]
 }
+
+type WvZeile = { id: string; kunde_id: string; bereich?: string | null; titel?: string | null; faellig?: string | null; verantwortlich?: string | null }
 
 export type WochenDaten = {
   kunden: KundeZeile[]
@@ -329,6 +343,33 @@ async function ladeUngeklaert(admin: Db): Promise<number> {
   return Array.isArray(data?.dokumente) ? data.dokumente.length : 0
 }
 
+/** Offene Wiedervorlagen (Tabelle wiedervorlagen) bis heute. Wirft nie (dann keine) — die Übersicht soll nie daran scheitern. */
+async function ladeWiedervorlagen(admin: Db, heute: string): Promise<WvZeile[]> {
+  try {
+    const { data, error } = await alleZeilen(() => admin.from('wiedervorlagen').select('id, kunde_id, bereich, titel, faellig, verantwortlich').is('erledigt_am', null).lte('faellig', heute))
+    if (error) return []
+    return (data ?? []) as WvZeile[]
+  } catch {
+    return []
+  }
+}
+
+/** Ausgeblendete To-Do-Listen je Login (ms_konten.stand.todoListen mit aus=true). Wirft nie (dann keine). */
+async function ladeAusgeblendeteListen(admin: Db): Promise<Map<string, Set<string>>> {
+  const m = new Map<string, Set<string>>()
+  try {
+    const { data, error } = await admin.from('ms_konten').select('login_email, stand')
+    if (error) return m
+    for (const z of (data ?? []) as { login_email?: string | null; stand?: unknown }[]) {
+      const ids = ausgeblendeteListen(z.stand)
+      if (ids.size) m.set(text(z.login_email).toLowerCase(), ids)
+    }
+  } catch {
+    // ohne Microsoft-Konten gibt es nichts auszublenden
+  }
+  return m
+}
+
 async function ladeErststand(admin: Db): Promise<string | null> {
   const { data } = await admin.from(TABELLE).select('daten').eq('id', 'treffer_stand').maybeSingle()
   const wert = alsObjekt(data?.daten)?.erststandAm
@@ -343,18 +384,20 @@ export async function ladeDaten(admin: Db, heute: string): Promise<Daten> {
     if (error) throw new Error(`termine: ${error.message}`)
     return (data ?? []) as TerminZeile[]
   }
-  const [kunden, objekte, termine, todos, treffer, privatTreffer, fragen, ungeklaert, trefferErststand] = await Promise.all([
+  const [kunden, objekte, termine, todos, treffer, privatTreffer, fragen, ungeklaert, trefferErststand, ausgeblendet, wiedervorlagen] = await Promise.all([
     ladeAlle(admin, 'kunden', 'id, bereich, firma, ansprechpartner, verantwortlich, verantwortlich_email, follow_up'),
     ladeAlle(admin, 'objekte', 'id, bezeichnung, adresse, verantwortlich, follow_up, privat_besitzer'),
     termineAbfrage(),
-    ladeAlle(admin, 'todos', 'id, besitzer_email, bereich, aufgabe, kunde_projekt, zustaendig, erledigt_am, erledigen_bis, geplante_wiedervorlage'),
+    ladeAlle(admin, 'todos', 'id, besitzer_email, bereich, aufgabe, kunde_projekt, zustaendig, erledigt_am, erledigen_bis, geplante_wiedervorlage, ms_id, ms_liste_id'),
     ladeAlle(admin, TABELLE, 'id, daten', 'treffer'),
     ladeAlle(admin, TABELLE, 'id, daten', 'privat_treffer'),
     ladeAlle(admin, TABELLE, 'id, daten', 'frage'),
     ladeUngeklaert(admin),
     ladeErststand(admin),
+    ladeAusgeblendeteListen(admin),
+    ladeWiedervorlagen(admin, heute),
   ])
-  return { kunden, objekte, termine, todos, treffer, privatTreffer, fragen, ungeklaert, trefferErststand }
+  return { kunden, objekte, termine, todos, treffer, privatTreffer, fragen, ungeklaert, trefferErststand, ausgeblendeteListen: ausgeblendet, wiedervorlagen }
 }
 
 export async function ladeWochenDaten(admin: Db): Promise<WochenDaten> {
@@ -410,8 +453,63 @@ function terminZeile(t: TerminZeile, von: Date, bis: Date): string {
   return `• ${wann} ${kurz(text(t.titel) || 'Termin')}${zusatz.length ? ` (${zusatz.join(', ')})` : ''}`
 }
 
+export type MorgenOptionen = {
+  /** false = die eigene Liste gehört in die Privat-Übersicht (Person nutzt den privaten Assistenten). */
+  eigeneListe?: boolean
+}
+
+/** Microsoft-Aufgaben mit älterer Frist bzw. Wiedervorlage fehlen in der Morgen-Übersicht. */
+export const MS_HOECHSTENS_TAGE = 90
+
+/**
+ * Fällige Aufgaben einer Person als Zeilen, heute Fälliges zuerst, dann die neuesten Überfälligen.
+ * - 'mayer': Bereichslisten (wo die Person zuständig ist) und die eigene Liste OHNE Microsoft To Do.
+ * - 'nur_bereiche': nur Bereichslisten (eigene Liste geht über den privaten Assistenten).
+ * - 'privat': nur die eigene Liste MIT Microsoft To Do (ohne ausgeblendete Listen und ohne Microsoft-Aufgaben über 90 Tage).
+ */
+export function aufgabenZeilen(p: Person, d: Daten, heute: string, art: 'mayer' | 'nur_bereiche' | 'privat'): string[] {
+  const grenze = plusTage(heute, -MS_HOECHSTENS_TAGE)
+  const ausgeblendet = d.ausgeblendeteListen?.get(p.email) ?? new Set<string>()
+  const aufgaben: { tag: string; zeile: string }[] = []
+  for (const t of d.todos) {
+    if (text(t.erledigt_am).trim()) continue
+    const zustaendig = text(t.zustaendig).trim()
+    const microsoft = !!text(t.ms_id)
+    // Eigene Liste: gehört dem Besitzer, außer jemand anderes ist ausdrücklich zuständig.
+    // Bereichs-Liste: zählt nur, wo die Person als zuständig eingetragen ist (sonst bekäme jeder alles).
+    let meine: boolean
+    if (t.bereich) meine = art !== 'privat' && darfBereich(p, t.bereich) && gehoertZu(zustaendig, p.name)
+    else {
+      const eigene = text(t.besitzer_email).trim().toLowerCase() === p.email && (!zustaendig || gehoertZu(zustaendig, p.name))
+      // Privat bleibt privat: Microsoft To Do nie über den Mayer-Bot; mit privatem Assistenten die ganze eigene Liste nicht.
+      meine = eigene && (art === 'privat' || (art === 'mayer' && !microsoft))
+    }
+    if (!meine) continue
+    if (microsoft && ausgeblendet.has(text(t.ms_liste_id))) continue
+    const aufgabe = text(t.aufgabe).trim()
+    if (!aufgabe) continue
+    const frist = alsDatum(t.erledigen_bis)
+    const wiedervorlage = alsDatum(t.geplante_wiedervorlage)
+    let tag = ''
+    let wann = ''
+    if (frist && frist <= heute) {
+      tag = frist
+      wann = frist < heute ? `überfällig seit ${tagMonat(frist)}` : 'fällig heute'
+    } else if (wiedervorlage && wiedervorlage <= heute) {
+      tag = wiedervorlage
+      wann = wiedervorlage < heute ? `Wiedervorlage seit ${tagMonat(wiedervorlage)}` : 'Wiedervorlage heute'
+    } else continue
+    if (microsoft && tag < grenze) continue
+    const projekt = text(t.kunde_projekt).trim()
+    aufgaben.push({ tag, zeile: `• ${kurz(aufgabe)}${projekt ? ` (${kurz(projekt, 40)})` : ''} – ${wann}` })
+  }
+  // Heute Fälliges zuerst, dann die neuesten Überfälligen (die ältesten sind meist erledigt oder vergessen).
+  aufgaben.sort((a, b) => Number(b.tag === heute) - Number(a.tag === heute) || b.tag.localeCompare(a.tag))
+  return aufgaben.map((x) => x.zeile)
+}
+
 /** Was heute für diese Person ansteht, als Abschnitte (leere Abschnitte fehlen). Rechnet nur. */
-export function morgenAbschnitte(p: Person, d: Daten, jetzt: Date): Abschnitt[] {
+export function morgenAbschnitte(p: Person, d: Daten, jetzt: Date, optionen: MorgenOptionen = {}): Abschnitt[] {
   const heute = berlinZeit(jetzt).datum
   const von = berlinTagesbeginn(heute)
   const bis = berlinTagesbeginn(plusTage(heute, 1))
@@ -446,38 +544,23 @@ export function morgenAbschnitte(p: Person, d: Daten, jetzt: Date): Abschnitt[] 
     if (!darfObjekt(o, p.email, darfImmobilien)) continue
     pruefeWv(o.follow_up, o.verantwortlich, `Objekt ${objektName(o)}`, istPrivatesObjekt(o))
   }
+  // Runde 6: auch die Wiedervorlagen aus dem Reiter „Wiedervorlagen“ (Tabelle wiedervorlagen, z. B. „Neuanfrage prüfen“) —
+  // vorher fehlten sie in der Übersicht, das Team arbeitet aber fast nur per Telegram. Nur wo die Person zuständig ist.
+  {
+    const kundenNachId = new Map(d.kunden.map((k) => [k.id, k]))
+    for (const w of d.wiedervorlagen ?? []) {
+      const tag = alsDatum(w.faellig)
+      if (!tag || tag > heute || !gehoertZu(w.verantwortlich, p.name) || !darfBereich(p, w.bereich) || w.bereich === 'privat') continue
+      const k = kundenNachId.get(w.kunde_id)
+      wv.push({ tag, zeile: `• ${kurz(text(w.titel) || 'Wiedervorlage', 60)}: ${kurz(k ? kundenName(k) : 'Akte', 40)} – ${faelligText(tag, heute)}` })
+    }
+  }
   wv.sort((a, b) => a.tag.localeCompare(b.tag))
   if (wv.length) abschnitte.push({ titel: 'Wiedervorlagen', zeilen: wv.map((x) => x.zeile) })
 
-  // ---- Eigene offene Aufgaben, fällig heute oder überfällig ----
-  const aufgaben: { tag: string; zeile: string }[] = []
-  for (const t of d.todos) {
-    if (text(t.erledigt_am).trim()) continue
-    const zustaendig = text(t.zustaendig).trim()
-    // Eigene Liste: gehört dem Besitzer, außer jemand anderes ist ausdrücklich zuständig.
-    // Bereichs-Liste: zählt nur, wo die Person als zuständig eingetragen ist (sonst bekäme jeder alles).
-    const meine = t.bereich
-      ? darfBereich(p, t.bereich) && gehoertZu(zustaendig, p.name)
-      : text(t.besitzer_email).trim().toLowerCase() === p.email && (!zustaendig || gehoertZu(zustaendig, p.name))
-    if (!meine) continue
-    const aufgabe = text(t.aufgabe).trim()
-    if (!aufgabe) continue
-    const frist = alsDatum(t.erledigen_bis)
-    const wiedervorlage = alsDatum(t.geplante_wiedervorlage)
-    let tag = ''
-    let wann = ''
-    if (frist && frist <= heute) {
-      tag = frist
-      wann = frist < heute ? `überfällig seit ${tagMonat(frist)}` : 'fällig heute'
-    } else if (wiedervorlage && wiedervorlage <= heute) {
-      tag = wiedervorlage
-      wann = wiedervorlage < heute ? `Wiedervorlage seit ${tagMonat(wiedervorlage)}` : 'Wiedervorlage heute'
-    } else continue
-    const projekt = text(t.kunde_projekt).trim()
-    aufgaben.push({ tag, zeile: `• ${kurz(aufgabe)}${projekt ? ` (${kurz(projekt, 40)})` : ''} – ${wann}` })
-  }
-  aufgaben.sort((a, b) => a.tag.localeCompare(b.tag))
-  if (aufgaben.length) abschnitte.push({ titel: 'Aufgaben', zeilen: aufgaben.map((x) => x.zeile) })
+  // ---- Offene Aufgaben, fällig heute oder überfällig (eigene Liste ohne Microsoft To Do; mit privatem Assistenten gar nicht) ----
+  const aufgaben = aufgabenZeilen(p, d, heute, optionen.eigeneListe === false ? 'nur_bereiche' : 'mayer')
+  if (aufgaben.length) abschnitte.push({ titel: 'Aufgaben', zeilen: aufgaben })
 
   // ---- Neue Treffer der letzten 24 Stunden: gemeldet an die Person oder sie ist verantwortlich ----
   // Mayer-Treffer nur mit Immobilien-Recht und nie mit einem privaten Objekt; private Treffer nur an ihren Besitzer.
@@ -548,8 +631,8 @@ function vorname(name: string): string {
 }
 
 /** Die fertige Nachricht — null, wenn nichts ansteht. Höchstens 25 Zeilen: Lange Listen werden gekürzt. */
-export function morgenText(p: Person, d: Daten, jetzt: Date, zusatz: Abschnitt[] = []): string | null {
-  const abschnitte = [...morgenAbschnitte(p, d, jetzt), ...zusatz]
+export function morgenText(p: Person, d: Daten, jetzt: Date, zusatz: Abschnitt[] = [], optionen: MorgenOptionen = {}): string | null {
+  const abschnitte = [...morgenAbschnitte(p, d, jetzt, optionen), ...zusatz]
   if (abschnitte.length === 0) return null
   const b = berlinZeit(jetzt)
   const gruss = vorname(p.name) ? `Guten Morgen ${vorname(p.name)}, das steht heute an (${WOCHENTAG_LANG[b.wochentag]}, ${tagMonat(b.datum)}):` : `Guten Morgen, das steht heute an (${WOCHENTAG_LANG[b.wochentag]}, ${tagMonat(b.datum)}):`
@@ -583,11 +666,15 @@ export function privatUebersichtText(p: Person, abschnitte: Abschnitt[], jetzt: 
   return zeilen.join('\n')
 }
 
-/** Morgen-Nachrichten einer Person: Mayer-Teil und, wenn sie den privaten Assistenten benutzt, getrennt der Hotmail-Teil. */
-async function morgenNachrichten(admin: Db, p: Person, daten: Daten, jetzt: Date): Promise<{ mayer: string | null; privat: string | null }> {
+/** Morgen-Nachrichten einer Person: Mayer-Teil und, wenn sie den privaten Assistenten benutzt, getrennt der private Teil
+ *  (eigene Aufgaben samt Microsoft To Do und Hotmail). Privat bleibt privat: die eigene Liste dann nicht im Mayer-Teil. */
+export async function morgenNachrichten(admin: Db, p: Person, daten: Daten, jetzt: Date, privatAktiv?: (email: string) => Promise<boolean>): Promise<{ mayer: string | null; privat: string | null }> {
   const hotmail = await hotmailAbschnitte(admin, p.email, jetzt)
-  if (hotmail.length > 0 && p.chat != null && (await privatBotAktiv(admin, p.email))) {
-    return { mayer: morgenText(p, daten, jetzt), privat: privatUebersichtText(p, hotmail, jetzt) }
+  const privat = p.chat != null && (await (privatAktiv ?? ((e: string) => privatBotAktiv(admin, e)))(p.email).catch(() => false))
+  if (privat) {
+    const eigene = aufgabenZeilen(p, daten, berlinZeit(jetzt).datum, 'privat')
+    const teile = [...(eigene.length ? [{ titel: 'Eigene Aufgaben', zeilen: eigene }] : []), ...hotmail]
+    return { mayer: morgenText(p, daten, jetzt, [], { eigeneListe: false }), privat: privatUebersichtText(p, teile, jetzt) }
   }
   return { mayer: morgenText(p, daten, jetzt, hotmail), privat: null }
 }
