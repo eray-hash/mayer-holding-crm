@@ -69,7 +69,8 @@ const STILE: Record<Kopfstil, Stil> = {
   protokoll: { schrift: 'helvetica', logo: { x: 12, y: 8, breite: 15, seiten: 'erste' }, fuss: 'keiner', start1: 13, startN: 18, links: 14, rechts: 14, unten: 18, nebenLogo: 33, titel: { groesse: 12.5, fett: false } },
   kooperation: { schrift: 'helvetica', logo: { x: 18, y: 25, breite: 20, seiten: 'alle' }, kooperation: true, fuss: 'mayer', start1: 72, startN: 58, links: 25, rechts: 22, unten: 30, titelMitte: true, titel: { groesse: 13, fett: true }, handZeile: 3.5 },
   schlicht: { schrift: 'helvetica', fuss: 'keiner', start1: 30, startN: 20, links: 25, rechts: 22, unten: 18, titelMitte: true, titel: { groesse: 11, fett: true }, mitteBisParagraf: true },
-  schlichtSerif: { schrift: 'times', fuss: 'keiner', start1: 52, startN: 25, links: 25, rechts: 22, unten: 22, titel: { groesse: 11, fett: false }, handZeile: 3.5 },
+  // Titel fett und größer, Textbeginn höher (23.11.2026: ohne Briefkopf stand der Text sonst erst nach einem Viertel der Seite).
+  schlichtSerif: { schrift: 'times', fuss: 'keiner', start1: 32, startN: 25, links: 25, rechts: 22, unten: 22, titel: { groesse: 15, fett: true }, handZeile: 3.5 },
   erben: { schrift: 'helvetica', logo: { x: 18, y: 12, breite: 22, seiten: 'alle' }, rueck: { y: 43.5, seiten: 'alle' }, fuss: 'vertraulich', start1: 52, startN: 50, links: 21, rechts: 18, unten: 20, titelMitte: true, titel: { groesse: 17, fett: true }, untertitelSchwarz: true, ueberFarbe: BLAU, kopfFuellung: [200, 200, 200], abschnittZusammen: true, tabellenLuft: 0 },
   memo: { schrift: 'times', fuss: 'keiner', start1: 26, startN: 20, links: 23, rechts: 20, unten: 18, titel: { groesse: 15, fett: true }, titelFarbe: [79, 129, 189], ueberFarbe: [79, 129, 189] },
   feedback: { schrift: 'helvetica', logo: { x: 177, y: 9, breite: 15, seiten: 'erste', blass: true }, fuss: 'keiner', start1: 24, startN: 18, links: 22, rechts: 20, unten: 18, kopfFuellung: [244, 204, 204] },
@@ -319,8 +320,32 @@ export function erzeugeVorlagePdf(params: {
     if (messen) return
     const leer = doc.getTextWidth(' ')
     let x = x0
+    // Aufeinanderfolgende Wörter gleicher Schrift als EIN Text mit echten Leerzeichen setzen: Die eingebauten
+    // Schriften stecken nicht in der Datei, der Betrachter nimmt seine eigene Times/Helvetica mit leicht anderen
+    // Breiten. Einzeln gesetzte Wörter fraßen dann die Abstände („Vollmachtgeberin“, „Ort,Datum“, 23.11.2026).
+    let lauf: { text: string; x: number; fett: boolean } | null = null
+    const schreibeLauf = () => {
+      if (!lauf) return
+      doc.setFont(FAM, lauf.fett ? 'bold' : 'normal')
+      setzeFarbe()
+      doc.text(lauf.text, lauf.x, yy)
+      lauf = null
+    }
     zeile.forEach((w, i) => {
-      if (i > 0 && zeile[i - 1].nachLeer) x += leer
+      const davorLeer = i > 0 && zeile[i - 1].nachLeer
+      if (davorLeer) x += leer
+      const istText = !w.kasten && !w.linie
+      if (istText && lauf && lauf.fett === !!w.fett) {
+        lauf.text += (davorLeer ? ' ' : '') + w.text
+        x += w.breite
+        return
+      }
+      schreibeLauf()
+      if (istText) {
+        lauf = { text: w.text, x, fett: !!w.fett }
+        x += w.breite
+        return
+      }
       if (w.kasten) {
         doc.setDrawColor(60)
         doc.setLineWidth(0.25)
@@ -333,13 +358,10 @@ export function erzeugeVorlagePdf(params: {
         doc.setDrawColor(120)
         doc.setLineWidth(0.2)
         doc.line(x, yy + 0.6, x + w.breite, yy + 0.6)
-      } else {
-        doc.setFont(FAM, w.fett ? 'bold' : 'normal')
-        setzeFarbe()
-        doc.text(w.text, x, yy)
       }
       x += w.breite
     })
+    schreibeLauf()
   }
 
   function absatz(teile: InlineTeil[], stil: 'normal' | 'bold', groesse: number, zeilenhoehe: number, einzug = 0) {
