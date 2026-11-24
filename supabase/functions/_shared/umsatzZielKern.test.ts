@@ -28,12 +28,12 @@ Deno.test('Zuordnung: KI über Bereich, Stichwort nur wenn eingeschaltet', () =>
 })
 
 Deno.test('Sparten aus Zeilen, sonst Vorgabe; Soll je Monat', () => {
-  assertEquals(spartenAusZeilen(null).map((s) => s.id), ['ki', 'immobilien', 'beratung'])
+  assertEquals(spartenAusZeilen(null).map((s) => s.id), ['ki', 'immobilien', 'beratung', 'fahrschule'])
   const z = spartenAusZeilen([{ id: 'x', name: 'X', reihenfolge: 2, soll_vorgabe: 5, bereiche: ['erben'], rest: true }, { id: 'a', name: 'A', reihenfolge: 1, soll_vorgabe: '7' }])
   assertEquals(z.map((s) => [s.id, s.sollVorgabe, s.rest]), [['a', 7, false], ['x', 5, true]])
   const soll = sollImMonat(S, [{ monat: '2026-11', sparte: 'ki', sollNetto: 0 }], '2026-11')
   assertEquals([soll.ki.soll, soll.ki.ausVorgabe, soll.immobilien.soll, soll.immobilien.ausVorgabe], [0, false, 15000, true])
-  assertEquals(fehlendeSollZeilen(S, [{ monat: '2026-11', sparte: 'ki', sollNetto: 0 }], '2026-11').map((x) => [x.sparte, x.sollNetto]), [['immobilien', 15000], ['beratung', 25000]])
+  assertEquals(fehlendeSollZeilen(S, [{ monat: '2026-11', sparte: 'ki', sollNetto: 0 }], '2026-11').map((x) => [x.sparte, x.sollNetto]), [['immobilien', 15000], ['beratung', 25000], ['fahrschule', 5000]])
 })
 
 Deno.test('Zeit: Werktage und Lage', () => {
@@ -78,17 +78,17 @@ Deno.test('Ist je Sparte: bezahlt, offen, erwartet, Soll bis heute', () => {
   assertEquals([i.bezahlt, i.offen, i.erwartet], [5000, 0, 12000]) // Provision 15.000 × 80 %
   assertEquals([k.bezahlt, k.soll], [0, 10000])
   assert(k.hinweis?.includes('Bereich KI wird noch eingerichtet'))
-  assertEquals(z.gesamt.soll, 50000)
+  assertEquals(z.gesamt.soll, 55000)
   assertEquals(z.gesamt.bezahlt, 6800)
-  assertEquals(z.gesamt.sollBisHeute, 40000) // 50.000 × 24/30
-  assertEquals(z.gesamt.abstand, -33200)
-  assertEquals(z.gesamt.prozent, 14)
+  assertEquals(z.gesamt.sollBisHeute, 44000) // 55.000 × 24/30
+  assertEquals(z.gesamt.abstand, -37200)
+  assertEquals(z.gesamt.prozent, 12)
   assertEquals(z.gesamt.hochrechnung, 6800 + 1000 + 14300)
-  assertEquals(z.gesamt.noetigProWerktag, Math.round(((50000 - 7800) / 5) * 100) / 100)
-  assertEquals(kurzMeldung(z), 'Umsatzziel November: 6.800 von 50.000 € (14 %), Soll bis heute 40.000 € — Rückstand 33.200 €. KI 0/10.000, Immobilien 5.000/15.000, Beratung 1.800/25.000.')
+  assertEquals(z.gesamt.noetigProWerktag, Math.round(((55000 - 7800) / 5) * 100) / 100)
+  assertEquals(kurzMeldung(z), 'Umsatzziel November: 6.800 von 55.000 € (12 %), Soll bis heute 44.000 € — Rückstand 37.200 €. KI 0/10.000, Immobilien 5.000/15.000, Beratung 1.800/25.000, Fahrschule 0/5.000.')
   // Oktober: nur was im Oktober eingegangen ist (nichts), r2 ist nicht mehr offen
   const okt = berechneZielStand(eingabe(), '2026-10')
-  assertEquals([okt.gesamt.bezahlt, okt.gesamt.offen, okt.gesamt.erwartet, okt.gesamt.sollBisHeute], [0, 0, 0, 50000])
+  assertEquals([okt.gesamt.bezahlt, okt.gesamt.offen, okt.gesamt.erwartet, okt.gesamt.sollBisHeute], [0, 0, 0, 55000])
 })
 
 Deno.test('KI-Stichwort eingeschaltet: Akademie-Rechnung zählt bei KI', () => {

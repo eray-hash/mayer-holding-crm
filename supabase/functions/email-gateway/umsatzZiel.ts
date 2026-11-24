@@ -105,6 +105,7 @@ export function spartenFuerBereiche(bereiche: string[]): string[] {
   for (const b of bereiche) {
     if (b === 'immobilien' || b === 'immobilienkunden') s.add('immobilien')
     else if (b === 'ki') s.add('ki')
+    else if (b === 'fahrschule') s.add('fahrschule')
     else if (b && b !== 'privat') s.add('beratung')
   }
   return [...s]

@@ -68,10 +68,11 @@ export const VORGABE_SPARTEN: SparteRegel[] = [
   { id: 'ki', name: 'KI', reihenfolge: 1, sollVorgabe: 10000, bereiche: ['ki'], stichwoerter: ['KI', 'künstliche Intelligenz'], stichwortAktiv: false, objektProvision: false, rest: false },
   { id: 'immobilien', name: 'Immobilien', reihenfolge: 2, sollVorgabe: 15000, bereiche: ['immobilienkunden'], stichwoerter: [], stichwortAktiv: false, objektProvision: true, rest: false },
   { id: 'beratung', name: 'Beratung & Privat', reihenfolge: 3, sollVorgabe: 25000, bereiche: ['beratung', 'erben', 'betriebsuebergabe', 'betriebsformen', 'akademie', 'finanzierungen', 'buecher'], stichwoerter: [], stichwortAktiv: false, objektProvision: false, rest: true },
+  { id: 'fahrschule', name: 'Fahrschule', reihenfolge: 4, sollVorgabe: 5000, bereiche: ['fahrschule'], stichwoerter: [], stichwortAktiv: false, objektProvision: false, rest: false },
 ]
 
 /** Bereiche, die es als Akten-Bereich gibt (für „Rest“-Trichter und Abteilungs-Zuordnung). */
-export const AKTEN_BEREICHE: readonly string[] = ['beratung', 'immobilienkunden', 'erben', 'betriebsuebergabe', 'betriebsformen', 'akademie', 'finanzierungen', 'buecher', 'ki']
+export const AKTEN_BEREICHE: readonly string[] = ['beratung', 'immobilienkunden', 'erben', 'betriebsuebergabe', 'betriebsformen', 'akademie', 'finanzierungen', 'buecher', 'ki', 'fahrschule']
 
 export const AKTEN_BEREICH_NAME: Record<string, string> = {
   beratung: 'Unternehmensberatung',
