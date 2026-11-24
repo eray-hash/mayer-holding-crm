@@ -43,7 +43,7 @@ import { darfObjekt, istPrivatesObjekt, nurMayerObjekte, normalisiereAdresse } f
 import { wochenrueckblickAdressen } from './wochenrueckblickEmpfaenger.ts'
 import { ausgeblendeteListen } from './todoAbgleich.ts'
 import { alleZeilen } from '../_shared/alleZeilen.ts'
-import { umsatzZielAbschnitt } from './umsatzZiel.ts'
+import { spartenFuerBereiche, umsatzZielAbschnitt } from './umsatzZiel.ts'
 
 // Der Dienst-Zugang zur Datenbank — wie in gesuchTreffer.ts.
 // deno-lint-ignore no-explicit-any
@@ -694,7 +694,9 @@ export async function morgenNachrichten(admin: Db, p: Person, daten: Daten, jetz
   const hotmail = await hotmailAbschnitte(admin, p.email, jetzt)
   // Umsatzziel (umsatzZiel.ts, 24.11.2026): nur Geschäftsführung/Admins und nur mit eingeschaltetem Schalter
   // (umsatz_ziel_einstellung.meldung_aktiv, Vorgabe aus) — als Abschnitt hier statt als eigene Nachricht. Wirft nie.
-  const ziel = p.gf ? await umsatzZielAbschnitt(admin, jetzt) : null
+  // Seit 24.11.2026 abends: jeder für seine Abteilung (Geschäftsführung alle Sparten, sonst die eigenen).
+  const eigeneSparten = spartenFuerBereiche(p.bereiche)
+  const ziel = p.gf ? await umsatzZielAbschnitt(admin, jetzt) : eigeneSparten.length ? await umsatzZielAbschnitt(admin, jetzt, { sparten: eigeneSparten }) : null
   const zielTeil = ziel ? [ziel] : []
   const privat = p.chat != null && (await (privatAktiv ?? ((e: string) => privatBotAktiv(admin, e)))(p.email).catch(() => false))
   if (privat) {
