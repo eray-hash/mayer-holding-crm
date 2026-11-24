@@ -21,6 +21,7 @@
 // eigener Gesprächszustand (privat_einstellungen.telegram_zustand). Einrichten: intern „privat_bot_einrichten“.
 
 import { gaesteEingabe, gaesteText, gaesteZeile } from './terminGaeste.ts'
+import { HOECHSTENS_EXTERNE, leseExterneAdressen } from './externeMail.ts'
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2.119.0'
 import { PDFDocument, degrees } from 'npm:pdf-lib@1.17.1'
 import { aktuellePerson, kiAufruf, mitAnlass, setzeAnlass, setzePerson, setzePrivat } from '../_shared/kiVerbrauch.ts'
@@ -30,7 +31,7 @@ import { aufgabenUebersicht } from './aufgaben.ts'
 import { type AbteilungZeile, alleObjektDokumente, lesenVonSelbst, leseRef, OBJEKT_SPALTEN, objektakteText, objektStatus, type ObjektRow, sucheObjekte } from './objektakte.ts'
 import { richteFotoAus } from './bildDrehung.ts'
 import { loescheTelegramNachricht, sensibelHinweis, sensibleArt, sensiblerEingang } from './sensibel.ts'
-import { kollegenBenachrichtigen, type MitteilungsWege, schickeMitteilung, todoAendern, todoAnlegen, todoErledigen } from './teamWerkzeuge.ts'
+import { kollegenBenachrichtigen, type MitteilungsWege, schickeMitteilung, todoAendern, todoAnlegen, todoErledigen, todoLoeschen } from './teamWerkzeuge.ts'
 import { fuehrePflegeWerkzeugAus, istPflegeWerkzeug, type PflegeAnfrage, PFLEGE_WERKZEUGE } from './pflegeWerkzeuge.ts'
 import { DOKUMENT_WERKZEUGE, fuehreDokumentWerkzeugAus, istDokumentWerkzeug } from './dokumentErstellen.ts'
 import { DIAGRAMM_WERKZEUG, fuehreDiagrammAus, istDiagrammWerkzeug } from './diagrammWerkzeug.ts'
@@ -1071,6 +1072,7 @@ type AgentState = {
   datei_ergebnisse?: { id: string; text: string; z: string }[]
 }
 
+// kunde_id und bereich leer = Adresse ohne Kundenakte (an_adressen in mail_vorbereiten, externeMail.ts).
 type MailEmpfaenger = { kunde_id: string; bereich: string; name: string; firma: string; email: string; status: string }
 type MailEntwurf = { id: string; betreff: string; text: string; empfaenger: MailEmpfaenger[]; z: string }
 
@@ -1109,6 +1111,16 @@ export function ladeState(raw: unknown): AgentState {
 // - Große Werkzeug-Ergebnisse (ganze Akte, Firmenüberblick) werden gekürzt; braucht der Assistent
 //   sie später wieder, ruft er das Werkzeug neu auf.
 const BILD_VERMERK = '[Bild im CRM-Fenster eingefügt]'
+
+/** Text der vorigen Nachricht des Mitarbeiters (letzter gespeicherter Zug, höchstens 30 Minuten alt), sonst leer. */
+function vorigeNachrichtDesMitarbeiters(state: AgentState): string {
+  const zug = state.zuege[state.zuege.length - 1]
+  const m = zug?.msgs?.[0]
+  if (!m || m.role !== 'user' || Date.now() - Date.parse(zug.z) > 30 * 60 * 1000) return ''
+  if (typeof m.content === 'string') return m.content
+  // deno-lint-ignore no-explicit-any
+  return Array.isArray(m.content) ? m.content.filter((b: any) => b?.type === 'text').map((b: any) => String(b.text ?? '')).join('\n') : ''
+}
 
 function fuerVerlauf(msgs: Nachricht[]): Nachricht[] {
   return msgs
@@ -1430,7 +1442,8 @@ export const TOOLS = [
   {
     name: 'mail_vorbereiten',
     description:
-      'Bereitet eine E-Mail an einen, mehrere oder alle Kunden vor, OHNE sie zu senden. Du schreibst Betreff und Text selbst aus dem, was der Mitarbeiter als Inhalt nennt. Das Werkzeug ermittelt die Empfänger, setzt die persönliche Anrede und den Gruß mit Namen des Mitarbeiters ein und liefert die fertige Fassung zur Freigabe. Gesendet wird erst mit mail_senden, nachdem der Mitarbeiter in einer eigenen Nachricht zugestimmt hat.',
+      'Bereitet eine E-Mail an einen, mehrere oder alle Kunden vor, OHNE sie zu senden — oder an Personen ohne Kundenakte (an_adressen, z. B. ein externer Termingast). Du schreibst Betreff und Text selbst aus dem, was der Mitarbeiter als Inhalt nennt. Das Werkzeug ermittelt die Empfänger, setzt die persönliche Anrede und den Gruß mit Namen des Mitarbeiters ein und liefert die fertige Fassung zur Freigabe. Gesendet wird erst mit mail_senden, nachdem der Mitarbeiter in einer eigenen Nachricht zugestimmt hat. ' +
+      'Für eine Einladung zu einem Termin nimm stattdessen gaeste bei termin_anlegen/termin_aendern (Kalenderdatei, Erinnerungen, Absage bei Änderung); an_adressen nur für normale Nachrichten.',
     input_schema: {
       type: 'object',
       properties: {
@@ -1445,6 +1458,12 @@ export const TOOLS = [
         status: { type: 'array', items: { type: 'string' }, description: 'Nur Kunden mit einem dieser Status (IDs wie lead, interessent, erstkontakt).' },
         kunden_ids: { type: 'array', items: { type: 'string' }, description: 'Genau diese Kunden (IDs aus kunden_suchen), z. B. für eine Mail an einen einzelnen Kunden.' },
         ohne_kunden_ids: { type: 'array', items: { type: 'string' }, description: 'Diese Kunden auslassen.' },
+        an_adressen: {
+          type: 'array',
+          items: { type: 'string' },
+          maxItems: HOECHSTENS_EXTERNE,
+          description: `Empfänger OHNE Kundenakte, je „Name <adresse@firma.de>“ oder nur die Adresse (höchstens ${HOECHSTENS_EXTERNE}). Nur Adressen, die der Mitarbeiter genannt hat oder die aus einem Termin (Gäste) stammen — nie erfinden. Gehört die Adresse zu einer Akte, wird die Mail dort vermerkt. Den Namen angeben, wenn bekannt (für die Anrede).`,
+        },
       },
       required: ['betreff', 'text'],
     },
@@ -1644,7 +1663,8 @@ export const TOOLS = [
       'Legt ein NEUES To-do ohne Kundenakte an (für Aufgaben mit Kundenakte nimm aufgabe_setzen). Ohne bereich und fuer landet es in der eigenen To-do-Liste des Mitarbeiters. Es erscheint im CRM in der To-do-Liste und unter "Aufgaben nach Mitarbeiter". Datum als JJJJ-MM-TT oder TT.MM.JJJJ. ' +
       'Soll ein bestehendes To-do nur anders heißen, eine Frist oder eine Erinnerung bekommen, nimm todo_aendern statt ein neues anzulegen und das alte abzuhaken. ' +
       'Persönliche Erinnerung ohne Kunden ("erinnere mich morgen an X", "erinnere mich um 15 Uhr an Y"): leg sofort ein To-do mit erinnern_um an, ohne zurückzufragen; ohne Uhrzeit nimm 09:00 Uhr an diesem Tag. Die Erinnerung kommt per Telegram. ' +
-      'Ist ein Personen- oder Kundenname unklar oder mehrdeutig, leg das To-do trotzdem an, schreib den Namen so wie gesagt in kunde_projekt und nenne den Zweifel in deiner Antwort, statt vorher nachzufragen.',
+      'Ist ein Personen- oder Kundenname unklar oder mehrdeutig, leg das To-do trotzdem an, schreib den Namen so wie gesagt in kunde_projekt und nenne den Zweifel in deiner Antwort, statt vorher nachzufragen. ' +
+      'Soll ein KOLLEGE die Aufgabe erledigen („gib das Hasan“, „Aufgabe für Quirin“, „X soll …“), setz fuer=<Kollege>: Das To-do kommt in dessen eigene Liste und er bekommt automatisch eine Telegram-Nachricht. Mit bereich bleibt es in der Bereichsliste und der Kollege wird zuständig. Nenne in deiner Antwort immer ausdrücklich, wem es zugewiesen ist und ob er benachrichtigt wurde.',
     input_schema: {
       type: 'object',
       properties: {
@@ -1652,10 +1672,10 @@ export const TOOLS = [
         erledigen_bis: { type: 'string', description: 'Fälligkeit, optional. Fehlt sie und ist erinnern_um gesetzt, wird der Tag der Erinnerung die Fälligkeit.' },
         erinnern_um: { type: 'string', description: 'Optional: Zeitpunkt der Erinnerung per Telegram in deutscher Ortszeit, Form JJJJ-MM-TTTHH:MM, z. B. 2026-11-20T09:00. Ohne Uhrzeit vom Mitarbeiter: 09:00. Erinnert wird bei der eigenen Liste ihr Besitzer, bei einer Bereichsliste der Zuständige.' },
         kunde_projekt: { type: 'string', description: 'Optional: Stichwort zu Kunde, Projekt, Person oder Thema (freier Text, Namen so wie gesagt).' },
-        zustaendig: { type: 'string', description: 'Optional: wer es erledigt, falls nicht der Mitarbeiter selbst.' },
+        zustaendig: { type: 'string', description: 'Optional: wer es erledigt, falls nicht der Mitarbeiter selbst. Ist das eindeutig ein Kollege, gilt es als Zuweisung wie fuer; Externe (z. B. Steuerberater) bleiben nur als Text.' },
         prio: { type: 'string', enum: ['A', 'B', 'C'], description: 'Optional: A = dringend, B = normal, C = wenn Zeit ist.' },
         bereich: { type: 'string', enum: ['beratung', 'immobilien', 'erben', 'betriebsuebergabe', 'betriebsformen', 'akademie', 'finanzierungen', 'buecher'], description: 'Optional: in die gemeinsame To-do-Liste dieses Bereichs statt in die eigene.' },
-        fuer: { type: 'string', description: 'Optional: Name eines Kollegen, dem das To-do geschickt wird — es kommt in seine eigene Liste, mit deinem Namen als Absender („schick Hasan ein To-do …“, „Aufgabe für Quirin …“).' },
+        fuer: { type: 'string', description: 'Optional: Name eines Kollegen, dem das To-do zugewiesen wird — es kommt in seine eigene Liste, mit deinem Namen als Absender, und er bekommt eine Telegram-Nachricht („schick Hasan ein To-do …“, „Aufgabe für Quirin …“). Ist der Name nicht eindeutig, kommt eine Liste der Kollegen zum Nachfragen.' },
       },
       required: ['aufgabe'],
     },
@@ -1708,7 +1728,19 @@ export const TOOLS = [
   ...ABEND_RUECKBLICK_WERKZEUGE,
   {
     name: 'todo_erledigen',
-    description: 'Hakt ein offenes To-do ab (eigene Liste oder freigegebene Bereichsliste), nur wenn es wirklich erledigt ist — nicht, um es zu korrigieren (dafür todo_aendern). Mit todo_id oder einem Suchbegriff aus dem Aufgabentext; bei mehreren Treffern kommt eine Liste zum Nachfragen.',
+    description: 'Hakt ein offenes To-do ab (eigene Liste oder freigegebene Bereichsliste), nur wenn es wirklich erledigt ist — nicht, um es zu korrigieren (dafür todo_aendern). Will er es von der Liste löschen/entfernen, nimm todo_loeschen. Mit todo_id oder einem Suchbegriff aus dem Aufgabentext; bei mehreren Treffern kommt eine Liste zum Nachfragen.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        todo_id: { type: 'string' },
+        suchbegriff: { type: 'string', description: 'Wort oder Teil aus dem Aufgabentext.' },
+      },
+    },
+  },
+  {
+    name: 'todo_loeschen',
+    description:
+      'Löscht ein To-do endgültig (eigene Liste oder freigegebene Bereichsliste, offen oder schon abgehakt) — wie der Löschen-Knopf in der To-Do-Liste des CRM. NUR, wenn der Mitarbeiter ausdrücklich löschen, entfernen, streichen oder „von der Liste nehmen“ sagt; sonst abhaken mit todo_erledigen. Mit todo_id oder Suchbegriff; bei mehreren Treffern kommt eine Liste zum Nachfragen. Lässt sich nicht rückgängig machen.',
     input_schema: {
       type: 'object',
       properties: {
@@ -1722,7 +1754,8 @@ export const TOOLS = [
     description:
       'Ändert ein bestehendes To-do (eigene Liste oder freigegebene Bereichsliste): Text korrigieren, Fälligkeit setzen oder entfernen, Erinnerung per Telegram setzen oder entfernen, Zuständig, Kunde/Projekt, aktueller Stand, Prio. Legt nie ein neues To-do an. ' +
       'Nimm es immer, wenn der Mitarbeiter ein vorhandenes To-do umbenennen, ergänzen oder terminieren will — nicht neu anlegen und das alte abhaken. Mit todo_id (aus einer früheren Antwort) oder einem Suchbegriff aus dem Aufgabentext; bei mehreren Treffern kommt eine Liste zum Nachfragen. ' +
-      'Gib nur die Felder an, die sich ändern; ein leerer Text löscht das Feld. Ist ein Name unklar, trag ihn so wie gesagt ein und nenne den Zweifel in der Antwort.',
+      'Gib nur die Felder an, die sich ändern; ein leerer Text löscht das Feld. Ist ein Name unklar, trag ihn so wie gesagt ein und nenne den Zweifel in der Antwort. ' +
+      'Einem Kollegen zuweisen: fuer=<Kollege> (ein To-do der eigenen Liste wandert in seine Liste, in einer Bereichsliste wird er zuständig; er bekommt eine Telegram-Nachricht). Nenne danach ausdrücklich, wem es zugewiesen ist.',
     input_schema: {
       type: 'object',
       properties: {
@@ -1731,7 +1764,8 @@ export const TOOLS = [
         aufgabe: { type: 'string', description: 'Neuer Aufgabentext (ersetzt den alten).' },
         erledigen_bis: { type: 'string', description: 'Neue Fälligkeit JJJJ-MM-TT oder TT.MM.JJJJ; leer = Fälligkeit entfernen.' },
         erinnern_um: { type: 'string', description: 'Erinnerung per Telegram in deutscher Ortszeit, Form JJJJ-MM-TTTHH:MM, z. B. 2026-11-20T09:00 (ohne Uhrzeit vom Mitarbeiter: 09:00); leer = Erinnerung entfernen. Hat das To-do keine Fälligkeit, wird der Tag der Erinnerung die Fälligkeit.' },
-        zustaendig: { type: 'string', description: 'Wer es erledigt; leer = entfernen.' },
+        zustaendig: { type: 'string', description: 'Wer es erledigt; leer = entfernen. Ein eindeutiger Kollege gilt als Zuweisung wie fuer.' },
+        fuer: { type: 'string', description: 'Name eines Kollegen, dem das To-do zugewiesen wird.' },
         kunde_projekt: { type: 'string', description: 'Stichwort zu Kunde, Projekt, Person oder Thema; leer = entfernen.' },
         aktueller_stand: { type: 'string', description: 'Notiz zum aktuellen Stand (ersetzt die bisherige); leer = entfernen.' },
         prio: { type: 'string', enum: ['A', 'B', 'C', ''], description: 'A = dringend, B = normal, C = wenn Zeit ist; leer = entfernen.' },
@@ -1927,9 +1961,11 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
 
   // Team-Werkzeuge (teamWerkzeuge.ts): Nachricht an Kollegen, To-dos ohne Kundenakte.
   if (name === 'kollegen_benachrichtigen') return await kollegenBenachrichtigen(supabase, MITTEILUNGS_WEGE, mitarbeiter, input, protokolliere)
-  if (name === 'todo_anlegen') return await todoAnlegen(supabase, mitarbeiter, input, protokolliere)
+  if (name === 'todo_anlegen') return await todoAnlegen(supabase, mitarbeiter, input, protokolliere, MITTEILUNGS_WEGE)
   if (name === 'todo_erledigen') return await todoErledigen(supabase, mitarbeiter, input, protokolliere)
-  if (name === 'todo_aendern') return await todoAendern(supabase, mitarbeiter, input, protokolliere)
+  if (name === 'todo_aendern') return await todoAendern(supabase, mitarbeiter, input, protokolliere, MITTEILUNGS_WEGE)
+  // Löschen nur auf ausdrücklichen Wunsch: geprüft an seiner Nachricht und der davor (Antwort „ja“ auf „Endgültig löschen?“).
+  if (name === 'todo_loeschen') return await todoLoeschen(supabase, mitarbeiter, input, protokolliere, [ctx.eingang, vorigeNachrichtDesMitarbeiters(state)])
 
   // Aktenpflege nur für Geschäftsführung/Admin, mit Bestätigung in der nächsten Nachricht (pflegeWerkzeuge.ts).
   if (istPflegeWerkzeug(name)) {
@@ -3301,8 +3337,13 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     const ohne = new Set<string>(Array.isArray(input.ohne_kunden_ids) ? input.ohne_kunden_ids.map(String) : [])
     const bereiche: string[] = Array.isArray(input.bereiche) ? input.bereiche.map(String) : []
     const status: string[] = Array.isArray(input.status) ? input.status.map(String) : []
-    if (ids.length === 0 && bereiche.length === 0 && status.length === 0 && input.alle_kunden !== true) {
-      return 'Fehler: Es ist nicht festgelegt, an wen die Mail gehen soll. Frag nach (alle Kunden, ein Bereich, ein Status oder bestimmte Kunden).'
+    const eigeneAdresse = (Deno.env.get('SMTP_USER') ?? '').toLowerCase()
+    const externe = leseExterneAdressen(input.an_adressen, eigeneAdresse)
+    if (externe.adressen.length > HOECHSTENS_EXTERNE) return `Fehler: höchstens ${HOECHSTENS_EXTERNE} Adressen ohne Akte in einer Mail. Für mehr Empfänger die Kunden auswählen (Bereich, Status, kunden_ids).`
+    const mitKunden = ids.length > 0 || bereiche.length > 0 || status.length > 0 || input.alle_kunden === true
+    if (!mitKunden && externe.adressen.length === 0) {
+      if (externe.fehler.length > 0) return `Fehler: ${externe.fehler.join('; ')}. Nichts vorbereitet — frag nach der richtigen Adresse.`
+      return 'Fehler: Es ist nicht festgelegt, an wen die Mail gehen soll. Frag nach (alle Kunden, ein Bereich, ein Status, bestimmte Kunden oder eine E-Mail-Adresse ohne Akte).'
     }
     const gesperrteBereiche = bereiche.filter((b) => !darfBereich(mitarbeiter, b))
     if (gesperrteBereiche.length > 0) return nichtFreigegeben(gesperrteBereiche[0], mitarbeiter.name)
@@ -3311,6 +3352,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     // deno-lint-ignore no-explicit-any
     const alle = ((data ?? []) as any[]).filter((k) => NEUANLAGE_BEREICHE.includes(k.bereich) && k.id !== AKTE_INTERN && k.id !== AKTE_UNGEKLAERT)
     const gewaehlt = alle.filter((k) => {
+      if (!mitKunden) return false // nur Adressen ohne Akte
       if (ohne.has(k.id)) return false
       if (ids.length > 0) return ids.includes(k.id)
       if (bereiche.length > 0 && !bereiche.includes(k.bereich)) return false
@@ -3344,6 +3386,19 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
       gesehen.add(mail)
       empfaenger.push({ kunde_id: k.id, bereich: k.bereich, name: String(k.ansprechpartner ?? '').trim(), firma: String(k.firma ?? '').trim(), email: mail, status: k.status ?? '' })
     }
+    // Adressen ohne Akte (an_adressen): Gehört eine zu einer Akte, die er sehen darf, wird die Mail dort vermerkt.
+    let ohneAkte = 0
+    for (const a of externe.adressen) {
+      if (gesehen.has(a.email)) continue
+      gesehen.add(a.email)
+      const akte = alle.find((k) => erlaubt.includes(k.bereich) && String(k.email ?? '').trim().toLowerCase() === a.email)
+      if (akte) {
+        empfaenger.push({ kunde_id: akte.id, bereich: akte.bereich, name: a.name || String(akte.ansprechpartner ?? '').trim(), firma: String(akte.firma ?? '').trim(), email: a.email, status: akte.status ?? '' })
+      } else {
+        empfaenger.push({ kunde_id: '', bereich: '', name: a.name, firma: '', email: a.email, status: '' })
+        ohneAkte++
+      }
+    }
     // Wer unter gleichem Namen ein zweites Mal mit Adresse geführt wird, ist nicht "ausgelassen".
     const dabei = new Set(empfaenger.map((e) => norm(e.name || e.firma)))
     for (let i = ohneAdresse.length - 1; i >= 0; i--) if (dabei.has(norm(ohneAdresse[i]))) ohneAdresse.splice(i, 1)
@@ -3353,24 +3408,26 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     const entwurf: MailEntwurf = { id: crypto.randomUUID().slice(0, 8), betreff, text, empfaenger, z: new Date().toISOString() }
     state.mail_anfrage = entwurf
     const jeBereich = new Map<string, number>()
-    for (const e of empfaenger) jeBereich.set(e.bereich, (jeBereich.get(e.bereich) ?? 0) + 1)
+    for (const e of empfaenger) jeBereich.set(e.bereich || 'ohne Akte', (jeBereich.get(e.bereich || 'ohne Akte') ?? 0) + 1)
     const nurLead = empfaenger.filter((e) => e.status === 'lead').length
     return [
       'NOCH NICHT GESENDET. Zeige dem Mitarbeiter jetzt die Fassung unten vollständig und unverändert (Betreff und Text) und nenne die Empfänger. Frag dann, ob du so senden sollst. Sende erst, wenn er in seiner nächsten Nachricht klar zustimmt.',
       '',
       `Empfänger: ${empfaenger.length} (${[...jeBereich.entries()].map(([b, n]) => `${BEREICH_LABEL[b] ?? b}: ${n}`).join(', ')})`,
       empfaenger.length <= 15
-        ? empfaenger.map((e) => `- ${e.name || e.firma} <${e.email}>`).join('\n')
-        : `${empfaenger.slice(0, 10).map((e) => `- ${e.name || e.firma} <${e.email}>`).join('\n')}\n- und ${empfaenger.length - 10} weitere`,
+        ? empfaenger.map((e) => `- ${e.name || e.firma || e.email} <${e.email}>${e.kunde_id ? '' : ' (ohne Akte)'}`).join('\n')
+        : `${empfaenger.slice(0, 10).map((e) => `- ${e.name || e.firma || e.email} <${e.email}>${e.kunde_id ? '' : ' (ohne Akte)'}`).join('\n')}\n- und ${empfaenger.length - 10} weitere`,
       nurLead > 0 && empfaenger.length > 1 ? `Hinweis für den Mitarbeiter: ${nurLead} davon sind bisher nur als Lead geführt (noch keine Kunden).` : '',
       ohneAdresse.length > 0 ? `Ausgelassen, weil keine gültige E-Mail-Adresse hinterlegt ist (${ohneAdresse.length}): ${ohneAdresse.slice(0, 12).join(', ')}${ohneAdresse.length > 12 ? ' …' : ''}` : '',
       doppelt.length > 0 ? `Ausgelassen, weil dieselbe Adresse schon dabei ist (${doppelt.length}): ${doppelt.slice(0, 8).join(', ')}` : '',
-      eingeschraenkt && ids.length === 0 ? `Berücksichtigt sind nur Kunden aus den Bereichen, die für ${mitarbeiter.name} freigegeben sind (${freigegebeneBereiche(mitarbeiter).map(bereichName).join(', ')}).` : '',
+      externe.fehler.length > 0 ? `Nicht übernommen: ${externe.fehler.join('; ')}.` : '',
+      ohneAkte > 0 ? `${ohneAkte} ${ohneAkte === 1 ? 'Empfänger hat' : 'Empfänger haben'} keine Kundenakte: Die Mail steht danach nur unter „Gesendet“ im CRM-Postfach, in keiner Akte. Ist es eine Termineinladung, nimm besser gaeste am Termin.` : '',
+      eingeschraenkt && ids.length === 0 && mitKunden ? `Berücksichtigt sind nur Kunden aus den Bereichen, die für ${mitarbeiter.name} freigegeben sind (${freigegebeneBereiche(mitarbeiter).map(bereichName).join(', ')}).` : '',
       `Absender ist das Postfach der Holding; Antworten kommen dort an und erscheinen im CRM-Postfach.`,
       '',
       `Betreff: ${betreff}`,
       '',
-      `So sieht die Mail für den ersten Empfänger aus (${empfaenger[0].name || empfaenger[0].firma}):`,
+      `So sieht die Mail für den ersten Empfänger aus (${empfaenger[0].name || empfaenger[0].firma || empfaenger[0].email}):`,
       '-----',
       mailText(entwurf, empfaenger[0], mitarbeiter.name),
       '-----',
@@ -3389,7 +3446,8 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
       return `Nichts gesendet: Der Versand „${laufend.betreff}" läuft noch. Bitte warten, bis die Abschlussmeldung da ist.`
     }
     // Rechte noch einmal beim Senden prüfen: Sie können sich seit dem Vorbereiten geändert haben.
-    const freigegeben = anfrage.empfaenger.filter((e) => darfBereich(mitarbeiter, e.bereich))
+    // Adressen ohne Akte (kunde_id leer) hängen an keinem Bereich.
+    const freigegeben = anfrage.empfaenger.filter((e) => !e.kunde_id || darfBereich(mitarbeiter, e.bereich))
     if (freigegeben.length === 0) return 'Nichts gesendet: Keiner der Empfänger liegt in einem Bereich, der für den Mitarbeiter freigegeben ist.'
     if (freigegeben.length < anfrage.empfaenger.length) {
       return 'Nichts gesendet: Seit dem Vorbereiten haben sich die freigegebenen Bereiche des Mitarbeiters geändert. Bereite die Mail mit mail_vorbereiten neu vor und zeige sie ihm noch einmal.'
@@ -3552,7 +3610,9 @@ export async function fuehreMailSchrittAus(mitarbeiterId: string, auftragId: str
   if (offen.length === 0 || runde > 60) {
     const gescheitert = auftrag.empfaenger.filter((e) => !raus.has(e.email))
     const zeilen = [`E-Mail „${auftrag.betreff}": ${auftrag.empfaenger.length - gescheitert.length} von ${auftrag.empfaenger.length} gesendet.`]
-    if (gescheitert.length > 0) zeilen.push(`Nicht zugestellt (${gescheitert.length}): ${gescheitert.slice(0, 15).map((e) => `${e.name || e.firma} <${e.email}>`).join(', ')}${gescheitert.length > 15 ? ' …' : ''}`)
+    if (gescheitert.length > 0) zeilen.push(`Nicht zugestellt (${gescheitert.length}): ${gescheitert.slice(0, 15).map((e) => `${e.name || e.firma || e.email} <${e.email}>`).join(', ')}${gescheitert.length > 15 ? ' …' : ''}`)
+    else if (auftrag.empfaenger.every((e) => !e.kunde_id)) zeilen.push('Die Mail steht unter „Gesendet“ im CRM-Postfach (Empfänger ohne Kundenakte).')
+    else if (auftrag.empfaenger.some((e) => !e.kunde_id)) zeilen.push('Bei Empfängern mit Akte steht der Versand als Eintrag in der Akte, die übrigen unter „Gesendet“ im CRM-Postfach.')
     else zeilen.push('Bei jedem Empfänger steht der Versand als Eintrag in der Akte.')
     // Auftrag aus dem frisch gelesenen Zustand nehmen, damit ein inzwischen geführtes Gespräch erhalten bleibt.
     const { data: frisch } = await supabase.from('mitarbeiter').select('telegram_pending').eq('id', mitarbeiterId).maybeSingle()
@@ -3576,15 +3636,14 @@ export async function fuehreMailSchrittAus(mitarbeiterId: string, auftragId: str
     try {
       await callEmailGateway('send', {
         to: e.email,
-        toName: e.name || e.firma,
+        toName: e.name || e.firma || e.email,
         subject: auftrag.betreff,
         text: mailText(auftrag, e, m.name),
-        kundeBereich: e.bereich,
-        kundeId: e.kunde_id,
-        kundeName: e.name || e.firma,
+        // Adresse ohne Akte: ohne Kundenbezug, steht dann nur unter „Gesendet“ (gesendete_emails ohne kunde_id).
+        ...(e.kunde_id ? { kundeBereich: e.bereich, kundeId: e.kunde_id, kundeName: e.name || e.firma } : {}),
         ohneRechnungsErkennung: true,
       })
-      const { data: k } = await supabase.from('kunden').select('activities').eq('id', e.kunde_id).maybeSingle()
+      const { data: k } = e.kunde_id ? await supabase.from('kunden').select('activities').eq('id', e.kunde_id).maybeSingle() : { data: null }
       if (k) {
         await supabase
           .from('kunden')
@@ -3642,7 +3701,7 @@ So arbeitest du:
 - Speichere eine Notiz oder Aufgabe aus einer getippten Nachricht weiterhin nur, wenn der Mitarbeiter etwas festhalten will; das Ablegen von Dateien und weitergeleiteten Nachrichten ist davon ausgenommen und geschieht immer.
 - Rechnungen: Meldet ein Datei-Eingang "Rechnung erkannt" und ist der Aussteller die Holding selbst (Andreas Mayer Holding, Mayer Consulting, Ulmer Wirtschaftskanzlei oder ein anderer Name aus dem eigenen Haus), ist das eine Ausgangsrechnung an den Kunden. Dann legst du die Datei ab UND erfasst sie mit rechnung_erfassen. Status ist Versendet (offen), außer der Mitarbeiter hat gesagt, dass sie bezahlt ist. Nenne danach Nummer, Datum, Netto und Brutto, damit er die gelesenen Werte prüfen kann, und sag, dass sie als offen geführt wird. Fehlen Nummer oder Bruttobetrag oder sind sie unklar, frag nach, statt zu raten. Rechnungen, die jemand anderes ausgestellt hat (Lieferanten, Handwerker, Unterlagen des Kunden), sind nur Dokumente und werden nicht erfasst.
 - Kunden löschen: nur auf ausdrücklichen Wunsch und erst nach Bestätigung in einer eigenen Nachricht.
-- E-Mails: Du kannst E-Mails an einen Kunden, an mehrere oder an alle schicken. Nennt der Mitarbeiter nur den Inhalt, schreibst du daraus selbst die fertige Mail: passender Betreff, höflicher Text in der Sie-Form, klar und ohne Floskeln, ohne englische Begriffe, nichts dazuerfinden (keine Termine, Preise oder Zusagen, die er nicht genannt hat). Dann rufst du mail_vorbereiten auf. Ist nicht klar, an wen die Mail gehen soll, frag vorher nach. Zeige ihm danach den Betreff und den vollständigen Text so, wie das Werkzeug ihn liefert, nenne die Zahl der Empfänger und wer ausgelassen wird, und frag, ob du so senden sollst. Erst wenn er in seiner nächsten Nachricht klar zustimmt, rufst du mail_senden auf. Will er etwas ändern, bereitest du neu vor, zeigst die neue Fassung und fragst erneut. Ohne seine Zustimmung wird nie gesendet. Lehnt er ab oder will er doch nicht senden, ist die Fassung damit verworfen; bestätige das in einem Satz. Der Inhalt geht als normaler Mailtext hinaus, ohne Anhang. Briefe für den Postversand kannst du noch nicht erstellen, weil in den Akten keine Anschriften stehen.
+- E-Mails: Du kannst E-Mails an einen Kunden, an mehrere oder an alle schicken — und an Personen ohne Kundenakte (z. B. einen externen Termingast): dann mit an_adressen („Name <adresse>“), ohne vorher eine Akte anzulegen; lehne das nicht ab. Für Termineinladungen nimm aber gaeste am Termin (termin_anlegen/termin_aendern), nicht eine Mail. Nennt der Mitarbeiter nur den Inhalt, schreibst du daraus selbst die fertige Mail: passender Betreff, höflicher Text in der Sie-Form, klar und ohne Floskeln, ohne englische Begriffe, nichts dazuerfinden (keine Termine, Preise oder Zusagen, die er nicht genannt hat). Dann rufst du mail_vorbereiten auf. Ist nicht klar, an wen die Mail gehen soll, frag vorher nach. Zeige ihm danach den Betreff und den vollständigen Text so, wie das Werkzeug ihn liefert, nenne die Zahl der Empfänger und wer ausgelassen wird, und frag, ob du so senden sollst. Erst wenn er in seiner nächsten Nachricht klar zustimmt, rufst du mail_senden auf. Will er etwas ändern, bereitest du neu vor, zeigst die neue Fassung und fragst erneut. Ohne seine Zustimmung wird nie gesendet. Lehnt er ab oder will er doch nicht senden, ist die Fassung damit verworfen; bestätige das in einem Satz. Der Inhalt geht als normaler Mailtext hinaus, ohne Anhang. Briefe für den Postversand kannst du noch nicht erstellen, weil in den Akten keine Anschriften stehen.
 - Für Fragen quer über alle Kunden oder Objekte ("was steht heute an", "wer sucht ...") nutze firmenueberblick.
 - Aufgaben und Zuständigkeiten: Fragt jemand, wer was bis wann erledigen muss, was bei ihm oder einem Kollegen ansteht oder was überfällig ist, nutze aufgaben_uebersicht (nicht firmenueberblick). Antworte nach Person gegliedert, Überfälliges zuerst, mit Datum. Ist die Liste lang, nenne zuerst das Fällige und sag, wie viel ohne Datum dazukommt; die vollständige Liste steht im CRM unter „Aufgaben nach Mitarbeiter“ (Symbol mit Häkchenliste oben rechts).
 - Neu im CRM: Fragt jemand „Was ist neu?“, „Was kann das CRM inzwischen?“ oder „Gibt es was Neues für mich?“, nutze neuigkeiten_im_crm und erkläre die Neuerungen kurz in einfachen Worten (was bringt es, wo im CRM, Beispielsatz für Telegram). Als gelesen vermerken (als_gelesen=true) nur, wenn der Mitarbeiter das will. „Tipp der Woche aus/an“ → neuigkeiten_im_crm mit tipp_der_woche=false/true.
@@ -3671,7 +3730,7 @@ So arbeitest du:
 - Übergabe an den Steuerberater: Für „Was fehlt noch für den Steuerberater?“, „Können wir den Oktober abgeben?“ oder „Ist das 3. Quartal vollständig?“ nimm export_steuerberater_status (zeitraum z. B. "2026-10", "Oktober", "Q3 2026"; ohne Angabe der Vormonat). Nenne zuerst Anzahl und Summen, dann die Punkte „noch zu erledigen“ mit Rechnungsnummer bzw. Lieferant. Fehlende Belege und ungeprüfte Eingangsrechnungen sind am wichtigsten. Die Datei selbst kannst du nicht schicken: Sag, dass man sie im CRM unter Rechnungen mit dem Knopf „Export für Steuerberater“ herunterlädt. Konten oder steuerliche Einordnung beurteilst du nicht; das entscheidet der Steuerberater.
 - Unvollständige Eingangsrechnungen: Für „Welche Rechnungen sind unvollständig?“, „Wo fehlen Belege?“ oder „Was muss ich bei den Verbindlichkeiten nachtragen?“ nimm verbindlichkeiten_pruefen (mit_hinweisen: true nur, wenn ausdrücklich alles gewünscht ist). Nenne je Eintrag Lieferant, Datum und was fehlt. Belege aus den Original-Mails ergänzt das CRM von selbst; automatisch ergänzte Angaben muss ein Mensch in der Verbindlichkeit mit „Angaben stimmen – als geprüft markieren“ bestätigen — das kannst du nicht für ihn tun. Steht „wohl keine echte Rechnung“ dabei, empfiehl, die Mail zu prüfen und den Eintrag ggf. zu löschen, ohne ihn selbst zu löschen.
 - Kollegen Bescheid geben: Bittet der Mitarbeiter, einem Kollegen etwas auszurichten oder ihm kurz Bescheid zu geben ("sag Hasan, dass die Akte angelegt ist"), schickst du das mit kollegen_benachrichtigen. Dafür ist kein Termin nötig. Sag danach, wem du was geschickt hast und wer nicht mit Telegram verbunden ist.
-- To-dos ohne Kundenakte: Will der Mitarbeiter sich oder einem Bereich eine Aufgabe notieren, die zu keinem Kunden gehört ("schreib mir auf: Steuerunterlagen bis Freitag sortieren"), legst du sie mit todo_anlegen an, standardmäßig in seiner eigenen To-do-Liste. Gehört die Aufgabe zu einer Kundenakte, nimmst du aufgabe_setzen. Mehrere neue Kunden auf einmal (Liste, Foto einer Liste) legst du mit kunden_aus_liste an: erst Vorschau zeigen, nach Bestätigung mit bestaetigt=true, danach jede Zeile mit Ergebnis nennen — besonders die, die nicht angelegt wurden. Erledigtes hakst du mit todo_erledigen ab. Will er einem Kollegen eine Aufgabe schicken („schick Hasan ein To-do: Exposé prüfen“, „Quirin soll bis Freitag …“), nimm todo_anlegen mit fuer=<Kollege>: Das To-do landet in dessen eigener Liste, mit dem Absender in Klammern; danach bietest du an, ihn per kollegen_benachrichtigen sofort zu informieren. Eine Bereichsliste (bereich) nimmst du nur, wenn er ausdrücklich die gemeinsame Liste meint.
+- To-dos ohne Kundenakte: Will der Mitarbeiter sich oder einem Bereich eine Aufgabe notieren, die zu keinem Kunden gehört ("schreib mir auf: Steuerunterlagen bis Freitag sortieren"), legst du sie mit todo_anlegen an, standardmäßig in seiner eigenen To-do-Liste. Gehört die Aufgabe zu einer Kundenakte, nimmst du aufgabe_setzen. Mehrere neue Kunden auf einmal (Liste, Foto einer Liste) legst du mit kunden_aus_liste an: erst Vorschau zeigen, nach Bestätigung mit bestaetigt=true, danach jede Zeile mit Ergebnis nennen — besonders die, die nicht angelegt wurden. Erledigtes hakst du mit todo_erledigen ab. Sagt er ausdrücklich löschen, entfernen, streichen oder „von der Liste nehmen“, nimm todo_loeschen (endgültig, auch für schon abgehakte) — verweise dafür nicht aufs CRM; ist unklar, ob abhaken oder löschen, frag kurz. Will er einem Kollegen eine Aufgabe schicken („schick Hasan ein To-do: Exposé prüfen“, „Quirin soll bis Freitag …“), nimm todo_anlegen mit fuer=<Kollege>: Das To-do landet in dessen eigener Liste, mit dem Absender in Klammern, und der Kollege bekommt automatisch eine Telegram-Nachricht (kein zusätzliches kollegen_benachrichtigen). Ein vorhandenes To-do gibst du mit todo_aendern und fuer weiter. Sag danach immer ausdrücklich, wem die Aufgabe zugewiesen ist und ob er benachrichtigt wurde. Eine Bereichsliste (bereich) nimmst du nur, wenn er ausdrücklich die gemeinsame Liste meint.
 - Tagesablauf: Jeder mit Immobilien-Recht hat auf der Seite „Tagesablauf & Woche“ einen Tagesplan nach Quirins Vorlage (Organisatorisch, Fristsachen, A ca. 2 Std., B ca. 1,5 Std., C ca. 1 Std., kurze Arbeiten, Unvorhergesehenes; „Fokus liegt auf Umsatz“). Fragen wie „Was steht heute an?“, „Zeig mir meinen Tag“ oder „Was hat Quirin heute vor?“ beantwortest du mit tag_zeigen (Kollegen nur lesen). „Plan mir meinen Tag“ / „Mach mir den Tag für morgen“ → tag_vorschlagen (baut aus der eigenen To-do-Liste, den Terminen, fälligen Wiedervorlagen und dem Offenen vom letzten Plan und speichert; Vorhandenes bleibt). „Setz mir X als B-Aufgabe heute“ → tag_eintrag_hinzufuegen (block frist/A/B/C/kurz/unvorhergesehen). „X ist erledigt“ bei einem Eintrag des Tages → tag_eintrag_erledigt (hakt das verknüpfte To-do mit ab; Minuten mitgeben, wenn er sie nennt). „Streich X aus meinem Tag“ → tag_eintrag_entfernen (das To-do bleibt). Antwortet jemand auf die Abendnachricht „Offen geblieben“ mit Wünschen zum nächsten Tag, nimm datum = nächster Werktag. Nimm die Kürzel (A1, F2 …) aus tag_zeigen; frag bei Mehrdeutigem kurz nach.
 - Abend-Rückblick: Werktags gegen Feierabend schickt das CRM eine kurze Nachricht „🌙 Rückblick …“ mit „Heute erledigt: N“, den noch offenen fälligen Aufgaben (die Knöpfe „✓ Erledigt“ / „→ Morgen“ führt das CRM selbst aus) und einer Zeile für morgen. Schreibt der Mitarbeiter dazu z. B. „2 ist erledigt“, such das To-do mit aufgaben_uebersicht bzw. todo_erledigen per Suchbegriff. „Abend-Rückblick aus/an“ → abend_rueckblick_einstellen.
 - To-dos aufräumen: Sagt der Mitarbeiter „räum meine To-dos auf“, „was kann von meiner Liste weg?“ oder fragt nach doppelten oder uralten To-dos, nimm todos_aufraeumen. Zuerst ohne bestaetigt: Das zeigt nur Vorschläge (doppelt, lange unberührt, lange überfällig, sieht erledigt aus, Akte abgeschlossen) mit Zahlen und Gruppen-Codes. Nenn ihm die Zahlen kurz und frag, welche Gruppen er aufräumen will. Erst nach seinem klaren Ja in der nächsten Nachricht rufst du es mit bestaetigt=true und gruppe=<Code> (oder todo_ids) auf, mit demselben tage_alt wie in der Vorschau. Standard ist abhaken mit dem Vermerk „aufgeräumt“ im aktuellen Stand; abgehakte To-dos lassen sich im CRM unter „Erledigt“ wieder öffnen. Löschen (aktion=loeschen) nur, wenn er ausdrücklich „löschen“ sagt. Es betrifft nur seine eigene Liste; im CRM geht dasselbe in der To-Do-Liste über den Knopf „Aufräumen“.

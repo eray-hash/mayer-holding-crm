@@ -89,6 +89,8 @@ export const KERN: readonly string[] = [
   'todo_anlegen',
   'todo_erledigen',
   'todo_aendern',
+  // 24.11.2026: endgültig löschen statt nur abhaken — gehört zu den To-do-Werkzeugen, kommt oft ohne Stichwort („nimm X raus“).
+  'todo_loeschen',
   'dokument_erstellen',
   'datei_senden',
   'alles_durchsuchen',

@@ -513,12 +513,13 @@ export function MeinProfil() {
     setTimeout(() => setGespeichert(false), 2500)
   }
 
-  async function nachfrageUmschalten(an: boolean) {
+  // Schalter in mitarbeiter_profil sofort speichern (Nachfrage des Assistenten, Telefonnummer im Exposé).
+  async function schalterUmschalten(patch: Pick<Partial<ProfilZusatz>, 'profilNachfrage' | 'telefonImExpose'>) {
     if (!mitarbeiter?.id || !zusatzGespeichert) return
     const vorher = zusatzGespeichert
-    setZusatzGespeichert({ ...vorher, profilNachfrage: an })
+    setZusatzGespeichert({ ...vorher, ...patch })
     try {
-      await speichereProfilZusatz(mitarbeiter.id, { profilNachfrage: an })
+      await speichereProfilZusatz(mitarbeiter.id, patch)
     } catch {
       setZusatzGespeichert(vorher)
       setFehler('Die Einstellung konnte nicht gespeichert werden.')
@@ -591,7 +592,7 @@ export function MeinProfil() {
         <Field label="Name">
           <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} />
         </Field>
-        <Field label="Telefon (erscheint in Mails an Interessenten, im Kundenbereich und im Exposé)">
+        <Field label="Telefon (erscheint in Mails an Interessenten, im Kundenbereich und – wenn unten angehakt – im Exposé)">
           <input className={inputClass} type="tel" value={telefon} onChange={(e) => setTelefon(e.target.value)} placeholder="+49 ..." />
         </Field>
         {isSupabaseConfigured && zusatzGespeichert && (
@@ -599,6 +600,20 @@ export function MeinProfil() {
             <Field label="Mobil (freiwillig; wird genommen, wenn kein Telefon eingetragen ist)">
               <input className={inputClass} type="tel" value={mobil} onChange={(e) => setMobil(e.target.value)} placeholder="+49 176 ..." />
             </Field>
+            <label className="mb-3 flex items-start gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={zusatzGespeichert.telefonImExpose}
+                onChange={(e) => schalterUmschalten({ telefonImExpose: e.target.checked })}
+              />
+              <span>
+                Telefonnummer im Exposé zeigen
+                <span className="block text-xs text-slate-500">
+                  Ohne Haken steht im Exposé nicht deine Nummer, sondern die Firmennummer (ist der Firmen-Ersatz abgeschaltet, gar keine). Wird sofort gespeichert.
+                </span>
+              </span>
+            </label>
             <Field label="Funktion">
               <input className={inputClass} value={position} onChange={(e) => setPosition(e.target.value)} placeholder="z. B. Immobilienberater" />
             </Field>
@@ -625,7 +640,7 @@ export function MeinProfil() {
               type="checkbox"
               className="mt-0.5"
               checked={zusatzGespeichert.profilNachfrage}
-              onChange={(e) => nachfrageUmschalten(e.target.checked)}
+              onChange={(e) => schalterUmschalten({ profilNachfrage: e.target.checked })}
             />
             <span>
               Der Telegram-Assistent darf mich einmal nach meiner Telefonnummer fragen

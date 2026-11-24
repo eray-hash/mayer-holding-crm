@@ -128,6 +128,7 @@ async function aufbau(): Promise<FalscheDatenbank> {
     ],
     vorgeschlagene_leads: [],
     objekt_anfragen: [],
+    scan_eingang: [],
   })
   await db.storage.from('postfach-anhaenge').upload('pf_immo/1/1_expose.pdf', new TextEncoder().encode('%PDF-1.4 Test'), { contentType: 'application/pdf' })
   return db

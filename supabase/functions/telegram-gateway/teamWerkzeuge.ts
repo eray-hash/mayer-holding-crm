@@ -13,6 +13,7 @@
 import { alsIso, ordneZu, personenNamen } from '../_shared/aufgabenKern.ts'
 import { BEREICH_IDS, bereichName, darfBereich, type RechteMitarbeiter } from './rechte.ts'
 import { imPrivatBot } from './privatBot.ts'
+import { findeKollege, kollegeUnklar, loeschWunsch, mitAbsender, zuweisungsMitteilung } from './todoZuweisung.ts'
 
 // deno-lint-ignore no-explicit-any
 type Supa = any
@@ -72,10 +73,10 @@ export async function schickeMitteilung(
   return { ok: true, an: m.name }
 }
 
-type TeamZeile = { id: string; name: string; email: string | null; telegram_chat_id: number | string | null; rolle?: string | null; ist_admin?: boolean | null }
+type TeamZeile = { id: string; name: string; email: string | null; telegram_chat_id: number | string | null; rolle?: string | null; ist_admin?: boolean | null; bereiche?: string[] | null }
 
 async function ladeTeam(supabase: Supa): Promise<TeamZeile[]> {
-  const { data } = await supabase.from('mitarbeiter').select('id, name, email, telegram_chat_id, rolle, ist_admin').eq('aktiv', true)
+  const { data } = await supabase.from('mitarbeiter').select('id, name, email, telegram_chat_id, rolle, ist_admin, bereiche').eq('aktiv', true)
   return ((data ?? []) as TeamZeile[]).filter((m) => m.name)
 }
 
@@ -188,13 +189,50 @@ function todoId(): string {
   return `todo_${Math.random().toString(36).slice(2, 9)}${Date.now().toString(36).slice(-4)}`
 }
 
-/** Werkzeug todo_anlegen: eigene Liste (Vorgabe), Bereichsliste oder — nur GF/Admin — Liste eines Kollegen. */
+/**
+ * Kollege aus einer Namensangabe (fuer oder zuständig). undefined = keine Zuweisung (leer, der Mitarbeiter selbst
+ * oder — nur bei zuständig — kein Kollege, z. B. ein Externer), Text = Fehler zum Nachfragen.
+ * streng (fuer): Jeder Name, der nicht genau einen aktiven Kollegen meint, ist ein Fehler.
+ */
+async function kollegeAusAngabe(supabase: Supa, fragender: Fragender, angabe: string, streng: boolean): Promise<TeamZeile | string | undefined> {
+  if (!angabe.trim()) return undefined
+  const team = await ladeTeam(supabase)
+  const namen = personenNamen(team.map((m) => m.name))
+  const treffer = findeKollege(angabe, namen)
+  if (treffer.art !== 'eindeutig') {
+    // Bei „zuständig“ darf auch jemand außerhalb des Teams stehen (Steuerberater, Kunde) — nur mehrere Kollegen sind unklar.
+    if (!streng && treffer.art === 'keiner') return undefined
+    return `Nicht ausgeführt: ${kollegeUnklar(angabe, treffer, namen.filter((n) => n !== fragender.name))}`
+  }
+  const ziel = team.find((m) => m.name === treffer.name)
+  if (!ziel) return undefined
+  const eigene = String(fragender.email ?? '').toLowerCase()
+  if (ziel.id === fragender.id || (eigene && String(ziel.email ?? '').toLowerCase() === eigene)) return undefined
+  return ziel
+}
+
+/** Schickt dem Kollegen die Mitteilung über die Zuweisung; liefert den Satz für die Antwort des Werkzeugs. */
+async function benachrichtigeKollegen(supabase: Supa, wege: MitteilungsWege | undefined, ziel: TeamZeile, text: string, von: string, protokolliere: (t: string) => void): Promise<string> {
+  if (!ziel.telegram_chat_id || !wege) return `${ziel.name} ist nicht mit Telegram verbunden und sieht es nur im CRM.`
+  const r = await schickeMitteilung(supabase, wege, ziel.id, text, von, 'mitteilung').catch((e) => ({ ok: false as const, grund: String(e), status: 500 }))
+  if (!r.ok) return `Die Telegram-Nachricht an ${ziel.name} ging nicht raus (${r.grund}); er sieht es im CRM.`
+  protokolliere(`${ziel.name} per Telegram über das To-do informiert`)
+  return `${ziel.name} wurde per Telegram benachrichtigt.`
+}
+
+/**
+ * Werkzeug todo_anlegen: eigene Liste (Vorgabe), Bereichsliste oder die Liste eines Kollegen (fuer).
+ * Seit 24.11.2026 (Wunsch aus der Nutzung): Nennt zuständig eindeutig einen Kollegen, ist das ebenfalls eine
+ * Zuweisung — vorher blieb die Aufgabe in der eigenen Liste und der Kollege erfuhr nichts. Der Kollege bekommt
+ * eine Telegram-Mitteilung, und die Antwort nennt ausdrücklich, wem die Aufgabe zugewiesen ist.
+ */
 export async function todoAnlegen(
   supabase: Supa,
   fragender: Fragender,
   // deno-lint-ignore no-explicit-any
   input: any,
   protokolliere: (text: string) => void,
+  wege?: MitteilungsWege,
 ): Promise<string> {
   const aufgabe = String(input?.aufgabe ?? '').trim()
   if (!aufgabe) return 'Fehler: aufgabe fehlt.'
@@ -217,42 +255,54 @@ export async function todoAnlegen(
 
   const gewuenschterBereich = String(input?.bereich ?? '').trim()
   const fuer = String(input?.fuer ?? '').trim()
+  // Kollege, dem die Aufgabe zugewiesen wird (eigene Liste des Kollegen oder zuständig in der Bereichsliste).
+  let kollege: TeamZeile | null = null
   let vonKollege: string | null = null
+  let hinweisBereich = ''
   if (gewuenschterBereich) {
     const b = gewuenschterBereich === 'immobilienkunden' ? 'immobilien' : gewuenschterBereich
     if (!BEREICH_IDS.includes(b)) return `Fehler: ungültiger Bereich. Erlaubt: ${BEREICH_IDS.join(', ')}.`
     if (!darfBereich(fragender, b)) return `Nicht angelegt: Der Bereich ${bereichName(b)} ist für ${fragender.name} nicht freigegeben.`
     bereich = b
     liste = `der To-do-Liste ${bereichName(b)}`
+    // In der gemeinsamen Liste bleibt die Aufgabe; ein genannter Kollege wird zuständig und bekommt Bescheid.
+    if (!imPrivatBot() && (fuer || zustaendig)) {
+      const k = await kollegeAusAngabe(supabase, fragender, fuer || zustaendig || '', !!fuer)
+      if (typeof k === 'string') return k
+      if (k) {
+        kollege = k
+        zustaendig = k.name
+        if (!darfBereich(k, b)) hinweisBereich = ` Achtung: Der Bereich ${bereichName(b)} ist für ${k.name} nicht freigegeben, er sieht diese Liste nicht — sag das dem Mitarbeiter und biete an, das To-do stattdessen in die eigene Liste von ${k.name} zu legen (todo_aendern mit fuer).`
+      }
+    }
     zustaendig = zustaendig ?? fragender.name
-  } else if (fuer) {
-    const team = await ladeTeam(supabase)
-    const { personen } = ordneZu(fuer, personenNamen(team.map((m) => m.name)))
-    if (personen.length !== 1) return `Nicht angelegt: „${fuer}" ist kein eindeutiger Kollege. Im Team sind: ${personenNamen(team.map((m) => m.name)).join(', ')}.`
-    const ziel = team.find((m) => m.name === personen[0])
-    if (ziel && ziel.email && ziel.email.toLowerCase() !== eigeneEmail) {
+  } else if (fuer || zustaendig) {
+    if (fuer && imPrivatBot()) return 'Nicht angelegt: Im privaten Assistenten gehen To-dos nur in die eigene private Liste.'
+    const k = imPrivatBot() ? undefined : await kollegeAusAngabe(supabase, fragender, fuer || zustaendig || '', !!fuer)
+    if (typeof k === 'string') return k
+    if (k) {
       // Seit 22.11.2026 (Wunsch Quirin) darf jeder einem Kollegen ein To-do in dessen Liste schicken; damit
       // klar ist, woher es kommt, steht der Absender in der Aufgabe. Private Listen bleiben privat.
-      if (imPrivatBot()) return 'Nicht angelegt: Im privaten Assistenten gehen To-dos nur in die eigene private Liste.'
-      besitzer = ziel.email.toLowerCase()
-      liste = `der eigenen To-do-Liste von ${ziel.name}`
-      zustaendig = ziel.name
+      if (!k.email) return `Nicht angelegt: Für ${k.name} ist keine E-Mail-Adresse hinterlegt, darum hat er keine eigene To-do-Liste.`
+      besitzer = k.email.toLowerCase()
+      liste = `der eigenen To-do-Liste von ${k.name}`
+      zustaendig = k.name
       vonKollege = fragender.name
-    } else if (!ziel?.email) return `Nicht angelegt: Für ${personen[0]} ist keine E-Mail-Adresse hinterlegt.`
+      kollege = k
+    }
   }
 
   // Ans Ende der jeweiligen Liste (wie im CRM: höchste Reihenfolge + 1).
-  const abfrage = supabase.from('todos').select('reihenfolge').order('reihenfolge', { ascending: false, nullsFirst: false }).limit(1)
-  const { data: letzte } = bereich ? await abfrage.eq('bereich', bereich) : await abfrage.is('bereich', null).ilike('besitzer_email', besitzer)
-  const reihenfolge = (Number(letzte?.[0]?.reihenfolge) || 0) + 1
+  const reihenfolge = await naechsteReihenfolge(supabase, bereich, besitzer)
   const heute = heuteIso()
   const id = todoId()
+  const text = (vonKollege ? mitAbsender(aufgabe, vonKollege) : aufgabe).slice(0, 500)
   const { error } = await supabase.from('todos').insert({
     id,
     besitzer_email: besitzer,
     bereich,
     reihenfolge,
-    aufgabe: (vonKollege ? `${aufgabe} (von ${vonKollege})` : aufgabe).slice(0, 500),
+    aufgabe: text,
     kunde_projekt: String(input?.kunde_projekt ?? '').trim() || null,
     zustaendig,
     prio: prio || null,
@@ -263,14 +313,29 @@ export async function todoAnlegen(
   })
   if (error) return `Fehler beim Anlegen: ${error.message}`
   // Wer erinnert wird: bei der eigenen Liste ihr Besitzer, bei einer Bereichsliste der Zuständige (todoErinnerung.ts im email-gateway).
-  const erinnerungText = erinnernUm ? `, Erinnerung per Telegram am ${deZeitpunkt(erinnernUm)}${bereich ? ` an ${zustaendig ?? 'den Zuständigen'}` : ''}` : ''
-  protokolliere(`To-do „${aufgabe.slice(0, 120)}" in ${liste} angelegt${faellig ? `, erledigen bis ${deDatum(faellig)}` : ''}${erinnernUm ? `, Erinnerung ${deZeitpunkt(erinnernUm)}` : ''} (todo_id=${id})`)
-  // Im privaten Assistenten: private Liste, Erinnerung kommt im privaten Chat (todoErinnerung.ts), nichts im Mayer-Bereich.
+  const erinnerungText = erinnernUm ? `, Erinnerung per Telegram am ${deZeitpunkt(erinnernUm)}${bereich || kollege ? ` an ${zustaendig ?? 'den Zuständigen'}` : ''}` : ''
+  protokolliere(`To-do „${aufgabe.slice(0, 120)}" in ${liste} angelegt${kollege ? `, zugewiesen an ${kollege.name}` : ''}${faellig ? `, erledigen bis ${deDatum(faellig)}` : ''}${erinnernUm ? `, Erinnerung ${deZeitpunkt(erinnernUm)}` : ''} (todo_id=${id})`)
   const wo = imPrivatBot() && !bereich
     ? ' Sie ist privat (nur für ihn sichtbar), die Erinnerung kommt hier im privaten Chat, und sie erscheint beim nächsten Abgleich in seinem Microsoft To Do.'
     : ' Sie steht jetzt auch im CRM unter „Aufgaben nach Mitarbeiter".'
-  const hinweisKollege = vonKollege ? ` Sag dazu, dass ${zustaendig} das To-do in seiner Liste sieht; soll er sofort Bescheid bekommen, biete kollegen_benachrichtigen an.` : ''
-  return `Angelegt in ${imPrivatBot() && !bereich ? 'seiner privaten To-do-Liste' : liste}: „${aufgabe}"${faellig ? `, erledigen bis ${deDatum(faellig)}` : ', ohne Fälligkeit'}${zustaendig ? `, zuständig ${zustaendig}` : ''}${erinnerungText}.${wo}${hinweisKollege} todo_id=${id}`
+  const grund = `Angelegt in ${imPrivatBot() && !bereich ? 'seiner privaten To-do-Liste' : liste}: „${aufgabe}"${faellig ? `, erledigen bis ${deDatum(faellig)}` : ', ohne Fälligkeit'}${zustaendig ? `, zuständig ${zustaendig}` : ''}${erinnerungText}.${wo}`
+  if (!kollege) return `${grund} todo_id=${id}`
+  const meldung = await benachrichtigeKollegen(
+    supabase,
+    wege,
+    kollege,
+    zuweisungsMitteilung({ von: fragender.name, aufgabe, faellig: faellig ? deDatum(faellig) : null, liste: bereich ? `To-do-Liste ${bereichName(bereich)}` : null, neu: true }),
+    fragender.name,
+    protokolliere,
+  )
+  return `ZUGEWIESEN AN ${kollege.name}. ${grund} ${meldung}${hinweisBereich} Sag dem Mitarbeiter ausdrücklich, dass die Aufgabe ${kollege.name} zugewiesen ist${bereich ? '' : ' und in dessen Liste steht'}, und ob er benachrichtigt wurde. todo_id=${id}`
+}
+
+/** Höchste Reihenfolge der Ziel-Liste + 1 (wie im CRM). */
+async function naechsteReihenfolge(supabase: Supa, bereich: string | null, besitzer: string): Promise<number> {
+  const abfrage = supabase.from('todos').select('reihenfolge').order('reihenfolge', { ascending: false, nullsFirst: false }).limit(1)
+  const { data: letzte } = bereich ? await abfrage.eq('bereich', bereich) : await abfrage.is('bereich', null).ilike('besitzer_email', besitzer)
+  return (Number(letzte?.[0]?.reihenfolge) || 0) + 1
 }
 
 type TodoZeile = {
@@ -285,15 +350,24 @@ type TodoZeile = {
   aktueller_stand: string | null
   prio: string | null
   erinnern_um: string | null
+  ms_id?: string | null
 }
-const TODO_SPALTEN = 'id, aufgabe, bereich, besitzer_email, erledigen_bis, erledigt_am, zustaendig, kunde_projekt, aktueller_stand, prio, erinnern_um'
+const TODO_SPALTEN = 'id, aufgabe, bereich, besitzer_email, erledigen_bis, erledigt_am, zustaendig, kunde_projekt, aktueller_stand, prio, erinnern_um, ms_id'
 
 /**
  * Sucht genau ein To-do für todo_erledigen / todo_aendern: per todo_id oder Suchbegriff im Aufgabentext
  * (nur offene), nur in Listen, die der Mitarbeiter ändern darf (eigene Liste, freigegebene Bereichsliste).
  * Kein oder mehrere Treffer → Text für den Assistenten statt eines To-dos.
  */
-async function findeTodo(supabase: Supa, fragender: Fragender, input: { todo_id?: unknown; suchbegriff?: unknown } | undefined): Promise<TodoZeile | string> {
+async function findeTodo(
+  supabase: Supa,
+  fragender: Fragender,
+  input: { todo_id?: unknown; suchbegriff?: unknown } | undefined,
+  // todo_loeschen: auch schon abgehakte To-dos (ein erledigter Stichpunkt soll von der Liste verschwinden).
+  o: { auchErledigte?: boolean } = {},
+): Promise<TodoZeile | string> {
+  // deno-lint-ignore no-explicit-any
+  const offen = (q: any) => (o.auchErledigte ? q : q.is('erledigt_am', null))
   const eigeneEmail = String(fragender.email ?? '').toLowerCase()
   const darf = (t: TodoZeile) => (t.bereich ? darfBereich(fragender, t.bereich) : String(t.besitzer_email ?? '').toLowerCase() === eigeneEmail)
   const id = String(input?.todo_id ?? '').trim()
@@ -311,15 +385,15 @@ async function findeTodo(supabase: Supa, fragender: Fragender, input: { todo_id?
     // Treffer fielen weg → „Kein passendes offenes To-do“, obwohl es da war.
     const [eigene, bereichsListen] = await Promise.all([
       eigeneEmail
-        ? supabase.from('todos').select(TODO_SPALTEN).is('erledigt_am', null).is('bereich', null).ilike('besitzer_email', eigeneEmail).ilike('aufgabe', muster).order('id').limit(50)
+        ? offen(supabase.from('todos').select(TODO_SPALTEN)).is('bereich', null).ilike('besitzer_email', eigeneEmail).ilike('aufgabe', muster).order('id').limit(50)
         : Promise.resolve({ data: [] }),
-      supabase.from('todos').select(TODO_SPALTEN).is('erledigt_am', null).not('bereich', 'is', null).ilike('aufgabe', muster).order('id').limit(200),
+      offen(supabase.from('todos').select(TODO_SPALTEN)).not('bereich', 'is', null).ilike('aufgabe', muster).order('id').limit(200),
     ])
     treffer = [...((eigene.data ?? []) as TodoZeile[]), ...((bereichsListen.data ?? []) as TodoZeile[])]
   }
   treffer = treffer.filter(darf)
   if (treffer.length === 0) {
-    const kopf = 'Kein passendes offenes To-do in Listen gefunden, die dieser Mitarbeiter ändern darf.'
+    const kopf = `Kein passendes ${o.auchErledigte ? '' : 'offenes '}To-do in Listen gefunden, die dieser Mitarbeiter ändern darf.`
     if (id || !eigeneEmail) return kopf
     // Sprachnachrichten: Der Suchbegriff ist oft falsch gehört (22.11.2026: „Judo“ statt des eben angelegten
     // AOK-To-dos — der Assistent legte ein neues an). Die zuletzt geänderten eigenen To-dos helfen beim Zuordnen.
@@ -329,7 +403,7 @@ async function findeTodo(supabase: Supa, fragender: Fragender, input: { todo_id?
     return `${kopf} Der Suchbegriff kann falsch verstanden sein (z. B. aus einer Sprachnachricht). Zuletzt geänderte offene To-dos seiner eigenen Liste — meint er eines davon, nimm dessen todo_id; sonst frag kurz nach, bevor du ein neues anlegst:\n${liste.map((t) => `- ${t.aufgabe}${t.erledigen_bis ? ` (bis ${deDatum(t.erledigen_bis)})` : ''} · todo_id=${t.id}`).join('\n')}`
   }
   if (treffer.length > 1) {
-    return `Mehrere passende To-dos, frag nach, welches gemeint ist:\n${treffer.map((t) => `- ${t.aufgabe}${t.erledigen_bis ? ` (bis ${deDatum(t.erledigen_bis)})` : ''} · ${t.bereich ? bereichName(t.bereich) : 'eigene Liste'} · todo_id=${t.id}`).join('\n')}`
+    return `Mehrere passende To-dos, frag nach, welches gemeint ist:\n${treffer.map((t) => `- ${t.aufgabe}${t.erledigen_bis ? ` (bis ${deDatum(t.erledigen_bis)})` : ''}${t.erledigt_am ? ` (erledigt am ${deDatum(t.erledigt_am)})` : ''} · ${t.bereich ? bereichName(t.bereich) : 'eigene Liste'} · todo_id=${t.id}`).join('\n')}`
   }
   return treffer[0]
 }
@@ -355,6 +429,8 @@ export async function todoErledigen(
  * Werkzeug todo_aendern: ändert ein bestehendes To-do (Text, Fälligkeit, Erinnerung, Zuständig, Kunde/Projekt,
  * aktueller Stand, Prio) — legt nie ein neues an. Gleiche Suche und gleiche Rechte wie todo_erledigen.
  * Nicht angegebene Felder bleiben, leerer Text löscht (außer beim Aufgabentext).
+ * Zuweisen (fuer, oder zuständig = eindeutig ein Kollege): Ein To-do der eigenen Liste wandert in die Liste des
+ * Kollegen (mit Absender in Klammern), in einer Bereichsliste wird er zuständig; er bekommt eine Telegram-Mitteilung.
  */
 export async function todoAendern(
   supabase: Supa,
@@ -362,12 +438,39 @@ export async function todoAendern(
   // deno-lint-ignore no-explicit-any
   input: any,
   protokolliere: (text: string) => void,
+  wege?: MitteilungsWege,
 ): Promise<string> {
   const t = await findeTodo(supabase, fragender, input)
   if (typeof t === 'string') return t
   const angegeben = (feld: string) => input?.[feld] !== undefined && input?.[feld] !== null
-  const patch: Record<string, string | null> = {}
+  const patch: Record<string, string | number | null> = {}
   const was: string[] = []
+
+  // Zuweisung an einen Kollegen zuerst klären: Ein unklarer Name ändert nichts (Rückfrage).
+  const fuer = String(input?.fuer ?? '').trim()
+  const zustaendigNeu = angegeben('zustaendig') ? String(input.zustaendig).trim() : ''
+  let kollege: TeamZeile | null = null
+  let umgezogen = false
+  if ((fuer || zustaendigNeu) && !imPrivatBot()) {
+    const k = await kollegeAusAngabe(supabase, fragender, fuer || zustaendigNeu, !!fuer)
+    if (typeof k === 'string') return k
+    if (k) kollege = k
+  } else if (fuer && imPrivatBot()) return 'Nicht geändert: Im privaten Assistenten bleiben To-dos in der eigenen privaten Liste.'
+  if (kollege) {
+    if (t.erledigt_am) return `Nicht zugewiesen: „${t.aufgabe}" ist seit ${deDatum(t.erledigt_am)} erledigt. Für eine neue Aufgabe an ${kollege.name} nimm todo_anlegen mit fuer.`
+    if (t.bereich) {
+      patch.zustaendig = kollege.name
+      was.push(`zuständig: ${kollege.name}`)
+    } else {
+      if (t.ms_id) return `Nicht zugewiesen: „${t.aufgabe}" kommt aus Microsoft To Do und bleibt in dieser Liste. Leg für ${kollege.name} stattdessen ein neues To-do an (todo_anlegen mit fuer).`
+      if (!kollege.email) return `Nicht zugewiesen: Für ${kollege.name} ist keine E-Mail-Adresse hinterlegt, darum hat er keine eigene To-do-Liste.`
+      patch.besitzer_email = kollege.email.toLowerCase()
+      patch.zustaendig = kollege.name
+      patch.reihenfolge = await naechsteReihenfolge(supabase, null, kollege.email.toLowerCase())
+      umgezogen = true
+      was.push(`in die eigene To-do-Liste von ${kollege.name} verschoben`)
+    }
+  }
 
   if (angegeben('aufgabe')) {
     const neu = String(input.aufgabe).trim().slice(0, 500)
@@ -377,6 +480,7 @@ export async function todoAendern(
       was.push(`Text jetzt „${neu}"`)
     }
   }
+  if (umgezogen) patch.aufgabe = mitAbsender(String(patch.aufgabe ?? t.aufgabe), fragender.name).slice(0, 500)
   if (angegeben('erledigen_bis')) {
     const roh = String(input.erledigen_bis).trim()
     const bis = roh ? alsIso(roh) : null
@@ -389,18 +493,19 @@ export async function todoAendern(
   if (erinnerung.wert !== undefined) {
     patch.erinnern_um = erinnerung.wert || null
     if (erinnerung.wert) {
-      const empfaenger = t.bereich ? ` an ${String(input?.zustaendig ?? '').trim() || t.zustaendig || 'den Zuständigen'}` : ''
+      const empfaenger = t.bereich || kollege ? ` an ${kollege?.name || String(input?.zustaendig ?? '').trim() || t.zustaendig || 'den Zuständigen'}` : ''
       was.push(`Erinnerung per Telegram am ${deZeitpunkt(erinnerung.wert)}${empfaenger}`)
       // Wie bei todo_anlegen: Ohne Fälligkeit wird der Tag der Erinnerung die Fälligkeit.
       if (!('erledigen_bis' in patch) && !t.erledigen_bis) {
         patch.erledigen_bis = BERLIN_DATUM.format(new Date(erinnerung.wert))
-        was.push(`erledigen bis ${deDatum(patch.erledigen_bis)}`)
+        was.push(`erledigen bis ${deDatum(String(patch.erledigen_bis))}`)
       }
     } else was.push('Erinnerung entfernt')
   }
   const textFelder: [string, string][] = [['zustaendig', 'zuständig'], ['kunde_projekt', 'Kunde/Projekt'], ['aktueller_stand', 'aktueller Stand']]
   for (const [feld, name] of textFelder) {
     if (!angegeben(feld)) continue
+    if (feld === 'zustaendig' && kollege) continue // schon oben als Zuweisung gesetzt
     const neu = String(input[feld]).trim().slice(0, 1000) || null
     patch[feld] = neu
     was.push(neu ? `${name}: ${neu}` : `${name} entfernt`)
@@ -417,5 +522,56 @@ export async function todoAendern(
   const liste = t.bereich ? `Liste ${bereichName(t.bereich)}` : 'eigene Liste'
   protokolliere(`To-do „${t.aufgabe.slice(0, 120)}" geändert: ${was.join('; ').slice(0, 300)} (todo_id=${t.id})`)
   const erledigtHinweis = t.erledigt_am ? ` Hinweis: Das To-do ist seit ${deDatum(t.erledigt_am)} erledigt${patch.erinnern_um ? ', eine Erinnerung kommt dafür nicht' : ''}.` : ''
-  return `Geändert (${liste}, kein neues To-do angelegt): „${patch.aufgabe ?? t.aufgabe}" — ${was.join('; ')}.${erledigtHinweis} todo_id=${t.id}`
+  const grund = `Geändert (${liste}, kein neues To-do angelegt): „${patch.aufgabe ?? t.aufgabe}" — ${was.join('; ')}.${erledigtHinweis}`
+  if (!kollege) return `${grund} todo_id=${t.id}`
+  const faellig = (patch.erledigen_bis !== undefined ? patch.erledigen_bis : t.erledigen_bis) as string | null
+  const meldung = await benachrichtigeKollegen(
+    supabase,
+    wege,
+    kollege,
+    zuweisungsMitteilung({ von: fragender.name, aufgabe: String(input?.aufgabe ?? '').trim() || t.aufgabe, faellig: faellig ? deDatum(faellig) : null, liste: t.bereich ? `To-do-Liste ${bereichName(t.bereich)}` : null, neu: false }),
+    fragender.name,
+    protokolliere,
+  )
+  const bereichHinweis = t.bereich && !darfBereich(kollege, t.bereich) ? ` Achtung: Der Bereich ${bereichName(t.bereich)} ist für ${kollege.name} nicht freigegeben, er sieht diese Liste nicht — sag das dem Mitarbeiter.` : ''
+  const nichtMehrSichtbar = umgezogen ? ` Es steht jetzt nicht mehr in der Liste von ${fragender.name}.` : ''
+  return `ZUGEWIESEN AN ${kollege.name}. ${grund}${nichtMehrSichtbar} ${meldung}${bereichHinweis} Sag dem Mitarbeiter ausdrücklich, wem die Aufgabe jetzt zugewiesen ist und ob er benachrichtigt wurde. todo_id=${t.id}`
+}
+
+/**
+ * Werkzeug todo_loeschen (Wunsch aus der Nutzung, 23.11.2026): ein To-do endgültig löschen statt nur abhaken —
+ * wie der Papierkorb-Knopf in der To-Do-Liste des CRM (src/pages/todo/ToDoListe.tsx: dort löscht in der eigenen
+ * Liste nur der Besitzer, in einer Bereichsliste jeder, der den Bereich sieht; das CRM löscht die Zeile direkt,
+ * eine Sicherung oder einen Papierkorb gibt es für To-dos nicht). Gleiche Suche und Rechte wie todo_erledigen,
+ * dazu auch schon abgehakte To-dos.
+ * Nur, wenn der Mitarbeiter ausdrücklich löschen/entfernen will (anlass = seine Nachricht und die davor; ohne
+ * anlass — z. B. in Tests — entfällt die Prüfung). Im Mayer-Assistenten nie Aufgaben aus Microsoft To Do
+ * (Privat bleibt privat, wie bei todos_aufraeumen); im privaten Assistenten ja, der Abgleich löscht sie dort mit.
+ */
+export async function todoLoeschen(
+  supabase: Supa,
+  fragender: Fragender,
+  // deno-lint-ignore no-explicit-any
+  input: any,
+  protokolliere: (text: string) => void,
+  anlass?: readonly (string | null | undefined)[],
+): Promise<string> {
+  if (anlass && !loeschWunsch(anlass)) {
+    return 'Nicht gelöscht: Der Mitarbeiter hat nicht ausdrücklich ums Löschen gebeten. Ist die Aufgabe erledigt, hak sie mit todo_erledigen ab; will er sie wirklich von der Liste haben, frag kurz „Endgültig löschen?“ und lösche erst nach seinem Ja.'
+  }
+  const t = await findeTodo(supabase, fragender, input, { auchErledigte: true })
+  if (typeof t === 'string') return t
+  const privat = imPrivatBot()
+  if (t.ms_id && !privat) {
+    return `Nicht gelöscht: „${t.aufgabe}" kommt aus seinem Microsoft To Do (privat). Das löscht er im privaten Assistenten, in Microsoft To Do oder im CRM in der To-Do-Liste.`
+  }
+  const eigeneEmail = String(fragender.email ?? '').toLowerCase()
+  // Die Zeilenregel noch einmal im Löschbefehl selbst (der Assistent arbeitet mit vollen Datenbankrechten).
+  const befehl = supabase.from('todos').delete().eq('id', t.id)
+  const { error } = t.bereich ? await befehl.eq('bereich', t.bereich) : await befehl.is('bereich', null).ilike('besitzer_email', eigeneEmail)
+  if (error) return `Fehler beim Löschen: ${error.message}`
+  const liste = t.bereich ? `Liste ${bereichName(t.bereich)}` : privat ? 'private Liste' : 'eigene Liste'
+  protokolliere(`To-do „${t.aufgabe.slice(0, 120)}" gelöscht (${liste}, todo_id=${t.id})`)
+  const ms = t.ms_id ? ' In Microsoft To Do verschwindet es beim nächsten Abgleich (alle 3 Minuten).' : ''
+  return `Gelöscht (${liste}): „${t.aufgabe}". Endgültig, es steht auch nicht mehr unter „Erledigt“.${ms}`
 }

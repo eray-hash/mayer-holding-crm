@@ -43,6 +43,7 @@ import { GespraechAufzeichnenGlobal } from './GespraechAufzeichnenGlobal'
 import { GlobaleSuche } from './GlobaleSuche'
 import { NeuigkeitenKnopf } from './NeuigkeitenKnopf'
 import { NeuHinweis } from './NeuHinweis'
+import { KopfHinweis } from './KopfHinweis'
 import { SidebarBeratung } from './SidebarBeratung'
 import { SidebarImmobilien } from './SidebarImmobilien'
 import { SidebarErben } from './SidebarErben'
@@ -168,13 +169,15 @@ export function Layout({ children }: { children: ReactNode }) {
       {/* Topbar */}
       <header className="flex h-14 flex-shrink-0 items-center justify-between border-b border-slate-200 bg-white px-2 sm:px-4">
         <div className="flex min-w-0 items-center gap-2 sm:gap-3">
-          <button
-            onClick={() => setDrawerOpen(true)}
-            className="flex-shrink-0 rounded-md p-2 text-slate-500 hover:bg-slate-100"
-            aria-label="Bereichsmenü öffnen"
-          >
-            <Menu size={20} />
-          </button>
+          <KopfHinweis text="Menü öffnen: Bereich wechseln und Seiten" className="inline-flex flex-shrink-0">
+            <button
+              onClick={() => setDrawerOpen(true)}
+              className="flex-shrink-0 rounded-md p-2 text-slate-500 hover:bg-slate-100"
+              aria-label="Menü öffnen: Bereich wechseln und Seiten"
+            >
+              <Menu size={20} />
+            </button>
+          </KopfHinweis>
           <span className="hidden whitespace-nowrap text-sm font-semibold tracking-tight text-slate-800 sm:inline">Mayer Holding CRM</span>
           <span className="inline-flex min-w-0 items-center gap-1 rounded-full bg-accent-50 px-2.5 py-1 text-xs font-medium text-accent-700 sm:ml-2">
             <aktuellerBereich.icon size={12} className="flex-shrink-0" />
@@ -182,124 +185,148 @@ export function Layout({ children }: { children: ReactNode }) {
           </span>
         </div>
         <div className="flex flex-shrink-0 items-center gap-0.5 sm:gap-1.5">
-          <button
-            onClick={() => setSucheOpen(true)}
-            className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
-            title="Suche in Akten, Dokumenten, Mails und mehr — ⌘K / Strg+K"
-          >
-            <Search size={16} />
-          </button>
-          <button
-            onClick={() => setKiAssistentOpen((o) => !o)}
-            className="flex items-center gap-1.5 rounded-lg border border-accent-200 bg-accent-50 px-2.5 py-1.5 text-xs font-medium text-accent-700 hover:bg-accent-100"
-            title="KI-Assistent: Notiz/Aufgabe aufnehmen oder Frage stellen"
-          >
-            <Sparkles size={14} />
-            <span className="hidden sm:inline">KI-Assistent</span>
-          </button>
-          <button
-            onClick={() => setGespraechAufzeichnenOpen(true)}
-            className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
-            title="Gespräch aufzeichnen (Kunde per Telefonnummer oder Name finden)"
-          >
-            <Phone size={16} />
-          </button>
-          <button
-            onClick={() => navigate('/aufgaben')}
-            className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
-            title="Aufgaben nach Mitarbeiter: wer muss was bis wann erledigen"
-            aria-label="Aufgaben nach Mitarbeiter"
-          >
-            <ListChecks size={16} />
-          </button>
-          <button
-            onClick={() => navigate('/kalender')}
-            className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
-            title="Kalender (alle Kollegen)"
-          >
-            <CalendarDays size={16} />
-          </button>
-          <button
-            onClick={() => navigate('/auswertungen')}
-            className="hidden rounded-lg p-2 text-slate-500 hover:bg-slate-100 sm:inline-flex"
-            title="Auswertungen"
-            aria-label="Auswertungen"
-          >
-            <BarChart3 size={16} />
-          </button>
-          {!imPrivatBereich && (
+          <KopfHinweis text="Suche in Akten, Dokumenten und Mails (Strg+K bzw. ⌘K)">
             <button
-              // Partner und Vermittler (22.11.2026): wer hat was gebracht, offene Provisionen.
-              onClick={() => navigate('/partner')}
-              className="hidden rounded-lg p-2 text-slate-500 hover:bg-slate-100 sm:inline-flex"
-              title="Partner und Vermittler: wer hat was gebracht, offene Provisionen"
-              aria-label="Partner und Vermittler"
+              onClick={() => setSucheOpen(true)}
+              className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
+              aria-label="Suche in Akten, Dokumenten und Mails"
             >
-              <BookUser size={16} />
+              <Search size={16} />
             </button>
+          </KopfHinweis>
+          <KopfHinweis text="KI-Assistent öffnen: Notiz oder Aufgabe aufnehmen, Frage stellen" aus={kiAssistentOpen}>
+            <button
+              onClick={() => setKiAssistentOpen((o) => !o)}
+              className="flex items-center gap-1.5 rounded-lg border border-accent-200 bg-accent-50 px-2.5 py-1.5 text-xs font-medium text-accent-700 hover:bg-accent-100"
+              aria-label="KI-Assistent öffnen"
+            >
+              <Sparkles size={14} />
+              <span className="hidden sm:inline">KI-Assistent</span>
+            </button>
+          </KopfHinweis>
+          <KopfHinweis text="Gespräch aufzeichnen (Kunde per Telefonnummer oder Name finden)">
+            <button
+              onClick={() => setGespraechAufzeichnenOpen(true)}
+              className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
+              aria-label="Gespräch aufzeichnen"
+            >
+              <Phone size={16} />
+            </button>
+          </KopfHinweis>
+          <KopfHinweis text="Aufgaben nach Mitarbeiter: wer muss was bis wann erledigen">
+            <button
+              onClick={() => navigate('/aufgaben')}
+              className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
+              aria-label="Aufgaben nach Mitarbeiter"
+            >
+              <ListChecks size={16} />
+            </button>
+          </KopfHinweis>
+          <KopfHinweis text="Kalender (alle Kollegen)">
+            <button
+              onClick={() => navigate('/kalender')}
+              className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
+              aria-label="Kalender"
+            >
+              <CalendarDays size={16} />
+            </button>
+          </KopfHinweis>
+          <KopfHinweis text="Auswertungen" className="hidden sm:inline-flex">
+            <button
+              onClick={() => navigate('/auswertungen')}
+              className="hidden rounded-lg p-2 text-slate-500 hover:bg-slate-100 sm:inline-flex"
+              aria-label="Auswertungen"
+            >
+              <BarChart3 size={16} />
+            </button>
+          </KopfHinweis>
+          {!imPrivatBereich && (
+            <KopfHinweis text="Partner und Vermittler: wer hat was gebracht, offene Provisionen" className="hidden sm:inline-flex">
+              <button
+                // Partner und Vermittler (22.11.2026): wer hat was gebracht, offene Provisionen.
+                onClick={() => navigate('/partner')}
+                className="hidden rounded-lg p-2 text-slate-500 hover:bg-slate-100 sm:inline-flex"
+                aria-label="Partner und Vermittler"
+              >
+                <BookUser size={16} />
+              </button>
+            </KopfHinweis>
           )}
           {!imPrivatBereich && (
-            <button
-              // Projekt-Checkliste (Hasan und Eray, 20.11.2026): alle laufenden Fälle mit Ampel.
-              onClick={() => navigate('/checkliste')}
-              className="hidden rounded-lg p-2 text-slate-500 hover:bg-slate-100 sm:inline-flex"
-              title="Projekt-Checkliste: alle laufenden Fälle mit Umsatz, Chance und Ampel"
-              aria-label="Projekt-Checkliste"
-            >
-              <ClipboardList size={16} />
-            </button>
+            <KopfHinweis text="Projekt-Checkliste: alle laufenden Fälle mit Umsatz, Chance und Ampel" className="hidden sm:inline-flex">
+              <button
+                // Projekt-Checkliste (20.11.2026): alle laufenden Fälle mit Ampel.
+                onClick={() => navigate('/checkliste')}
+                className="hidden rounded-lg p-2 text-slate-500 hover:bg-slate-100 sm:inline-flex"
+                aria-label="Projekt-Checkliste"
+              >
+                <ClipboardList size={16} />
+              </button>
+            </KopfHinweis>
           )}
           {!imPrivatBereich && (
-            <button
-              // Wochenbesprechung (20.11.2026): alle Fälle in fünf Stufen, fällig je Person, Bewegung der Woche.
-              onClick={() => navigate('/besprechung')}
-              className="hidden rounded-lg p-2 text-slate-500 hover:bg-slate-100 sm:inline-flex"
-              title="Wochenbesprechung: alle Fälle in fünf Stufen, was fällig ist und was sich bewegt hat"
-              aria-label="Wochenbesprechung"
-            >
-              <Presentation size={16} />
-            </button>
+            <KopfHinweis text="Wochenbesprechung: alle Fälle in fünf Stufen, was fällig ist und was sich bewegt hat" className="hidden sm:inline-flex">
+              <button
+                // Wochenbesprechung (20.11.2026): alle Fälle in fünf Stufen, fällig je Person, Bewegung der Woche.
+                onClick={() => navigate('/besprechung')}
+                className="hidden rounded-lg p-2 text-slate-500 hover:bg-slate-100 sm:inline-flex"
+                aria-label="Wochenbesprechung"
+              >
+                <Presentation size={16} />
+              </button>
+            </KopfHinweis>
           )}
-          <button
-            // Kostenvoranschläge (20.11.2026): im Bereich Privat die eigenen privaten, sonst alle.
-            onClick={() => navigate(imPrivatBereich ? '/privat/kostenvoranschlaege' : '/kostenvoranschlaege')}
-            className="hidden rounded-lg p-2 text-slate-500 hover:bg-slate-100 sm:inline-flex"
-            title={imPrivatBereich ? 'Meine Kostenvoranschläge' : 'Kostenvoranschläge'}
-            aria-label="Kostenvoranschläge"
-          >
-            <Calculator size={16} />
-          </button>
-          <button
-            // Im privaten Bereich führt das Symbol ins eigene Postfach, sonst ins gemeinsame (Wunsch von Markus, 20.11.2026).
-            onClick={() => navigate(imPrivatBereich ? '/privat/postfach' : '/postfach')}
-            className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
-            title={imPrivatBereich ? 'Mein Postfach' : 'Postfach (info@amayer-holding.com)'}
-          >
-            <Inbox size={16} />
-          </button>
-          <button
-            onClick={() => setDokumentImportOpen(true)}
-            className="hidden rounded-lg p-2 text-slate-500 hover:bg-slate-100 sm:inline-flex"
-            title="Dokument per Handyscan/Druckerscan importieren"
-          >
-            <Camera size={16} />
-          </button>
+          <KopfHinweis text={imPrivatBereich ? 'Meine Kostenvoranschläge' : 'Kostenvoranschläge'} className="hidden sm:inline-flex">
+            <button
+              // Kostenvoranschläge (20.11.2026): im Bereich Privat die eigenen privaten, sonst alle.
+              onClick={() => navigate(imPrivatBereich ? '/privat/kostenvoranschlaege' : '/kostenvoranschlaege')}
+              className="hidden rounded-lg p-2 text-slate-500 hover:bg-slate-100 sm:inline-flex"
+              aria-label={imPrivatBereich ? 'Meine Kostenvoranschläge' : 'Kostenvoranschläge'}
+            >
+              <Calculator size={16} />
+            </button>
+          </KopfHinweis>
+          <KopfHinweis text={imPrivatBereich ? 'Mein Postfach' : 'Gemeinsames Postfach (info@amayer-holding.com)'}>
+            <button
+              // Im privaten Bereich führt das Symbol ins eigene Postfach, sonst ins gemeinsame (20.11.2026).
+              onClick={() => navigate(imPrivatBereich ? '/privat/postfach' : '/postfach')}
+              className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
+              aria-label={imPrivatBereich ? 'Mein Postfach' : 'Gemeinsames Postfach'}
+            >
+              <Inbox size={16} />
+            </button>
+          </KopfHinweis>
+          <KopfHinweis text="Dokument einlesen (Handy- oder Druckerscan)" rechts className="hidden sm:inline-flex">
+            <button
+              onClick={() => setDokumentImportOpen(true)}
+              className="hidden rounded-lg p-2 text-slate-500 hover:bg-slate-100 sm:inline-flex"
+              aria-label="Dokument einlesen"
+            >
+              <Camera size={16} />
+            </button>
+          </KopfHinweis>
 
           {/* „Neu im CRM“ (23.11.2026): Zahl der ungelesenen Neuerungen, Klick öffnet /neuigkeiten. */}
           {isSupabaseConfigured && session && <NeuigkeitenKnopf />}
           <div className="relative">
-            <button
-              onClick={() => setBenachrichtigungenOpen((o) => !o)}
-              className="relative rounded-lg p-2 text-slate-500 hover:bg-slate-100"
-              title="Benachrichtigungen"
+            <KopfHinweis
+              text={benachrichtigungen.length > 0 ? `Benachrichtigungen: ${benachrichtigungen.length} offen` : 'Benachrichtigungen'}
+              rechts
+              aus={benachrichtigungenOpen}
             >
-              <Bell size={16} />
-              {benachrichtigungen.length > 0 && (
-                <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-semibold text-white">
-                  {benachrichtigungen.length}
-                </span>
-              )}
-            </button>
+              <button
+                onClick={() => setBenachrichtigungenOpen((o) => !o)}
+                className="relative rounded-lg p-2 text-slate-500 hover:bg-slate-100"
+                aria-label={benachrichtigungen.length > 0 ? `Benachrichtigungen: ${benachrichtigungen.length} offen` : 'Benachrichtigungen'}
+              >
+                <Bell size={16} />
+                {benachrichtigungen.length > 0 && (
+                  <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-semibold text-white">
+                    {benachrichtigungen.length}
+                  </span>
+                )}
+              </button>
+            </KopfHinweis>
             {benachrichtigungenOpen && (
               <>
                 <button className="fixed inset-0 z-40 cursor-default" onClick={() => setBenachrichtigungenOpen(false)} aria-label="Schließen" />
@@ -330,23 +357,25 @@ export function Layout({ children }: { children: ReactNode }) {
           </div>
 
           <div className="relative">
-            <button
-              onClick={() => setProfilMenuOpen((o) => !o)}
-              className="flex items-center gap-1.5 rounded-lg p-1.5 pr-2 hover:bg-slate-100"
-              title="Profil & Einstellungen"
-            >
-              {state.profil.fotoDataUrl ? (
-                <img src={state.profil.fotoDataUrl} alt="" className="h-7 w-7 rounded-full object-cover" />
-              ) : (
-                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-200 text-slate-500">
-                  <User size={15} />
-                </div>
-              )}
-              <span className="hidden text-xs font-medium text-slate-600 sm:inline">
-                {isSupabaseConfigured && session ? mitarbeiter?.name ?? session.user.email : state.profil.name}
-              </span>
-              <ChevronDown size={13} className="hidden text-slate-400 sm:inline" />
-            </button>
+            <KopfHinweis text="Mein Profil, Einstellungen und Abmelden" rechts aus={profilMenuOpen}>
+              <button
+                onClick={() => setProfilMenuOpen((o) => !o)}
+                className="flex items-center gap-1.5 rounded-lg p-1.5 pr-2 hover:bg-slate-100"
+                aria-label="Mein Profil, Einstellungen und Abmelden"
+              >
+                {state.profil.fotoDataUrl ? (
+                  <img src={state.profil.fotoDataUrl} alt="" className="h-7 w-7 rounded-full object-cover" />
+                ) : (
+                  <div className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-200 text-slate-500">
+                    <User size={15} />
+                  </div>
+                )}
+                <span className="hidden text-xs font-medium text-slate-600 sm:inline">
+                  {isSupabaseConfigured && session ? mitarbeiter?.name ?? session.user.email : state.profil.name}
+                </span>
+                <ChevronDown size={13} className="hidden text-slate-400 sm:inline" />
+              </button>
+            </KopfHinweis>
             {profilMenuOpen && (
               <>
                 <button className="fixed inset-0 z-40 cursor-default" onClick={() => setProfilMenuOpen(false)} aria-label="Schließen" />
@@ -441,7 +470,7 @@ export function Layout({ children }: { children: ReactNode }) {
           <div className="relative z-10 flex h-full w-full max-w-xs flex-col bg-white shadow-2xl">
             <div className="flex flex-shrink-0 items-center justify-between px-4 pt-4">
               <h2 className="text-base font-semibold text-slate-800">Bereich wählen</h2>
-              <button onClick={() => setDrawerOpen(false)} className="rounded-md p-1.5 text-slate-400 hover:bg-slate-100">
+              <button onClick={() => setDrawerOpen(false)} className="rounded-md p-1.5 text-slate-400 hover:bg-slate-100" title="Menü schließen" aria-label="Menü schließen">
                 <X size={20} />
               </button>
             </div>

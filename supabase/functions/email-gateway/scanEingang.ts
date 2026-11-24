@@ -288,7 +288,9 @@ async function bearbeiteMail(admin: Admin, dienste: ScanDienste, m: MailZeile, e
   }
 
   if (ohneName) {
-    const erkannt = erkannteNamen.map((n) => String(n ?? '').trim()).filter((n) => n.length >= 3 && n.length <= 80)
+    // Der eigene Firmenname (Absender von Briefen, Exposés, Protokollen) ist nie der Kunde.
+    const eigen = /mayer|ulmer wirtschaftskanzlei|fundament/i
+    const erkannt = erkannteNamen.map((n) => String(n ?? '').trim()).filter((n) => n.length >= 3 && n.length <= 80 && !eigen.test(n))
     if (erkannt.length === 0) throw new Error('Im Scan steht kein erkennbarer Name — bitte von Hand zuordnen.')
     betreff = erkannt[0]
   }

@@ -332,7 +332,7 @@ async function exposeErstellen(input: any, k: ExposeKontext): Promise<string> {
   if (!ohneAnsprechpartner) {
     const kontakt = await ladeKontakt(supabase, mitarbeiter, text(input.ansprechpartner))
     if (typeof kontakt === 'string') return kontakt
-    const telefon = privat ? (kontakt.telefon ?? '') : await telefonFuerMitarbeiter(supabase, { name: kontakt.name, email: kontakt.email, telefon: kontakt.telefon })
+    const telefon = privat ? (kontakt.telefon ?? '') : await telefonFuerMitarbeiter(supabase, { name: kontakt.name, email: kontakt.email, telefon: kontakt.telefon }, { fuerExpose: true })
     kontakte.push({ titel: 'Ihr Ansprechpartner', name: kontakt.name, telefon, email: kontakt.email ?? '', firma })
   }
   if (mitVermittler) kontakte.push({ titel: 'Vermittler', ...vermittler! })

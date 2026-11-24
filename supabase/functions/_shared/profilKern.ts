@@ -60,11 +60,13 @@ export function wirksamesTelefon(telefon: unknown, mobil: unknown, firma: Firmen
 export async function telefonFuerMitarbeiter(
   supabase: Supa,
   wer: { id?: string | null; email?: string | null; name?: string | null; telefon?: string | null },
+  o: { fuerExpose?: boolean } = {},
 ): Promise<string> {
   const firma = await ladeFirmenKontakt(supabase)
   let id = sauber(wer.id)
   let telefon = sauber(wer.telefon)
-  if (!id || !telefon) {
+  // Fürs Exposé wird der Mitarbeiter immer gesucht: Seine Einstellung „Telefonnummer im Exposé zeigen“ zählt.
+  if (!id || !telefon || o.fuerExpose) {
     const { data } = await supabase.from('mitarbeiter').select('id, name, email, telefon').eq('aktiv', true)
     const alle = (data ?? []) as { id?: string; name?: string; email?: string; telefon?: string | null }[]
     const mail = sauber(wer.email).toLowerCase()
@@ -78,6 +80,11 @@ export async function telefonFuerMitarbeiter(
       id = String(m.id)
       telefon = telefon || sauber(m.telefon)
     }
+  }
+  if (o.fuerExpose && id) {
+    const { data } = await supabase.from('mitarbeiter_profil').select('*').eq('id', id).maybeSingle()
+    // Ausgeschaltet: Firmennummer statt der eigenen (wie im Browser, src/lib/meinProfilZusatz.ts useExposeTelefon).
+    if (data && (data as { telefon_im_expose?: boolean }).telefon_im_expose === false) return wirksamesTelefon('', '', firma)
   }
   if (telefon) return telefon
   let mobil = ''

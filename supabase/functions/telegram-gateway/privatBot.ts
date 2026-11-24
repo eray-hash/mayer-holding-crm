@@ -63,6 +63,7 @@ export const PRIVAT_BOT_WERKZEUGE: readonly string[] = [
   'todo_anlegen',
   'todo_erledigen',
   'todo_aendern',
+  'todo_loeschen',
   'todos_aufraeumen',
   'privater_bereich',
   'in_oeffentlich_holen',

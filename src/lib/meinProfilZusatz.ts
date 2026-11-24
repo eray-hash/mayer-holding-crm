@@ -3,28 +3,38 @@ import { supabase } from './supabaseClient'
 import {
   FIRMEN_KONTAKT_ID,
   firmenKontaktAus,
+  firmenTelefonAus,
   wirksamesTelefon,
   type FirmenKontakt,
 } from '../../supabase/functions/_shared/profilKern.ts'
 
 // Zusatzangaben aus „Mein Profil“, die nicht in der mitarbeiter-Zeile stehen (Runde 5, 22.11.2026):
-// Tabelle mitarbeiter_profil (id = mitarbeiter.id; Mobil, Funktion, Nachfrage-Einstellung) — bewusst
+// Tabelle mitarbeiter_profil (id = mitarbeiter.id; Mobil, Funktion, Nachfrage-Einstellung, seit 24.11.2026
+// auch „Telefonnummer im Exposé zeigen“, Spalte telefon_im_expose, SQL 2026-11-24_expose_telefon.sql) — bewusst
 // keine neuen Spalten auf mitarbeiter (die bräuchten GRANT SELECT, sonst sperrt das CRM alle aus).
 // Schreiben darf jeder nur die eigene Zeile (Zeilenregel in der Datenbank).
 // Dazu die Firmen-Ersatznummer (abteilung_eintraege 'firmen_kontakt'; ändern nur Geschäftsführung/Admin).
 
-export type ProfilZusatz = { mobil: string; position: string; profilNachfrage: boolean }
+export type ProfilZusatz = {
+  mobil: string
+  position: string
+  profilNachfrage: boolean
+  /** Eigene Telefon-/Mobilnummer im Exposé zeigen (Vorgabe ja). Aus: dort steht die Firmennummer. */
+  telefonImExpose: boolean
+}
 
-export const LEERER_ZUSATZ: ProfilZusatz = { mobil: '', position: '', profilNachfrage: true }
+export const LEERER_ZUSATZ: ProfilZusatz = { mobil: '', position: '', profilNachfrage: true, telefonImExpose: true }
 
 export async function ladeProfilZusatz(mitarbeiterId: string): Promise<ProfilZusatz> {
   if (!supabase || !mitarbeiterId) return LEERER_ZUSATZ
-  const { data, error } = await supabase.from('mitarbeiter_profil').select('mobil, position, profil_nachfrage').eq('id', mitarbeiterId).maybeSingle()
+  // '*' statt einzelner Spalten: so klappt das Laden auch, solange die Spalte telefon_im_expose noch fehlt.
+  const { data, error } = await supabase.from('mitarbeiter_profil').select('*').eq('id', mitarbeiterId).maybeSingle()
   if (error) throw new Error(error.message)
   return {
     mobil: String(data?.mobil ?? ''),
     position: String(data?.position ?? ''),
     profilNachfrage: data?.profil_nachfrage !== false,
+    telefonImExpose: data?.telefon_im_expose !== false,
   }
 }
 
@@ -35,6 +45,7 @@ export async function speichereProfilZusatz(mitarbeiterId: string, patch: Partia
   if (patch.mobil !== undefined) zeile.mobil = patch.mobil.trim() || null
   if (patch.position !== undefined) zeile.position = patch.position.trim() || null
   if (patch.profilNachfrage !== undefined) zeile.profil_nachfrage = patch.profilNachfrage
+  if (patch.telefonImExpose !== undefined) zeile.telefon_im_expose = patch.telefonImExpose
   const { data, error } = await supabase.from('mitarbeiter_profil').update(zeile).eq('id', mitarbeiterId).select('id')
   if (error) throw new Error(error.message)
   if (data && data.length > 0) return
@@ -70,22 +81,28 @@ export async function speichereFirmenKontakt(patch: { an?: boolean; telefon?: st
 }
 
 /**
- * Für Kunden-Ausgaben im CRM (z. B. Exposé): liefert eine Funktion, die zur eigenen Nummer die
- * Mobilnummer aus „Mein Profil“ und sonst die Firmennummer ergänzt. Bis geladen ist: nur die eigene Nummer.
+ * Telefonnummer für das Exposé: liefert eine Funktion, die zur eigenen Nummer die Mobilnummer aus
+ * „Mein Profil“ und sonst die Firmennummer ergänzt. Hat der Mitarbeiter „Telefonnummer im Exposé zeigen“
+ * ausgeschaltet, steht dort nur die Firmennummer (oder nichts, wenn der Firmen-Ersatz abgeschaltet ist).
+ * Bis geladen ist: nur die eigene Nummer.
  */
-export function useTelefonErsatz(mitarbeiterId: string | null | undefined): (eigene: string | null | undefined) => string {
-  const [ersatz, setErsatz] = useState<{ mobil: string; firma: FirmenKontakt | null }>({ mobil: '', firma: null })
+export function useExposeTelefon(mitarbeiterId: string | null | undefined): (eigene: string | null | undefined) => string {
+  const [ersatz, setErsatz] = useState<{ mobil: string; firma: FirmenKontakt | null; zeigen: boolean }>({ mobil: '', firma: null, zeigen: true })
   useEffect(() => {
     if (!supabase || !mitarbeiterId) return
     let aktiv = true
     Promise.all([ladeProfilZusatz(mitarbeiterId), ladeFirmenKontaktCrm()])
       .then(([z, f]) => {
-        if (aktiv) setErsatz({ mobil: z.mobil, firma: f })
+        if (aktiv) setErsatz({ mobil: z.mobil, firma: f, zeigen: z.telefonImExpose })
       })
       .catch(() => undefined)
     return () => {
       aktiv = false
     }
   }, [mitarbeiterId])
-  return useCallback((eigene) => wirksamesTelefon(eigene, ersatz.mobil, ersatz.firma), [ersatz])
+  return useCallback(
+    (eigene) =>
+      ersatz.zeigen ? wirksamesTelefon(eigene, ersatz.mobil, ersatz.firma) : ersatz.firma ? firmenTelefonAus(ersatz.firma) : '',
+    [ersatz],
+  )
 }
