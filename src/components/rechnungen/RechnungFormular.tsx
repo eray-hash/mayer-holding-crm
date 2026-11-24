@@ -1,7 +1,7 @@
 // Rechnung anlegen oder bearbeiten (21.11.2026): Positionen aus der Preisliste oder frei, Übernahme aus einem
 // Kostenvoranschlag, Leistungszeitraum, Anschrift, Hinweis auf der Rechnung, interne Notiz. Ältere Rechnungen
 // ohne Positionen behalten ihre von Hand eingetragenen Beträge, bis jemand Positionen hinzufügt.
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { FileInput } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { Field, Modal, PrimaryButton, SecondaryButton, inputClass } from '../ui'
@@ -12,6 +12,7 @@ import { addDays, today, uid } from '../../lib/dates'
 import { naechsteRechnungsnummer, rundeCent, summeAusPositionen, ustSatzVon } from '../../lib/rechnungen'
 import { ladeKostenvoranschlaegeFuerKunde, preisMitAufschlag, type Kostenvoranschlag } from '../../lib/kostenvoranschlaege'
 import { anschriftFuer } from './aktionen'
+import { kuerzelSpeichern, ladeRechnungsKuerzel, nummerVorschlagFuer, type KuerzelZeile } from '../../lib/rechnungsnummer'
 import type { Rechnung, RechnungStatus } from '../../types'
 
 const alsText = (n: number) => (Number.isFinite(n) ? rundeCent(n).toFixed(2).replace('.', ',') : '')
@@ -52,6 +53,31 @@ export function RechnungFormular({ rechnung, vorKundeId, vorlage, onClose, onGes
   const [bezeichnung, setBezeichnung] = useState(rechnung?.leistungBezeichnung ?? vorlage?.leistungBezeichnung ?? '')
 
   const akte = findeAkte(state, kundeId)
+
+  // Rechnungsnummer nach Vorgabe der Geschäftsführung (24.11.2026, src/lib/rechnungsnummer.ts): Kürzel des Kunden +
+  // laufende Nummer, z. B. LSA-001. Nur für neue Rechnungen; das Feld bleibt änderbar. Lassen sich die Kürzel nicht
+  // laden, bleibt der alte Vorschlag (RE-JJJJ-NNN).
+  const [kuerzelListe, setKuerzelListe] = useState<KuerzelZeile[] | null>(null)
+  const [nummerVonHand, setNummerVonHand] = useState(false)
+  const [nummerMeldung, setNummerMeldung] = useState('')
+  const [speichertGerade, setSpeichertGerade] = useState(false)
+  useEffect(() => {
+    if (rechnung) return
+    let aktiv = true
+    ladeRechnungsKuerzel().then((l) => {
+      if (aktiv) setKuerzelListe(l)
+    })
+    return () => {
+      aktiv = false
+    }
+  }, [rechnung])
+  const nummerVorschlag = useMemo(
+    () => (!rechnung && kuerzelListe && akte ? nummerVorschlagFuer(akte.kunde, kuerzelListe, state.rechnungen) : null),
+    [rechnung, kuerzelListe, akte, state.rechnungen],
+  )
+  useEffect(() => {
+    if (nummerVorschlag && !nummerVonHand) setNummer(nummerVorschlag.nummer)
+  }, [nummerVorschlag, nummerVonHand])
   const [anschrift, setAnschrift] = useState(() => (rechnung ? anschriftFuer(rechnung, findeAkte(state, rechnung.kundeId)) : anschriftFuer({}, findeAkte(state, vorKundeId ?? vorlage?.kundeId))))
   const [anschriftSpeichern, setAnschriftSpeichern] = useState(true)
   const [hinweis, setHinweis] = useState(rechnung?.hinweis ?? vorlage?.hinweis ?? '')
@@ -162,8 +188,25 @@ export function RechnungFormular({ rechnung, vorKundeId, vorlage, onClose, onGes
                   ? 'Bitte ein Zahlungsziel eintragen.'
                   : ''
 
-  function speichern() {
-    if (fehler || nutzer.nurLesen) return
+  async function speichern() {
+    if (fehler || nutzer.nurLesen || speichertGerade) return
+    // Erste Rechnung mit neuem Kürzel: das Kürzel vorher fest am Kunden speichern. War ein anderer schneller, neu rechnen.
+    const kuerzelNeu = !rechnung && nummerVorschlag?.neu && nummerSauber.toUpperCase().startsWith(`${nummerVorschlag.kuerzel}-`) ? nummerVorschlag.kuerzel : ''
+    if (kuerzelNeu) {
+      setSpeichertGerade(true)
+      const ergebnis = await kuerzelSpeichern(kundeId, kuerzelNeu)
+      setSpeichertGerade(false)
+      if (ergebnis !== 'ok') {
+        if (ergebnis === 'vergeben') {
+          setNummerVonHand(false)
+          setKuerzelListe(await ladeRechnungsKuerzel())
+          setNummerMeldung(`Das Kürzel ${kuerzelNeu} wurde gerade anders vergeben. Die Nummer ist neu vorgeschlagen — bitte prüfen und noch einmal anlegen.`)
+        } else {
+          setNummerMeldung('Das Rechnungskürzel ließ sich nicht speichern (keine Verbindung?). Bitte noch einmal versuchen.')
+        }
+        return
+      }
+    }
     const anschriftSauber = anschrift.split('\n').map((z) => z.trim()).filter(Boolean).join('\n')
     if (akte && anschriftSpeichern && anschriftSauber && anschriftSauber !== (akte.kunde.anschrift ?? '').trim()) {
       dispatch({ type: 'UPDATE_KUNDE_IN_BEREICH', bereich: akte.bereich, id: akte.kunde.id, patch: { anschrift: anschriftSauber } })
@@ -213,7 +256,7 @@ export function RechnungFormular({ rechnung, vorKundeId, vorlage, onClose, onGes
       title={rechnung ? `Rechnung ${rechnung.nummer} bearbeiten` : 'Neue Rechnung'}
       width="max-w-3xl"
       aktionen={
-        <PrimaryButton onClick={speichern} disabled={!!fehler || nutzer.nurLesen}>
+        <PrimaryButton onClick={() => void speichern()} disabled={!!fehler || nutzer.nurLesen || speichertGerade}>
           {rechnung ? 'Speichern' : 'Anlegen'}
         </PrimaryButton>
       }
@@ -235,7 +278,29 @@ export function RechnungFormular({ rechnung, vorKundeId, vorlage, onClose, onGes
 
       <div className="grid grid-cols-1 gap-x-3 sm:grid-cols-3">
         <Field label="Rechnungsnummer">
-          <input className={inputClass} value={nummer} onChange={(e) => setNummer(e.target.value)} placeholder="z. B. RE-2026-001" />
+          <input
+            className={inputClass}
+            value={nummer}
+            onChange={(e) => {
+              setNummer(e.target.value)
+              setNummerVonHand(true)
+              setNummerMeldung('')
+            }}
+            placeholder={kuerzelListe ? 'z. B. LSA-001' : 'z. B. RE-2026-001'}
+          />
+          {nummerVorschlag && (
+            <span className="mt-1 block text-xs text-slate-400">
+              {nummerVorschlag.neu ? `Neues Kürzel ${nummerVorschlag.kuerzel} für diesen Kunden (wird beim Anlegen fest vergeben)` : `Kürzel des Kunden: ${nummerVorschlag.kuerzel}`}
+              {nummerVonHand && nummer !== nummerVorschlag.nummer && (
+                <>
+                  {' · '}
+                  <button type="button" className="underline" onClick={() => setNummerVonHand(false)}>
+                    Vorschlag {nummerVorschlag.nummer} übernehmen
+                  </button>
+                </>
+              )}
+            </span>
+          )}
         </Field>
         <Field label="Rechnungsdatum">
           <input type="date" className={inputClass} value={datum} onChange={(e) => datumSetzen(e.target.value)} />
@@ -408,12 +473,13 @@ export function RechnungFormular({ rechnung, vorKundeId, vorlage, onClose, onGes
         </p>
         <div className="flex gap-2">
           <SecondaryButton onClick={onClose}>Abbrechen</SecondaryButton>
-          <PrimaryButton onClick={speichern} disabled={!!fehler || nutzer.nurLesen}>
+          <PrimaryButton onClick={() => void speichern()} disabled={!!fehler || nutzer.nurLesen || speichertGerade}>
             {rechnung ? 'Änderungen speichern' : 'Rechnung anlegen'}
           </PrimaryButton>
         </div>
       </div>
       {fehler && (kundeId || !!rechnung) && <p className="mt-2 text-xs text-rose-600">{fehler}</p>}
+      {nummerMeldung && <p className="mt-2 text-xs text-amber-700">{nummerMeldung}</p>}
     </Modal>
   )
 }
