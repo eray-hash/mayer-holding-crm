@@ -3951,6 +3951,25 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       const ergebnis = await wunschAnalyseTest(admin, sendeTelegramAls('superuser_meldungen', true), { senden: body.senden, stunden: body.stunden, schreiben: body.schreiben, jetzt: body.jetzt })
       return new Response(JSON.stringify(ergebnis), { headers })
     }
+    if (body.action === 'gesendet_nachtragen') {
+      // Eine früher (vor dem 24.11.2026) gesendete CRM-Mail nachträglich als Kopie in IONOS „Gesendet“ ablegen —
+      // sendet NICHTS. Nur mit dem Dienst-Schlüssel. { an, anName?, betreff, text, datum (ISO), messageId?, anhaenge? }
+      const token = (req.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '').trim()
+      if (!istDienstSchluessel(token)) return new Response(JSON.stringify({ error: 'Nur mit dem Dienst-Schlüssel.' }), { status: 401, headers })
+      if (typeof body.an !== 'string' || typeof body.betreff !== 'string' || typeof body.text !== 'string') return new Response(JSON.stringify({ error: 'an, betreff, text fehlen' }), { status: 400, headers })
+      // deno-lint-ignore no-explicit-any
+      const gebaut: any = await nodemailer.createTransport({ streamTransport: true, buffer: true, newline: 'windows' }).sendMail({
+        from: Deno.env.get('SMTP_USER'),
+        to: body.anName ? { name: String(body.anName), address: body.an } : body.an,
+        subject: body.betreff,
+        text: body.text,
+        date: body.datum ? new Date(String(body.datum)) : new Date(),
+        ...(body.messageId ? { messageId: String(body.messageId) } : {}),
+        attachments: ((Array.isArray(body.anhaenge) ? body.anhaenge : []) as MailAnhang[]).map((a) => ({ filename: a.filename, content: a.contentBase64, encoding: 'base64', contentType: a.contentType })),
+      })
+      await legeInGesendet(gebaut.message)
+      return new Response(JSON.stringify({ ok: true, bytes: gebaut.message?.length ?? 0 }), { headers })
+    }
     if (body.action === 'bitte_bestaetigen_test') {
       // Trockenlauf „Bitte bestätigen“ / Statusvorschläge zur Freigabe der Texte: schreibt nichts, sendet nichts.
       // { email } = Zuordnungsvorschläge, die diese Person heute bekäme; { status: true, tage? } = Statusvorschläge
