@@ -125,6 +125,7 @@ export const GRUPPEN: Record<GruppenName, Gruppe> = {
       // 24.11.2026: Rechnung ausstellen (PDF auf dem Briefbogen) und mit Anhang versenden — rechnungErstellen.ts.
       'rechnung_erstellen',
       'rechnung_versenden',
+      'rechnung_aendern',
       'rechnung_status_setzen',
       'rechnung_zahlung_erfassen',
       'rechnungen_offen',

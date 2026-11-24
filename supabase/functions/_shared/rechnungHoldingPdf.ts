@@ -19,6 +19,8 @@ export type RechnungPdfDaten = {
   nummer: string
   datum: string
   zahlungsziel: string
+  /** true = keine Zahlungsfrist auf der Rechnung (kein „Zahlbar bis“, kein Datum im Zahlungssatz). */
+  ohneFrist?: boolean
   /** Text; leer = „entspricht dem Rechnungsdatum“. */
   leistungszeitraum?: string
   /** Firma, Ansprechpartner, Straße, PLZ Ort — eine Zeile je Angabe. */
@@ -229,7 +231,7 @@ export async function erzeugeHoldingRechnungPdf(d: RechnungPdfDaten, o: { protok
     ['Rechnungsnummer', d.nummer],
     ['Rechnungsdatum', deDatum(d.datum)],
     [leistungBeschriftung(leistung), leistung || 'entspricht dem Rechnungsdatum'],
-    ['Zahlbar bis', deDatum(d.zahlungsziel)],
+    ...(d.ohneFrist ? [] : [['Zahlbar bis', deDatum(d.zahlungsziel)] as [string, string]]),
   ]
   for (const [label, wert] of angaben) {
     const zeilen = b.umbrechen(wert, { groesse: 9.5, fett: true }, R - L - 40)
@@ -287,11 +289,16 @@ export async function erzeugeHoldingRechnungPdf(d: RechnungPdfDaten, o: { protok
   summe('Rechnungsbetrag', euroPdf(s.brutto), { groesse: 10.5, fett: true })
   b.y += 10
 
-  b.absatz(`Bitte überweisen Sie den Betrag von ${euroText(s.brutto)} ohne Abzug bis zum ${deDatum(d.zahlungsziel)} unter Angabe der Rechnungsnummer ${d.nummer} auf folgendes Konto:`, text)
+  b.absatz(
+    d.ohneFrist
+      ? `Bitte überweisen Sie den Betrag von ${euroText(s.brutto)} unter Angabe der Rechnungsnummer ${d.nummer} auf folgendes Konto:`
+      : `Bitte überweisen Sie den Betrag von ${euroText(s.brutto)} ohne Abzug bis zum ${deDatum(d.zahlungsziel)} unter Angabe der Rechnungsnummer ${d.nummer} auf folgendes Konto:`,
+    text,
+  )
   b.y += 1.5
   const bank: Stil = { groesse: 9.5 }
   for (const [label, wert] of [
-    ['Kontoinhaber', HOLDING_ANGABEN.firma],
+    ['Kontoinhaber', HOLDING_ANGABEN.kontoinhaber],
     ['IBAN', HOLDING_ANGABEN.iban],
     ['Bank', HOLDING_ANGABEN.bank],
     ['Verwendungszweck', d.nummer],

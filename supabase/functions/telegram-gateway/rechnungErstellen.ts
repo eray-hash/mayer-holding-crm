@@ -73,6 +73,8 @@ export type RechnungErstellenKontext = {
 }
 
 const EIMER = 'kunden-dokumente'
+/** Ohne Zahlungsfrist: Prüftag für Wiedervorlage/Mahnwesen = Rechnungsdatum + 30 Tage (Verzug nach § 286 Abs. 3 BGB). */
+const OHNE_FRIST_PRUEFTAGE = 30
 const SQL_FEHLT = 'Nicht erstellt: Für das neue Rechnungsnummern-Schema fehlt noch die Datenbank-Spalte kunden.rechnungs_kuerzel (Datei supabase/sql/2026-11-24_rechnungsnummer.sql ist noch nicht ausgeführt). Sag dem Mitarbeiter, dass Eray das kurz einspielen muss; bis dahin geht die Rechnung nur im CRM.'
 
 export const RECHNUNG_ERSTELLEN_WERKZEUGE = [
@@ -103,6 +105,7 @@ export const RECHNUNG_ERSTELLEN_WERKZEUGE = [
         leistungsdatum: { type: 'string', description: 'Tag der Leistung JJJJ-MM-TT, falls genannt.' },
         leistungszeitraum: { type: 'string', description: 'Statt leistungsdatum ein Zeitraum als Text, z. B. "01.11.2026 – 20.11.2026".' },
         zahlungsziel_tage: { type: 'integer', minimum: 0, maximum: 90, description: `Zahlbar binnen … Tagen, Vorgabe ${ZAHLUNGSZIEL_TAGE} (wie im CRM).` },
+        ohne_zahlungsfrist: { type: 'boolean', description: 'true = „ohne Frist“: Auf Rechnung und Mail steht KEIN Zahlungsziel/„zahlbar bis“. Intern prüft das Follow-up nach 30 Tagen den Geldeingang.' },
         anschrift: { type: 'string', description: 'Nur wenn in der Akte keine Anschrift steht oder der Mitarbeiter eine andere nennt: Straße und "PLZ Ort", je Angabe eine Zeile. Wird bei leerer Akte dort gespeichert.' },
         anschreiben: { type: 'string', description: 'Optional: eigener Satz vor der Aufstellung statt "für unsere Leistungen erlauben wir uns, Ihnen Folgendes in Rechnung zu stellen:".' },
         hinweis: { type: 'string', description: 'Optional: Zusatz auf der Rechnung (z. B. Grund für 0 % Umsatzsteuer).' },
@@ -121,6 +124,27 @@ export const RECHNUNG_ERSTELLEN_WERKZEUGE = [
         nummer: { type: 'string', description: 'Rechnungsnummer, wenn die id nicht bekannt ist, z. B. "LSA-001".' },
         an: { type: 'string', description: 'Nur wenn der Mitarbeiter eine andere Adresse nennt als die der Akte.' },
         text: { type: 'string', description: 'Optional eigener Mailtext OHNE Anrede und Gruß (beides kommt automatisch). Ohne Angabe der Standardtext wie im CRM.' },
+      },
+    },
+  },
+  {
+    name: 'rechnung_aendern',
+    description:
+      'Ändert eine Rechnung, die noch Entwurf ist (nicht versendet): Zahlungsfrist (z. B. „ohne Frist“), Positionen/Beträge, Umsatzsteuer, Leistungsdatum/-zeitraum, Rechnungsdatum, Hinweis, Anschreiben. Die Rechnungsnummer bleibt; das PDF in der Akte wird durch die neue Fassung ersetzt. Für „mach LSA-001 ohne Frist“ oder „ändere den Betrag auf …“. Nie eine neue Rechnung anlegen, nur weil ein Entwurf geändert werden soll. Versendete Rechnungen lassen sich nicht ändern (dann Gutschrift/Storno im CRM).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        rechnung_id: { type: 'string' },
+        nummer: { type: 'string', description: 'z. B. "LSA-001", wenn die id nicht bekannt ist.' },
+        ohne_zahlungsfrist: { type: 'boolean', description: 'true = kein Zahlungsziel auf der Rechnung; false = wieder mit Frist (zahlungsziel_tage).' },
+        zahlungsziel_tage: { type: 'integer', minimum: 0, maximum: 90 },
+        positionen: { type: 'array', description: 'Nur angeben, wenn sich Positionen ändern — dann ALLE Positionen vollständig.', items: { type: 'object', properties: { bezeichnung: { type: 'string' }, menge: { type: 'number' }, einheit: { type: 'string' }, einzelpreis: { type: 'number' } }, required: ['bezeichnung', 'einzelpreis'] } },
+        ust_satz: { type: 'number' },
+        rechnungsdatum: { type: 'string', description: 'JJJJ-MM-TT' },
+        leistungsdatum: { type: 'string' },
+        leistungszeitraum: { type: 'string' },
+        hinweis: { type: 'string', description: 'Leerer Text entfernt den Hinweis.' },
+        anschreiben: { type: 'string' },
       },
     },
   },
@@ -261,7 +285,8 @@ export async function fuehreRechnungErstellenWerkzeugAus(name: string, input: an
     if (summen.brutto <= 0) return 'Fehler: Der Rechnungsbetrag muss größer als 0 € sein.'
 
     const datum = istIsoDatum(input?.rechnungsdatum) ? String(input.rechnungsdatum) : heute
-    const tage = Number.isInteger(Number(input?.zahlungsziel_tage)) && Number(input.zahlungsziel_tage) >= 0 && Number(input.zahlungsziel_tage) <= 90 ? Number(input.zahlungsziel_tage) : ZAHLUNGSZIEL_TAGE
+    const ohneFrist = input?.ohne_zahlungsfrist === true
+    const tage = ohneFrist ? OHNE_FRIST_PRUEFTAGE : Number.isInteger(Number(input?.zahlungsziel_tage)) && Number(input.zahlungsziel_tage) >= 0 && Number(input.zahlungsziel_tage) <= 90 ? Number(input.zahlungsziel_tage) : ZAHLUNGSZIEL_TAGE
     const zahlungsziel = plusTage(datum, tage)
     const leistung = leistungText(input?.leistungsdatum, input?.leistungszeitraum)
 
@@ -281,6 +306,7 @@ export async function fuehreRechnungErstellenWerkzeugAus(name: string, input: an
       betrag_brutto: summen.brutto,
       status: 'Entwurf',
       zahlungsziel,
+      ohne_zahlungsfrist: ohneFrist,
       mahnstufe: null,
       leistung_bezeichnung: positionen[0].bezeichnung,
       leistung_einheit: null,
@@ -312,6 +338,7 @@ export async function fuehreRechnungErstellenWerkzeugAus(name: string, input: an
         nummer: angelegt.nummer,
         datum,
         zahlungsziel,
+        ohneFrist,
         leistungszeitraum: leistung,
         empfaenger,
         positionen,
@@ -342,7 +369,7 @@ export async function fuehreRechnungErstellenWerkzeugAus(name: string, input: an
     const folge = await folgeFuer(k, akte, angelegt.id)
     return [
       `Rechnung ${angelegt.nummer} erstellt für ${akteName(akte)} (Status Entwurf — noch NICHT an den Kunden gesendet).`,
-      `${positionen.length === 1 ? `Position: ${positionen[0].bezeichnung}` : `${positionen.length} Positionen`}; netto ${euro(summen.netto)} + ${ust} % USt ${euro(summen.ust)} = brutto ${euro(summen.brutto)}. Rechnungsdatum ${deDatum(datum)}, zahlbar bis ${deDatum(zahlungsziel)}${leistung ? `, Leistung: ${leistung}` : ''}.`,
+      `${positionen.length === 1 ? `Position: ${positionen[0].bezeichnung}` : `${positionen.length} Positionen`}; netto ${euro(summen.netto)} + ${ust} % USt ${euro(summen.ust)} = brutto ${euro(summen.brutto)}. Rechnungsdatum ${deDatum(datum)}, ${ohneFrist ? `ohne Zahlungsfrist (intern Geldeingang prüfen am ${deDatum(zahlungsziel)})` : `zahlbar bis ${deDatum(zahlungsziel)}`}${leistung ? `, Leistung: ${leistung}` : ''}.`,
       `Empfänger auf der Rechnung: ${empfaenger.join(', ')}.`,
       `PDF auf dem Briefbogen der Holding in der Akte unter Dokumente: „${abgelegt.name}“. Die Rechnung steht in der Rechnungsübersicht des CRM (rechnung_id ${angelegt.id}).`,
       angelegt.neuesKuerzel ? `Neues festes Rechnungskürzel für diesen Kunden: ${angelegt.kuerzel} (alle weiteren Rechnungen: ${angelegt.kuerzel}-002, …).` : '',
@@ -396,7 +423,7 @@ export async function fuehreRechnungErstellenWerkzeugAus(name: string, input: an
       const ust = r.ust_satz != null ? Number(r.ust_satz) : Math.abs(rundeCent(Number(r.betrag_netto) * 1.19) - Number(r.betrag_brutto)) < 0.011 ? 19 : 0
       if (Math.abs(summeAusPositionen(pos, ust).brutto - Number(r.betrag_brutto)) > 0.011) return `Nicht vorbereitet: Rechnung ${nummer} hat kein PDF in der Akte, und ihre Beträge lassen sich nicht sicher nachbilden. Bitte im CRM über „Senden“ verschicken.`
       const anschrift = anschriftFuer(String(r.anschrift ?? ''), akte)
-      const bytes = (await erzeugeHoldingRechnungPdf({ nummer, datum: String(r.datum), zahlungsziel: String(r.zahlungsziel), leistungszeitraum: String(r.leistungszeitraum ?? ''), empfaenger: empfaengerZeilen(akte, anschrift), positionen: pos, ustSatz: ust, hinweis: String(r.hinweis ?? '') || undefined, absender: mitarbeiter.name })).bytes
+      const bytes = (await erzeugeHoldingRechnungPdf({ nummer, datum: String(r.datum), zahlungsziel: String(r.zahlungsziel), ohneFrist: r.ohne_zahlungsfrist === true, leistungszeitraum: String(r.leistungszeitraum ?? ''), empfaenger: empfaengerZeilen(akte, anschrift), positionen: pos, ustSatz: ust, hinweis: String(r.hinweis ?? '') || undefined, absender: mitarbeiter.name })).bytes
       const ziel = await ladeZiel(dokKontext(k), { kunde_id: akte.id }, 'Sonstiges')
       if (typeof ziel === 'string') return ziel
       const abgelegt = await legeAb(dokKontext(k), ziel, heute, { bytes, dateiName: rechnungDateiname(nummer, String(r.datum)), typ: 'application/pdf', aktivitaet: (a, g) => `PDF zu Rechnung ${nummer} erstellt: „${a}“ (${g})` })
@@ -415,7 +442,7 @@ export async function fuehreRechnungErstellenWerkzeugAus(name: string, input: an
 
     const offen = rundeCent(Number(r.betrag_brutto) - ((r.zahlungen as { betrag?: number }[] | null) ?? []).reduce((s, z) => s + (Number(z?.betrag) || 0), 0))
     const eigenerText = String(input?.text ?? '').trim()
-    const text = `{{anrede}},\n\n${eigenerText || `anbei erhalten Sie unsere Rechnung Nr. ${nummer} vom ${deDatum(String(r.datum))} über ${euro(Number(r.betrag_brutto))}.\nBitte überweisen Sie den Betrag von ${euro(offen)} bis zum ${deDatum(String(r.zahlungsziel))} auf das in der Rechnung genannte Konto.\n\nBei Fragen zur Rechnung sind wir gerne für Sie da.`}`
+    const text = `{{anrede}},\n\n${eigenerText || `anbei erhalten Sie unsere Rechnung Nr. ${nummer} vom ${deDatum(String(r.datum))} über ${euro(Number(r.betrag_brutto))}.\nBitte überweisen Sie den Betrag von ${euro(offen)}${r.ohne_zahlungsfrist === true ? '' : ` bis zum ${deDatum(String(r.zahlungsziel))}`} auf das in der Rechnung genannte Konto.\n\nBei Fragen zur Rechnung sind wir gerne für Sie da.`}`
     const empfaenger: RechnungMailEmpfaenger = { kunde_id: akte.id, bereich: String(akte.bereich ?? ''), name: String(akte.ansprechpartner ?? '').trim(), firma: String(akte.firma ?? '').trim(), email: an, status: String(akte.status ?? '') }
     const entwurf: RechnungMailEntwurf = { id: crypto.randomUUID().slice(0, 8), betreff: `Rechnung ${nummer}`, text, empfaenger: [empfaenger], z: new Date().toISOString(), anhaenge: [anhang], rechnung: { id: String(r.id), nummer, kunde_id: akte.id } }
     if (!k.merkeMailEntwurf) return 'Fehler: Der Mailversand ist hier nicht eingerichtet.'
@@ -438,7 +465,132 @@ export async function fuehreRechnungErstellenWerkzeugAus(name: string, input: an
       .join('\n')
   }
 
+  if (name === 'rechnung_aendern') {
+    const r = await ladeRechnung(supabase, String(input?.rechnung_id ?? '').trim(), String(input?.nummer ?? '').trim())
+    if (!r) return `Es gibt keine Rechnung ${String(input?.nummer ?? input?.rechnung_id ?? '')}. Die Rechnungen einer Akte stehen in kundenakte_lesen.`
+    const akte = await ladeAkte(k, String(r.kunde_id ?? ''), false)
+    if (typeof akte === 'string') return akte
+    const fehlerAkte = pruefeRechnungsAkte(akte)
+    if (fehlerAkte) return fehlerAkte
+    const nummer = String(r.nummer)
+    if (r.status !== 'Entwurf' || r.versendet_am) {
+      return `Nicht geändert: Rechnung ${nummer} ist schon ${r.versendet_am ? `am ${deDatum(String(r.versendet_am))} versendet` : `im Status ${r.status}`}. Eine verschickte Rechnung darf nicht mehr verändert werden — dafür im CRM eine Gutschrift/Stornorechnung erstellen.`
+    }
+
+    const altePos = Array.isArray(r.positionen) && r.positionen.length
+      ? (r.positionen as { bezeichnung: string; menge: number; einheit: string; einzelpreis: number }[])
+      : [{ bezeichnung: String(r.leistung_bezeichnung ?? '') || 'Leistung laut Vereinbarung', menge: 1, einheit: 'Pauschal', einzelpreis: Number(r.betrag_netto) }]
+    let positionen = altePos
+    if (input?.positionen !== undefined) {
+      const neu = lesePositionen(input.positionen)
+      if (typeof neu === 'string') return neu
+      positionen = neu
+    }
+    const ustRoh = input?.ust_satz === undefined || input?.ust_satz === null || input?.ust_satz === '' ? (r.ust_satz != null ? Number(r.ust_satz) : UST_VORGABE) : Number(input.ust_satz)
+    if (!Number.isFinite(ustRoh) || ustRoh < 0 || ustRoh > 30) return 'Fehler: ust_satz muss zwischen 0 und 30 Prozent liegen.'
+    const ust = rundeCent(ustRoh)
+    const hinweis = input?.hinweis !== undefined ? String(input.hinweis ?? '').trim().slice(0, 600) : String(r.hinweis ?? '').trim()
+    if (ust === 0 && !hinweis) return 'Fehler: Bei 0 % Umsatzsteuer muss der Grund auf die Rechnung (hinweis).'
+    const summen = summeAusPositionen(positionen, ust)
+    if (summen.brutto <= 0) return 'Fehler: Der Rechnungsbetrag muss größer als 0 € sein.'
+
+    const datum = istIsoDatum(input?.rechnungsdatum) ? String(input.rechnungsdatum) : String(r.datum)
+    const ohneFrist = typeof input?.ohne_zahlungsfrist === 'boolean' ? input.ohne_zahlungsfrist : r.ohne_zahlungsfrist === true
+    const alteTage = Math.round((Date.parse(String(r.zahlungsziel)) - Date.parse(String(r.datum))) / 86400000)
+    const tageEingabe = Number(input?.zahlungsziel_tage)
+    const tage = ohneFrist
+      ? OHNE_FRIST_PRUEFTAGE
+      : Number.isInteger(tageEingabe) && tageEingabe >= 0 && tageEingabe <= 90
+        ? tageEingabe
+        : r.ohne_zahlungsfrist === true || !Number.isFinite(alteTage) || alteTage < 0 ? ZAHLUNGSZIEL_TAGE : alteTage
+    const zahlungsziel = plusTage(datum, tage)
+    const leistung = input?.leistungsdatum !== undefined || input?.leistungszeitraum !== undefined ? leistungText(input?.leistungsdatum, input?.leistungszeitraum) : String(r.leistungszeitraum ?? '')
+    const anschrift = anschriftFuer(String(r.anschrift ?? ''), akte)
+
+    let pdf: Uint8Array
+    try {
+      pdf = (await erzeugeHoldingRechnungPdf({
+        nummer,
+        datum,
+        zahlungsziel,
+        ohneFrist,
+        leistungszeitraum: leistung,
+        empfaenger: empfaengerZeilen(akte, anschrift),
+        positionen,
+        ustSatz: ust,
+        anschreiben: String(input?.anschreiben ?? '').trim().slice(0, 1500) || undefined,
+        hinweis: hinweis || undefined,
+        absender: mitarbeiter.name,
+      })).bytes
+    } catch (err) {
+      return `Nicht geändert: Das PDF ließ sich nicht erzeugen (${err instanceof Error ? err.message : String(err)}).`
+    }
+
+    // PDF ersetzen: gleiche Datei in der Akte überschreiben; fehlt sie, neu ablegen.
+    const dokVerweis = r.dokument as { dokumentId?: string } | null
+    const { data: frisch } = await supabase.from('kunden').select('dokumente').eq('id', akte.id).maybeSingle()
+    const doks = ((frisch?.dokumente ?? []) as { id: string; url?: string; groesse?: string; datum?: string }[])
+    const vorhanden = doks.find((d) => d.id === dokVerweis?.dokumentId && d.url && !/^https?:/.test(d.url))
+    let dokument: { kundeId: string; dokumentId: string; name: string } | null = null
+    if (vorhanden) {
+      const { error: upFehler } = await supabase.storage.from(EIMER).upload(String(vorhanden.url), pdf, { upsert: true, contentType: 'application/pdf' })
+      if (upFehler) return `Nicht geändert: Das neue PDF ließ sich nicht speichern (${upFehler.message}).`
+      const groesse = `${Math.max(1, Math.round(pdf.length / 1024))} KB`
+      const { data: nochmal } = await supabase.from('kunden').select('dokumente').eq('id', akte.id).maybeSingle()
+      const liste = ((nochmal?.dokumente ?? []) as Record<string, unknown>[]).map((d) => (d.id === vorhanden.id ? { ...d, groesse, datum: heute } : d))
+      await supabase.from('kunden').update({ dokumente: liste }).eq('id', akte.id)
+      dokument = { kundeId: akte.id, dokumentId: vorhanden.id, name: String((liste.find((d) => d.id === vorhanden.id) as { name?: string } | undefined)?.name ?? rechnungDateiname(nummer, datum)) }
+    } else {
+      const ziel = await ladeZiel(dokKontext(k), { kunde_id: akte.id }, 'Sonstiges')
+      if (typeof ziel === 'string') return ziel
+      const abgelegt = await legeAb(dokKontext(k), ziel, heute, { bytes: pdf, dateiName: rechnungDateiname(nummer, datum), typ: 'application/pdf', aktivitaet: (a, g) => `PDF zu Rechnung ${nummer} erstellt: „${a}“ (${g})` })
+      if (typeof abgelegt === 'string') return abgelegt
+      dokument = { kundeId: akte.id, dokumentId: abgelegt.id, name: abgelegt.name }
+    }
+
+    const { error: uFehler } = await supabase
+      .from('rechnungen')
+      .update({
+        datum,
+        zahlungsziel,
+        ohne_zahlungsfrist: ohneFrist,
+        betrag_netto: summen.netto,
+        betrag_brutto: summen.brutto,
+        positionen,
+        leistung_bezeichnung: positionen[0].bezeichnung,
+        ust_satz: ust,
+        leistungszeitraum: leistung || null,
+        hinweis: hinweis || null,
+        dokument,
+      })
+      .eq('id', r.id)
+      .eq('status', 'Entwurf')
+    if (uFehler) return `Fehler beim Speichern der Änderung: ${uFehler.message}`
+    protokolliere(`Rechnung ${nummer} geändert (Entwurf): ${ohneFrist ? 'ohne Zahlungsfrist' : `zahlbar bis ${deDatum(zahlungsziel)}`}, brutto ${euro(summen.brutto)}`)
+    const folge = await folgeFuer(k, akte, String(r.id))
+    return [
+      `Rechnung ${nummer} geändert (weiter Entwurf, Nummer unverändert, noch NICHT versendet).`,
+      `Jetzt: netto ${euro(summen.netto)} + ${ust} % USt = brutto ${euro(summen.brutto)}; Rechnungsdatum ${deDatum(datum)}; ${ohneFrist ? `ohne Zahlungsfrist — auf Rechnung und Mail steht kein „zahlbar bis“ (intern Geldeingang prüfen am ${deDatum(zahlungsziel)})` : `zahlbar bis ${deDatum(zahlungsziel)}`}.`,
+      `Das PDF in der Akte („${dokument?.name ?? ''}“) ist durch die neue Fassung ersetzt.`,
+      '',
+      'Nächste Schritte im Follow-up, wenn sie heute rausgeht:',
+      folge,
+      '',
+      'Sag dem Mitarbeiter kurz, was geändert ist, schick ihm die neue Fassung mit datei_senden und biete den Versand an (rechnung_versenden).',
+    ].join('\n')
+  }
+
   return `Fehler: unbekanntes Werkzeug ${name}.`
+}
+
+/** Rechnung per id oder Nummer (genau, sonst in Großbuchstaben). */
+async function ladeRechnung(supabase: Supa, id: string, nummerRoh: string): Promise<Record<string, unknown> | null> {
+  if (id) return (await supabase.from('rechnungen').select('*').eq('id', id).maybeSingle()).data ?? null
+  for (const n of [...new Set([nummerRoh, nummerRoh.toUpperCase()])].filter(Boolean)) {
+    const { data } = await supabase.from('rechnungen').select('*').eq('nummer', n).limit(1)
+    if (data?.length) return data[0]
+  }
+  return null
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -449,7 +601,7 @@ async function xRechnungFuer(supabase: Supa, r: Record<string, unknown>, akte: A
   if (!pos) return 'Die Rechnung hat keine Positionen.'
   const ust = r.ust_satz != null ? Number(r.ust_satz) : UST_VORGABE
   const eingabe = xRechnungEingabe(
-    { nummer: String(r.nummer), datum: String(r.datum), zahlungsziel: String(r.zahlungsziel ?? ''), leistungszeitraum: String(r.leistungszeitraum ?? ''), positionen: pos, ust_satz: ust, hinweis: String(r.hinweis ?? '') },
+    { nummer: String(r.nummer), datum: String(r.datum), zahlungsziel: r.ohne_zahlungsfrist === true ? '' : String(r.zahlungsziel ?? ''), leistungszeitraum: String(r.leistungszeitraum ?? ''), positionen: pos, ust_satz: ust, hinweis: String(r.hinweis ?? '') },
     akte,
     empfaengerZeilen(akte, anschriftFuer(String(r.anschrift ?? ''), akte)),
   )

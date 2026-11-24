@@ -92,6 +92,8 @@ export const HOLDING_ANGABEN = {
   telefon: '0176 209 671 39',
   web: 'www.amayer-holding.com',
   bank: 'KSK ES-NT',
+  /** Kontoinhaber der Bankverbindung — Vorgabe der Geschäftsführung (24.11.2026): nur „Andreas Mayer“, nie die UG. */
+  kontoinhaber: 'Andreas Mayer',
   iban: 'DE92 6115 0020 0007 0219 58',
   steuernummer: '71 504 682 835',
   register: 'Amtsgericht Ulm, HRB 745056',
