@@ -321,6 +321,7 @@ import { kontaktVorschlagZeilen } from '../telegram-gateway/postfachHelfer.ts'
 import { vertragsFristZeilen } from '../telegram-gateway/vertragWerkzeuge.ts'
 import { frageNachTerminen, frageUeberAssistent } from './nachTermin.ts'
 import { gespraechAkteSetzen, gespraechUebernehmen, gespraechVorbereitung } from './gespraechUebernehmen.ts'
+import { gespraechVerteilen, gespraechVerteilenVorschlag } from './gespraechVerteilen.ts'
 import { versendeAutoNachrichten } from './autoNachrichten.ts'
 import { kiEntscheidung, pruefeNeueAnfragen } from './anfragenManager.ts'
 import { akteZuObjektAktion, haikuOrdner, setzeHaengendeUmzuegeFort, stosseUmzugAn } from './akteZuObjekt.ts'
@@ -5449,6 +5450,29 @@ Deno.serve((req: Request) => mitAnlass(async () => {
         : body.action === 'gespraech_akte_setzen'
         ? await gespraechAkteSetzen(gk, body)
         : await gespraechVorbereitung(gk, body)
+      return new Response(JSON.stringify(ergebnis.daten), { status: ergebnis.status, headers })
+    }
+
+    // Gesprächs-App: eine Aufnahme auf mehrere Akten verteilen (gespraechVerteilen.ts) — eigener Login oder die
+    // Telegram-Funktion mit imAuftragVon. Nur der Besitzer der Aufnahme; je Akte darfKunde, neue Akten darfBereich.
+    if (body.action === 'gespraech_verteilen_vorschlag' || body.action === 'gespraech_verteilen') {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const aufrufer = await ermittleAufrufer(req, admin, body)
+      if (!aufrufer) {
+        return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
+      }
+      const vk = {
+        admin,
+        aufrufer,
+        heute: new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Berlin' }).format(new Date()),
+        darfKunde: (kundeId: string) => darfKundeServer(admin, aufrufer.email, kundeId),
+        darfBereich: (bereich: string) => darfBereichServer(admin, aufrufer.email, bereich),
+        // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
+        imHintergrund: (arbeit: Promise<unknown>) => EdgeRuntime.waitUntil(arbeit),
+        restMs: () => WORKER_LEBENSDAUER_MS - (Date.now() - WORKER_GEBOOTET),
+        sendeTelegram: (chat: number | string | null, text: string) => sendeTelegram(chat, text),
+      }
+      const ergebnis = body.action === 'gespraech_verteilen_vorschlag' ? await gespraechVerteilenVorschlag(vk, body) : await gespraechVerteilen(vk, body)
       return new Response(JSON.stringify(ergebnis.daten), { status: ergebnis.status, headers })
     }
 

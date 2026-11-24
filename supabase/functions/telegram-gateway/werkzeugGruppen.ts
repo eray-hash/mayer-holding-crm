@@ -170,10 +170,11 @@ export const GRUPPEN: Record<GruppenName, Gruppe> = {
   },
   kalender: {
     titel: 'Kalender',
-    wofuer: 'Termine absagen und verschieben, Termine einer Akte zuordnen, freie Zeiten finden, Termin-Briefing, Protokoll nach einem Kundentermin, Tagesablauf (Tag zeigen, planen, abhaken)',
-    werkzeuge: ['termin_absagen', 'termin_aendern', 'freie_zeiten', 'termin_briefing', 'nachtermin_protokoll', 'termin_zuordnen', 'tag_zeigen', 'tag_vorschlagen', 'tag_eintrag_erledigt', 'tag_eintrag_hinzufuegen', 'tag_eintrag_entfernen'],
+    wofuer: 'Termine absagen und verschieben, Termine einer Akte zuordnen, freie Zeiten finden, Termin-Briefing, Protokoll nach einem Kundentermin, Gesprächsaufnahme auf mehrere Akten verteilen, Tagesablauf (Tag zeigen, planen, abhaken)',
+    // 24.11.2026: aufnahme_verteilen — Gesprächsaufnahme bzw. Sprachnotiz auf mehrere Akten verteilen (aufnahmeVerteilen.ts).
+    werkzeuge: ['termin_absagen', 'termin_aendern', 'freie_zeiten', 'termin_briefing', 'nachtermin_protokoll', 'termin_zuordnen', 'tag_zeigen', 'tag_vorschlagen', 'tag_eintrag_erledigt', 'tag_eintrag_hinzufuegen', 'tag_eintrag_entfernen', 'aufnahme_verteilen'],
     stichworte:
-      /termin|kalender|absag|verschieb|verleg|\bfrei|wann (hast|habe|hat|kann|koennen)|\buhr\b|(?<![\d.])\d{1,2}[:.]\d{2}(?![\d])|morgen|naechste woche|montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag|briefing|vorbereit|wie lief|besprechung|meeting|treffen|mein(en)? tag|tagesablauf|tagesplan|tagesliste|heute an|heute (zu tun|dran|machen|erledigen)|plan(e)? (mir|meinen|den) tag|plan mir|offen geblieben|a-aufgabe|b-aufgabe|c-aufgabe/,
+      /aufnahme|aufgenommen|sprachnotiz|verteil|termin|kalender|absag|verschieb|verleg|\bfrei|wann (hast|habe|hat|kann|koennen)|\buhr\b|(?<![\d.])\d{1,2}[:.]\d{2}(?![\d])|morgen|naechste woche|montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag|briefing|vorbereit|wie lief|besprechung|meeting|treffen|mein(en)? tag|tagesablauf|tagesplan|tagesliste|heute an|heute (zu tun|dran|machen|erledigen)|plan(e)? (mir|meinen|den) tag|plan mir|offen geblieben|a-aufgabe|b-aufgabe|c-aufgabe/,
   },
   dateien: {
     titel: 'Dateien verwalten',
@@ -279,6 +280,7 @@ export const ABSATZ_GRUPPE: readonly [string, GruppenName][] = [
   ['- Online-Unterschrift:', 'nachfassen'],
   ['- Termin-Briefing:', 'kalender'],
   ['- Nachfrage nach Kundenterminen:', 'kalender'],
+  ['- Aufnahmen auf Akten verteilen:', 'kalender'],
 ]
 
 export const LADE_WERKZEUG_NAME = 'weitere_werkzeuge_laden'

@@ -9,6 +9,7 @@ import { callAuthenticated, sendEmail } from '../../lib/emailGateway'
 import { supabase } from '../../lib/supabaseClient'
 import { GESPRAECH_SPEICHER, type GespraechAufnahme, type GespraechUebernommen } from '../typen'
 import type { AktenfeldName, Aktenfelder, FragebogenAntwort, GespraechGeteilt, GespraechSprache, GespraechUebersetzung } from '../../../supabase/functions/_shared/gespraechSchema.ts'
+import type { VerteilAbschnitt, VerteilTreffer, VerteilVorschlag } from '../../../supabase/functions/_shared/gespraechVerteilenKern.ts'
 
 /** Zeile mit den Feldern aus Runde 5 (Sprache, Übersetzung, Teilen; Fragebogen und Aktenfelder in analyse). */
 export type AufnahmeR5 = Omit<GespraechAufnahme, 'sprecher' | 'analyse' | 'uebernommen'> & {
@@ -338,4 +339,48 @@ export async function sendeKundennotiz(a: {
   } catch (e) {
     return { hinweis: `Die Mail ist verschickt, aber der Eintrag im Verlauf der Akte fehlt: ${e instanceof Error ? e.message : String(e)}` }
   }
+}
+
+// ---------- Auf mehrere Akten verteilen (24.11.2026, Server: email-gateway/gespraechVerteilen.ts) ----------
+
+export type VerteilAbschnittAnsicht = VerteilAbschnitt & {
+  treffer: VerteilTreffer[]
+  vorschlag: VerteilVorschlag
+  erledigt?: { kundeId: string; name: string; link: string; extern?: boolean }
+}
+
+export type VerteilVorschlagAntwort = {
+  ok: true
+  status: 'laeuft' | 'fertig' | 'fehler'
+  fehler?: string | null
+  hinweis?: string | null
+  erstellt_am?: string | null
+  abschnitte: VerteilAbschnittAnsicht[]
+  /** Bereiche, in denen der Mitarbeiter neue Akten anlegen darf (plus privat). */
+  bereiche?: string[]
+}
+
+/** Vorschlag holen bzw. (neu=true) neu berechnen lassen. status 'laeuft' = noch einmal fragen. */
+export async function verteilVorschlag(id: string, neu = false): Promise<VerteilVorschlagAntwort> {
+  return (await callAuthenticated({ action: 'gespraech_verteilen_vorschlag', id, ...(neu ? { neu: true } : {}) })) as VerteilVorschlagAntwort
+}
+
+export type VerteilZiel = { kundeId: string } | { neu: { bereich: string; firma: string; ansprechpartner?: string } } | { ueberspringen: true }
+
+export type VerteilEingabe = {
+  nr: number
+  ziel: VerteilZiel
+  stand?: string
+  bezahlt?: number | null
+  erwartetNetto?: number | null
+  erwartetMonat?: string | null
+  chance?: { prozent: number; begruendung: string } | null
+  wiedervorlagen?: { titel: string; faellig: string }[]
+  todos?: { text: string; faellig?: string; zustaendig?: string; zustaendig_email?: string }[]
+}
+
+export type VerteilErgebnisZeile = { kundeId: string; name: string; bereich: string; link: string; neu: boolean; extern: boolean; angelegt: string[]; hinweise: string[]; nrs: number[] }
+
+export async function verteilen(id: string, abschnitte: VerteilEingabe[]): Promise<{ ok: true; zeilen: string[]; hinweise: string[]; ergebnisse: VerteilErgebnisZeile[] }> {
+  return (await callAuthenticated({ action: 'gespraech_verteilen', id, auswahl: { abschnitte } })) as { ok: true; zeilen: string[]; hinweise: string[]; ergebnisse: VerteilErgebnisZeile[] }
 }

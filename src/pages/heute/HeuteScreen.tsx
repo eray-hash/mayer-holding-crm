@@ -18,6 +18,7 @@ import type { FollowUp } from '../../types'
 import { AKTE_UNGEKLAERT, PFAD_UNGEKLAERT } from '../../data/sammelakten'
 import { ProfilVollstaendigkeitHeute } from '../../components/ProfilVollstaendigkeit'
 import { NeuanfragenHinweis } from '../neuanfragen/NeuanfragenHinweis'
+import { GespraechOhneAkteHinweis } from '../../components/GespraechOhneAkteHinweis'
 import { Fehlergrenze } from '../../components/Fehlergrenze'
 
 function weekdayGerman(): string {
@@ -173,6 +174,9 @@ export function HeuteScreen() {
       </Fehlergrenze>
       <Fehlergrenze name="Heute: Neuanfragen" klein>
         <NeuanfragenHinweis />
+      </Fehlergrenze>
+      <Fehlergrenze name="Heute: Aufnahmen ohne Akte" klein>
+        <GespraechOhneAkteHinweis />
       </Fehlergrenze>
       {ungeklaertDokumente.length > 0 && (
         <Card className="mb-5 border-amber-200 bg-amber-50/40 p-5">

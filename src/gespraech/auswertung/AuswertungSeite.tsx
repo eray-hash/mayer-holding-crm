@@ -9,9 +9,11 @@
 //    Verschickt wird von hier nichts — der Mail-Entwurf landet als Notiz in der Akte. Seit Runde 5 auch der
 //    vorbefüllte Fragebogen und die Aktenfelder (FragebogenKarten.tsx).
 //  - Teilen (Runde 5, Teilen.tsx): an Kollegen per Telegram, Gesprächsnotiz an den Kunden (nur per Knopf + Bestätigung).
+//  - Seit 24.11.2026 auf dem Reiter „In die Akte“ zusätzlich „Auf mehrere Akten verteilen“ (Verteilen.tsx) für Aufnahmen,
+//    in denen mehrere Kunden nacheinander besprochen werden. Der Link aus dem CRM öffnet das mit ?verteilen=1.
 // Auf dem Reiter „Abschrift“ zeigt SpracheUebersetzung.tsx die erkannte Sprache und auf Wunsch die deutsche Fassung.
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import type { GespraechAufnahme, GespraechSegment } from '../typen'
 import { AkteZuordnen } from './AkteZuordnen'
 import {
@@ -37,6 +39,7 @@ import { BEREICH_NAMEN } from '../akten'
 import { aendere, feld, Karte, Schalter, UEBER_LEISTE } from './bausteine'
 import { DeutscheFassung, istFremdsprachig, SprachLeiste } from './SpracheUebersetzung'
 import { TeilenSeite } from './Teilen'
+import { Verteilen } from './Verteilen'
 import { afAlsDaten, afStart, AktenfelderKarten, fbStart, FragebogenKarte, type AfZeile, type FbZeile } from './FragebogenKarten'
 
 export type AuswertungSeiteProps = {
@@ -51,7 +54,10 @@ const MARKER_NAME: Record<string, string> = { wichtig: 'Wichtig', aufgabe: 'Aufg
 const STAMMDATEN_NAME: Record<string, string> = { telefon: 'Telefon', email: 'E-Mail', anschrift: 'Anschrift', firma: 'Firma', ansprechpartner: 'Ansprechpartner', sonstiges: 'Sonstiges' }
 
 export function AuswertungSeite({ id, zeile, neuLaden }: AuswertungSeiteProps) {
-  const [reiter, setReiter] = useState<Reiter>('ergebnis')
+  const location = useLocation()
+  const startVerteilen = new URLSearchParams(location.search).get('verteilen') === '1'
+  const [reiter, setReiter] = useState<Reiter>(startVerteilen ? 'akte' : 'ergebnis')
+  const [verteilenAn, setVerteilenAn] = useState(startVerteilen)
   const segmente = useMemo(() => [...(zeile.segmente ?? [])].sort((a, b) => a.nr - b.nr), [zeile.segmente])
   const fotos = zeile.fotos ?? []
   const [links, setLinks] = useState<Map<string, string>>(new Map())
@@ -108,7 +114,11 @@ export function AuswertungSeite({ id, zeile, neuLaden }: AuswertungSeiteProps) {
             )}
           </>
         )}
-        {reiter === 'akte' && <InDieAkte id={id} zeile={zeile} neuLaden={neuLaden} />}
+        {reiter === 'akte' && (verteilenAn && zeile.status === 'fertig' ? (
+          <Verteilen id={id} zurueck={() => setVerteilenAn(false)} />
+        ) : (
+          <InDieAkte id={id} zeile={zeile} neuLaden={neuLaden} onVerteilen={() => setVerteilenAn(true)} />
+        ))}
         {reiter === 'teilen' && <TeilenSeite id={id} zeile={zeile as AufnahmeR5} neuLaden={neuLaden} />}
       </div>
 
@@ -370,7 +380,7 @@ function passendesMitglied(name: string, team: TeamMitglied[]): string {
   return treffer.length === 1 ? treffer[0].email : ''
 }
 
-function InDieAkte({ id, zeile: zeileRoh, neuLaden }: AuswertungSeiteProps) {
+function InDieAkte({ id, zeile: zeileRoh, neuLaden, onVerteilen }: AuswertungSeiteProps & { onVerteilen: () => void }) {
   const zeile = zeileRoh as AufnahmeR5
   const a = zeile.analyse
   const u = zeile.uebernommen
@@ -475,6 +485,14 @@ function InDieAkte({ id, zeile: zeileRoh, neuLaden }: AuswertungSeiteProps) {
 
   return (
     <div className="space-y-3">
+      {/* Mehrere Kunden in einer Aufnahme (z. B. Sprachnotiz der Geschäftsführung): auf mehrere Akten verteilen. */}
+      <div className={`rounded-xl border p-3 ${zeile.kunde_id ? 'border-slate-200 bg-white' : 'border-indigo-200 bg-indigo-50'}`}>
+        <p className="text-sm text-slate-700">
+          {zeile.kunde_id ? 'Geht es in der Aufnahme um mehrere Kunden? Dann lässt sie sich auch aufteilen.' : 'Geht es in der Aufnahme um mehrere Kunden? Dann je Kunde in seine Akte verteilen statt einer Akte zuzuordnen.'}
+        </p>
+        <button onClick={onVerteilen} className="mt-2 w-full rounded-lg border border-indigo-200 bg-white px-3 py-2 text-sm font-medium text-indigo-700">Auf mehrere Akten verteilen</button>
+      </div>
+
       {/* Akte */}
       {!zeile.kunde_id || akteAendern ? (
         <AkteZuordnen aufnahmeId={id} vorschlagName={(a.sprecher ?? []).find((s) => s.rolle === 'kunde')?.name} onFertig={() => { setAkteAendern(false); neuLaden() }} />
