@@ -243,7 +243,8 @@ async function bearbeiteMail(admin: Admin, dienste: ScanDienste, m: MailZeile, e
   let betreff = String(m.betreff ?? '').trim()
   // Ohne Namen im Betreff nur auf ausdrücklichen Wunsch (von Hand, nameAusScan): dann zählt der im Scan erkannte Name,
   // und es wird nie eine neue Akte angelegt.
-  const ohneName = !betreffIstName(betreff)
+  // Steht der Betreff in der festen Zuordnung (scan_eingang.betreff_akten), zählt er wie ein Name — z. B. Kürzel wie „s t o m 12“.
+  const ohneName = !betreffIstName(betreff) && !(await festeAkte(admin, betreff))
   if (ohneName && !nameAusScan) throw new Error('Kein Name im Betreff — der Scan bleibt im Postfach zum Zuordnen von Hand.')
   const anhaenge = ((m.anhaenge ?? []) as Anhang[]).filter((a) => typeof a.url === 'string' && (/pdf/i.test(String(a.contentType ?? '')) || /\.pdf$/i.test(String(a.filename ?? ''))))
   if (anhaenge.length === 0) throw new Error('Keine PDF im Anhang.')
