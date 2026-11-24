@@ -2,7 +2,8 @@
 import { assert, assertEquals, assertStringIncludes } from 'jsr:@std/assert@1'
 import { falscheDatenbank, falschesMicrosoft, TEST_DIENST_SCHLUESSEL, verbundenesKonto } from '../_shared/testDoppel.ts'
 import {
-  erinnerungFuer, type FristMail, fristenZeilen, fristTodoAusfuehrer, KI_HOECHSTENS, MARKE, pruefeFristen, vorfilter, werteKiAntwort, zaehlt,
+  baueInhalt, erinnerungFuer, type FristMail, fristenZeilen, fristTodoAusfuehrer, KI_HOECHSTENS, MARKE, PDF_HOECHSTENS, type PdfAnhang, pruefeFristen,
+  vorfilter, waehlePdfs, werteKiAntwort, zaehlt,
 } from './fristenRadar.ts'
 
 Deno.env.set('MS_CLIENT_ID', 'test-client-id')
@@ -88,21 +89,30 @@ Deno.test('Erinnerung: 2 Tage vorher 9 Uhr Berlin, nie in der Vergangenheit', ()
 
 type Vorgemerkt = { art: string; beschreibung: string; parameter: Record<string, unknown>; quelle?: string }
 
-async function aufbau(mails: FristMail[], antworten: Record<string, unknown>) {
+/** Anhänge im nachgebauten Microsoft: Liste je Mail und Inhalt je Anhang-Kennung. */
+type Anhaenge = { listen?: Record<string, unknown[]>; inhalte?: Record<string, Record<string, unknown>> }
+
+async function aufbau(mails: FristMail[], antworten: Record<string, unknown>, anhaenge: Anhaenge = {}) {
   Deno.env.set('MS_ERLAUBT', ICH)
   const d = falscheDatenbank({ postfaecher: [{ id: 'standard', adresse: 'info@amayer-holding.com' }], mitarbeiter: [{ email: ICH }, { email: 'kollege@amayer-holding.com' }], privat_einstellungen: [] })
   await verbundenesKonto(d, ICH, { konto: { stand: { mayerStand: new Date().toISOString(), mayerUnterhaltungen: [] } } })
   const ms = falschesMicrosoft((a) => {
     if (a.weg === '/me/mailFolders/inbox/messages') return { value: mails }
+    const liste = a.weg.match(/^\/me\/messages\/([^/]+)\/attachments$/)
+    if (liste) return { value: anhaenge.listen?.[liste[1]] ?? [] }
+    const eins = a.weg.match(/^\/me\/messages\/([^/]+)\/attachments\/([^/]+)$/)
+    if (eins) return anhaenge.inhalte?.[eins[2]] ?? new Response('{"error":{"code":"ErrorItemNotFound"}}', { status: 404 })
     const m = a.weg.match(/^\/me\/messages\/(.+)$/)
     if (m) return { body: { contentType: 'text', content: `Text der Mail ${m[1]}` } }
   })
   const fragen: string[] = []
+  const pdfs: PdfAnhang[][] = []
   const vorgemerkt: Vorgemerkt[] = []
   const abhaengig = {
     jetzt: JETZT,
-    frageKi: (prompt: string) => {
+    frageKi: (prompt: string, beigefuegt: PdfAnhang[] = []) => {
       fragen.push(prompt)
+      pdfs.push(beigefuegt)
       const id = prompt.match(/Text der Mail (\S+)/)?.[1] ?? ''
       const a = antworten[id]
       if (a instanceof Error) return Promise.reject(a)
@@ -115,7 +125,7 @@ async function aufbau(mails: FristMail[], antworten: Record<string, unknown>) {
       return Promise.resolve({ id: `vm_${vorgemerkt.length}`, telegram: true })
     },
   }
-  return { d, ms, fragen, vorgemerkt, abhaengig }
+  return { d, ms, fragen, pdfs, vorgemerkt, abhaengig }
 }
 
 const frist = (datum: string, was: string, wer: string, sicherheit = 'hoch') => JSON.stringify({ hat_frist: true, frist_datum: datum, was_tun: was, absender_kurz: wer, sicherheit })
@@ -258,4 +268,164 @@ Deno.test('Morgenplan: nur Radar-Fristen der nächsten 14 Tage, offen, eigene Li
   assertEquals(z2.length, 5)
   assertEquals(z2[4], '… und 4 weitere in der To-do-Liste')
   assertEquals(await fristenZeilen(falscheDatenbank(), ICH, JETZT), [])
+})
+
+// ---------- PDF-Anhänge ----------
+
+const PDF_INHALT = btoa('%PDF-1.4 Testbescheid')
+const pdfAnhang = (id: string, name: string, size = 2000, extra: Record<string, unknown> = {}) => ({ '@odata.type': '#microsoft.graph.fileAttachment', id, name, contentType: 'application/pdf', size, isInline: false, ...extra })
+
+Deno.test('PDF-Auswahl: passende Namen oder Amts-Absender, höchstens 2, Größengrenze, keine eingebetteten', () => {
+  const amt = mail('P0', 'noreply@portal.finanzamt.de', 'Neue Nachricht in Ihrem Postfach', {
+    attachments: [
+      pdfAnhang('a1', 'Dokument_1.pdf'),
+      pdfAnhang('a2', 'Riesig.pdf', PDF_HOECHSTENS + 1),
+      pdfAnhang('a3', 'Logo.pdf', 100, { isInline: true }),
+      { id: 'a4', name: 'Tabelle.xlsx', contentType: 'application/vnd.ms-excel', size: 100 },
+      pdfAnhang('a5', 'Anlage.pdf'),
+      pdfAnhang('a6', 'Info.pdf'),
+    ],
+  })
+  const w = waehlePdfs(amt)
+  assertEquals(w.laden.map((a) => a.id), ['a1', 'a5'])
+  assertEquals(w.zuGross, ['Riesig.pdf', 'Info.pdf'])
+  // Privater Absender: nur Namen, die nach Schreiben/Rechnung klingen.
+  const privat = mail('P1', 'freund@gmx.de', 'Fotos', { attachments: [pdfAnhang('b1', 'Urlaub.pdf'), pdfAnhang('b2', 'Rechnung_2026.pdf'), pdfAnhang('b3', 'Bescheid.pdf')] })
+  assertEquals(waehlePdfs(privat).laden.map((a) => a.id), ['b2', 'b3'])
+  assertEquals(waehlePdfs(mail('P2', 'freund@gmx.de', 'Fotos', { attachments: [pdfAnhang('c1', 'Urlaub.pdf')] })).laden, [])
+  // Ohne Kennung (Liste ohne id) nichts zu laden.
+  assertEquals(waehlePdfs(mail('P3', 'post@finanzamt.de', 'Bescheid', { attachments: [{ name: 'Bescheid.pdf' }] })).laden, [])
+})
+
+Deno.test('KI-Inhalt: ohne PDF nur Text, mit PDF Dokumentblock vor dem Auftrag', () => {
+  assertEquals(baueInhalt('Auftrag'), 'Auftrag')
+  const inhalt = baueInhalt('Auftrag', [{ name: 'Bescheid.pdf', daten: PDF_INHALT }, { name: 'b.pdf', daten: PDF_INHALT }, { name: 'c.pdf', daten: PDF_INHALT }])
+  assert(Array.isArray(inhalt))
+  assertEquals(inhalt.length, 5) // höchstens 2 PDFs: je Name + Dokument, dann der Auftrag
+  assertEquals(inhalt[1], { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: PDF_INHALT } })
+  assertStringIncludes(JSON.stringify(inhalt[0]), 'Bescheid.pdf')
+  assertEquals(inhalt[4], { type: 'text', text: 'Auftrag' })
+})
+
+Deno.test('Lauf: Frist nur im PDF-Anhang — Anhang wird geladen und geht mit, zu große Anhänge nicht', async () => {
+  const mails = [
+    mail('D1', 'noreply@portal.finanzamt.de', 'Neue Nachricht in Ihrem Postfach', {
+      hasAttachments: true,
+      attachments: [pdfAnhang('d1a', 'Bescheid_2025.pdf'), pdfAnhang('d1b', 'Anlage_gross.pdf', PDF_HOECHSTENS + 10)],
+    }),
+    // Anhang-Liste wurde nicht mitgeladen → einzeln holen; Inhalt doch zu groß → nur Text.
+    mail('D2', 'service@aok.de', 'Neue Nachricht', { hasAttachments: true, attachments: undefined }),
+  ]
+  const gross = 'A'.repeat(Math.ceil((PDF_HOECHSTENS + 3) / 3) * 4)
+  const t = await aufbau(mails, {}, {
+    listen: { D2: [pdfAnhang('d2a', 'Schreiben.pdf', 100)] },
+    inhalte: {
+      d1a: { ...pdfAnhang('d1a', 'Bescheid_2025.pdf'), contentBytes: PDF_INHALT },
+      d1b: { ...pdfAnhang('d1b', 'Anlage_gross.pdf'), contentBytes: PDF_INHALT },
+      d2a: { ...pdfAnhang('d2a', 'Schreiben.pdf', 100), contentBytes: gross },
+    },
+  })
+  // Die Attrappe findet die Frist nur, wenn das PDF beiliegt.
+  t.abhaengig.frageKi = ((alt) => (prompt: string, beigefuegt: PdfAnhang[] = []) => {
+    void alt(prompt, beigefuegt)
+    if (beigefuegt.some((p) => p.daten === PDF_INHALT)) return Promise.resolve(frist('2026-12-14', 'Einspruch prüfen oder Steuer zahlen', 'Finanzamt'))
+    return Promise.resolve('{"hat_frist": false, "frist_datum": null, "was_tun": "", "absender_kurz": "AOK", "sicherheit": "hoch"}')
+  })(t.abhaengig.frageKi)
+  try {
+    const r = await pruefeFristen(t.d, ICH, t.abhaengig)
+    assertEquals(r.fehler, [])
+    assertEquals([r.geprueft, r.fristen, r.pdfs], [2, 1, 1])
+    const d1 = t.fragen.findIndex((p) => p.includes('Text der Mail D1'))
+    assertEquals(t.pdfs[d1].map((p) => p.name), ['Bescheid_2025.pdf'])
+    assertStringIncludes(t.fragen[d1], 'Die PDF-Anhänge „Bescheid_2025.pdf“ liegen bei')
+    assertStringIncludes(t.fragen[d1], 'Nicht beigefügt (zu groß, zu viele oder nicht ladbar): Anlage_gross.pdf')
+    const d2 = t.fragen.findIndex((p) => p.includes('Text der Mail D2'))
+    assertEquals(t.pdfs[d2], [])
+    assertStringIncludes(t.fragen[d2], 'Schreiben.pdf')
+    const wege = t.ms.aufrufe.map((a) => a.weg)
+    assert(!wege.includes('/me/messages/D1/attachments/d1b'), 'zu großer Anhang wird gar nicht erst geladen')
+    assert(wege.includes('/me/messages/D2/attachments'), 'Anhang-Liste einzeln geholt')
+    assertEquals(t.vorgemerkt.length, 1)
+    assertEquals(t.vorgemerkt[0].parameter.erledigen_bis, '2026-12-14')
+  } finally {
+    t.ms()
+  }
+})
+
+Deno.test('Lauf: lehnt die KI das PDF ab (400), wird nur mit Text noch einmal gefragt', async () => {
+  const mails = [mail('E1', 'post@finanzamt.de', 'Ihr Bescheid', { hasAttachments: true, attachments: [pdfAnhang('e1a', 'Bescheid.pdf')] })]
+  const t = await aufbau(mails, { E1: frist('2026-12-10', 'Einspruch prüfen', 'Finanzamt') }, { inhalte: { e1a: { ...pdfAnhang('e1a', 'Bescheid.pdf'), contentBytes: PDF_INHALT } } })
+  const echt = t.abhaengig.frageKi
+  t.abhaengig.frageKi = (prompt: string, beigefuegt: PdfAnhang[] = []) =>
+    beigefuegt.length ? Promise.reject(new Error('KI-Dienst antwortet mit 400: zu viele Seiten')) : echt(prompt, beigefuegt)
+  try {
+    const r = await pruefeFristen(t.d, ICH, t.abhaengig)
+    assertEquals(r.fehler, [])
+    assertEquals([r.geprueft, r.fristen, r.pdfs], [1, 1, 0])
+    assertStringIncludes(t.fragen[0], 'Nicht beigefügt (zu groß, zu viele oder nicht ladbar): Bescheid.pdf')
+  } finally {
+    t.ms()
+  }
+})
+
+// ---------- Zahlungsfristen und Lastschrift ----------
+
+Deno.test('Vorfilter: Rechnungen mit Zahlungsfrist ja, Werbung und Newsletter weiter nein', () => {
+  assertEquals(vorfilter(mail('R1', 'rechnung@stadtwerke-beispiel.de', 'Ihre Rechnung Nr. 4711')).grund, 'rechnung')
+  assertEquals(vorfilter(mail('R2', 'kunde@telefon-beispiel.de', 'Ihre monatliche Übersicht', { bodyPreview: 'Der Betrag ist zahlbar bis 05.12.' })).kandidat, true)
+  assertEquals(vorfilter(mail('R3', 'service@energie-beispiel.de', 'Vorabankündigung SEPA-Lastschrift')).kandidat, true)
+  assertEquals(vorfilter(mail('R4', 'newsletter@shop-beispiel.de', 'Ihre Rechnung und unsere neuen Produkte')).kandidat, false)
+  assertEquals(vorfilter(mail('R5', 'info@shop-beispiel.de', 'Rechnung + 20 % Rabatt auf alles')).kandidat, false)
+  assertEquals(vorfilter(mail('R6', 'freund@gmx.de', 'Wer zahlt das Essen?')).kandidat, false)
+})
+
+Deno.test('Lauf: Zahlungsfrist wird als „Zahlung bis“ vorgemerkt, ohne Beträge, Erinnerung 3 Tage vorher; Lastschrift nur gezählt', async () => {
+  const mails = [
+    mail('Z1', 'rechnung@stadtwerke-beispiel.de', 'Ihre Rechnung über 89,90 € — zahlbar bis 05.12.'),
+    mail('Z2', 'service@energie-beispiel.de', 'Ihre Abschlagsrechnung', { bodyPreview: 'Der Betrag wird am 01.12. per Lastschrift abgebucht.' }),
+    mail('Z3', 'buchhaltung@handwerk-beispiel.de', 'Rechnung 2026-118'),
+  ]
+  const zahl = (datum: string, was: string, wer: string, art = 'zahlung') => JSON.stringify({ hat_frist: true, art, frist_datum: datum, was_tun: was, absender_kurz: wer, sicherheit: 'hoch' })
+  const t = await aufbau(mails, {
+    Z1: zahl('2026-12-05', 'Rechnung begleichen', 'Stadtwerke'),
+    Z2: zahl('2026-12-01', 'Nichts zu tun, Abbuchung von 120,00 EUR', 'Energieversorger', 'lastschrift'),
+    Z3: zahl('2026-12-08', 'Rechnung über 1.250,00 € an IBAN DE89 3704 0044 0532 0130 00 überweisen', 'Handwerksbetrieb 1.250,00 €'),
+  })
+  try {
+    const r = await pruefeFristen(t.d, ICH, t.abhaengig)
+    assertEquals(r.fehler, [])
+    assertEquals([r.kandidaten, r.geprueft, r.fristen, r.zahlungen, r.lastschriften], [3, 3, 2, 2, 1])
+    assert(t.fragen.every((p) => p.includes('"art": "frist"|"zahlung"|"lastschrift"')), 'Prompt fragt nach der Art')
+    assertEquals(t.vorgemerkt.length, 2)
+    const stadtwerke = t.vorgemerkt.find((v) => v.parameter.mailId === 'Z1')!
+    assertEquals(stadtwerke.beschreibung, 'Zahlung bis 05.12.: Stadtwerke — Rechnung begleichen')
+    assertEquals(stadtwerke.parameter.art, 'zahlung')
+    assertEquals(stadtwerke.parameter.erinnern_um, '2026-12-02T08:00:00.000Z') // 3 Tage vorher, 9 Uhr Berlin
+    assertStringIncludes(String(stadtwerke.parameter.bezug), 'Zahlen bis: 05.12.2026')
+    // Nirgends Beträge oder Kontonummern — weder in Text noch in Parametern.
+    for (const v of t.vorgemerkt) {
+      const alles = JSON.stringify(v)
+      for (const verboten of ['89,90', '1.250', '120,00', '€', 'EUR', 'DE89']) assert(!alles.includes(verboten), `${verboten} in ${alles}`)
+    }
+    const zeilen = t.d.tabelle('privat_fristen')
+    assertEquals(zeilen.find((z) => z.mail_id === '<Z2@test>')?.ergebnis, 'keine_frist')
+    assertEquals(zeilen.filter((z) => z.ergebnis === 'frist').length, 2)
+
+    // Nach dem Bestätigen: Erinnerung wieder 3 Tage vorher, auch wenn die gemerkte schon vorbei ist.
+    const text = await fristTodoAusfuehrer(t.d, ICH, { ...stadtwerke.parameter, erinnern_um: '2026-11-20T08:00:00.000Z' }, JETZT)
+    assertStringIncludes(text, 'To-do angelegt: „Stadtwerke: Rechnung begleichen“')
+    const todo = t.d.tabelle('todos').find((z) => String(z.id).startsWith('todo_frist'))!
+    assertEquals(todo.erinnern_um, '2026-12-02T08:00:00.000Z')
+    assert(!String(todo.aktueller_stand).includes('89'), 'kein Betrag im Stand')
+    assertStringIncludes(String(todo.aktueller_stand), MARKE)
+  } finally {
+    t.ms()
+  }
+})
+
+Deno.test('KI-Antwort: Art wird gelesen, Unbekanntes gilt als Frist', () => {
+  assertEquals(werteKiAntwort({ hat_frist: true, art: 'Zahlung', frist_datum: '2026-12-05', was_tun: 'Zahlen', absender_kurz: 'X', sicherheit: 'hoch' })?.art, 'zahlung')
+  assertEquals(werteKiAntwort({ hat_frist: true, art: 'lastschrift', frist_datum: '2026-12-05', was_tun: 'Nichts', absender_kurz: 'X', sicherheit: 'hoch' })?.art, 'lastschrift')
+  assertEquals(werteKiAntwort({ hat_frist: true, frist_datum: '2026-12-05', was_tun: 'Antworten', absender_kurz: 'X', sicherheit: 'hoch' })?.art, 'frist')
+  assertEquals(erinnerungFuer('2026-12-05', JETZT, 3), '2026-12-02T08:00:00.000Z')
 })
