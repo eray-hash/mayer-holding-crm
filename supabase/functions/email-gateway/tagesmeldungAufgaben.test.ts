@@ -99,3 +99,25 @@ Deno.test('Wiedervorlagen aus dem Reiter „Wiedervorlagen“ stehen in der Morg
   assert(!t.includes('Später') && !t.includes('Für Andreas'))
 })
 
+
+Deno.test('Termine heute im Mayer-Bot: private Termine (aus Outlook bzw. mit privatem Assistenten) fehlen, gemeinsame und Mayer-Akten bleiben', () => {
+  const d = daten()
+  d.todos = []
+  const t = (id: string, titel: string, extra: Record<string, unknown> = {}) => ({ id, titel, beginn: '2026-11-23T16:00:00Z', ende: '2026-11-23T16:45:00Z', ganztags: false, besitzer_email: 'h@x.de', teilnehmer: [], kunde_id: null, kunde_bereich: null, ms_id: null, ...extra })
+  d.termine = [
+    t('outlook', 'Sitzung aus Outlook', { ms_id: 'AAMk1' }),
+    t('crm_eigen', 'Eigener CRM-Termin'),
+    t('gemeinsam', 'Mit Kollegin', { teilnehmer: ['k@x.de'] }),
+    t('akte', 'Beratung Akte', { kunde_id: 'k1', kunde_bereich: 'beratung', ms_id: 'AAMk2' }),
+    t('privatakte', 'Private Akte', { kunde_id: 'p1', kunde_bereich: 'privat' }),
+  ]
+  const ohne = morgenText(HASAN, d, JETZT)!
+  assert(!ohne.includes('Sitzung aus Outlook') && !ohne.includes('Private Akte'))
+  assertStringIncludes(ohne, 'Eigener CRM-Termin')
+  assertStringIncludes(ohne, 'Mit Kollegin')
+  assertStringIncludes(ohne, 'Beratung Akte')
+  const mitPrivatBot = morgenText(HASAN, d, JETZT, [], { eigeneListe: false })!
+  assert(!mitPrivatBot.includes('Sitzung aus Outlook') && !mitPrivatBot.includes('Eigener CRM-Termin') && !mitPrivatBot.includes('Private Akte'))
+  assertStringIncludes(mitPrivatBot, 'Mit Kollegin')
+  assertStringIncludes(mitPrivatBot, 'Beratung Akte')
+})

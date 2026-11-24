@@ -301,7 +301,7 @@ type KundeZeile = {
   activities?: unknown
 }
 type ObjektZeile = { id: string; bezeichnung?: string | null; adresse?: string | null; verantwortlich?: string | null; follow_up?: FollowUp | null; activities?: unknown; privat_besitzer?: string | null }
-type TerminZeile = { id: string; titel?: string | null; beginn: string; ende: string; ganztags?: boolean | null; ort?: string | null; kunde_name?: string | null; besitzer_email?: string | null; teilnehmer?: unknown }
+type TerminZeile = { id: string; titel?: string | null; beginn: string; ende: string; ganztags?: boolean | null; ort?: string | null; kunde_name?: string | null; besitzer_email?: string | null; teilnehmer?: unknown; kunde_id?: string | null; kunde_bereich?: string | null; ms_id?: string | null }
 type TodoZeile = { id: string; besitzer_email?: string | null; bereich?: string | null; aufgabe?: string | null; kunde_projekt?: string | null; zustaendig?: string | null; erledigt_am?: string | null; erledigen_bis?: string | null; geplante_wiedervorlage?: string | null; ms_id?: string | null; ms_liste_id?: string | null }
 type EintragZeile = { id: string; daten?: unknown }
 type RechnungZeile = { id: string; datum?: string | null; zahlungsziel?: string | null; status?: string | null; mahnstufe?: string | null; betrag_brutto?: number | string | null }
@@ -381,7 +381,7 @@ export async function ladeDaten(admin: Db, heute: string): Promise<Daten> {
   const von = berlinTagesbeginn(heute).toISOString()
   const bis = berlinTagesbeginn(plusTage(heute, 1)).toISOString()
   const termineAbfrage = async (): Promise<TerminZeile[]> => {
-    const { data, error } = await admin.from('termine').select('id, titel, beginn, ende, ganztags, ort, kunde_name, besitzer_email, teilnehmer').lt('beginn', bis).gt('ende', von)
+    const { data, error } = await admin.from('termine').select('id, titel, beginn, ende, ganztags, ort, kunde_name, besitzer_email, teilnehmer, kunde_id, kunde_bereich, ms_id').lt('beginn', bis).gt('ende', von)
     if (error) throw new Error(`termine: ${error.message}`)
     return (data ?? []) as TerminZeile[]
   }
@@ -521,6 +521,11 @@ export function morgenAbschnitte(p: Person, d: Daten, jetzt: Date, optionen: Mor
     .filter((t) => {
       const teilnehmer = Array.isArray(t.teilnehmer) ? t.teilnehmer.map((x) => text(x).toLowerCase()) : []
       if (text(t.besitzer_email).toLowerCase() !== p.email && !teilnehmer.includes(p.email)) return false
+      // Privat bleibt privat (24.11.2026: ein privater Outlook-Termin stand in der Mayer-Morgennachricht): ein eigener
+      // Termin ohne Kollegen und ohne Mayer-Akte fehlt hier, wenn er aus Microsoft kommt oder die Person den privaten
+      // Assistenten nutzt — dann steht er in ihrem privaten Morgenplan.
+      const privat = !teilnehmer.some((x) => x.trim()) && (!text(t.kunde_id).trim() || text(t.kunde_bereich).trim() === 'privat')
+      if (privat && (optionen.eigeneListe === false || !!text(t.ms_id).trim() || text(t.kunde_bereich).trim() === 'privat')) return false
       return new Date(t.beginn) < bis && new Date(t.ende) > von
     })
     .sort((a, b) => Number(!a.ganztags) - Number(!b.ganztags) || a.beginn.localeCompare(b.beginn))

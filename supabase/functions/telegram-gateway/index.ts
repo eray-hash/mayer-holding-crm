@@ -2011,6 +2011,8 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     // deno-lint-ignore no-explicit-any
     const privaterTermin = (t: any, nachgeschlagen: Map<string, AkteRecht>) =>
       String(t.besitzer_email ?? '').toLowerCase() === ich && (t.teilnehmer ?? []).length === 0 && darfZuordnung(mitarbeiter, t.kunde_id, t.kunde_bereich, nachgeschlagen)
+    // deno-lint-ignore no-explicit-any
+    const outlookPrivat = (t: any) => !!String(t.ms_id ?? '').trim() && (t.teilnehmer ?? []).length === 0 && (!t.kunde_id || t.kunde_bereich === 'privat')
     if (nurPrivat && (name === 'termin_absagen' || name === 'termin_aendern')) {
       const { data: t } = await supabase.from('termine').select('id, besitzer_email, teilnehmer, kunde_id, kunde_bereich').eq('id', String(input.termin_id ?? '').trim()).maybeSingle()
       if (!t || !privaterTermin(t, await bereicheDerAkten(supabase, t.kunde_id ? [String(t.kunde_id)] : []))) return 'Fehler: Diesen Termin gibt es nicht (mehr). Ermittle die termin_id mit termine_zeigen.'
@@ -2025,7 +2027,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
       const bisTag = berlinZuZeitpunkt(String(input.bis || ''))
       if (!von) return 'Fehler: von muss das Format JJJJ-MM-TT haben.'
       const bis = bisTag ? new Date(bisTag.getTime() + 86400000) : new Date(von.getTime() + 8 * 86400000)
-      const { data } = await alleZeilen(() => supabase.from('termine').select('id, titel, ort, beginn, ende, ganztags, besitzer_email, teilnehmer, kunde_id, kunde_bereich, kunde_name, zuordnung_vorschlag, gast, gaeste').lt('beginn', bis.toISOString()).gt('ende', von.toISOString()).order('beginn'))
+      const { data } = await alleZeilen(() => supabase.from('termine').select('id, titel, ort, beginn, ende, ganztags, besitzer_email, teilnehmer, kunde_id, kunde_bereich, kunde_name, zuordnung_vorschlag, gast, gaeste, ms_id').lt('beginn', bis.toISOString()).gt('ende', von.toISOString()).order('beginn'))
       // deno-lint-ignore no-explicit-any
       const alle = (data ?? []) as any[]
       // Die verknüpfte Akte nur nennen, wenn der Mitarbeiter sie sehen darf (Bereich freigegeben bzw.
@@ -2056,14 +2058,16 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
         const person = findePerson(String(input.person))
         if (!person) return `Fehler: „${input.person}" ist kein eindeutiger Kollege. Aktive Kollegen: ${team.filter((m) => m.email !== ich).map((m) => m.name).join(', ')}.`
         const { data: einst } = await supabase.from('kalender_einstellungen').select('sichtbar').eq('email', person.email).maybeSingle()
-        const seine = alle.filter((t) => beteiligt(t, person.email))
+        // Private Outlook-Termine eines Kollegen gibt es hier nicht, auch nicht als „belegt“ (wie kalender_belegt).
+        const seine = alle.filter((t) => beteiligt(t, person.email) && (beteiligt(t, ich) || !outlookPrivat(t)))
         const liste = seine
           .filter((t) => beteiligt(t, ich) || einst?.sichtbar !== false)
           .map((t) => (beteiligt(t, ich) ? voll(t) : { belegt: berlinText(t.beginn, t.ende, t.ganztags), inhalt: 'privat — nicht einsehbar' }))
         if (liste.length === 0) return `${person.name} hat in diesem Zeitraum keine Termine im Kalender${einst?.sichtbar === false ? ' (er/sie zeigt Kollegen den Kalender allerdings nicht)' : ''}.`
         return JSON.stringify({ kollege: person.name, eintraege: liste })
       }
-      const meine = alle.filter((t) => beteiligt(t, ich) && (!nurPrivat || privaterTermin(t, nachgeschlagen))).map(voll)
+      // Mayer-Assistent: private Outlook-Termine (ohne Kollegen, ohne Mayer-Akte) nur im privaten Assistenten (24.11.2026).
+      const meine = alle.filter((t) => beteiligt(t, ich) && (nurPrivat ? privaterTermin(t, nachgeschlagen) : !outlookPrivat(t))).map(voll)
       return meine.length === 0 ? 'In diesem Zeitraum stehen keine Termine im Kalender.' : JSON.stringify(meine)
     }
 
