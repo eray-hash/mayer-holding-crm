@@ -68,6 +68,8 @@ export type Rechnung = {
   betragBrutto: number
   status: RechnungStatus
   zahlungsziel: string
+  /** true = Rechnung nennt keine Zahlungsfrist (PDF/Mail ohne „zahlbar bis“); zahlungsziel ist dann nur interner Prüftag (+30 Tage). */
+  ohneZahlungsfrist?: boolean
   mahnstufe?: MahnstufeId
   leistungBezeichnung?: string
   leistungEinheit?: 'Stunde' | 'Tag'

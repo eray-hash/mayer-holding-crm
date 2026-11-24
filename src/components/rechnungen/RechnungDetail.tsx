@@ -163,7 +163,7 @@ export function RechnungDetail({ rechnungId, onClose }: { rechnungId: string; on
           <Abschnitt titel="Angaben">
             <Zeile label="Rechnungsdatum" wert={deDatum(r.datum)} />
             <Zeile label="Leistung" wert={r.leistungszeitraum?.trim() || 'wie Rechnungsdatum'} />
-            <Zeile label="Zahlungsziel" wert={deDatum(r.zahlungsziel)} farbe={ueberfaellig ? 'text-rose-600' : undefined} />
+            <Zeile label={r.ohneZahlungsfrist ? 'Ohne Frist – Geldeingang prüfen am' : 'Zahlungsziel'} wert={deDatum(r.zahlungsziel)} farbe={ueberfaellig ? 'text-rose-600' : undefined} />
             {aktuelleFrist(r) !== r.zahlungsziel && <Zeile label="Neue Frist (Mahnung)" wert={deDatum(aktuelleFrist(r))} />}
             <Zeile label="Versendet" wert={r.versendetAm ? `${deDatum(r.versendetAm)}${r.versendetAn ? ` · ${r.versendetAn}` : ''}` : r.status === 'Entwurf' ? 'noch nicht' : 'ja (ohne Datum)'} />
             {r.bezahltAm && <Zeile label="Bezahlt am" wert={deDatum(r.bezahltAm)} farbe="text-emerald-700" />}

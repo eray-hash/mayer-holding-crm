@@ -37,7 +37,7 @@ export function RechnungSendenModal({ rechnung, onClose }: { rechnung: Rechnung;
   const dateiname = rechnungPdfDateiname(rechnung)
   const eRechnung = useXRechnungFuerVersand(rechnung) // Modul E-Rechnung (abschaltbar, siehe src/module/eRechnung/README.md) — null, wenn das Modul aus ist
 
-  const mailText = `${ANREDE}\n\nanbei erhalten Sie unsere Rechnung Nr. ${rechnung.nummer} vom ${deDatum(rechnung.datum)} über ${euroText(rechnung.betragBrutto)}.\nBitte überweisen Sie den Betrag von ${euroText(offen)} bis zum ${deDatum(rechnung.zahlungsziel)} auf das in der Rechnung genannte Konto.\n\nBei Fragen zur Rechnung sind wir gerne für Sie da.\n\nMit freundlichen Grüßen\n${nutzer.name}`
+  const mailText = `${ANREDE}\n\nanbei erhalten Sie unsere Rechnung Nr. ${rechnung.nummer} vom ${deDatum(rechnung.datum)} über ${euroText(rechnung.betragBrutto)}.\nBitte überweisen Sie den Betrag von ${euroText(offen)}${rechnung.ohneZahlungsfrist ? '' : ` bis zum ${deDatum(rechnung.zahlungsziel)}`} auf das in der Rechnung genannte Konto.\n\nBei Fragen zur Rechnung sind wir gerne für Sie da.\n\nMit freundlichen Grüßen\n${nutzer.name}`
 
   return (
     <PdfVersandModal

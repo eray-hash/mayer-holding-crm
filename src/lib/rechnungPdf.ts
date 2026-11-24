@@ -164,7 +164,7 @@ export function erzeugeRechnungPdf(r: Rechnung, a: RechnungPdfAngaben): Blob {
     ['Rechnungsnummer', r.nummer],
     ['Rechnungsdatum', deDatum(r.datum)],
     [r.leistungszeitraum?.trim() ? 'Leistungszeitraum' : 'Leistungsdatum', r.leistungszeitraum?.trim() || 'entspricht dem Rechnungsdatum'],
-    ['Zahlbar bis', deDatum(r.zahlungsziel)],
+    ...(r.ohneZahlungsfrist ? [] : [['Zahlbar bis', deDatum(r.zahlungsziel)] as [string, string]]),
   ])
   b.y += 5
   b.absatz(a.anrede?.trim() || 'Sehr geehrte Damen und Herren,')
@@ -233,7 +233,7 @@ export function erzeugeRechnungPdf(r: Rechnung, a: RechnungPdfAngaben): Blob {
     b.absatz(`Der Rechnungsbetrag wurde bereits beglichen${r.bezahltAm ? ` (Zahlungseingang am ${deDatum(r.bezahltAm)})` : ''}. Vielen Dank.`)
   } else {
     const offen = Math.max(0, rundeCent(s.brutto - gezahlt))
-    b.absatz(`Bitte überweisen Sie den Betrag von ${euroText(offen)} ohne Abzug bis zum ${deDatum(r.zahlungsziel)} unter Angabe der Rechnungsnummer ${r.nummer} auf das unten genannte Konto.`)
+    b.absatz(`Bitte überweisen Sie den Betrag von ${euroText(offen)}${r.ohneZahlungsfrist ? '' : ` ohne Abzug bis zum ${deDatum(r.zahlungsziel)}`} unter Angabe der Rechnungsnummer ${r.nummer} auf das unten genannte Konto.`)
   }
   if (r.hinweis?.trim()) {
     b.y += 3
@@ -285,7 +285,7 @@ export function mahnVorlage(r: Rechnung, stufe: MahnstufeId, datum = heuteIso())
     return {
       tage: 7,
       gebuehr: 0,
-      text: `sicherlich ist es Ihrer Aufmerksamkeit entgangen, dass ${bezug} noch nicht vollständig beglichen ist. Die Zahlung war am ${deDatum(r.zahlungsziel)} fällig.\nWir bitten Sie freundlich, den unten aufgeführten Betrag bis zum genannten Datum zu überweisen.`,
+      text: `sicherlich ist es Ihrer Aufmerksamkeit entgangen, dass ${bezug} noch nicht vollständig beglichen ist.${r.ohneZahlungsfrist ? '' : ` Die Zahlung war am ${deDatum(r.zahlungsziel)} fällig.`}\nWir bitten Sie freundlich, den unten aufgeführten Betrag bis zum genannten Datum zu überweisen.`,
       schluss: 'Sollten Sie die Zahlung in den letzten Tagen bereits veranlasst haben, betrachten Sie dieses Schreiben bitte als gegenstandslos. Bei Fragen zur Rechnung sind wir gerne für Sie da.',
     }
   }

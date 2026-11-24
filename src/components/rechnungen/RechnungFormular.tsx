@@ -37,6 +37,8 @@ export function RechnungFormular({ rechnung, vorKundeId, vorlage, onClose, onGes
   const [status, setStatus] = useState<RechnungStatus>(rechnung?.status ?? 'Entwurf')
   const [zahlungsziel, setZahlungsziel] = useState(rechnung?.zahlungsziel ?? addDays(today(), 14))
   const [zielVonHand, setZielVonHand] = useState(!!rechnung && rechnung.zahlungsziel !== addDays(rechnung.datum, 14))
+  // „Ohne Frist“ (GF 24.11.2026): kein „zahlbar bis“ auf Rechnung und Mail; intern Prüftag Rechnungsdatum + 30 Tage.
+  const [ohneFrist, setOhneFrist] = useState(rechnung?.ohneZahlungsfrist === true)
 
   const [pos, setPos] = useState<KvPositionenWert>({
     positionen: rechnung?.positionen?.map((p) => ({ ...p })) ?? vorlage?.positionen?.map((p) => ({ ...p })) ?? [],
@@ -220,7 +222,8 @@ export function RechnungFormular({ rechnung, vorKundeId, vorlage, onClose, onGes
       betragNetto: rundeCent(nettoZahl),
       betragBrutto: rundeCent(bruttoZahl),
       status,
-      zahlungsziel,
+      zahlungsziel: ohneFrist ? addDays(datum, 30) : zahlungsziel,
+      ohneZahlungsfrist: ohneFrist,
       leistungBezeichnung: bez || undefined,
       leistungEinheit: mengeBehalten ? rechnung?.leistungEinheit : undefined,
       leistungMenge: mengeBehalten ? rechnung?.leistungMenge : undefined,
@@ -309,12 +312,16 @@ export function RechnungFormular({ rechnung, vorKundeId, vorlage, onClose, onGes
           <input
             type="date"
             className={inputClass}
-            value={zahlungsziel}
+            value={ohneFrist ? '' : zahlungsziel}
+            disabled={ohneFrist}
             onChange={(e) => {
               setZahlungsziel(e.target.value)
               setZielVonHand(true)
             }}
           />
+          <label className="mt-1 flex items-center gap-1.5 text-xs text-slate-600" title="Auf Rechnung und Mail steht kein „zahlbar bis“. Den Geldeingang prüft das CRM intern nach 30 Tagen.">
+            <input type="checkbox" checked={ohneFrist} onChange={(e) => setOhneFrist(e.target.checked)} /> ohne Frist (kein Zahlungsziel auf der Rechnung)
+          </label>
         </Field>
       </div>
       <Field label="Leistungszeitraum oder Leistungsdatum">
