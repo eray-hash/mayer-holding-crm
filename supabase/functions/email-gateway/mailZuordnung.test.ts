@@ -36,7 +36,7 @@ const AKTEN: Zeile[] = [
 ]
 
 const TEAM: Zeile[] = [
-  { id: 'm1', name: 'Hasan Süslü', email: 'sueslue@hotmail.com' },
+  { id: 'm1', name: 'Hasan Süslü', email: 'privat.gf@beispiel.de' },
   { id: 'm2', name: 'Andreas Mayer', email: 'aikidomayer@t-online.de' },
   { id: 'm3', name: 'Markus Gröber', email: 'info@fahrschule-groeber.de' },
 ]
@@ -180,7 +180,7 @@ Deno.test('Vorschläge: an diese Adresse geschrieben, gleiche Domain, Name im Te
   const domain = entscheide({ id: '1', von: 'buchhaltung@hdimmo.de', betreff: 'Rechnung', relevanz: 'kunde' }, kontext(), JETZT)
   assertEquals(domain.art, 'vorschlag')
   if (domain.art === 'vorschlag') assertStringIncludes(domain.kandidaten[0].grund, '@hdimmo.de')
-  const name = entscheide({ id: '1', von: 'sueslue@hotmail.com', von_name: 'Hasan Süslü', betreff: 'Fw: grundbuch Franz Mayr', relevanz: 'kunde' }, kontext(), JETZT)
+  const name = entscheide({ id: '1', von: 'privat.gf@beispiel.de', von_name: 'Hasan Süslü', betreff: 'Fw: grundbuch Franz Mayr', relevanz: 'kunde' }, kontext(), JETZT)
   assertEquals(name.art, 'vorschlag')
   if (name.art === 'vorschlag') assertEquals(name.kandidaten.map((k) => k.kundeId), ['k_mayr'])
   const zweiteAdresse = entscheide({ id: '1', von: 'hello@sanny.rocks', von_name: 'Sanny Simpfendörfer', betreff: 'Vollmacht', relevanz: 'kunde' }, kontext(), JETZT)
@@ -218,7 +218,7 @@ Deno.test('Rundschreiben: nur markieren, wenn die KI-Einordnung fehlt; Akten-New
 Deno.test('Lauf: ordnet sicher zu (Verlauf + Dokumente), legt Vorschläge ab, markiert Rundschreiben, prüft jede Mail einmal', async () => {
   const sicher = mail({ von: 'ch.lipps@googlemail.com', betreff: 'Unterlagen', anhaenge: [{ filename: 'bwa.pdf', size: 50_000, contentType: 'application/pdf', url: 'https://x/bwa.pdf' }] })
   const verlauf = mail({ von: 'info@bruestle-eberle.de', betreff: 'WG: Schöllkopf', relevanz: 'nicht_relevant', rohdaten: { 'headers[in_reply_to]': '<def-456@amayer-holding.com>' } })
-  const vorschlag = mail({ von: 'sueslue@hotmail.com', von_name: 'Hasan Süslü', betreff: 'Fw: grundbuch Franz Mayr' })
+  const vorschlag = mail({ von: 'privat.gf@beispiel.de', von_name: 'Hasan Süslü', betreff: 'Fw: grundbuch Franz Mayr' })
   const rund = mail({ von: 'no-reply@shop.de', betreff: 'Angebot', relevanz: null })
   const privat = mail({ von: 'ch.lipps@googlemail.com', betreff: 'Privat', besitzer_email: 'eray@fundament-it.de' })
   const alt = mail({ von: 'ch.lipps@googlemail.com', betreff: 'Alt', erstellt_am: '2026-11-01T10:00:00Z' })

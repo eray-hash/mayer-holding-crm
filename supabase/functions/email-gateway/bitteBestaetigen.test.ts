@@ -10,7 +10,7 @@ import { haeufigkeitAus, merkmaleAus, ordnerFuer, vorschlaegeFuer } from '../_sh
 import { imFenster, reihum, sendeBitteBestaetigen } from './bitteBestaetigen.ts'
 
 const ERAY = { name: 'Eray Yesil', email: 'eray.yesil@fundament-it.de', rolle: 'geschaeftsfuehrung', ist_admin: false, bereiche: [], aktiv: true, telegram_chat_id: 333, ist_superuser: true }
-const HASAN = { name: 'Hasan Süslü', email: 'sueslue@hotmail.com', rolle: 'geschaeftsfuehrung', ist_admin: false, bereiche: [], aktiv: true, telegram_chat_id: 111, ist_superuser: false }
+const HASAN = { name: 'Hasan Süslü', email: 'privat.gf@beispiel.de', rolle: 'geschaeftsfuehrung', ist_admin: false, bereiche: [], aktiv: true, telegram_chat_id: 111, ist_superuser: false }
 const QUIRIN = { name: 'Quirin Lutzenberger', email: 'immo@amayer-holding.com', rolle: 'mitarbeiter', ist_admin: false, bereiche: ['immobilien'], aktiv: true, telegram_chat_id: 222, ist_superuser: false }
 
 // Dienstag, 24.11.2026, 8:30 Uhr in Berlin.
@@ -141,7 +141,7 @@ Deno.test('Datei ohne Schicker mit Recht: an den Verantwortlichen des Objekts', 
 
 Deno.test('Trockenlauf: Texte für eine Person, ohne Schalter, ohne Schreiben, ohne Senden', async () => {
   const t = aufbau()
-  const r = await sendeBitteBestaetigen(t.db, { telegram: t.telegram, jetzt: new Date('2026-11-28T15:00:00Z'), trockenFuer: 'SUESLUE@hotmail.com' })
+  const r = await sendeBitteBestaetigen(t.db, { telegram: t.telegram, jetzt: new Date('2026-11-28T15:00:00Z'), trockenFuer: 'PRIVAT.GF@beispiel.de' })
   assertEquals(t.gesendet.length, 0)
   assertEquals(t.db.tabelle('telegram_vorschlaege').length, 0)
   assertEquals(r.vorschau?.length, 1)

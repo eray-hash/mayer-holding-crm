@@ -34,7 +34,7 @@ function postfach(extra: Partial<Postfach> = {}): Postfach {
 }
 
 const QUIRIN = { email: IMMO, name: 'Quirin Lutzenberger', istGf: false, bereiche: ['immobilien'] }
-const HASAN = { email: 'sueslue@hotmail.com', name: 'Hasan Süslü', istGf: true, bereiche: [] }
+const HASAN = { email: 'privat.gf@beispiel.de', name: 'Hasan Süslü', istGf: true, bereiche: [] }
 const BERATER = { email: 'berater@amayer-holding.com', name: 'Berater', istGf: false, bereiche: ['beratung'] }
 const IMMO_KOLLEGE = { email: 'kollege@amayer-holding.com', name: 'Kollege', istGf: false, bereiche: ['immobilien'] }
 
@@ -105,7 +105,7 @@ async function aufbau(): Promise<FalscheDatenbank> {
     postfaecher: [postfach() as unknown as Zeile],
     mitarbeiter: [
       { name: 'Quirin Lutzenberger', email: IMMO, aktiv: true },
-      { name: 'Hasan Süslü', email: 'sueslue@hotmail.com', aktiv: true },
+      { name: 'Hasan Süslü', email: 'privat.gf@beispiel.de', aktiv: true },
     ],
     kunden: [
       { id: 'k_mueller', bereich: 'immobilienkunden', firma: 'Müller Bau GmbH', ansprechpartner: 'Hans Müller', email: 'mueller@muellerbau.de', dokumente: [], activities: [] },

@@ -14,6 +14,7 @@ type Db = any
 
 export const OUTLOOK_AKTIONEN = new Set([
   'outlook_ordner',
+  'outlook_ordner_anlegen',
   'outlook_liste',
   'outlook_suche',
   'outlook_mail',
@@ -205,6 +206,30 @@ export async function outlookAktion(admin: Db, ich: string, body: Record<string,
     return { ordner: ergebnis }
   }
 
+  if (a === 'outlook_ordner_anlegen') {
+    // Legt einen Mail-Ordner auf oberster Ebene an (z. B. „Werbung“). Gibt es ihn schon, kommt der vorhandene zurück —
+    // nichts wird überschrieben, gelöscht oder verschoben, keine Regeln.
+    const name = String(body.name ?? '').replace(/\s+/g, ' ').trim()
+    if (!name || name.length > 80 || /[\\/<>:*?"|]/.test(name)) throw new MsFehler(400, 'Ungültiger Ordnername.')
+    if (['papierkorb', 'gelöschte elemente', 'deleted items', 'deleteditems'].includes(name.toLowerCase())) throw new MsFehler(400, 'Dieser Ordnername ist nicht erlaubt.')
+    const suche = async () => {
+      const liste = await graphAlle<{ id: string; displayName?: string }>(admin, ich, '/me/mailFolders?$top=100&$select=id,displayName', 300)
+      return liste.find((o) => String(o.displayName ?? '').toLowerCase() === name.toLowerCase())
+    }
+    const da = await suche()
+    if (da) return { id: da.id, name: da.displayName ?? name, neu: false }
+    try {
+      const neu = await graph<{ id: string; displayName?: string }>(admin, ich, '/me/mailFolders', { methode: 'POST', daten: { displayName: name } })
+      return { id: neu.id, name: neu.displayName ?? name, neu: true }
+    } catch (e) {
+      // Inzwischen angelegt (Microsoft meldet 409 ErrorFolderExists): den vorhandenen nehmen.
+      if (e instanceof MsFehler && e.status === 409) {
+        const x = await suche()
+        if (x) return { id: x.id, name: x.displayName ?? name, neu: false }
+      }
+      throw e
+    }
+  }
   const regel = await ladeMayerRegel(admin, ich)
 
   if (a === 'outlook_liste') {

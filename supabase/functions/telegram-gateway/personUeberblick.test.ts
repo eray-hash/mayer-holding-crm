@@ -2,7 +2,7 @@
 import { assert, assertEquals, assertStringIncludes } from 'jsr:@std/assert@1'
 import { fuehrePersonWerkzeugAus, istPersonWerkzeug, PERSON_WERKZEUGE, type HotmailAufruf, personenBilden, TEXT_HOECHSTENS, zerlegeName } from './personUeberblick.ts'
 
-const ICH = 'sueslue@hotmail.com'
+const ICH = 'privat.gf@beispiel.de'
 const FREMD = 'kollege@mayer-holding.de'
 
 // ---------- Datenbank-Doppel (eq, ilike, is, in, order, range, maybeSingle) ----------

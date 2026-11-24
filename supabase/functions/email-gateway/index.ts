@@ -264,6 +264,9 @@ async function merkePrivatAktion(admin: any, email: string, text: string): Promi
 
 // Fristen aus Behörden-/Versicherungspost (fristenRadar.ts): nach dem Klick auf „Ausführen“ entsteht das To-do.
 AUSFUEHRER.frist_todo = (admin, ich, p) => fristTodoAusfuehrer(admin, ich, p)
+// Zusagen aus gesendeten Mails (mailFolgen.ts) und Termine aus Mails (terminAusMail.ts), 24.11.2026: erst nach dem Klick.
+AUSFUEHRER.zusage_todo = (admin, ich, p) => zusageTodoAusfuehrer(admin, ich, p)
+AUSFUEHRER.termin_aus_mail = (admin, ich, p) => terminAusMailAusfuehrer(admin, ich, p)
 
 AUSFUEHRER.crm_termin_absagen = async (admin, ich, p) => {
   const muster = ich.replace(/[\\%_]/g, (z) => `\\${z}`)
@@ -302,6 +305,11 @@ import { tagesplanAktion } from './tagesplan.ts'
 import { sendeTagesplanMeldungen } from './tagesplanMeldungen.ts'
 import { hotmailZeilen, type PlanZusatz, sendePrivatTagesplaene } from './privatTagesplan.ts'
 import { FRISTEN_TITEL, fristenZeilen, fristTodoAusfuehrer, pruefeFristen } from './fristenRadar.ts'
+import { pruefeZusagen, unbeantworteteZeilen, zusageTodoAusfuehrer } from './mailFolgen.ts'
+import { pruefeTerminMails, terminAusMailAusfuehrer } from './terminAusMail.ts'
+import { privatBotAktiv } from '../_shared/telegramPrivat.ts'
+import { sendePrivatTerminBriefings, sendePrivatWochenrueckblicke } from './privatWoche.ts'
+import { kontaktVorschlagZeilen } from '../telegram-gateway/postfachHelfer.ts'
 import { vertragsFristZeilen } from '../telegram-gateway/vertragWerkzeuge.ts'
 import { frageNachTerminen, frageUeberAssistent } from './nachTermin.ts'
 import { gespraechAkteSetzen, gespraechUebernehmen, gespraechVorbereitung } from './gespraechUebernehmen.ts'
@@ -3563,18 +3571,53 @@ Deno.serve((req: Request) => mitAnlass(async () => {
         const z = await fristenZeilen(a, email, k.jetzt)
         return z.length ? [FRISTEN_TITEL, ...z] : []
       }
+      // Noch unbeantwortete Mails von Personen (mailFolgen.ts, Hasans Wunsch 2) — ohne KI.
+      const unbeantwortetTeil: PlanZusatz = (a, email, k) => unbeantworteteZeilen(a, email, k.jetzt)
       const vertragTeil: PlanZusatz = async (a, email, k) => {
         const z = await vertragsFristZeilen(a, email, k.datum)
         return z.length ? ['Verträge — bald kündbar', ...z] : []
       }
       // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
       EdgeRuntime.waitUntil(
-        sendePrivatTagesplaene(admin, new Date(), undefined, { zusatzMorgen: [hotmailZeilen, fristenTeil, vertragTeil] }).then(async (r) => {
+        sendePrivatTagesplaene(admin, new Date(), undefined, { zusatzMorgen: [hotmailZeilen, fristenTeil, vertragTeil, unbeantwortetTeil] }).then(async (r) => {
           if (r.morgen > 0 || r.abend > 0 || r.fehler.length > 0) console.log(`Privater Tagesplan: ${r.morgen} morgens, ${r.abend} abends.`, r.fehler.join(' | '))
           // Rückfragen zu vagen To-dos in den privaten Gesprächsverlauf, damit der Assistent die Antwort zuordnet.
           for (const rf of r.rueckfragen ?? []) await merkePrivatAktion(admin, rf.email, `Abend-Rückblick: nachgefragt, was bei diesen To-dos gemeint ist (todo_id ${rf.todoIds.join(', ')}). Antwortet er dazu, ergänze die Aufgabe mit todo_aendern.`).catch(() => {})
         }),
       )
+      // Kurz-Briefing 25–40 Minuten vor privaten Terminen mit einer erkennbaren Person und Sonntags-Wochenrückblick
+      // (privatWoche.ts, 24.11.2026, Hasans Wünsche 8 und 9): nur über den privaten Bot, je einmal (Sperrzeile), ohne KI,
+      // abschaltbar im Assistenten (meldungen_einstellen); werfen nie.
+      // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
+      EdgeRuntime.waitUntil(sendePrivatTerminBriefings(admin).then((r) => {
+        if (r.gesendet > 0 || r.fehler.length > 0) console.log(`Privates Termin-Briefing: ${r.gesendet} gesendet.`, r.fehler.join(' | '))
+      }))
+      // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
+      EdgeRuntime.waitUntil(sendePrivatWochenrueckblicke(admin, new Date(), undefined, { zusatz: [fristenTeil, vertragTeil, (a, email) => kontaktVorschlagZeilen(a, email)] }).then((r) => {
+        if (r.gesendet > 0 || r.fehler.length > 0) console.log(`Privater Wochenrückblick: ${r.gesendet} gesendet.`, r.fehler.join(' | '))
+      }))
+      // Privates Postfach lesen (24.11.2026, Hasans Wünsche 3 und 4): um 7:15, 12:30 und 17:30 deutscher Zeit werden
+      // gesendete Mails auf Zusagen („ich schicke Ihnen bis Freitag …“) und eingegangene auf Termine geprüft. Ergebnis sind
+      // Vormerkungen mit Knopf im privaten Bot — angelegt wird erst nach seinem Klick. Jede Mail geht nur einmal zur KI
+      // (privat_mail_pruefungen), höchstens 10 je Lauf und Art. Nur Leute mit privatem Bot und Microsoft-Freischaltung.
+      {
+        const uhr = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date())
+        if (uhr === '07:15' || uhr === '12:30' || uhr === '17:30') {
+          // @ts-ignore EdgeRuntime ist in der Laufzeit global, aber nicht in den Deno-Typings deklariert.
+          EdgeRuntime.waitUntil((async () => {
+            const { data: leute } = await admin.from('mitarbeiter').select('email').eq('aktiv', true)
+            for (const m of (leute ?? []) as { email?: string | null }[]) {
+              const email = String(m.email ?? '').trim().toLowerCase()
+              if (!email || !(await privatBotAktiv(admin, email).catch(() => false))) continue
+              const z = await pruefeZusagen(admin, email).catch((err) => ({ vorgemerkt: [], fehler: [String(err)] }))
+              const t = await pruefeTerminMails(admin, email).catch((err) => ({ vorgemerkt: [], fehler: [String(err)] }))
+              const zv = Array.isArray(z.vorgemerkt) ? z.vorgemerkt.length : Number(z.vorgemerkt) || 0
+              const tv = Array.isArray(t.vorgemerkt) ? t.vorgemerkt.length : Number(t.vorgemerkt) || 0
+              console.log(`Postfach-Prüfung privat: ${zv} Zusagen, ${tv} Termine vorgemerkt.`, [...(z.fehler ?? []), ...(t.fehler ?? [])].join(' | '))
+            }
+          })())
+        }
+      }
       // Nachfrage nach Kundenterminen (nachTermin.ts): 10–20 Minuten nach dem Ende eines Termins mit Kundenakte fragt der
       // Assistent den Besitzer einmal „Wie lief der Termin …?“ — über telegram-gateway in seinen Gesprächsverlauf, damit er
       // die Antwort als Gesprächsprotokoll ablegt (nachTerminWerkzeug.ts). Ohne KI; wirft nie.

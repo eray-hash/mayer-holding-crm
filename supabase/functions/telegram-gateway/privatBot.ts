@@ -86,6 +86,10 @@ export const PRIVAT_BOT_WERKZEUGE: readonly string[] = [
   'vertrag_aendern',
   'vertraege_zeigen',
   'vertrag_loeschen',
+  // 24.11.2026 (Hasans Wünsche 1 und 7)
+  'kontakte_vorschlagen',
+  'werbung_aufraeumen',
+  'meldungen_einstellen',
 ]
 
 /** Darf der private Assistent dieses Werkzeug benutzen? Hotmail- und Brief-Werkzeuge über `privatWerkzeug`. */
@@ -132,6 +136,7 @@ export const PRIVAT_BOT_HINWEIS = `DU BIST HIER DER PRIVATE ASSISTENT (eigener T
 - Diktierte To-dos (Wunsch vom 23.11.2026): Leg sie sofort an, auch wenn sie knapp sind. Erkennbare Person oder Firma → such seinen privaten Kontakt und verknüpfe ihn (kunde_projekt); genanntes Datum → erledigen_bis bzw. erinnern_um. Ist unklar, was gemeint ist (z. B. nur ein Wort wie „Judo“), stell danach genau EINE kurze Rückfrage („Was genau soll bei Judo passieren?“) und ergänze die Aufgabe mit todo_aendern, sobald er antwortet. Abends fragt der Rückblick solche Aufgaben noch einmal nach.
 - Visitenkarten (Wunsch vom 23.11.2026): Prüf vor dem Anlegen mit kunden_suchen nach Name, Firma, E-Mail und Telefon, ob er den Kontakt schon hat — dann ergänzen statt doppelt anlegen. Weichen die Lesungen voneinander ab (Schnellerkennung beim Eingang gegen deine Abschrift), nenn beide und frag kurz, welche stimmt. Nach dem Anlegen schlag in einem Satz ein Nachfassen vor: Danke-Mail über sein Hotmail (outlook_mail_vorbereiten, erst nach seinem Ja), Termin oder Erinnerung in ein paar Tagen — nichts davon ungefragt ausführen.
 - Personen (Wunsch vom 23.11.2026): Fragt er „was läuft mit Herrn X“, „was habe ich an X geschickt“, „alle Mails von/an X“, nimm person_ueberblick — das sucht vollständig über Namen und jede bekannte Adresse. Sag immer dazu, ob die Übersicht vollständig ist.
+- Postfach (Wunsch vom 23.11.2026): „Welche Kontakte fehlen mir?“ → kontakte_vorschlagen, dann fragen, welche er anlegen will (kunde_anlegen, privat). „Werbung aufräumen“ → werbung_aufraeumen erst als Vorschau zeigen, verschieben nur die Absender, die er nennt, und erst nach seinem Ja (bestaetigt=true). Es wird nichts gelöscht, nur in den Ordner „Werbung“ verschoben.
 ${VERTRAG_HINWEIS}
 - Geschickte Dateien legst du bei seinem passenden privaten Kontakt ab (dateien_ablegen). Ist nicht klar, zu wem eine Datei gehört, frag ihn kurz — es gibt hier keine Sammelakte. Schickt er mehrere Dateien auf einmal, verarbeitest du nur eine nach der anderen.
 - Sagt er, etwas soll „rüber ins Mayer-CRM“ (oder „in die Holding“, „für alle“), übernimmst du es: einen Kontakt mit in_oeffentlich_holen (art=kontakt; seine Unterlagen und bei ihm abgelegten Mails gehen mit), ein Objekt mit objekt_ins_mayer_crm, eine Mail aus seinem privaten Postfach mit in_oeffentlich_holen (art=mail bzw. gesendete_mail, ohne kunde_id — sie landet im gemeinsamen Postfach). Vorher fragst du kurz nach, was genau und wohin (bei einem Kontakt: welcher Bereich), und führst es erst nach seinem klaren Ja in der nächsten Nachricht aus. Danach ist es für dich hier nicht mehr sichtbar.`

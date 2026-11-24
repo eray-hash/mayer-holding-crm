@@ -36,6 +36,8 @@ import { DOKUMENT_WERKZEUGE, fuehreDokumentWerkzeugAus, istDokumentWerkzeug } fr
 import { DIAGRAMM_WERKZEUG, fuehreDiagrammAus, istDiagrammWerkzeug } from './diagrammWerkzeug.ts'
 import { fuehreKvWerkzeugAus, istKvWerkzeug, KV_WERKZEUGE } from './kostenvoranschlagWerkzeuge.ts'
 import { fuehrePersonWerkzeugAus, istPersonWerkzeug, PERSON_WERKZEUGE } from './personUeberblick.ts'
+import { fuehrePostfachHelferAus, istPostfachHelferWerkzeug, POSTFACH_HELFER_WERKZEUGE } from './postfachHelfer.ts'
+import { fuehreMeldungenAus, istMeldungenWerkzeug, MELDUNGEN_WERKZEUG } from './meldungenWerkzeug.ts'
 import { fuehreVertragWerkzeugAus, istVertragWerkzeug, VERTRAG_WERKZEUGE } from './vertragWerkzeuge.ts'
 import { fuehrePlanKnopfAus, istPlanKnopf } from '../email-gateway/privatTagesplan.ts'
 import { kvAkteHinweisNachAnlegen } from './kvAkteVorschlag.ts'
@@ -1751,6 +1753,9 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
   if (istDiagrammWerkzeug(name)) return await fuehreDiagrammAus(input ?? {}, { supabase, mitarbeiter, protokolliere, heute, botToken: botToken(BOT_TOKEN) ?? null })
   // Hasans Wünsche vom 23.11.2026 (nur im privaten Assistenten angeboten): alles zu einer Person, Verträge und Abos.
   if (istPersonWerkzeug(name)) return await fuehrePersonWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere })
+  // Kontakte aus Hotmail vorschlagen, Werbung in den Ordner „Werbung“ verschieben (24.11.2026) — postfachHelfer.ts.
+  if (istPostfachHelferWerkzeug(name)) return await fuehrePostfachHelferAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere })
+  if (istMeldungenWerkzeug(name)) return await fuehreMeldungenAus(input ?? {}, { supabase, mitarbeiter, protokolliere })
   if (istVertragWerkzeug(name)) return await fuehreVertragWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute, privat: imPrivatBot() })
   // Kostenvoranschläge anlegen, auflisten, ändern — kostenvoranschlagWerkzeuge.ts.
   if (istKvWerkzeug(name)) {
@@ -3733,7 +3738,7 @@ export type WebBild = { base64: string; mediaType: 'image/jpeg' | 'image/png' | 
  * Hotmail) nur für Freigeschaltete; im privaten Assistenten nur dessen Liste (privatBot.ts).
  */
 export function werkzeugListe(privat: { briefe: boolean; outlook: boolean }, privatBot: boolean): { name: string }[] {
-  const alle = privat.briefe ? [...TOOLS, ...BRIEF_WERKZEUGE, ...OBJEKT_WERKZEUGE, ...(privat.outlook ? OUTLOOK_WERKZEUGE : []), ...(privatBot ? [...PERSON_WERKZEUGE, ...VERTRAG_WERKZEUGE] : [])] : TOOLS
+  const alle = privat.briefe ? [...TOOLS, ...BRIEF_WERKZEUGE, ...OBJEKT_WERKZEUGE, ...(privat.outlook ? OUTLOOK_WERKZEUGE : []), ...(privatBot ? [...PERSON_WERKZEUGE, ...VERTRAG_WERKZEUGE, ...POSTFACH_HELFER_WERKZEUGE, MELDUNGEN_WERKZEUG] : [])] : TOOLS
   // deno-lint-ignore no-explicit-any
   return privatBot ? werkzeugeFuerPrivatBot(alle as any[], istPrivatWerkzeug) : alle
 }

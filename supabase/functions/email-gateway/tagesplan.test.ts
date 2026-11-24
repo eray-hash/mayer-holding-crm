@@ -12,12 +12,12 @@ function db() {
   return falscheDatenbank({
     mitarbeiter: [
       { id: 'm1', name: 'Quirin Lutzenberger', email: QUIRIN, rolle: 'mitarbeiter', bereiche: ['immobilien'], aktiv: true, telegram_chat_id: 111 },
-      { id: 'm2', name: 'Hasan Süslü', email: 'sueslue@hotmail.com', rolle: 'geschaeftsfuehrung', aktiv: true, telegram_chat_id: 222 },
+      { id: 'm2', name: 'Hasan Süslü', email: 'privat.gf@beispiel.de', rolle: 'geschaeftsfuehrung', aktiv: true, telegram_chat_id: 222 },
       { id: 'm3', name: 'Ohne Telegram', email: 'ohne@x.de', rolle: 'mitarbeiter', bereiche: ['immobilien'], aktiv: true, telegram_chat_id: null },
     ],
     todos: [
       { id: 't1', besitzer_email: QUIRIN, bereich: null, aufgabe: 'Umbau / Teilungserklärung', kunde_projekt: 'Otilie Mayr', prio: 'A', umsatz_wert: 45000, welche_fragen: 'Bauamt kann Bauakte nicht schicken. Wie bekomme ich die Daten?', erledigt_am: null, bezug: { art: 'objekt', id: 'o_mayr', name: 'Ottilye Mayr' } },
-      { id: 't2', besitzer_email: 'sueslue@hotmail.com', bereich: null, aufgabe: 'Privat Hasan', erledigt_am: null },
+      { id: 't2', besitzer_email: 'privat.gf@beispiel.de', bereich: null, aufgabe: 'Privat Hasan', erledigt_am: null },
       { id: 't3', besitzer_email: QUIRIN, bereich: null, aufgabe: 'Fristsache Bank', prio: 'C', erledigen_bis: '2026-11-20', erledigt_am: null },
     ],
     todo_freigaben: [],
@@ -25,7 +25,7 @@ function db() {
     kunden: [{ id: 'k1', bereich: 'immobilienkunden', firma: 'Claudia Corvalli', activities: [], status: 'neu' }],
     tagesplan_einstellungen: [
       { email: QUIRIN, morgen_an: true, abend_an: true },
-      { email: 'sueslue@hotmail.com', morgen_an: false, abend_an: false },
+      { email: 'privat.gf@beispiel.de', morgen_an: false, abend_an: false },
       { email: 'ohne@x.de', morgen_an: true, abend_an: true },
     ],
     tagesplan_meldungen: [],

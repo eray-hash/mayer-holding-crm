@@ -13,14 +13,14 @@ function db() {
   return falscheDatenbank({
     mitarbeiter: [
       { id: 'm1', ...QUIRIN, aktiv: true },
-      { id: 'm2', name: 'Hasan Süslü', email: 'sueslue@hotmail.com', rolle: 'geschaeftsfuehrung', aktiv: true },
+      { id: 'm2', name: 'Hasan Süslü', email: 'privat.gf@beispiel.de', rolle: 'geschaeftsfuehrung', aktiv: true },
     ],
     todos: [
       { id: 't_ebay', besitzer_email: QUIRIN.email, bereich: null, aufgabe: 'Ebay Anzeige ändern', kunde_projekt: 'Elmali MFH Aislingen', prio: 'A', umsatz_wert: 25000, geplante_zeit: '60', erledigt_am: null, ist_zeit: 200, bezug: { art: 'objekt', id: 'o_ql_aislingen', name: 'Aislingen' } },
       { id: 't_frist', besitzer_email: QUIRIN.email, bereich: null, aufgabe: 'Unterlagen an Bank', prio: 'C', erledigen_bis: '2026-11-20', erledigt_am: null },
       { id: 't_hasan', besitzer_email: QUIRIN.email, bereich: null, aufgabe: 'Fonds raussuchen', prio: 'A', zustaendig: 'Hasan Süslü', erledigt_am: null },
       { id: 't_gutachten', besitzer_email: QUIRIN.email, bereich: null, aufgabe: 'Gutachten Vöhringen Fragen beantworten', prio: 'B', erledigt_am: null },
-      { id: 't_fremd', besitzer_email: 'sueslue@hotmail.com', bereich: null, aufgabe: 'Fremd', prio: 'A', erledigt_am: null },
+      { id: 't_fremd', besitzer_email: 'privat.gf@beispiel.de', bereich: null, aufgabe: 'Fremd', prio: 'A', erledigt_am: null },
     ],
     objekte: [{ id: 'o_ql_voehringen', bezeichnung: 'Vöhringen (Boardinghouse / Wohnpark)', privat_besitzer: null }],
     kunden: [],

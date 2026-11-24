@@ -10,7 +10,7 @@ import { leseKnopf } from '../_shared/bestaetigenKern.ts'
 import { imStatusFenster, pruefeStatusVorschlaege } from './statusVorschlag.ts'
 
 const ERAY = { name: 'Eray Yesil', email: 'eray.yesil@fundament-it.de', rolle: 'geschaeftsfuehrung', ist_admin: false, bereiche: [], aktiv: true, telegram_chat_id: 333, ist_superuser: true }
-const HASAN = { name: 'Hasan Süslü', email: 'sueslue@hotmail.com', rolle: 'geschaeftsfuehrung', ist_admin: false, bereiche: [], aktiv: true, telegram_chat_id: 111, ist_superuser: false }
+const HASAN = { name: 'Hasan Süslü', email: 'privat.gf@beispiel.de', rolle: 'geschaeftsfuehrung', ist_admin: false, bereiche: [], aktiv: true, telegram_chat_id: 111, ist_superuser: false }
 const QUIRIN = { name: 'Quirin Lutzenberger', email: 'immo@amayer-holding.com', rolle: 'mitarbeiter', ist_admin: false, bereiche: ['immobilien'], aktiv: true, telegram_chat_id: 222, ist_superuser: false }
 
 // Dienstag, 24.11.2026, 10:00 Uhr in Berlin.

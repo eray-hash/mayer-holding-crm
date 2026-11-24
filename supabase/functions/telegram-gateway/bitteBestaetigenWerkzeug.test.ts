@@ -9,7 +9,7 @@ import { FalscheDatenbank, type Zeile } from '../_shared/testDoppel.ts'
 import { knopfDaten } from '../_shared/bestaetigenKern.ts'
 import { entscheideVorschlag, fuehreBestaetigenWerkzeugAus, type Mitarbeiter, verarbeiteBestaetigenKnopf } from './bitteBestaetigenWerkzeug.ts'
 
-const HASAN: Mitarbeiter & { telegram_chat_id: number; aktiv: boolean; id: string } = { id: 'm_hasan', name: 'Hasan Süslü', email: 'sueslue@hotmail.com', rolle: 'geschaeftsfuehrung', ist_admin: false, bereiche: [], telegram_chat_id: 111, aktiv: true }
+const HASAN: Mitarbeiter & { telegram_chat_id: number; aktiv: boolean; id: string } = { id: 'm_hasan', name: 'Hasan Süslü', email: 'privat.gf@beispiel.de', rolle: 'geschaeftsfuehrung', ist_admin: false, bereiche: [], telegram_chat_id: 111, aktiv: true }
 const QUIRIN: Mitarbeiter & { telegram_chat_id: number; aktiv: boolean; id: string } = { id: 'm_quirin', name: 'Quirin Lutzenberger', email: 'immo@amayer-holding.com', rolle: 'mitarbeiter', ist_admin: false, bereiche: ['immobilien'], telegram_chat_id: 222, aktiv: true }
 const JETZT = new Date('2026-11-24T08:00:00Z')
 

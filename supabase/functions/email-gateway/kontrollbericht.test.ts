@@ -8,7 +8,7 @@ import { FalscheDatenbank, type Zeile } from '../_shared/testDoppel.ts'
 import { imFenster, kontrollberichtTest, kontrollText, ladeKontrollDaten, normalisiereEinstellung, pruefeKontrollberichte, vergissEinstellung, vergissTag, zaehleAnfragen } from './kontrollbericht.ts'
 
 const IMMO = 'immo@amayer-holding.com'
-const HASAN = 'sueslue@hotmail.com'
+const HASAN = 'privat.gf@beispiel.de'
 // Montag, 23.11.2026, 18:30 Uhr in Berlin.
 const JETZT = new Date('2026-11-23T17:30:00Z')
 const HEUTE = (uhr: string) => `2026-11-23T${uhr}:00Z`
@@ -36,7 +36,7 @@ function aufbau(einst: Zeile | null = einstellung()): FalscheDatenbank {
       eingang('e3', 'verkaeufer@firma.de', '2026-11-18T10:00:00Z'),
       eingang('e4', 'interessent@gmx.de', '2026-11-16T10:00:00Z'),
       eingang('e5', 'noreply@portal.de', '2026-11-16T10:00:00Z'),
-      eingang('e6', 'sueslue@hotmail.com', '2026-11-16T10:00:00Z'),
+      eingang('e6', 'privat.gf@beispiel.de', '2026-11-16T10:00:00Z'),
     ],
     gesendete_emails: [
       { id: 'g1', an: 'verkaeufer@firma.de', gesendet_am: '2026-11-19T10:00:00Z', postfach_id: 'pf_immo' },

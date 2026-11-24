@@ -19,7 +19,7 @@ import {
 const EIGENE = eigeneDatenAus([
   { name: 'Andreas Mayer', email: 'info@amayer-holding.com', telefon: '0731 1234567', signatur_html: '<p>Andreas Mayer<br>Mayer Holding UG<br>Schwabstr. 3<br>89075 Ulm<br>Tel. 0731 / 123 45 67</p>' },
   { name: 'Quirin Lutzenberger', email: 'immo@amayer-holding.com', telefon: null, signatur_html: null },
-  { name: 'Hasan Süslü', email: 'sueslue@hotmail.com', telefon: '+49 171 5550000', signatur_html: null },
+  { name: 'Hasan Süslü', email: 'privat.gf@beispiel.de', telefon: '+49 171 5550000', signatur_html: null },
 ])
 
 Deno.test('Nummern: +49, 0049, (0), Schrägstrich und Bindestrich werden vergleichbar', () => {
@@ -188,7 +188,7 @@ Handy 0176 5555555`
 })
 
 Deno.test('Mitarbeiter-Adressen liefern nie Kundendaten', () => {
-  assertEquals(signaturenVon('Hallo\nGruß\nHasan\nMobil 0172 7777777', { absenderEmail: 'sueslue@hotmail.com' }, 'sueslue@hotmail.com', EIGENE), [])
+  assertEquals(signaturenVon('Hallo\nGruß\nHasan\nMobil 0172 7777777', { absenderEmail: 'privat.gf@beispiel.de' }, 'privat.gf@beispiel.de', EIGENE), [])
 })
 
 Deno.test('Anschriften vergleichen: Str./Straße, Komma oder Zeilenumbruch', () => {

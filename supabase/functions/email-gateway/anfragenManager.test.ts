@@ -102,7 +102,7 @@ const OBJEKTE: Zeile[] = [
     adresse: 'Karlstraße 12, 89143 Blaubeuren',
     status: 'akquise',
     verantwortlich: 'Hasan Süslü',
-    privat_besitzer: 'sueslue@hotmail.com',
+    privat_besitzer: 'privat.gf@beispiel.de',
     anfrage_kennungen: ['151234567'],
     activities: [],
   },
@@ -114,7 +114,7 @@ function grundstand(mails: Zeile[], extra: Record<string, Zeile[]> = {}): Record
     objekte: structuredClone(OBJEKTE),
     mitarbeiter: [
       { name: 'Quirin Lutzenberger', email: 'immo@amayer-holding.com', aktiv: true, telegram_chat_id: 111 },
-      { name: 'Hasan Süslü', email: 'sueslue@hotmail.com', aktiv: true, telegram_chat_id: 222 },
+      { name: 'Hasan Süslü', email: 'privat.gf@beispiel.de', aktiv: true, telegram_chat_id: 222 },
       { name: 'Eray Yesil', email: 'eray.yesil@fundament-it.de', aktiv: true, telegram_chat_id: 333 },
     ],
     auto_nachricht_regeln: [{ id: REGEL_ID, titel: 'Portal-Link nach einer Anfrage', aktiv: false, wartezeit_minuten: 10 }],

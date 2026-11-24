@@ -71,11 +71,11 @@ const todo = (id: string, aufgabe: string, besitzer: string | null, bereich: str
 })
 
 const QUIRIN = { id: 'm_q', name: 'Quirin Lutzenberger', email: 'immo@amayer-holding.com', rolle: 'mitarbeiter', ist_admin: false, bereiche: ['immobilien'] }
-const HASAN_PRIVAT = { id: 'm_h', name: 'Hasan Süslü', email: 'sueslue@hotmail.com', rolle: 'geschaeftsfuehrung', ist_admin: false, bereiche: [], nurPrivat: true }
+const HASAN_PRIVAT = { id: 'm_h', name: 'Hasan Süslü', email: 'privat.gf@beispiel.de', rolle: 'geschaeftsfuehrung', ist_admin: false, bereiche: [], nurPrivat: true }
 
 /** 60 offene private To-dos eines Kollegen, deren Ids VOR Quirins To-do sortiert werden. */
 function vieleFremde(): Zeile[] {
-  return Array.from({ length: 60 }, (_, i) => todo(`todo_a${String(i).padStart(3, '0')}`, `Hotel anrufen wegen Strom ${i}`, 'sueslue@hotmail.com'))
+  return Array.from({ length: 60 }, (_, i) => todo(`todo_a${String(i).padStart(3, '0')}`, `Hotel anrufen wegen Strom ${i}`, 'privat.gf@beispiel.de'))
 }
 
 Deno.test('todo_erledigen: eigenes To-do wird gefunden, auch wenn viele fremde To-dos dasselbe Wort enthalten', async () => {
@@ -111,8 +111,8 @@ Deno.test('todo_aendern: mehrere eigene Treffer → Liste zum Nachfragen, nur ei
 
 Deno.test('kein Treffer: zuletzt geänderte eigene To-dos als Hilfe (falsch gehörter Suchbegriff), nichts geändert', async () => {
   const db = falscheDb([
-    todo('todo_alt', 'Alte Sache', 'sueslue@hotmail.com', null, '2026-11-01T10:00:00Z'),
-    todo('todo_aok', 'AOK-Krankschreibungen prüfen', 'sueslue@hotmail.com', null, '2026-11-22T11:43:31Z'),
+    todo('todo_alt', 'Alte Sache', 'privat.gf@beispiel.de', null, '2026-11-01T10:00:00Z'),
+    todo('todo_aok', 'AOK-Krankschreibungen prüfen', 'privat.gf@beispiel.de', null, '2026-11-22T11:43:31Z'),
     todo('todo_fremd', 'Fremdes To-do', 'immo@amayer-holding.com', null, '2026-11-22T12:00:00Z'),
     todo('todo_ber', 'Bereichs-To-do', null, 'immobilien', '2026-11-22T12:00:00Z'),
   ])
@@ -128,13 +128,13 @@ Deno.test('kein Treffer per todo_id: nur die kurze Meldung', async () => {
   const db = falscheDb([todo('todo_x', 'Etwas', 'immo@amayer-holding.com')])
   assertEquals(await todoErledigen(db, QUIRIN, { todo_id: 'todo_gibtsnicht' }, () => {}), 'Kein passendes offenes To-do in Listen gefunden, die dieser Mitarbeiter ändern darf.')
   // Fremdes To-do per Id: genauso unbekannt.
-  const db2 = falscheDb([todo('todo_h', 'Privat', 'sueslue@hotmail.com')])
+  const db2 = falscheDb([todo('todo_h', 'Privat', 'privat.gf@beispiel.de')])
   assertEquals(await todoErledigen(db2, QUIRIN, { todo_id: 'todo_h' }, () => {}), 'Kein passendes offenes To-do in Listen gefunden, die dieser Mitarbeiter ändern darf.')
   assertEquals(db2.aenderungen.length, 0)
 })
 
 Deno.test('privater Assistent: Bereichslisten nie, auch nicht bei passendem Wort', async () => {
-  const db = falscheDb([todo('todo_b1', 'Lorch anrufen', null, 'immobilien'), todo('todo_h1', 'Strom anrufen', 'sueslue@hotmail.com')])
+  const db = falscheDb([todo('todo_b1', 'Lorch anrufen', null, 'immobilien'), todo('todo_h1', 'Strom anrufen', 'privat.gf@beispiel.de')])
   const antwort = await todoErledigen(db, HASAN_PRIVAT, { suchbegriff: 'anrufen' }, () => {})
   assertEquals(db.aenderungen.map((a) => a.id), ['todo_h1'])
   assert(!antwort.includes('Lorch'), antwort)

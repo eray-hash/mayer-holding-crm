@@ -20,7 +20,7 @@ import {
   sperrKennung,
 } from './privatTagesplan.ts'
 
-const HASAN = 'sueslue@hotmail.com'
+const HASAN = 'privat.gf@beispiel.de'
 const QUIRIN = 'quirin@x.de'
 // November: Berlin = UTC+1. 2026-11-28 ist ein Samstag, 2026-11-23 ein Montag.
 const SA_MORGEN = new Date('2026-11-28T07:05:00Z') // Samstag 8:05
@@ -292,7 +292,7 @@ Deno.test('Knopf: Erledigt und Morgen nur für offene To-dos der eigenen Liste',
   assertFalse(nochmal.ok)
   assertStringIncludes(nochmal.text, 'schon erledigt')
 
-  const morgen = await fuehrePlanKnopfAus(db, 'Sueslue@Hotmail.com', 'pt:m:t_wv', SA_ABEND)
+  const morgen = await fuehrePlanKnopfAus(db, 'Privat.GF@Beispiel.de', 'pt:m:t_wv', SA_ABEND)
   assert(morgen.ok)
   const wv = db.tabelle('todos').find((t) => t.id === 't_wv')!
   assertEquals(wv.erledigen_bis, '2026-11-29')

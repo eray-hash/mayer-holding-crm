@@ -18,7 +18,7 @@ import {
 } from './vertragWerkzeuge.ts'
 
 const HEUTE = '2026-11-23'
-const ICH = 'sueslue@hotmail.com'
+const ICH = 'privat.gf@beispiel.de'
 const FREMD = 'andere@mayer.de'
 
 function vertrag(id: string, mehr: Zeile = {}): Zeile {
@@ -46,7 +46,7 @@ function vertrag(id: string, mehr: Zeile = {}): Zeile {
 function aufbau(zeilen: Zeile[], o: { privat?: boolean; email?: string } = {}) {
   const db = falscheDatenbank({ privat_vertraege: zeilen })
   const protokoll: string[] = []
-  const ctx: VertragKontext = { supabase: db, mitarbeiter: { name: 'Hasan', email: o.email ?? 'Sueslue@Hotmail.com' }, protokolliere: (t) => protokoll.push(t), heute: HEUTE, privat: o.privat ?? true }
+  const ctx: VertragKontext = { supabase: db, mitarbeiter: { name: 'Hasan', email: o.email ?? 'Privat.GF@Beispiel.de' }, protokolliere: (t) => protokoll.push(t), heute: HEUTE, privat: o.privat ?? true }
   const tab = () => db.tabelle('privat_vertraege')
   return { db, ctx, protokoll, tab, zeile: (id: string) => tab().find((z) => z.id === id) }
 }
@@ -269,7 +269,7 @@ Deno.test('vertragsFristZeilen: ≤ 45 Tage, sortiert, höchstens 3 + „und N w
       vertrag('x', { besitzer_email: FREMD, anbieter: 'Fremd', laufzeit_ende: '2026-12-31', kuendigungsfrist_monate: 1 }),
     ],
   })
-  const zeilen = await vertragsFristZeilen(db, 'SUESLUE@hotmail.com', HEUTE)
+  const zeilen = await vertragsFristZeilen(db, 'PRIVAT.GF@beispiel.de', HEUTE)
   assertEquals(zeilen, [
     '• Telefon (Telekom): kündbar bis 30.11. — noch 7 Tage',
     '• Versicherung (Allianz): kündbar bis 01.12. — noch 8 Tage',
