@@ -180,7 +180,7 @@ export async function scanAbsender(admin: Admin): Promise<string[]> {
 export async function verarbeiteScanEingang(
   admin: Admin,
   dienste: ScanDienste,
-  opts: { hoechstens?: number; budgetMs?: number; mailIds?: string[]; ersetzen?: boolean } = {},
+  opts: { hoechstens?: number; budgetMs?: number; mailIds?: string[]; ersetzen?: boolean; nameAusScan?: boolean } = {},
 ): Promise<ScanErgebnis> {
   const ergebnis: ScanErgebnis = { bearbeitet: 0, teile: 0, neueAkten: 0, fehler: [] }
   const beginn = Date.now()
@@ -209,7 +209,7 @@ export async function verarbeiteScanEingang(
       const { data: geholt } = await anspruch.select('id')
       if (!geholt || geholt.length === 0) continue
       try {
-        const r = await bearbeiteMail(admin, dienste, m, !!opts.ersetzen)
+        const r = await bearbeiteMail(admin, dienste, m, !!opts.ersetzen, !!opts.nameAusScan)
         ergebnis.bearbeitet++
         ergebnis.teile += r.teile
         ergebnis.neueAkten += r.neueAkte ? 1 : 0
@@ -239,9 +239,12 @@ async function festeAkte(admin: Admin, betreff: string): Promise<string | null> 
 
 type FertigerTeil = { name: string; bytes: Uint8Array; kategorie: string; kurzinhalt?: string; seiten: string; quelleUrl: string }
 
-async function bearbeiteMail(admin: Admin, dienste: ScanDienste, m: MailZeile, ersetzen: boolean): Promise<{ teile: number; neueAkte: boolean }> {
-  const betreff = String(m.betreff ?? '').trim()
-  if (!betreffIstName(betreff)) throw new Error('Kein Name im Betreff — der Scan bleibt im Postfach zum Zuordnen von Hand.')
+async function bearbeiteMail(admin: Admin, dienste: ScanDienste, m: MailZeile, ersetzen: boolean, nameAusScan = false): Promise<{ teile: number; neueAkte: boolean }> {
+  let betreff = String(m.betreff ?? '').trim()
+  // Ohne Namen im Betreff nur auf ausdrücklichen Wunsch (von Hand, nameAusScan): dann zählt der im Scan erkannte Name,
+  // und es wird nie eine neue Akte angelegt.
+  const ohneName = !betreffIstName(betreff)
+  if (ohneName && !nameAusScan) throw new Error('Kein Name im Betreff — der Scan bleibt im Postfach zum Zuordnen von Hand.')
   const anhaenge = ((m.anhaenge ?? []) as Anhang[]).filter((a) => typeof a.url === 'string' && (/pdf/i.test(String(a.contentType ?? '')) || /\.pdf$/i.test(String(a.filename ?? ''))))
   if (anhaenge.length === 0) throw new Error('Keine PDF im Anhang.')
 
@@ -284,6 +287,12 @@ async function bearbeiteMail(admin: Admin, dienste: ScanDienste, m: MailZeile, e
     }
   }
 
+  if (ohneName) {
+    const erkannt = erkannteNamen.map((n) => String(n ?? '').trim()).filter((n) => n.length >= 3 && n.length <= 80)
+    if (erkannt.length === 0) throw new Error('Im Scan steht kein erkennbarer Name — bitte von Hand zuordnen.')
+    betreff = erkannt[0]
+  }
+
   // 2. Welche Akte?
   const akten = (await alleZeilen<AkteZeile>(() => admin.from('kunden').select('id, bereich, firma, ansprechpartner, email').neq('bereich', 'privat'))).data ?? []
   // Erst die Akten, deren Name zum Betreff passt; dazu Akten, die nur einen der Namen tragen (gemeinsame Kunden wie
@@ -312,9 +321,10 @@ async function bearbeiteMail(admin: Admin, dienste: ScanDienste, m: MailZeile, e
     if (kandidaten.length === 0) neuerBereich = BEREICHE[String(wahl.neue_akte_bereich)] ? String(wahl.neue_akte_bereich) : 'beratung'
   }
 
-  // 3. Neue Akte, falls keine passt.
+  // 3. Neue Akte, falls keine passt (nicht bei Scans ohne Namen im Betreff: dort lieber von Hand).
   const heute = heuteBerlin()
   let neueAkte: AkteZeile | null = null
+  if (kandidaten.length === 0 && ohneName) throw new Error(`Keine Akte zum Namen im Scan („${betreff}“) gefunden — bitte von Hand zuordnen.`)
   if (kandidaten.length === 0) {
     const name = nameFuerNeueAkte(betreff, erkannteNamen) || 'Unbekannt (Scan)'
     const id = `k_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`

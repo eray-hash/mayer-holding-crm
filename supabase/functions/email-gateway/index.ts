@@ -5351,7 +5351,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       if (!aufrufer) return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
       if (!aufrufer.istGf) return keinRecht(headers)
       const mailIds = Array.isArray(body.mailIds) ? (body.mailIds as unknown[]).map(String).slice(0, 20) : undefined
-      const ergebnis = await verarbeiteScanEingang(admin, scanDienste(), { hoechstens: 1, budgetMs: 140_000, mailIds, ersetzen: body.ersetzen === true })
+      const ergebnis = await verarbeiteScanEingang(admin, scanDienste(), { hoechstens: 1, budgetMs: 140_000, mailIds, ersetzen: body.ersetzen === true, nameAusScan: body.nameAusScan === true })
       return new Response(JSON.stringify(ergebnis), { headers })
     }
 
