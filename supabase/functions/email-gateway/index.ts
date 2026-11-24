@@ -612,8 +612,9 @@ async function sendMail(to: string, subject: string, text: string, html?: string
     secure: port === 465, // sonst STARTTLS (Port 587)
     auth: absender ? { user: absender.benutzer, pass: absender.passwort } : { user: env('SMTP_USER'), pass: env('SMTP_PASSWORD') },
   })
-  await transporter.sendMail({
-    from: absender ? (absender.anzeigeName ? { name: absender.anzeigeName, address: absender.adresse } : absender.adresse) : Deno.env.get('SMTP_USER'),
+  const von = absender ? (absender.anzeigeName ? { name: absender.anzeigeName, address: absender.adresse } : absender.adresse) : Deno.env.get('SMTP_USER')
+  const mail = {
+    from: von,
     ...(messageId ? { messageId } : {}),
     to,
     subject,
@@ -624,7 +625,45 @@ async function sendMail(to: string, subject: string, text: string, html?: string
         ? { filename: a.filename, content: a.contentBase64, encoding: 'base64', contentType: a.contentType }
         : { filename: a.filename, path: a.url, contentType: a.contentType },
     ),
-  })
+  }
+  // Hauptpostfach (info@): Die Mail einmal fertig bauen, so senden und dieselbe Fassung als Kopie in den
+  // IONOS-Ordner „Gesendet“ legen — sonst sieht man CRM-Mails im Webmail nicht (Wunsch 24.11.2026).
+  if (!absender) {
+    let roh: Uint8Array | null = null
+    try {
+      // deno-lint-ignore no-explicit-any
+      const gebaut: any = await nodemailer.createTransport({ streamTransport: true, buffer: true, newline: 'windows' }).sendMail(mail)
+      roh = gebaut?.message instanceof Uint8Array ? gebaut.message : null
+    } catch (err) {
+      console.error('Mail für die Gesendet-Kopie nicht gebaut — normaler Versand:', err instanceof Error ? err.message : err)
+    }
+    if (roh) {
+      await transporter.sendMail({ envelope: { from: String(Deno.env.get('SMTP_USER') ?? ''), to }, raw: roh })
+      await legeInGesendet(roh).catch((err) => console.error('Kopie in „Gesendet“ (IONOS) fehlgeschlagen:', err instanceof Error ? err.message : err))
+      return
+    }
+  }
+  await transporter.sendMail(mail)
+}
+
+// Kopie einer gesendeten Mail in den Ordner „Gesendet“ des Hauptpostfachs (IONOS, IMAP wie syncInbox: Port 143 + STARTTLS).
+async function legeInGesendet(roh: Uint8Array): Promise<void> {
+  const user = Deno.env.get('IMAP_USER')
+  const pass = Deno.env.get('IMAP_PASSWORD')
+  if (!user || !pass) return
+  const port = Number(Deno.env.get('IMAP_PORT') ?? '143')
+  const client = new ImapFlow({ host: Deno.env.get('IMAP_HOST') ?? 'imap.ionos.de', port, secure: port === 993, auth: { user, pass }, logger: false })
+  client.on('error', () => {})
+  await withTimeout(client.connect(), 15000, 'IMAP-Verbindung für die Gesendet-Kopie hat nicht geantwortet.')
+  try {
+    const ordner = await client.list()
+    // deno-lint-ignore no-explicit-any
+    const gesendet = (ordner as any[]).find((o) => o.specialUse === '\\Sent') ?? (ordner as any[]).find((o) => /^(gesendete objekte|gesendet|sent|sent items)$/i.test(String(o.name ?? '')))
+    // deno-lint-ignore no-explicit-any
+    await client.append(gesendet?.path ?? 'Gesendete Objekte', roh as any, ['\\Seen'])
+  } finally {
+    await client.logout().catch(() => {})
+  }
 }
 
 // Schickt einen Link zum Festlegen des Passworts über das eigene Postfach (nicht über Supabases
