@@ -27,6 +27,7 @@
 //   VOR der Arbeit mit einer bedingten Änderung weiter; laufen zwei Aufrufe gleichzeitig, gewinnt einer.
 // - Keine Importe aus index.ts; die Datenbank (Dienst-Zugang) und das Senden kommen als Parameter.
 // - Wirft nie: Fehler stehen im Protokoll, die nächste Auswertung holt den Zeitraum nach.
+import { kiFehlerText } from '../_shared/kiFehler.ts'
 import { kiAufruf, setzeAnlass } from '../_shared/kiVerbrauch.ts'
 import { entschaerfe, kuerze, merkeWunsch, normTitel, OFFENE_STATUS, type WunschZeile } from '../_shared/wuensche.ts'
 import { alleZeilen } from '../_shared/alleZeilen.ts'
@@ -307,7 +308,7 @@ async function haikuAufruf(prompt: string): Promise<string> {
   })
   if (!res.ok) {
     const detail = await res.text().catch(() => '')
-    throw new Error(`Anthropic-API-Fehler (${res.status}): ${detail.slice(0, 300)}`)
+    throw new Error(kiFehlerText(detail, `Anthropic-API-Fehler (${res.status}): ${detail.slice(0, 300)}`))
   }
   const data = await res.json()
   // deno-lint-ignore no-explicit-any

@@ -20,6 +20,7 @@
 // Funktion mit ?bot=privat auf. Gleicher Code, aber nur der Bereich Privat, eigene Werkzeugliste und
 // eigener Gesprächszustand (privat_einstellungen.telegram_zustand). Einrichten: intern „privat_bot_einrichten“.
 
+import { kiFehlerText } from '../_shared/kiFehler.ts'
 import { gaesteEingabe, gaesteText, gaesteZeile } from './terminGaeste.ts'
 import { HOECHSTENS_EXTERNE, leseExterneAdressen } from './externeMail.ts'
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2.119.0'
@@ -3786,7 +3787,7 @@ async function claude(system: unknown[], messages: unknown[], maxTokens = ANTWOR
       await new Promise((r) => setTimeout(r, warten * 1000))
       continue
     }
-    throw new Error(`KI-Dienst antwortet mit ${res.status}: ${data?.error?.message ?? 'unbekannter Fehler'}`)
+    throw new Error(kiFehlerText(String(data?.error?.message ?? ''), `KI-Dienst antwortet mit ${res.status}: ${data?.error?.message ?? 'unbekannter Fehler'}`))
   }
 }
 
@@ -4706,7 +4707,7 @@ async function verarbeiteNachricht(supabase: Supa, message: any, chatId: number,
     const dateiHinweis = notAblage.length > 0 ? ` Deine Datei liegt unter „Ungeklärte Eingänge": ${notAblage.join(', ')}.` : istDatei ? ' Deine Datei ist gespeichert.' : ''
     // Auch hier ist die Datei gespeichert und notfalls in der Sammelakte — eine sensible Unterlage kann raus.
     const geloescht = sensibel ? await loescheTelegramNachricht(botToken(BOT_TOKEN), chatId, message.message_id) : false
-    await sendTelegramMessage(chatId, `Da ist gerade etwas schiefgelaufen (${err instanceof Error ? err.message : 'unbekannter Fehler'}).${dateiHinweis}${istDatei ? '' : ' Versuch es bitte gleich noch einmal.'}${geloescht && sensibel ? `\n\n${sensibelHinweis(sensibel)}` : ''}`)
+    await sendTelegramMessage(chatId, `${err instanceof Error && err.message.startsWith('Die KI ist gerade gesperrt') ? err.message : `Da ist gerade etwas schiefgelaufen (${err instanceof Error ? err.message : 'unbekannter Fehler'}).`}${dateiHinweis}${istDatei || (err instanceof Error && err.message.startsWith('Die KI ist gerade gesperrt')) ? '' : ' Versuch es bitte gleich noch einmal.'}${geloescht && sensibel ? `\n\n${sensibelHinweis(sensibel)}` : ''}`)
     return
   }
   if (istDatei && privatBot) {

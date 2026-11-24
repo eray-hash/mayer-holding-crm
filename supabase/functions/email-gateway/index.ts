@@ -206,6 +206,7 @@
 // Alle Zugangsdaten kommen ausschließlich aus Supabase Function Secrets (nie im Code, nie im
 // Frontend). Siehe README-Abschnitt "E-Mail-Postfach-Anbindung" für die Einrichtung.
 
+import { kiFehlerText } from '../_shared/kiFehler.ts'
 import { eigenerSpeicher, pruefeSpeicherPfad } from '../_shared/speicherPfad.ts'
 import { ImapFlow } from 'npm:imapflow@1'
 import { simpleParser } from 'npm:mailparser@3'
@@ -749,7 +750,7 @@ async function summarizeTranscript(transcript: string): Promise<Zusammenfassung>
   })
   if (!res.ok) {
     const detail = await res.text().catch(() => '')
-    throw new Error(`Anthropic-API-Fehler (${res.status}): ${detail.slice(0, 300)}`)
+    throw new Error(kiFehlerText(detail, `Anthropic-API-Fehler (${res.status}): ${detail.slice(0, 300)}`))
   }
   const data = await res.json()
   const toolUse = data.content?.find((c: { type: string }) => c.type === 'tool_use')
@@ -798,7 +799,7 @@ async function callClaudeTool<T>(
   })
   if (!res.ok) {
     const detail = await res.text().catch(() => '')
-    throw new Error(`Anthropic-API-Fehler (${res.status}): ${detail.slice(0, 300)}`)
+    throw new Error(kiFehlerText(detail, `Anthropic-API-Fehler (${res.status}): ${detail.slice(0, 300)}`))
   }
   const data = await res.json()
   const toolUse = data.content?.find((c: { type: string }) => c.type === 'tool_use')
@@ -865,7 +866,7 @@ async function callClaudeResearch(
   })
   if (!res.ok) {
     const detail = await res.text().catch(() => '')
-    throw new Error(`Anthropic-API-Fehler (${res.status}): ${detail.slice(0, 300)}`)
+    throw new Error(kiFehlerText(detail, `Anthropic-API-Fehler (${res.status}): ${detail.slice(0, 300)}`))
   }
   const data = await res.json()
   opts.meldeStopp?.(String(data.stop_reason ?? ''))
