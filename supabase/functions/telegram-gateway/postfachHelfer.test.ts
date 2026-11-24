@@ -3,6 +3,7 @@
 import { assert, assertEquals, assertStringIncludes } from 'jsr:@std/assert@1'
 import {
   absenderCode,
+  bremsWartezeit,
   fuehrePostfachHelferAus,
   istPostfachHelferWerkzeug,
   kontaktVorschlagZeilen,
@@ -355,4 +356,34 @@ Deno.test('werbung_aufraeumen: fehlgeschlagene Verschiebungen werden gezählt', 
       : basis(body)
   const r = await fuehrePostfachHelferAus('werbung_aufraeumen', { bestaetigt: true, gruppen: [SHOP] }, kontext(neueDb(KUNDEN), hotmail))
   assertStringIncludes(r, 'verschoben: 2 Mails, 1 fehlgeschlagen (Mail nicht gefunden.)')
+})
+
+Deno.test('werbung_aufraeumen: bremst Microsoft, wird gewartet und erneut versucht — nichts gilt als fehlgeschlagen', async () => {
+  const { hotmail: basis, aufrufe } = neuesPostfach(EINGANG_W, GESENDET_W)
+  let gebremst = 1
+  const hotmail: HotmailAufruf = (body) =>
+    body.action === 'outlook_verschieben' && body.id === 'shop2' && gebremst-- > 0
+      ? (aufrufe.push(body), Promise.resolve({ ok: false, status: 429, daten: { error: 'Rate limit exceeded for trace x. Retry after 1500ms.' } }))
+      : basis(body)
+  const pausen: number[] = []
+  const r = await fuehrePostfachHelferAus('werbung_aufraeumen', { bestaetigt: true, gruppen: [SHOP] }, { ...kontext(neueDb(KUNDEN), hotmail), warte: async (ms: number) => void pausen.push(ms) })
+  assertEquals(pausen, [2000])
+  assertStringIncludes(r, 'verschoben: 3 Mails')
+  assert(!r.includes('fehlgeschlagen'), r)
+  // shop2 zweimal versucht, die anderen einmal.
+  assertEquals(verschoben(aufrufe).filter((a) => a.id === 'shop2').length, 2)
+})
+
+Deno.test('werbung_aufraeumen: bremst Microsoft dauerhaft, bleibt der Rest liegen mit Hinweis „nicht sofort“', async () => {
+  const { hotmail: basis } = neuesPostfach(EINGANG_W, GESENDET_W)
+  const hotmail: HotmailAufruf = (body) =>
+    body.action === 'outlook_verschieben' ? Promise.resolve({ ok: false, status: 429, daten: { error: 'Rate limit exceeded. Retry after 30000ms.' } }) : basis(body)
+  const r = await fuehrePostfachHelferAus('werbung_aufraeumen', { bestaetigt: true, gruppen: [SHOP] }, { ...kontext(neueDb(KUNDEN), hotmail), warte: async () => {}, zeitBudgetMs: 10_000 })
+  assertStringIncludes(r, 'verschoben: 0 Mails')
+  assert(!r.includes('fehlgeschlagen'), r)
+  assertStringIncludes(r, 'Microsoft hat gebremst')
+  assertStringIncludes(r, '3 Werbe-Mails sind noch nicht verschoben')
+  assertStringIncludes(r, 'NICHT sofort')
+  assertEquals(bremsWartezeit('Rate limit exceeded for trace a. Retry after 31464ms.'), 31464)
+  assertEquals(bremsWartezeit('Mail nicht gefunden.'), null)
 })

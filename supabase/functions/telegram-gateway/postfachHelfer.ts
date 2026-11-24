@@ -33,6 +33,8 @@ export type PostfachHelferKontext = {
   outlookVerbunden?: boolean
   /** Zeitbudget in Millisekunden (Vorgabe siehe unten; für Tests verkleinerbar). */
   zeitBudgetMs?: number
+  /** Pause beim Bremsen von Microsoft; für Tests ersetzbar. */
+  warte?: (ms: number) => Promise<void>
 }
 
 /** Mails je Seite (Grenze von outlook_liste). */
@@ -43,8 +45,19 @@ export const SEITEN_HOECHSTENS = 20
 export const VORSCHLAEGE_HOECHSTENS = 10
 /** Höchstens so viele Mails werden je Lauf verschoben. */
 export const VERSCHIEBEN_HOECHSTENS = 300
-/** Gleichzeitige Verschiebe-Aufrufe. */
-const GLEICHZEITIG = 5
+/** Gleichzeitige Verschiebe-Aufrufe. Microsoft lässt je Postfach nur wenige gleichzeitige Anfragen zu (der
+ *  Abgleich alle 3 Minuten nutzt dasselbe Postfach) — mit 5 kam am 24.11.2026 nach 29 Mails „Rate limit exceeded“. */
+const GLEICHZEITIG = 2
+/** Längste Pause, die beim Bremsen von Microsoft abgewartet wird (dann wird der Rest später verschoben). */
+const PAUSE_HOECHSTENS_MS = 35_000
+
+/** Ist das ein Bremsen von Microsoft? Liefert die verlangte Wartezeit in ms (Vorgabe 30 s), sonst null. */
+export function bremsWartezeit(fehler: string): number | null {
+  if (!/rate limit|bremst|too many requests|throttl|\b429\b|retry after/i.test(fehler)) return null
+  const ms = fehler.match(/retry after\s+(\d+)\s*ms/i)?.[1]
+  const s = fehler.match(/retry after\s+(\d+)\s*s(?:ec|ekunden)?\b/i)?.[1]
+  return ms ? Number(ms) : s ? Number(s) * 1000 : 30_000
+}
 /** Zeitbudget fürs Lesen bzw. Verschieben (die Edge-Funktion nimmt Anfragen rund 200 s an). */
 const ZEIT_BUDGET_MS = 110_000
 /** Zeitbudget fürs Verschieben (nach höchstens ZEIT_BUDGET_MS/2 Lesen). */
@@ -566,7 +579,10 @@ async function werbungAufraeumen(input: Record<string, unknown>, k: PostfachHelf
   const tage = Math.min(365, Math.max(7, Math.round(Number(input.tage) || 90)))
   const hotmail = k.hotmail ?? gatewayFuer(ich)
   const a = await analysiereWerbung(k.supabase, ich, hotmail, tage)
-  if (a.fehler && !a.gelesen) return `Fehler: Der Posteingang konnte nicht gelesen werden (${a.fehler}). Nichts verschoben.`
+  if (a.fehler && !a.gelesen) {
+    const gebremst = bremsWartezeit(a.fehler) !== null
+    return `Fehler: Der Posteingang konnte nicht gelesen werden (${gebremst ? 'Microsoft bremst gerade, zu viele Anfragen an das Postfach' : a.fehler}). Nichts verschoben.${gebremst ? ' NICHT sofort noch einmal aufrufen: sag ihm, er soll es in etwa 5 Minuten noch einmal versuchen.' : ''}`
+  }
 
   // ---------- Anwenden ----------
   if (input.bestaetigt === true) {
@@ -610,21 +626,49 @@ async function werbungAufraeumen(input: Record<string, unknown>, k: PostfachHelf
     let ok = 0
     let fehl = 0
     let ausgelassen = 0
+    let gebremst = false
     const fehlerBeispiele: string[] = []
     const frist = Date.now() + (k.zeitBudgetMs ?? VERSCHIEBEN_BUDGET_MS)
-    for (let i = 0; i < dieses.length; i += GLEICHZEITIG) {
+    const warte = k.warte ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
+    const verschiebe = (m: ListenMail) =>
+      hotmail({ action: 'outlook_verschieben', id: m.id, ordner: ordner.id }).then(
+        (r) => (r.ok ? null : fehlerText(r)),
+        (e) => (e instanceof Error ? e.message : String(e)),
+      )
+    // Langsam und der Reihe nach (je GLEICHZEITIG Mails). Bremst Microsoft, wird die verlangte Zeit gewartet und
+    // dieselben Mails noch einmal versucht; reicht die Zeit nicht, bleibt der Rest für den nächsten Lauf liegen
+    // (zählt nicht als fehlgeschlagen).
+    let i = 0
+    let versuche = 0
+    while (i < dieses.length) {
       if (Date.now() > frist) {
         ausgelassen = dieses.length - i
         break
       }
-      const ergebnisse = await Promise.all(
-        dieses.slice(i, i + GLEICHZEITIG).map((m) =>
-          hotmail({ action: 'outlook_verschieben', id: m.id, ordner: ordner.id }).then(
-            (r) => (r.ok ? null : fehlerText(r)),
-            (e) => (e instanceof Error ? e.message : String(e)),
-          )
-        ),
-      )
+      const stapel = dieses.slice(i, i + GLEICHZEITIG)
+      const ergebnisse = await Promise.all(stapel.map(verschiebe))
+      const bremse = Math.max(...ergebnisse.map((f) => (f === null ? -1 : bremsWartezeit(f) ?? -1)))
+      if (bremse >= 0) {
+        gebremst = true
+        const wartezeit = Math.min(Math.max(bremse, 2_000), PAUSE_HOECHSTENS_MS)
+        // Schon Verschobene des Stapels zählen; die gebremsten werden nach der Pause erneut versucht.
+        const nochmal = stapel.filter((_, j) => ergebnisse[j] !== null && bremsWartezeit(ergebnisse[j]!) !== null)
+        ok += ergebnisse.filter((f) => f === null).length
+        for (const f of ergebnisse) if (f !== null && bremsWartezeit(f) === null) {
+          fehl++
+          if (fehlerBeispiele.length < 2 && !fehlerBeispiele.includes(f)) fehlerBeispiele.push(f)
+        }
+        versuche++
+        if (versuche > 3 || Date.now() + wartezeit > frist) {
+          ausgelassen = dieses.length - i - stapel.length + nochmal.length
+          break
+        }
+        await warte(wartezeit)
+        // Gebremste Mails vorne wieder einreihen.
+        dieses.splice(i, stapel.length, ...nochmal)
+        continue
+      }
+      versuche = 0
       for (const f of ergebnisse) {
         if (f === null) ok++
         else {
@@ -632,14 +676,17 @@ async function werbungAufraeumen(input: Record<string, unknown>, k: PostfachHelf
           if (fehlerBeispiele.length < 2 && !fehlerBeispiele.includes(f)) fehlerBeispiele.push(f)
         }
       }
+      i += stapel.length
     }
-    const weitere = ids.length - dieses.length + ausgelassen
+    const weitere = ids.length - Math.min(ids.length, VERSCHIEBEN_HOECHSTENS) + ausgelassen
     k.protokolliere(`Werbung aufgeräumt: ${ok} verschoben, ${fehl} fehlgeschlagen nach „${WERBE_ORDNER}“ (Absender: ${getroffen.slice(0, 10).join(', ')}${getroffen.length > 10 ? ' …' : ''})`)
     return [
       `In den Ordner „${WERBE_ORDNER}“ verschoben: ${zahl(ok)} Mails${fehl ? `, ${zahl(fehl)} fehlgeschlagen (${fehlerBeispiele.join(' | ')})` : ''}. Absender: ${getroffen.join(', ')}.`,
       ordner.neu ? `Der Ordner „${WERBE_ORDNER}“ wurde neu angelegt.` : '',
       'Nichts wurde gelöscht und es gibt keine automatische Regel — neue Werbung landet weiter im Posteingang.',
-      weitere > 0 ? `Es gibt weitere ${zahl(weitere)} Werbe-Mails dieser Absender (Grenze je Lauf ${VERSCHIEBEN_HOECHSTENS}) — mit denselben Codes noch einmal bestätigen, um weiterzumachen.` : '',
+      gebremst && ausgelassen > 0
+        ? `Microsoft hat gebremst (zu viele Anfragen an das Postfach). ${zahl(weitere)} Werbe-Mails sind noch nicht verschoben — das ist kein Fehler. NICHT sofort noch einmal aufrufen: sag ihm, er soll es in etwa 5 Minuten mit denselben Codes noch einmal bestätigen.`
+        : weitere > 0 ? `Es gibt weitere ${zahl(weitere)} Werbe-Mails dieser Absender (Grenze je Lauf ${VERSCHIEBEN_HOECHSTENS}) — mit denselben Codes noch einmal bestätigen, um weiterzumachen.` : '',
       a.grenze ? `Hinweis: Es wurden nur die neuesten ${zahl(a.gelesen)} Mails des Posteingangs gelesen — ältere Werbung im Zeitraum ist noch nicht erfasst.` : '',
       unbekannt.length ? `Nicht gefunden (nichts verschoben): ${unbekannt.join(', ')}.` : '',
     ]
