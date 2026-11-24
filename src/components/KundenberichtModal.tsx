@@ -111,7 +111,7 @@ export function KundenberichtModal({ bereich, kunde, nutzerName, nurLesen = fals
 
 function BerichtFenster({ bereich, kunde, nutzerName, nurLesen, onClose }: { bereich: KundeBereich; kunde: Kunde; nutzerName: string; nurLesen: boolean; onClose: () => void }) {
   const { dispatch } = useApp()
-  const { briefkopf, pdfAblegen, pdfSenden } = useRechnungAktionen()
+  const { pdfAblegen, pdfSenden } = useRechnungAktionen()
   const kundeAktuell = useRef(kunde)
   kundeAktuell.current = kunde
 
@@ -170,7 +170,6 @@ function BerichtFenster({ bereich, kunde, nutzerName, nurLesen, onClose }: { ber
   function pdf(): Blob {
     if (!f || !textAngaben) throw new Error('Der Bericht ist noch nicht fertig geladen.')
     return erzeugeKundenberichtPdf({
-      briefkopf,
       empfaenger: empfaengerZeilen({ anschrift: undefined }, { kunde, bereich, bereichLabel: '' }),
       datum: heute,
       seit,

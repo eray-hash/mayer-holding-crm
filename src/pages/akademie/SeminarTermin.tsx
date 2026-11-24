@@ -18,7 +18,6 @@ import {
 } from '../../lib/seminarTermine'
 import { brichAutoNachrichtAb, sendeAutoNachrichtJetzt, setzeAutoRegel } from '../../lib/autoNachrichten'
 import { erzeugeTeilnahmePdf, teilnahmeDateiname } from '../../lib/teilnahmebestaetigungPdf'
-import { briefkopfAus } from '../../data/briefkopf'
 import type { Kunde, SeminarBuchung, SeminarStand } from '../../types'
 
 const NACHRICHT_STAND: Record<string, { label: string; farbe: string }> = {
@@ -150,7 +149,7 @@ export function SeminarTermin() {
       referent: termin!.referent || seminar?.dozent,
       inhalte: seminar?.beschreibung,
     }
-    herunterladen(erzeugeTeilnahmePdf(angaben, briefkopfAus(state.vorlagenBeratung)), teilnahmeDateiname(angaben))
+    herunterladen(erzeugeTeilnahmePdf(angaben), teilnahmeDateiname(angaben))
   }
 
   async function kopieren() {

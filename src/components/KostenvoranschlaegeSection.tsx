@@ -634,7 +634,7 @@ export async function kvPdfAblegen(
   const art = p.art ?? 'kostenvoranschlag'
   const akte = findeAkte(p.state, kv.kundeId)
   const privat = kv.bereich === 'privat' || akte?.bereich === 'privat'
-  const briefkopf = privat ? { name: p.nutzerName, unterzeilen: [], seitenleiste: [], fusszeilen: [p.nutzerName] } : briefkopfAus(p.state.vorlagenBeratung)
+  const briefkopf = privat ? { name: p.nutzerName, unterzeilen: [], seitenleiste: [], fusszeilen: [p.nutzerName], privat: true } : briefkopfAus(p.state.vorlagenBeratung)
   const blob = erzeugeKvPdf(kv, { briefkopf, art, angebot: p.angebot })
   const name = kvPdfDateiname(kv, art, p.angebot?.datum)
   herunterladen(blob, name)

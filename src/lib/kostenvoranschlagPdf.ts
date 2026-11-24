@@ -1,13 +1,15 @@
 // PDF eines im CRM berechneten Kostenvoranschlags oder eines daraus erzeugten Angebots (20.11.2026).
-// Briefkopf wie bei allen Schreiben aus Vorlagen (data/briefkopf.ts: Zeile "briefkopf" der Tabelle
-// vorlagen — Name, Unterzeilen, Seitenleiste auf Seite 1, Fußzeilen). Bei privaten Akten ein schlichter
-// Kopf mit dem Namen des Besitzers. Der Auf-/Abschlag ist in den Einzelpreisen eingerechnet und wird
-// nicht ausgewiesen.
+// Auf dem echten Briefbogen der Andreas Mayer Holding / Ulmer Wirtschaftskanzlei (holdingBriefbogenJspdf.ts,
+// seit 24.11.2026). Nur bei privaten Akten (briefkopf.privat) bleibt der schlichte Kopf mit dem Namen des
+// Besitzers — private Schreiben gehen nie auf dem Briefbogen der Holding hinaus. Der Auf-/Abschlag ist in
+// den Einzelpreisen eingerechnet und wird nicht ausgewiesen.
 import jsPDF from 'jspdf'
 import { BRIEFKOPF, type Briefkopf } from '../data/briefkopf'
+import { HOLDING_RAENDER, holdingAlleSeiten, holdingSatzspiegel } from './holdingBriefbogenJspdf'
 import { berechneKv, preisMitAufschlag, type Kostenvoranschlag } from './kostenvoranschlaege'
 
-const L = 22
+// Ränder des schlichten Kopfs (nur private Schreiben); auf dem Holding-Briefbogen gilt holdingSatzspiegel.
+const L_PRIVAT = 22
 const OBEN = 18
 const UNTEN = 26
 
@@ -69,12 +71,16 @@ export function erzeugeKvPdf(
   const doc = new jsPDF({ unit: 'mm', format: 'a4' })
   const sb = doc.internal.pageSize.getWidth()
   const sh = doc.internal.pageSize.getHeight()
+  const holding = !kopf.privat
+  const satz = holdingSatzspiegel(doc)
+  const L = holding ? HOLDING_RAENDER.links : L_PRIVAT
   const R = sb - 16
-  const leiste = kopf.seitenleiste.length > 0 ? 42 : 0
+  const leiste = !holding && kopf.seitenleiste.length > 0 ? 42 : 0
   let seite = 1
-  let y = OBEN
-  // Auf Seite 1 steht rechts die Seitenleiste; der Text bleibt links davon.
-  const rechts = () => (seite === 1 && leiste ? R - leiste - 6 : R)
+  let y = holding ? satz.obenErste : OBEN
+  // Auf Seite 1 steht rechts die Team-Spalte (bzw. Seitenleiste); der Text bleibt links davon.
+  const rechts = () => (holding ? (seite === 1 ? satz.rechtsErste : satz.rechtsFolge) : seite === 1 && leiste ? R - leiste - 6 : R)
+  const unten = holding ? satz.unten : sh - UNTEN
 
   const schrift = (stil: 'normal' | 'bold', groesse: number, grau = 25) => {
     doc.setFont('helvetica', stil)
@@ -121,10 +127,11 @@ export function erzeugeKvPdf(
   function neueSeite() {
     doc.addPage()
     seite++
-    y = OBEN + 4
+    // 2 mm Luft mehr: der graue Tabellenkopf reicht über die Grundlinie hinaus bis an die Absenderzeile.
+    y = holding ? satz.obenFolge + 2 : OBEN + 4
   }
   const platz = (h: number) => {
-    if (y + h > sh - UNTEN) {
+    if (y + h > unten) {
       neueSeite()
       return true
     }
@@ -143,7 +150,7 @@ export function erzeugeKvPdf(
     }
   }
 
-  kopfZeichnen()
+  if (!holding) kopfZeichnen()
 
   // Empfänger (Angebot) bzw. "Für" (Kostenvoranschlag)
   if (art === 'angebot' && a.angebot) {
@@ -211,13 +218,15 @@ export function erzeugeKvPdf(
   positionen.forEach((p, i) => {
     let s = sp()
     schrift('normal', 9.3)
-    let zeilen = doc.splitTextToSize(sicher(p.bezeichnung), s.menge - 16 - s.bez) as string[]
-    const hoehe = zeilen.length * 4.4 + 2.6
+    let zeilen = doc.splitTextToSize(sicher(p.bezeichnung), s.menge - 20 - s.bez) as string[]
+    let hoehe = zeilen.length * 4.4 + 2.6
     if (platz(hoehe)) {
       tabKopf()
       s = sp()
       schrift('normal', 9.3)
-      zeilen = doc.splitTextToSize(sicher(p.bezeichnung), s.menge - 16 - s.bez) as string[]
+      zeilen = doc.splitTextToSize(sicher(p.bezeichnung), s.menge - 20 - s.bez) as string[]
+      // Auf der Folgeseite ist die Spalte breiter: weniger Zeilen, also auch weniger Höhe.
+      hoehe = zeilen.length * 4.4 + 2.6
     }
     const preis = preisMitAufschlag(p.einzelpreis, auf)
     const einheit = p.einheit === 'Stunde' ? 'Std.' : p.einheit === 'Tag' ? (p.menge === 1 ? 'Tag' : 'Tage') : p.einheit
@@ -253,10 +262,15 @@ export function erzeugeKvPdf(
       absatz(a.angebot.schluss)
       y += 4
     }
-    platz(22)
-    absatz('Mit freundlichen Grüßen')
-    y += 12
-    absatz(a.angebot.absender)
+    // Wird es knapp über der Fußzeile, etwas weniger Platz zum Unterschreiben statt einer Seite nur mit dem Gruß.
+    // Die Grundlinie des Namens darf bis zum unteren Rand reichen (darunter ist noch Luft bis zur Fußzeile).
+    const luft = y + 17 <= unten ? 12 : 8
+    platz(5 + luft)
+    schrift('normal', 10)
+    doc.text('Mit freundlichen Grüßen', L, y)
+    y += 5 + luft
+    doc.text(sicher(a.angebot.absender), L, y)
+    y += 5
   } else {
     absatz(
       'Dieser Kostenvoranschlag ist unverbindlich und gilt 30 Tage ab Datum. Abgerechnet wird nach tatsächlichem Aufwand; zeichnet sich eine wesentliche Überschreitung ab, melden wir uns vorher.',
@@ -266,7 +280,13 @@ export function erzeugeKvPdf(
     )
   }
 
-  // Fußzeilen und Seitenzahlen
+  const kennung = `${art === 'angebot' ? 'Angebot' : 'Kostenvoranschlag'} ${kvNummer(kv, art)}`
+  if (holding) {
+    holdingAlleSeiten(doc, kennung)
+    return doc.output('blob')
+  }
+
+  // Privat: schlichte Fußzeilen und Seitenzahlen
   const seiten = doc.getNumberOfPages()
   for (let i = 1; i <= seiten; i++) {
     doc.setPage(i)
@@ -278,7 +298,7 @@ export function erzeugeKvPdf(
       doc.text(sicher(z), L, fy)
       fy += 3
     }
-    doc.text(`${art === 'angebot' ? 'Angebot' : 'Kostenvoranschlag'} ${kvNummer(kv, art)} · Seite ${i} von ${seiten}`, R, sh - 11.5, { align: 'right' })
+    doc.text(`${kennung} · Seite ${i} von ${seiten}`, R, sh - 11.5, { align: 'right' })
   }
   return doc.output('blob')
 }

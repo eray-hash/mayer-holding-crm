@@ -33,7 +33,7 @@ import { XRechnungKnopf } from '../../module/eRechnung/XRechnungKnopf' // Modul 
 type Dialog = 'senden' | 'zahlung' | 'mahnung' | 'bearbeiten' | null
 
 export function RechnungDetail({ rechnungId, onClose }: { rechnungId: string; onClose: () => void }) {
-  const { state, dispatch, nutzer, briefkopf, vermerk } = useRechnungAktionen()
+  const { state, dispatch, nutzer, vermerk } = useRechnungAktionen()
   const [dialog, setDialog] = useState<Dialog>(null)
   const [loeschenFrage, setLoeschenFrage] = useState(false)
   const [fehler, setFehler] = useState('')
@@ -55,7 +55,7 @@ export function RechnungDetail({ rechnungId, onClose }: { rechnungId: string; on
   function pdfHerunterladen() {
     setFehler('')
     try {
-      herunterladen(erzeugeRechnungPdf(r!, { briefkopf, empfaenger, absender: nutzer.name }), rechnungPdfDateiname(r!))
+      herunterladen(erzeugeRechnungPdf(r!, { empfaenger, absender: nutzer.name }), rechnungPdfDateiname(r!))
     } catch (e) {
       setFehler(e instanceof Error ? e.message : 'Das PDF ließ sich nicht erstellen.')
     }

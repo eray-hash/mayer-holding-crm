@@ -28,7 +28,7 @@ const ANREDE = 'Sehr geehrte Damen und Herren,'
 // Rechnung senden oder als PDF erstellen
 
 export function RechnungSendenModal({ rechnung, onClose }: { rechnung: Rechnung; onClose: () => void }) {
-  const { state, dispatch, nutzer, briefkopf, vermerk } = useRechnungAktionen()
+  const { state, dispatch, nutzer, vermerk } = useRechnungAktionen()
   const akte = findeAkte(state, rechnung.kundeId)
   const [anrede, setAnrede] = useState(ANREDE)
   const [absender, setAbsender] = useState(nutzer.name)
@@ -47,7 +47,7 @@ export function RechnungSendenModal({ rechnung, onClose }: { rechnung: Rechnung;
       standardBetreff={`Rechnung ${rechnung.nummer}`}
       standardMailText={mailText}
       dateiname={dateiname}
-      erzeugePdf={() => erzeugeRechnungPdf(rechnung, { briefkopf, empfaenger, absender: absender.trim() || nutzer.name, anrede })}
+      erzeugePdf={() => erzeugeRechnungPdf(rechnung, { empfaenger, absender: absender.trim() || nutzer.name, anrede })}
       pruefen={() => (empfaenger.length < 2 ? 'Auf der Rechnung fehlt die Anschrift des Kunden. Bitte erst unter „Bearbeiten“ eintragen.' : '')}
       nurPdfHinweis="Das PDF wird heruntergeladen und in der Akte abgelegt. Die Rechnung gilt danach als versendet (z. B. per Post oder von Hand übergeben)."
       // Modul E-Rechnung (abschaltbar, siehe src/module/eRechnung/README.md)
@@ -158,7 +158,7 @@ export function ZahlungErfassenModal({ rechnung, onClose }: { rechnung: Rechnung
 // Zahlungserinnerung / 1. Mahnung / 2. Mahnung / Inkasso-Vermerk
 
 export function MahnungModal({ rechnung, onClose }: { rechnung: Rechnung; onClose: () => void }) {
-  const { state, dispatch, nutzer, briefkopf, vermerk } = useRechnungAktionen()
+  const { state, dispatch, nutzer, vermerk } = useRechnungAktionen()
   const akte = findeAkte(state, rechnung.kundeId)
   const vorschlagStufe: MahnstufeId = nextMahnstufe(rechnung.mahnstufe) ?? 'inkasso'
   const [stufe, setStufe] = useState<MahnstufeId>(vorschlagStufe)
@@ -252,7 +252,7 @@ export function MahnungModal({ rechnung, onClose }: { rechnung: Rechnung; onClos
       standardMailText={mailText}
       dateiname={dateiname}
       erzeugePdf={() =>
-        erzeugeMahnungPdf(rechnung, { briefkopf, empfaenger, absender: absender.trim() || nutzer.name, stufe, datum, gebuehr: gebuehrZahl || 0, neueFrist: frist, anrede, text, schluss })
+        erzeugeMahnungPdf(rechnung, { empfaenger, absender: absender.trim() || nutzer.name, stufe, datum, gebuehr: gebuehrZahl || 0, neueFrist: frist, anrede, text, schluss })
       }
       pruefen={() =>
         empfaenger.length < 2

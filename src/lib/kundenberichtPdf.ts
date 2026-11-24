@@ -1,13 +1,11 @@
-// PDF „Stand Ihres Projekts“ (Statusbericht an den Kunden, 22.11.2026) auf dem Briefbogen wie Rechnung
-// und Kostenvoranschlag (data/briefkopf.ts: Name, Unterzeilen, Seitenleiste auf Seite 1, Fußzeilen).
-// Eigene kleine Fassung des Briefbogens, weil der in rechnungPdf.ts nicht ausgeführt wird.
+// PDF „Stand Ihres Projekts“ (Statusbericht an den Kunden, 22.11.2026) auf dem echten Briefbogen der
+// Andreas Mayer Holding / Ulmer Wirtschaftskanzlei (holdingBriefbogenJspdf.ts, seit 24.11.2026).
+// Für private Akten gibt es keinen Kundenbericht (KundenberichtModal.tsx).
 import jsPDF from 'jspdf'
-import { BRIEFKOPF, type Briefkopf } from '../data/briefkopf'
 import { AMPEL_NAME, deDatum, type KundenAmpel } from '../../supabase/functions/_shared/kundenberichtKern.ts'
+import { HOLDING_RAENDER, holdingAlleSeiten, holdingSatzspiegel } from './holdingBriefbogenJspdf'
 
-const L = 22
-const OBEN = 18
-const UNTEN = 26
+const L = HOLDING_RAENDER.links
 
 /** Nur Zeichen, die die eingebaute Helvetica kennt (wie vorlagePdf.ts). */
 function sicher(text: string): string {
@@ -25,7 +23,6 @@ const FARBE: Record<KundenAmpel, [number, number, number]> = {
 }
 
 export type KundenberichtPdfAngaben = {
-  briefkopf?: Briefkopf
   empfaenger: string[]
   datum: string
   seit: string
@@ -44,60 +41,22 @@ export type KundenberichtPdfAngaben = {
 }
 
 export function erzeugeKundenberichtPdf(a: KundenberichtPdfAngaben): Blob {
-  const kopf = a.briefkopf ?? BRIEFKOPF
   const doc = new jsPDF({ unit: 'mm', format: 'a4' })
-  const sb = doc.internal.pageSize.getWidth()
-  const sh = doc.internal.pageSize.getHeight()
-  const R = sb - 16
-  const leiste = kopf.seitenleiste.length > 0 ? 42 : 0
+  const satz = holdingSatzspiegel(doc)
   let seite = 1
-  let y = OBEN
-  const rechts = () => (seite === 1 && leiste ? R - leiste - 6 : R)
+  let y = satz.obenErste
+  // Auf Seite 1 steht rechts die Team-Spalte des Briefbogens; der Text bleibt links davon.
+  const rechts = () => (seite === 1 ? satz.rechtsErste : satz.rechtsFolge)
   const schrift = (stil: 'normal' | 'bold', groesse: number, grau = 25) => {
     doc.setFont('helvetica', stil)
     doc.setFontSize(groesse)
     doc.setTextColor(grau)
   }
   const platz = (h: number) => {
-    if (y + h > sh - UNTEN) {
+    if (y + h > satz.unten) {
       doc.addPage()
       seite++
-      y = OBEN + 4
-    }
-  }
-
-  // Kopf und Seitenleiste
-  schrift('bold', 13)
-  doc.text(sicher(kopf.name), L, OBEN)
-  schrift('normal', 8.5, 90)
-  let ky = OBEN + 5
-  for (const z of kopf.unterzeilen) {
-    doc.text(sicher(z), L, ky)
-    ky += 3.8
-  }
-  doc.setDrawColor(190)
-  doc.setLineWidth(0.3)
-  doc.line(L, ky + 1, R, ky + 1)
-  y = ky + 10
-  if (leiste) {
-    const lx = R - leiste
-    let ly = y
-    doc.setDrawColor(215)
-    doc.line(lx - 4, ly - 3, lx - 4, sh - UNTEN - 6)
-    for (const e of kopf.seitenleiste) {
-      if (e.titel) {
-        schrift('bold', 7.5, 60)
-        doc.text(sicher(e.titel), lx, ly)
-        ly += 3.6
-      }
-      schrift('normal', 6.6, 105)
-      for (const z of e.zeilen) {
-        for (const t of doc.splitTextToSize(sicher(z), leiste) as string[]) {
-          doc.text(t, lx, ly)
-          ly += 2.9
-        }
-      }
-      ly += 2.4
+      y = satz.obenFolge
     }
   }
 
@@ -194,18 +153,6 @@ export function erzeugeKundenberichtPdf(a: KundenberichtPdfAngaben): Blob {
   y += 10
   absatz(a.gruss.trim() || 'Ihr Team der Mayer Holding')
 
-  const seiten = doc.getNumberOfPages()
-  for (let i = 1; i <= seiten; i++) {
-    doc.setPage(i)
-    schrift('normal', 7.2, 120)
-    doc.setDrawColor(210)
-    doc.line(L, sh - 19, R, sh - 19)
-    let fy = sh - 15
-    for (const z of kopf.fusszeilen) {
-      doc.text(sicher(z), L, fy)
-      fy += 3
-    }
-    doc.text(sicher(`Stand Ihres Projekts · ${deDatum(a.datum)} · Seite ${i} von ${seiten}`), R, sh - 11.5, { align: 'right' })
-  }
+  holdingAlleSeiten(doc, sicher(`Stand Ihres Projekts · ${deDatum(a.datum)}`))
   return doc.output('blob')
 }

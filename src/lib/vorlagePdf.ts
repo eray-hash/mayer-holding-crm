@@ -1,10 +1,15 @@
 import jsPDF from 'jspdf'
 import { hatKopfzeile, zerlegeVorlage, type InlineTeil, type VorlagenBlock } from './vorlagenFuellen'
-import { BRIEFKOPF, type Briefkopf } from '../data/briefkopf'
 import { MAYER_LOGO_PNG, MAYER_LOGO_VERHAELTNIS } from '../data/mayerLogo'
+import { HOLDING_BRIEFKOPF, HOLDING_RAENDER, holdingSeite } from './holdingBriefbogenJspdf'
 
 // Erzeugt aus einer ausgefüllten Vorlage ein A4-PDF mit Briefkopf. Nutzt dieselbe Zerlegung wie die
 // Vorschau am Bildschirm (zerlegeVorlage), damit Druck und Vorschau nicht auseinanderlaufen.
+//
+// Briefkopf (seit 24.11.2026): Anschreiben, Rechnungs-Anschreiben und alle Vorlagen ohne eigenes gescanntes
+// Original (Kopfstil 'brief') stehen auf dem echten Briefbogen der Andreas Mayer Holding / Ulmer
+// Wirtschaftskanzlei (holdingBriefbogenJspdf.ts). Die übrigen Kopfstile bilden ihr gescanntes Papier-Original
+// nach; Team-Leiste, Absenderzeile und Fußzeile nehmen sie ebenfalls aus dem Holding-Briefbogen (HOLDING_BRIEFKOPF).
 //
 // Schrift: die in jsPDF eingebaute Helvetica. Sie kennt nur westeuropäische Zeichen — Kästchen
 // werden deshalb gezeichnet statt als Schriftzeichen gesetzt, und alles andere Unbekannte wird in
@@ -16,7 +21,7 @@ const KASTEN = 3.1
 // ---- Kopfstile: jede Vorlage sieht aus wie ihr gescanntes Original (Scans vom 21.09.2026, SKM_C3350i…) ----
 // Maße in mm, abgenommen von den Scans bzw. dem Word-Briefbogen „AMayer Holding Ulmer Wirtschaftskanzlei 01.09.2026“.
 export type Kopfstil =
-  | 'brief' // Brief: Logo, Rücksendezeile, Leiste „Ulmer Wirtschaftskanzlei“, Fußzeile mit Balken (10100-1, 10110-6)
+  | 'brief' // Echter Holding-Briefbogen (Logo, Absenderzeile, Team-Spalte auf Seite 1, Fußzeile); Anschreiben und alles ohne eigenes Original
   | 'fragebogen' // Logo + Rücksendezeile auf jeder Seite, Leiste im Rahmen auf Seite 1, Fußzeile (10080)
   | 'vertrag' // Logo auf jeder Seite, unten links „1 von 4“ (10040)
   | 'kopffelder' // kleines Logo oben links, daneben Bereich/Datum/Kunde/Telefon auf jeder Seite (10090)
@@ -30,10 +35,12 @@ export type Kopfstil =
 
 type Stil = {
   schrift: 'helvetica' | 'times'
+  /** Auf dem echten Holding-Briefbogen (zeichneHoldingBriefbogen): Logo, Absenderzeile, Team-Spalte, Fußzeile. */
+  holding?: boolean
   logo?: { x: number; y: number; breite: number; seiten: 'alle' | 'erste'; blass?: boolean }
   rueck?: { y: number; seiten: 'alle' | 'erste' }
   leiste?: 'frei' | 'rahmen'
-  fuss: 'mayer' | 'mayerBalken' | 'vertraulich' | 'seitenzahlLinks' | 'keiner'
+  fuss: 'mayer' | 'vertraulich' | 'seitenzahlLinks' | 'keiner'
   kooperation?: boolean
   start1: number // Textbeginn Seite 1
   startN: number // Textbeginn Folgeseiten
@@ -61,7 +68,8 @@ type Stil = {
 const LOGO_STANDARD = { x: 16.5, y: 9.4, breite: 24 }
 const BLAU: [number, number, number] = [46, 116, 181]
 const STILE: Record<Kopfstil, Stil> = {
-  brief: { schrift: 'times', logo: { ...LOGO_STANDARD, seiten: 'alle' }, rueck: { y: 41.2, seiten: 'erste' }, leiste: 'frei', fuss: 'mayerBalken', start1: 49, startN: 45, links: 21, rechts: 61, unten: 40 },
+  // Ränder aus dem Briefbogen: rechts auf Seite 1 die Team-Spalte, auf Folgeseiten nur der normale Rand.
+  brief: { schrift: 'times', holding: true, fuss: 'keiner', start1: HOLDING_RAENDER.obenErste, startN: HOLDING_RAENDER.obenFolge, links: HOLDING_RAENDER.links, rechts: HOLDING_RAENDER.rechts, unten: HOLDING_RAENDER.unten },
   fragebogen: { schrift: 'helvetica', logo: { ...LOGO_STANDARD, seiten: 'alle' }, rueck: { y: 38.5, seiten: 'alle' }, leiste: 'rahmen', fuss: 'mayer', start1: 47, startN: 47, links: 21, rechts: 18, unten: 30, titel: { groesse: 10.5, fett: false }, handZeile: 4.2, abschnittZusammen: true },
   // Etwas enger als der Scan (Logo höher, Zeilen 4,5 mm), damit die Vereinbarung auf zwei Seiten passt (Erays Wunsch, 20.11.2026).
   vertrag: { schrift: 'times', logo: { x: 17, y: 18, breite: 22, seiten: 'alle' }, fuss: 'seitenzahlLinks', start1: 58, startN: 50, links: 21, rechts: 20, unten: 20, titel: { groesse: 16, fett: true }, zeile: 4.5, abschnittZusammen: true },
@@ -90,7 +98,8 @@ export function kopfstilFuer(name: string): Kopfstil {
   if (/feedbackbogen/.test(n)) return 'feedback'
   if (/gesprächsprotokoll|gespraechsprotokoll/.test(n)) return 'protokoll'
   if (/beratungsfragen|steuerberater|unterlagen|checkliste/.test(n)) return 'kopffelder'
-  return 'fragebogen'
+  // Ohne eigenes gescanntes Original: der echte Holding-Briefbogen (Anweisung der Geschäftsführung, 24.11.2026).
+  return 'brief'
 }
 
 function sicher(text: string): string {
@@ -114,12 +123,12 @@ export function erzeugeVorlagePdf(params: {
   text: string
   werte: Record<string, string>
   angekreuzt: ReadonlySet<number>
-  briefkopf?: Briefkopf
-  /** Kopfstil; ohne Angabe 'fragebogen'. Passend zur Vorlage: kopfstilFuer(vorlage.name). */
+  /** Kopfstil; ohne Angabe 'brief' (Holding-Briefbogen). Passend zur Vorlage: kopfstilFuer(vorlage.name). */
   kopfstil?: Kopfstil
 }): jsPDF {
-  const kopf = params.briefkopf ?? BRIEFKOPF
-  const st = STILE[params.kopfstil ?? 'fragebogen']
+  // Vorlagen sind immer Schriftstücke der Holding (es gibt keine privaten Vorlagen) — Angaben aus dem Briefbogen.
+  const kopf = HOLDING_BRIEFKOPF
+  const st = STILE[params.kopfstil ?? 'brief']
   const FAM = st.schrift
   const LINKS = st.links
   const UNTEN = st.unten
@@ -127,9 +136,9 @@ export function erzeugeVorlagePdf(params: {
   const seitenBreite = doc.internal.pageSize.getWidth()
   const seitenHoehe = doc.internal.pageSize.getHeight()
   const leiste = st.leiste && kopf.seitenleiste.length > 0 ? st.leiste : undefined
-  // Leiste „frei“ (Brief) liegt rechts im Rand (st.rechts = 61); „rahmen“ (Fragebogen) verkleinert Seite 1.
+  // Leiste „frei“ liegt rechts im Rand (st.rechts); „rahmen“ (Fragebogen) verkleinert Seite 1.
   const breiteSeite1 = leiste === 'rahmen' ? 152 - LINKS - 5 : seitenBreite - LINKS - st.rechts
-  const breiteFolge = seitenBreite - LINKS - (st.fuss === 'mayerBalken' ? st.rechts : Math.min(st.rechts, 22))
+  const breiteFolge = seitenBreite - LINKS - (st.holding ? HOLDING_RAENDER.rechtsFolge : Math.min(st.rechts, 22))
   let seite = 1
   let y = st.start1
   const logoUnten = st.logo ? st.logo.y + st.logo.breite / MAYER_LOGO_VERHAELTNIS + 1.5 : 0
@@ -171,6 +180,10 @@ export function erzeugeVorlagePdf(params: {
   }
 
   function kopfZeichnen(s: number) {
+    if (st.holding) {
+      holdingSeite(doc, s === 1 ? 'erste' : 'folge')
+      return
+    }
     logoZeichnen(s)
     if (st.rueck && (st.rueck.seiten === 'alle' || s === 1)) {
       const t = sicher(kopf.unterzeilen[0]?.replace(/\s*·\s*/g, ' ') ?? '')
@@ -551,7 +564,7 @@ export function erzeugeVorlagePdf(params: {
       if (/^§\s*1\b/.test(roh)) paragrafErreicht = true
       titelMitte = !!st.mitteBisParagraf && !paragrafErreicht && !/^wird\b/i.test(roh)
       // Brief: Datumszeile „Ulm, den …“ rechtsbündig wie im Original (10100-1, 10110-6)
-      rechtsBuendig = st.fuss === 'mayerBalken' && /^[A-ZÄÖÜ][\wäöüß.-]*,\s+den\b/.test(roh)
+      rechtsBuendig = !!st.holding && /^[A-ZÄÖÜ][\wäöüß.-]*,\s+den\b/.test(roh)
       absatz(block.teile, 'normal', st.schrift === 'times' ? 10.5 : 9.5, st.zeile ?? ZEILE, block.einzug)
       titelMitte = false
       rechtsBuendig = false
@@ -612,11 +625,7 @@ export function erzeugeVorlagePdf(params: {
       seite = seiteVorher
       y = yVorher
     }
-    if (st.fuss === 'mayer' || st.fuss === 'mayerBalken') {
-      if (st.fuss === 'mayerBalken') {
-        doc.setFillColor(247, 141, 75)
-        doc.rect(159.6, 262.9, 46.2, 3.6, 'F')
-      }
+    if (st.fuss === 'mayer') {
       const [l, m, r] = fussSpalten()
       doc.setFont('helvetica', 'normal')
       doc.setFontSize(6.8)

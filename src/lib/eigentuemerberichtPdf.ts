@@ -1,13 +1,12 @@
 // PDF des Eigentümerberichts (21.11.2026): was im gewählten Zeitraum für die Vermarktung eines Objekts
 // geschehen ist — Kennzahlen, Besichtigungen mit Rückmeldung, Kaufpreisangebote, Tätigkeiten und die
-// Einschätzung des Maklers. Briefkopf wie bei Kostenvoranschlag und Angebot (data/briefkopf.ts).
-// Was hineinkommt, stellt der Mitarbeiter in ObjektEigentuemerbericht.tsx zusammen; hier wird nur gesetzt.
+// Einschätzung des Maklers. Auf dem echten Briefbogen der Andreas Mayer Holding / Ulmer Wirtschaftskanzlei
+// (holdingBriefbogenJspdf.ts, seit 24.11.2026). Was hineinkommt, stellt der Mitarbeiter in
+// ObjektEigentuemerbericht.tsx zusammen; hier wird nur gesetzt.
 import jsPDF from 'jspdf'
-import { BRIEFKOPF, type Briefkopf } from '../data/briefkopf'
+import { HOLDING_RAENDER, holdingAlleSeiten, holdingSatzspiegel } from './holdingBriefbogenJspdf'
 
-const L = 22
-const OBEN = 18
-const UNTEN = 26
+const L = HOLDING_RAENDER.links
 
 export const deDatum = (iso?: string) => (iso && /^\d{4}-\d{2}-\d{2}/.test(iso) ? iso.slice(0, 10).split('-').reverse().join('.') : '')
 const euro = (n: number) => `${n.toLocaleString('de-DE', { maximumFractionDigits: 0 })} €`
@@ -24,7 +23,6 @@ function sicher(text: string): string {
 export type BerichtBesichtigung = { datum: string; interessent: string; stand: string; interesse: string; rueckmeldung: string; angebot?: number }
 
 export type EigentuemerberichtDaten = {
-  briefkopf?: Briefkopf
   /** Empfänger, eine Zeile je Eintrag. */
   empfaenger: string[]
   /** Datum des Berichts (JJJJ-MM-TT). */
@@ -48,15 +46,12 @@ export function eigentuemerberichtDateiname(objektBezeichnung: string, bis: stri
 }
 
 export function erzeugeEigentuemerberichtPdf(d: EigentuemerberichtDaten): Blob {
-  const kopf = d.briefkopf ?? BRIEFKOPF
   const doc = new jsPDF({ unit: 'mm', format: 'a4' })
-  const sb = doc.internal.pageSize.getWidth()
-  const sh = doc.internal.pageSize.getHeight()
-  const R = sb - 16
-  const leiste = kopf.seitenleiste.length > 0 ? 42 : 0
+  const satz = holdingSatzspiegel(doc)
   let seite = 1
-  let y = OBEN
-  const rechts = () => (seite === 1 && leiste ? R - leiste - 6 : R)
+  let y = satz.obenErste
+  // Auf Seite 1 steht rechts die Team-Spalte des Briefbogens; der Text bleibt links davon.
+  const rechts = () => (seite === 1 ? satz.rechtsErste : satz.rechtsFolge)
 
   const schrift = (stil: 'normal' | 'bold', groesse: number, grau = 25) => {
     doc.setFont('helvetica', stil)
@@ -64,47 +59,11 @@ export function erzeugeEigentuemerberichtPdf(d: EigentuemerberichtDaten): Blob {
     doc.setTextColor(grau)
   }
 
-  function kopfZeichnen() {
-    schrift('bold', 13, 25)
-    doc.text(sicher(kopf.name), L, OBEN)
-    schrift('normal', 8.5, 90)
-    let ky = OBEN + 5
-    for (const z of kopf.unterzeilen) {
-      doc.text(sicher(z), L, ky)
-      ky += 3.8
-    }
-    doc.setDrawColor(190)
-    doc.setLineWidth(0.3)
-    doc.line(L, ky + 1, R, ky + 1)
-    y = ky + 10
-    if (leiste) {
-      const lx = R - leiste
-      let ly = y
-      doc.setDrawColor(215)
-      doc.line(lx - 4, ly - 3, lx - 4, sh - UNTEN - 6)
-      for (const e of kopf.seitenleiste) {
-        if (e.titel) {
-          schrift('bold', 7.5, 60)
-          doc.text(sicher(e.titel), lx, ly)
-          ly += 3.6
-        }
-        schrift('normal', 6.6, 105)
-        for (const z of e.zeilen) {
-          for (const t of doc.splitTextToSize(sicher(z), leiste) as string[]) {
-            doc.text(t, lx, ly)
-            ly += 2.9
-          }
-        }
-        ly += 2.4
-      }
-    }
-  }
-
   const platz = (h: number) => {
-    if (y + h > sh - UNTEN) {
+    if (y + h > satz.unten) {
       doc.addPage()
       seite++
-      y = OBEN + 4
+      y = satz.obenFolge
       return true
     }
     return false
@@ -132,8 +91,6 @@ export function erzeugeEigentuemerberichtPdf(d: EigentuemerberichtDaten): Blob {
     doc.line(L, y, rechts(), y)
     y += 5.5
   }
-
-  kopfZeichnen()
 
   // Empfänger und Datum
   schrift('normal', 10)
@@ -238,19 +195,6 @@ export function erzeugeEigentuemerberichtPdf(d: EigentuemerberichtDaten): Blob {
   y += 10
   absatz(d.absender)
 
-  // Fußzeilen und Seitenzahlen
-  const seiten = doc.getNumberOfPages()
-  for (let i = 1; i <= seiten; i++) {
-    doc.setPage(i)
-    schrift('normal', 7.2, 120)
-    doc.setDrawColor(210)
-    doc.line(L, sh - 19, R, sh - 19)
-    let fy = sh - 15
-    for (const z of kopf.fusszeilen) {
-      doc.text(sicher(z), L, fy)
-      fy += 3
-    }
-    doc.text(`Eigentümerbericht · Seite ${i} von ${seiten}`, R, sh - 11.5, { align: 'right' })
-  }
+  holdingAlleSeiten(doc, 'Eigentümerbericht')
   return doc.output('blob')
 }

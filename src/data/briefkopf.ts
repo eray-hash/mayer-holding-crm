@@ -1,27 +1,34 @@
 import type { Vorlage } from '../types'
+import { HOLDING_ANGABEN as H } from '../../supabase/functions/_shared/holdingBriefbogen.ts'
 
-// Briefkopf für alle aus Vorlagen erzeugten Schreiben.
-//
-// Die vollständigen Angaben (Registernummer, Bankverbindung, Steuernummer, Namen und Titel der
-// Seitenleiste) stehen NICHT hier im Programmcode, sondern in der Datenbank: als eine Zeile der
-// Tabelle "vorlagen" mit der id "briefkopf" (bereich "beratung", kategorie "briefkopf"), deren Text
-// die Angaben als JSON enthält. Grund: Dieses Repository ist öffentlich. Hier steht nur ein
-// schlichter Ersatz für den Fall, dass die Zeile fehlt.
+// Briefkopf-Angaben aus der Datenbank: eine Zeile der Tabelle "vorlagen" mit der id "briefkopf" (bereich
+// "beratung", kategorie "briefkopf"), deren Text die Angaben als JSON enthält. Sie liefert heute vor allem die
+// Verkäuferdaten der E-Rechnung (module/eRechnung). Das AUSSEHEN der PDFs (Rechnung, Angebot, Berichte,
+// Vorlagen …) kommt seit 24.11.2026 nicht mehr von hier, sondern vom echten Holding-Briefbogen
+// (supabase/functions/_shared/holdingBriefbogen.ts, src/lib/holdingBriefbogenJspdf.ts).
 export type Briefkopf = {
   name: string
   unterzeilen: string[]
   // Rechte Spalte auf der ersten Seite: Personen mit ihren Bezeichnungen, wie auf dem Briefbogen.
   seitenleiste: { titel: string; zeilen: string[] }[]
   fusszeilen: string[]
+  /** Privates Schreiben eines Mitarbeiters (private Akte): schlichter Kopf mit seinem Namen, NIE der Holding-Briefbogen. */
+  privat?: boolean
 }
 
 export const BRIEFKOPF_ID = 'briefkopf'
 
+/** Ersatz, falls die Zeile fehlt: dieselben Angaben wie die Fußzeile des Holding-Briefbogens (HOLDING_ANGABEN),
+ *  im Format der Datenbank-Zeile — so findet auch die E-Rechnung Anschrift, IBAN und Steuernummer. */
 export const BRIEFKOPF: Briefkopf = {
   name: 'Andreas Mayer Holding',
-  unterzeilen: ['Schwabstrasse 3 · 89075 Ulm'],
+  unterzeilen: [`Andreas Mayer Holding · ${H.strasse}, ${H.plz} ${H.ort}`],
   seitenleiste: [],
-  fusszeilen: ['Andreas Mayer Holding · Schwabstrasse 3 · 89075 Ulm'],
+  fusszeilen: [
+    `${H.firma} · ${H.strasse} · ${H.plz} ${H.ort} · ${H.register}`,
+    `${H.bank} · IBAN: ${H.iban} · Steuernummer ${H.steuernummer}`,
+    `Tel.: ${H.telefon} · ${H.web} · GF: ${H.geschaeftsfuehrer}`,
+  ],
 }
 
 const istTextliste = (x: unknown): x is string[] => Array.isArray(x) && x.every((e) => typeof e === 'string')

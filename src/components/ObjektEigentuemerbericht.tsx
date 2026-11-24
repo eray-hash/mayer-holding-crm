@@ -8,7 +8,6 @@ import { Download, FileText, FolderInput, Plus, Trash2 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { useAuth } from '../context/AuthContext'
 import { CURRENT_USER } from '../data/constants'
-import { briefkopfAus } from '../data/briefkopf'
 import { IMMOBILIEN_STATUS } from '../data/statusNetworks'
 import { addDays, fmtEUR, today, uid } from '../lib/dates'
 import { herunterladen } from '../lib/briefe'
@@ -131,7 +130,6 @@ export function ObjektEigentuemerbericht({ objekt }: { objekt: Objekt }) {
       .filter((b) => b.status === 'durchgefuehrt' || (mitAbgesagten && (b.status === 'abgesagt' || b.status === 'nicht_erschienen')))
       .sort((x, y) => x.beginn.localeCompare(y.beginn))
     return {
-      briefkopf: briefkopfAus(state.vorlagenBeratung),
       empfaenger: empfaenger.split('\n'),
       datum: today(),
       objekt: { bezeichnung: objekt.bezeichnung, adresse: objekt.adresse, typ: objekt.typ, stand: IMMOBILIEN_STATUS[objekt.status]?.label ?? objekt.status, preis: preis || undefined },

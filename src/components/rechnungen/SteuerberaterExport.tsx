@@ -177,7 +177,7 @@ async function ladePersonenkonten(): Promise<Personenkonto[]> {
 type Art = 'monat' | 'quartal'
 
 export function SteuerberaterExport({ onClose }: { onClose: () => void }) {
-  const { state, nutzer, briefkopf } = useRechnungAktionen()
+  const { state, nutzer } = useRechnungAktionen()
   const { mitarbeiter, ansichtAls } = useAuth()
   const darfEinstellen = !ansichtAls && (mitarbeiter?.rolle === 'geschaeftsfuehrung' || !!mitarbeiter?.ist_admin)
 
@@ -312,7 +312,7 @@ export function SteuerberaterExport({ onClose }: { onClose: () => void }) {
           }
           if (!inhalt) {
             try {
-              const blob = erzeugeRechnungPdf(r, { briefkopf, empfaenger: empfaengerZeilen(r, findeAkte(state, r.kundeId)), absender: nutzer.name })
+              const blob = erzeugeRechnungPdf(r, { empfaenger: empfaengerZeilen(r, findeAkte(state, r.kundeId)), absender: nutzer.name })
               inhalt = new Uint8Array(await blob.arrayBuffer())
             } catch {
               zusatz.push({ art: 'datei_fehler', schwere: 'fehlt', id: r.id, bezug: 'rechnung', text: `Rechnung ${r.nummer}: kein PDF — ließ sich weder laden noch erzeugen.` })

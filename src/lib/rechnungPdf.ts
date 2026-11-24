@@ -1,23 +1,20 @@
-// Rechnungen und Mahnschreiben als PDF auf dem Briefbogen der Holding (21.11.2026).
-// Briefkopf wie bei Kostenvoranschlag/Angebot (data/briefkopf.ts: Zeile "briefkopf" der Tabelle vorlagen —
-// Name, Unterzeilen mit Anschrift, Seitenleiste auf Seite 1, Fußzeilen mit Steuernummer und Bankverbindung).
+// Rechnungen und Mahnschreiben als PDF auf dem echten Briefbogen der Andreas Mayer Holding / Ulmer
+// Wirtschaftskanzlei (Logo, Absenderzeile, Team-Spalte auf Seite 1, dreispaltige Fußzeile mit Bank,
+// Steuernummer und Amtsgericht — holdingBriefbogenJspdf.ts; seit 24.11.2026 statt eines nachgebauten Kopfs).
 // Pflichtangaben einer Rechnung (§ 14 UStG): Anschrift beider Seiten, Steuernummer (Fußzeile), Datum,
 // fortlaufende Nummer, Leistung, Leistungszeitpunkt, Entgelt netto, Steuersatz und -betrag, Bruttobetrag.
 import jsPDF from 'jspdf'
-import { BRIEFKOPF, type Briefkopf } from '../data/briefkopf'
 import { MAHNSTUFEN } from '../data/constants'
+import { HOLDING_RAENDER, holdingAlleSeiten, holdingSatzspiegel } from './holdingBriefbogenJspdf'
 import { bezahlteSumme, mahngebuehren, positionenFuerAnzeige, rundeCent, summeAusPositionen, ustSatzVon } from './rechnungen'
 import type { MahnstufeId, Rechnung, RechnungMahnung } from '../types'
-
-const L = 22
-const OBEN = 18
-const UNTEN = 26
 
 export const euroPdf = (n: number) => `${n.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €`
 /** Beträge im Fließtext: jsPDF verschluckt mit der eingebauten Schrift das Leerzeichen nach „€“ — dort „EUR“. */
 const euroText = (n: number) => `${n.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} EUR`
 const zahl = (n: number) => n.toLocaleString('de-DE', { maximumFractionDigits: 2 })
 export const deDatum = (iso?: string) => (iso && /^\d{4}-\d{2}-\d{2}/.test(iso) ? iso.slice(0, 10).split('-').reverse().join('.') : iso ?? '')
+const L = HOLDING_RAENDER.links
 const heuteIso = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Berlin' })
 
 /** Nur Zeichen, die die eingebaute Helvetica kennt (wie vorlagePdf.ts). */
@@ -25,35 +22,25 @@ function sicher(text: string): string {
   return text
     .replace(/[→➜➤]/g, '->')
     .replace(/[✓✔]/g, 'x')
-    .replace(/[  ]/g, ' ')
+    .replace(/[\u00a0\u202f]/g, ' ')
     .replace(/[^\u0000-ÿ€–—‘’‚“”„•…]/g, '?')
 }
 
 export const mahnstufeName = (s: MahnstufeId) => MAHNSTUFEN.find((m) => m.id === s)?.label ?? s
 
 // ---------------------------------------------------------------------------------------------
-// Briefbogen: Kopf, Seitenleiste auf Seite 1, Absätze mit Seitenumbruch, Fußzeilen mit Seitenzahl.
+// Satz auf dem Holding-Briefbogen: Inhalt im Satzspiegel, Absätze mit Seitenumbruch; Briefbogen und
+// Seitenzahlen kommen am Ende auf alle Seiten (fertig).
 
 class Briefbogen {
   doc = new jsPDF({ unit: 'mm', format: 'a4' })
-  sb = this.doc.internal.pageSize.getWidth()
-  sh = this.doc.internal.pageSize.getHeight()
-  R = this.sb - 16
-  leiste: number
+  satz = holdingSatzspiegel(this.doc)
   seite = 1
-  y = OBEN
+  y = this.satz.obenErste
 
-  kopf: Briefkopf
-
-  constructor(kopf: Briefkopf) {
-    this.kopf = kopf
-    this.leiste = kopf.seitenleiste.length > 0 ? 42 : 0
-    this.kopfZeichnen()
-  }
-
-  /** Rechte Textgrenze: auf Seite 1 links der Seitenleiste. */
+  /** Rechte Textgrenze: auf Seite 1 links der Team-Spalte. */
   rechts() {
-    return this.seite === 1 && this.leiste ? this.R - this.leiste - 6 : this.R
+    return this.seite === 1 ? this.satz.rechtsErste : this.satz.rechtsFolge
   }
 
   schrift(stil: 'normal' | 'bold', groesse: number, grau = 25) {
@@ -62,49 +49,13 @@ class Briefbogen {
     this.doc.setTextColor(grau)
   }
 
-  private kopfZeichnen() {
-    const { doc, kopf } = this
-    this.schrift('bold', 13, 25)
-    doc.text(sicher(kopf.name), L, OBEN)
-    this.schrift('normal', 8.5, 90)
-    let ky = OBEN + 5
-    for (const z of kopf.unterzeilen) {
-      doc.text(sicher(z), L, ky)
-      ky += 3.8
-    }
-    doc.setDrawColor(190)
-    doc.setLineWidth(0.3)
-    doc.line(L, ky + 1, this.R, ky + 1)
-    this.y = ky + 10
-    if (this.leiste) {
-      const lx = this.R - this.leiste
-      let ly = this.y
-      doc.setDrawColor(215)
-      doc.line(lx - 4, ly - 3, lx - 4, this.sh - UNTEN - 6)
-      for (const e of kopf.seitenleiste) {
-        if (e.titel) {
-          this.schrift('bold', 7.5, 60)
-          doc.text(sicher(e.titel), lx, ly)
-          ly += 3.6
-        }
-        this.schrift('normal', 6.6, 105)
-        for (const z of e.zeilen) {
-          for (const t of doc.splitTextToSize(sicher(z), this.leiste) as string[]) {
-            doc.text(t, lx, ly)
-            ly += 2.9
-          }
-        }
-        ly += 2.4
-      }
-    }
-  }
-
   /** Neue Seite, wenn h Millimeter nicht mehr passen. */
   platz(h: number): boolean {
-    if (this.y + h > this.sh - UNTEN) {
+    if (this.y + h > this.satz.unten) {
       this.doc.addPage()
       this.seite++
-      this.y = OBEN + 4
+      // 2 mm Luft mehr: der graue Tabellenkopf reicht über die Grundlinie hinaus bis an die Absenderzeile.
+      this.y = this.satz.obenFolge + 2
       return true
     }
     return false
@@ -164,28 +115,21 @@ class Briefbogen {
   }
 
   gruss(absender: string) {
-    this.platz(24)
-    this.absatz('Mit freundlichen Grüßen')
-    this.y += 12
-    this.absatz(absender)
+    // Gruß, Platz für die Unterschrift, Name. Wird es knapp über der Fußzeile, etwas weniger Platz zum
+    // Unterschreiben, statt den Gruß allein auf eine neue Seite zu stellen.
+    // Die Grundlinie des Namens darf bis satz.unten reichen (darunter ist noch Luft bis zur Fußzeile).
+    const luft = this.y + 17 <= this.satz.unten ? 12 : 8
+    this.platz(5 + luft)
+    this.schrift('normal', 10)
+    this.doc.text('Mit freundlichen Grüßen', L, this.y)
+    this.y += 5 + luft
+    this.doc.text(sicher(absender), L, this.y)
+    this.y += 5
   }
 
-  fertig(fussText: string): Blob {
-    const { doc, sh } = this
-    const seiten = doc.getNumberOfPages()
-    for (let i = 1; i <= seiten; i++) {
-      doc.setPage(i)
-      this.schrift('normal', 7.2, 120)
-      doc.setDrawColor(210)
-      doc.line(L, sh - 19, this.R, sh - 19)
-      let fy = sh - 15
-      for (const z of this.kopf.fusszeilen) {
-        doc.text(sicher(z), L, fy)
-        fy += 3
-      }
-      doc.text(sicher(`${fussText} · Seite ${i} von ${seiten}`), this.R, sh - 11.5, { align: 'right' })
-    }
-    return doc.output('blob')
+  fertig(kennung: string): Blob {
+    holdingAlleSeiten(this.doc, sicher(kennung))
+    return this.doc.output('blob')
   }
 }
 
@@ -193,7 +137,6 @@ class Briefbogen {
 // Rechnung
 
 export type RechnungPdfAngaben = {
-  briefkopf?: Briefkopf
   /** Empfänger: Name/Firma und Anschrift, eine Zeile je Eintrag. */
   empfaenger: string[]
   /** Name unter dem Gruß. */
@@ -206,7 +149,7 @@ export function rechnungPdfDateiname(r: Pick<Rechnung, 'nummer' | 'datum'>): str
 }
 
 export function erzeugeRechnungPdf(r: Rechnung, a: RechnungPdfAngaben): Blob {
-  const b = new Briefbogen(a.briefkopf ?? BRIEFKOPF)
+  const b = new Briefbogen()
   const { doc } = b
   const positionen = positionenFuerAnzeige(r)
   const ust = ustSatzVon(r)
@@ -251,13 +194,15 @@ export function erzeugeRechnungPdf(r: Rechnung, a: RechnungPdfAngaben): Blob {
   positionen.forEach((p, i) => {
     let c = sp()
     b.schrift('normal', 9.3)
-    let zeilen = doc.splitTextToSize(sicher(p.bezeichnung || 'Leistung'), c.menge - 16 - c.bez) as string[]
-    const hoehe = zeilen.length * 4.4 + 2.6
+    let zeilen = doc.splitTextToSize(sicher(p.bezeichnung || 'Leistung'), c.menge - 20 - c.bez) as string[]
+    let hoehe = zeilen.length * 4.4 + 2.6
     if (b.platz(hoehe)) {
       tabKopf()
       c = sp()
       b.schrift('normal', 9.3)
-      zeilen = doc.splitTextToSize(sicher(p.bezeichnung || 'Leistung'), c.menge - 16 - c.bez) as string[]
+      zeilen = doc.splitTextToSize(sicher(p.bezeichnung || 'Leistung'), c.menge - 20 - c.bez) as string[]
+      // Auf der Folgeseite ist die Spalte breiter: weniger Zeilen, also auch weniger Höhe.
+      hoehe = zeilen.length * 4.4 + 2.6
     }
     const einheit = p.einheit === 'Stunde' ? 'Std.' : p.einheit === 'Tag' ? (p.menge === 1 ? 'Tag' : 'Tage') : p.einheit
     doc.text(String(i + 1), c.nr + 1, b.y)
@@ -305,7 +250,6 @@ export function erzeugeRechnungPdf(r: Rechnung, a: RechnungPdfAngaben): Blob {
 // Zahlungserinnerung und Mahnungen
 
 export type MahnungPdfAngaben = {
-  briefkopf?: Briefkopf
   empfaenger: string[]
   absender: string
   stufe: MahnstufeId
@@ -365,7 +309,7 @@ export function mahnVorlage(r: Rechnung, stufe: MahnstufeId, datum = heuteIso())
 }
 
 export function erzeugeMahnungPdf(r: Rechnung, a: MahnungPdfAngaben): Blob {
-  const b = new Briefbogen(a.briefkopf ?? BRIEFKOPF)
+  const b = new Briefbogen()
   const { doc } = b
   const betraege = mahnBetraege(r, a.gebuehr)
 
