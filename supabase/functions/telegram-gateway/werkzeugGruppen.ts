@@ -119,9 +119,12 @@ export const GRUPPEN: Record<GruppenName, Gruppe> = {
   },
   rechnungen: {
     titel: 'Rechnungen und Buchhaltung',
-    wofuer: 'Rechnungen erfassen, Status und Zahlungen, offene Rechnungen, Kontoauszug abgleichen, Rechnungsvorschläge, Mahnungen, Verbindlichkeiten, Übergabe an den Steuerberater, Kostenvoranschläge',
+    wofuer: 'Rechnungen ausstellen (PDF) und per Mail versenden, Rechnungen erfassen, Status und Zahlungen, offene Rechnungen, Kontoauszug abgleichen, Rechnungsvorschläge, Mahnungen, Verbindlichkeiten, Übergabe an den Steuerberater, Kostenvoranschläge',
     werkzeuge: [
       'rechnung_erfassen',
+      // 24.11.2026: Rechnung ausstellen (PDF auf dem Briefbogen) und mit Anhang versenden — rechnungErstellen.ts.
+      'rechnung_erstellen',
+      'rechnung_versenden',
       'rechnung_status_setzen',
       'rechnung_zahlung_erfassen',
       'rechnungen_offen',
@@ -183,9 +186,9 @@ export const GRUPPEN: Record<GruppenName, Gruppe> = {
   },
   nachfassen: {
     titel: 'Nachfassen',
-    wofuer: 'Wiedervorlagen, To-do-Liste aufräumen, Stand der Online-Unterschriften, Statusbericht an den Kunden, „Bitte bestätigen“-Vorschläge (Zuordnung, Statuswechsel), Abend-Rückblick an/aus',
-    werkzeuge: ['wiedervorlagen_auflisten', 'wiedervorlage_anlegen', 'wiedervorlage_erledigen', 'wiedervorlage_verschieben', 'todos_aufraeumen', 'unterschrift_status', 'statusbericht_entwurf', 'vorschlaege_bestaetigen', 'abend_rueckblick_einstellen'],
-    stichworte: /wiedervorlage|nachfass|nachhak|erinner|aufraeum|\braeum.{0,40}\bauf\b|to-?dos?.{0,30}(weg|streich)|was kann weg|von (meiner|der) liste|unterschrift|unterschrieb|unterzeichn|vertrag|vollmacht|vereinbarung|statusbericht|zwischenstand|bericht|vorschlaege_bestaetigen|bitte bestaetigen|andere akte|rueckblick/,
+    wofuer: 'Nächste Follow-up-Schritte einer Akte, Wiedervorlagen, To-do-Liste aufräumen, Stand der Online-Unterschriften, Statusbericht an den Kunden, „Bitte bestätigen“-Vorschläge (Zuordnung, Statuswechsel), Abend-Rückblick an/aus',
+    werkzeuge: ['followup_naechste_schritte', 'wiedervorlagen_auflisten', 'wiedervorlage_anlegen', 'wiedervorlage_erledigen', 'wiedervorlage_verschieben', 'todos_aufraeumen', 'unterschrift_status', 'statusbericht_entwurf', 'vorschlaege_bestaetigen', 'abend_rueckblick_einstellen'],
+    stichworte: /follow-?up|naechsten? schritte|als naechstes|wiedervorlage|nachfass|nachhak|erinner|aufraeum|\braeum.{0,40}\bauf\b|to-?dos?.{0,30}(weg|streich)|was kann weg|von (meiner|der) liste|unterschrift|unterschrieb|unterzeichn|vertrag|vollmacht|vereinbarung|statusbericht|zwischenstand|bericht|vorschlaege_bestaetigen|bitte bestaetigen|andere akte|rueckblick/,
   },
   hotmail: {
     titel: 'Hotmail und Briefe (Bereich Privat)',
@@ -239,6 +242,7 @@ export const ABSATZ_GRUPPE: readonly [string, GruppenName][] = [
   ['- E-Mails:', 'postfach'],
   ['- Gesendete Mails:', 'postfach'],
   ['- Rechnungen:', 'rechnungen'],
+  ['- Rechnungen ausstellen:', 'rechnungen'],
   ['- Zahlungen auf Rechnungen:', 'rechnungen'],
   ['- Kontoauszug abgleichen:', 'rechnungen'],
   ['- Rechnungsvorschläge:', 'rechnungen'],
