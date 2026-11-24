@@ -7,8 +7,10 @@
 import { assert, assertEquals, assertMatch, assertStringIncludes } from 'jsr:@std/assert@1'
 import { strFromU8, unzipSync } from 'npm:fflate@0.8.2'
 import { XMLValidator } from 'npm:fast-xml-parser@4.5.0'
-import { blattName, DOCX_TYP, erstelleDocx, erstelleXlsx, spaltenName, XLSX_TYP, xmlText } from './dateiFormate.ts'
-import { fuehreDokumentWerkzeugAus } from './dokumentErstellen.ts'
+import { blattName, DOCX_TYP, erstelleDocx, erstelleHoldingDocx, erstelleXlsx, spaltenName, XLSX_TYP, xmlText } from './dateiFormate.ts'
+import { erstellePdf, fuehreDokumentWerkzeugAus, HOLDING_WORD_VORLAGE_ID, vergissHoldingWordVorlage } from './dokumentErstellen.ts'
+import { falscheHoldingVorlage } from './holdingVorlageTestDoppel.ts'
+import { PDFDocument } from 'npm:pdf-lib@1.17.1'
 import { findeDokument, speicherOrt } from './dateiSenden.ts'
 import { falscheDatenbank, type FalscheDatenbank } from '../_shared/testDoppel.ts'
 
@@ -184,6 +186,51 @@ Deno.test('Excel: leere Eingabe und zu viele Zellen ergeben einen deutschen Fehl
   assertStringIncludes(fehler, 'mindestens ein Blatt')
 })
 
+Deno.test('Word auf dem Holding-Briefbogen: Vorlage bleibt, Briefformular fällt weg, wohlgeformt', () => {
+  const t = entpacke(erstelleHoldingDocx(falscheHoldingVorlage(), { titel: 'Merkblatt Test', inhalt: TEXT, artName: 'Merkblatt', fuer: 'Zebra & Partner', stand: '24. November 2026', urheber: 'Andreas Mayer Holding' }))
+  pruefeWohlgeformt(t)
+  const doc = t['word/document.xml']
+  // Team-Spalte (Umlauf) bleibt, Brief-Textfeld und leerer Rahmen nicht.
+  assertStringIncludes(doc, 'Teamspalte Kanzlei')
+  assert(!doc.includes('Ulm, den') && !doc.includes('>Firma<') && !doc.includes('Gruss Absender'))
+  assertEquals((doc.match(/<wp:anchor\b/g) ?? []).length, 1)
+  assertStringIncludes(doc, 'Merkblatt Test')
+  assertStringIncludes(doc, 'Müller &amp; Söhne')
+  // Ein Abschnitt mit Standard-Kopf/-Fuß der Vorlage, rechter Rand 22 mm, keine alte erste/gerade Kopfzeile.
+  assertEquals((doc.match(/<w:sectPr\b/g) ?? []).length, 1)
+  assertMatch(doc, /<w:sectPr><w:headerReference w:type="default" r:id="rId9"\/><w:footerReference w:type="default" r:id="rId11"\/>.*w:right="1247"/)
+  for (const weg of ['word/header1.xml', 'word/header3.xml', 'word/footer3.xml']) assert(!t[weg], `${weg} sollte entfernt sein`)
+  assert(!t['[Content_Types].xml'].includes('header3') && !t['word/_rels/document.xml.rels'].includes('footer3'))
+  assert(!t['word/settings.xml'].includes('evenAndOddHeaders'))
+  assertStringIncludes(t['word/header2.xml'], 'Absenderzeile Holding')
+  // Eigene Formatvorlagen mit Vorsatz, die der Vorlage bleiben; Listen-Nummern lückenlos nach denen der Vorlage.
+  assertStringIncludes(t['word/styles.xml'], 'w:styleId="CrmHeading2"')
+  assertEquals((t['word/styles.xml'].match(/w:styleId="Listenabsatz"/g) ?? []).length, 1)
+  assertStringIncludes(doc, '<w:pStyle w:val="CrmListenabsatz"/><w:numPr><w:ilvl w:val="0"/><w:numId w:val="3"/>')
+  assertStringIncludes(t['word/numbering.xml'], '<w:num w:numId="3"><w:abstractNumId w:val="2"/></w:num>')
+  assert(t['word/numbering.xml'].indexOf('w:abstractNumId="2"><w:multiLevelType') < t['word/numbering.xml'].indexOf('<w:num w:numId="1">'), 'abstractNum vor num')
+})
+
+Deno.test('Word auf dem Holding-Briefbogen: kaputte Vorlage gibt klaren Fehler', () => {
+  let fehler = ''
+  try {
+    erstelleHoldingDocx(new Uint8Array([1, 2, 3]), { titel: 'X', inhalt: 'Y', artName: 'Merkblatt', stand: 'heute', urheber: 'Z' })
+  } catch (e) {
+    fehler = (e as Error).message
+  }
+  assertStringIncludes(fehler, 'Holding-Briefbogens')
+})
+
+Deno.test('PDF der Holding: auf dem Briefbogen (Fußzeile mit Register), kein erfundener Kopf', async () => {
+  const { bytes, seiten } = await erstellePdf({ titel: 'Merkblatt Test', inhalt: TEXT, datum: '2026-11-24' })
+  assert(seiten >= 1)
+  const doc = await PDFDocument.load(bytes)
+  assertEquals(doc.getAuthor(), 'Andreas Mayer Holding')
+  // Hintergrund ist als eingebettete Seite (Form-XObject) gezeichnet.
+  const roh = new TextDecoder('latin1').decode(bytes)
+  assertMatch(roh, /\/Subtype\s*\/Form/)
+})
+
 // Beispiel-Dateien zum Ansehen (nur wenn BEISPIEL_ORDNER gesetzt ist).
 Deno.test('Beispiel-Dateien schreiben', async () => {
   const ordner = Deno.env.get('BEISPIEL_ORDNER')
@@ -280,6 +327,27 @@ Deno.test('tabelle_erstellen: leere Tabelle und fremde private Akte werden abgel
   assertStringIncludes(await fuehreDokumentWerkzeugAus('tabelle_erstellen', { kunde_id: 'k_b', titel: 'X', blaetter: [] }, k), 'leer')
   assertStringIncludes(await fuehreDokumentWerkzeugAus('tabelle_erstellen', { kunde_id: 'k_priv_c', titel: 'X', blaetter: [{ spalten: ['a'], zeilen: [[1]] }] }, k), 'keinen Kunden')
   assertEquals(d.ablage.get('kunden-dokumente')?.size ?? 0, 0)
+})
+
+Deno.test('dokument_erstellen mit format word für die Holding: echte Vorlage aus dem CRM, ohne Vorlage klarer Fehler', async () => {
+  vergissHoldingWordVorlage()
+  const d = db()
+  const { k } = kontext(d, ANNA)
+  const ohne = await fuehreDokumentWerkzeugAus('dokument_erstellen', { kunde_id: 'k_b', titel: 'Merkblatt', inhalt: 'Text', format: 'word' }, k)
+  assertMatch(ohne, /^Fehler: .*Word-Vorlage des Holding-Briefbogens/)
+  assertEquals(d.ablage.get('kunden-dokumente')?.size ?? 0, 0)
+  d.tabelle('vorlagen').push({ id: HOLDING_WORD_VORLAGE_ID, name: 'Briefbogen', datei: { pfad: 'vorlagen/x/briefbogen.docx', name: 'b.docx' } })
+  await legeAb(d, 'kunden-dokumente', 'vorlagen/x/briefbogen.docx', '')
+  d.ablage.get('kunden-dokumente')!.set('vorlagen/x/briefbogen.docx', { bytes: new Uint8Array(falscheHoldingVorlage()), contentType: DOCX_TYP })
+  const aus = await fuehreDokumentWerkzeugAus('dokument_erstellen', { kunde_id: 'k_b', titel: 'Merkblatt', inhalt: '- eins', format: 'word' }, k)
+  assertStringIncludes(aus, '„Merkblatt (20.11.2026).docx"')
+  // deno-lint-ignore no-explicit-any
+  const neu = (d.tabelle('kunden').find((z) => z.id === 'k_b')!.dokumente as any[])[0]
+  const t = entpacke(d.ablage.get('kunden-dokumente')!.get(neu.url)!.bytes)
+  assertStringIncludes(t['word/header2.xml'], 'Absenderzeile Holding')
+  assertStringIncludes(t['word/document.xml'], 'Teamspalte Kanzlei')
+  assert(!t['word/header1.xml'])
+  vergissHoldingWordVorlage()
 })
 
 Deno.test('dokument_erstellen mit format word: .docx in der Akte, private Akte ohne Mayer-Kopf', async () => {

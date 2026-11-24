@@ -19,13 +19,21 @@
 // bei Exposés, sonst „Sonstiges“) — Ablage über objektAblage.ts. Anlass: Wunsch vom 20.11.2026, ein
 // erstelltes Exposé landete mangels Funktion in einer Sammelakte.
 //
+// Briefbogen (24.11.2026): Alles, was nicht privat ist, steht auf dem ECHTEN Briefbogen der Andreas Mayer
+// Holding / Ulmer Wirtschaftskanzlei — PDF mit dem Briefbogen als Hintergrund (_shared/holdingBriefbogenPdf.ts),
+// Word auf der Word-Vorlage aus dem CRM (Vorlage HOLDING_WORD_VORLAGE_ID, erstelleHoldingDocx). Vorher stand
+// hier ein selbst gebauter Kopf; der Chef will ausnahmslos den echten Briefbogen. Fehlt die Word-Vorlage,
+// gibt es einen klaren Fehler statt eines erfundenen Layouts. Private Akten: weiter eigener Briefbogen/Name.
+//
 // Die Datei kennt index.ts nicht (kein Kreis-Import): Datenbank, Mitarbeiter und Protokoll reicht der
 // Aufrufer herein, die Rechte kommen aus rechte.ts. Neue Werkzeuge hier in DOKUMENT_WERKZEUGE und
 // istDokumentWerkzeug eintragen — index.ts übernimmt sie von selbst.
 
 import { PDFDocument, type PDFEmbeddedPage, type PDFFont, type PDFPage, rgb, StandardFonts } from 'npm:pdf-lib@1.17.1'
 import { type Lauf, laeufe, ohneTitelUeberschrift, zerlege } from './auszeichnung.ts'
-import { type BlattEingabe, DOCX_TYP, erstelleDocx, erstelleXlsx, XLSX_TYP } from './dateiFormate.ts'
+import { type BlattEingabe, DOCX_TYP, erstelleDocx, erstelleHoldingDocx, erstelleXlsx, XLSX_TYP } from './dateiFormate.ts'
+import { HOLDING_RAENDER } from '../_shared/holdingBriefbogen.ts'
+import { HOLDING_HINTERGRUND_RAENDER, holdingBriefbogenPdf } from '../_shared/holdingBriefbogenPdf.ts'
 import { DATEI_SENDEN_WERKZEUG, fuehreDateiSendenAus } from './dateiSenden.ts'
 import { ladeObjektMitRechten, legeInsObjektAb, objektAnzeige, type ObjektZeile, ordnerAusEingabe } from './objektAblage.ts'
 import { type AkteFuerRechte, darfAkte as darfAkteStandard, istFremdePrivatakte, istPrivat, nichtFreigegeben, type RechteMitarbeiter, SAMMELAKTEN } from './rechte.ts'
@@ -60,7 +68,9 @@ type Art = (typeof ARTEN)[number]
 const ART_NAME: Record<Art, string> = { handout: 'Merkblatt', brief: 'Schreiben', zusammenfassung: 'Zusammenfassung' }
 
 export const FIRMA = 'Andreas Mayer Holding'
-export const FIRMA_ZEILE = 'Andreas Mayer Holding UG (haftungsbeschränkt) · Schwabstraße 3 · 89075 Ulm'
+
+/** CRM-Vorlage „Briefbogen AMayer Holding Ulmer Wirtschaftskanzlei 01.09.2026“ (Tabelle vorlagen, Datei im Speicher kunden-dokumente). */
+export const HOLDING_WORD_VORLAGE_ID = 'v_ql_8c0d7da428d'
 
 const SENDEN_HINWEIS = 'Will der Mitarbeiter die Datei hier in Telegram haben, schick sie mit datei_senden'
 
@@ -68,7 +78,7 @@ export const DOKUMENT_WERKZEUGE = [
   {
     name: 'dokument_erstellen',
     description:
-      'Erstellt aus einem von dir geschriebenen Text eine fertige Datei — PDF (Vorgabe) oder Word (.docx, format "word") — als Merkblatt, Schreiben oder Zusammenfassung mit Briefkopf der Andreas Mayer Holding (bei eigenen privaten Kontakten auf dem eigenen Briefbogen bzw. mit dem Namen des Mitarbeiters), Datum und Seitenzahlen und legt sie als Dokument in der Kundenakte ab — oder mit objekt_id statt kunde_id in der Objektakte einer Immobilie (Ordner frei wählbar, Vorgabe „Exposé“ bei einem Exposé, sonst „Sonstiges“). Verwenden, wenn jemand ein Merkblatt, ein Schreiben oder eine Zusammenfassung "als Datei", "als PDF", "als Word-Datei", "zum Bearbeiten" oder "zum Ausdrucken/Mitgeben" möchte. Den Inhalt (z. B. aus Gesprächsprotokollen, Vertragsnotizen oder Dokumenten der Akte) schreibst du vorher selbst vollständig aus. Für eigene Unterlagen des Hauses ohne Kundenbezug kunde_id=k_intern_holding. Gehört das Dokument zu einer Immobilie (Exposé, Objektbeschreibung, Notiz zum Objekt), immer objekt_id nehmen, nie eine Sammelakte; ein fertiges Exposé mit Bildern, Eckdaten und Ansprechpartner macht aber expose_erstellen. Reine Listen und Tabellen zum Weiterrechnen oder Sortieren besser mit tabelle_erstellen (Excel). Danach kann die Datei mit datei_senden direkt in den Telegram-Chat geschickt werden.',
+      'Erstellt aus einem von dir geschriebenen Text eine fertige Datei — PDF (Vorgabe) oder Word (.docx, format "word") — als Merkblatt, Schreiben oder Zusammenfassung und legt sie als Dokument in der Kundenakte ab — oder mit objekt_id statt kunde_id in der Objektakte einer Immobilie (Ordner frei wählbar, Vorgabe „Exposé“ bei einem Exposé, sonst „Sonstiges“). Verwenden, wenn jemand ein Merkblatt, ein Schreiben oder eine Zusammenfassung "als Datei", "als PDF", "als Word-Datei", "zum Bearbeiten" oder "zum Ausdrucken/Mitgeben" möchte. Den Inhalt (z. B. aus Gesprächsprotokollen, Vertragsnotizen oder Dokumenten der Akte) schreibst du vorher selbst vollständig aus. Für eigene Unterlagen des Hauses ohne Kundenbezug kunde_id=k_intern_holding. Gehört das Dokument zu einer Immobilie (Exposé, Objektbeschreibung, Notiz zum Objekt), immer objekt_id nehmen, nie eine Sammelakte; ein fertiges Exposé mit Bildern, Eckdaten und Ansprechpartner macht aber expose_erstellen. Reine Listen und Tabellen zum Weiterrechnen oder Sortieren besser mit tabelle_erstellen (Excel). Danach kann die Datei mit datei_senden direkt in den Telegram-Chat geschickt werden. BRIEFBOGEN: Jedes Dokument der Holding (alle Akten und Objekte, die nicht privat sind) steht automatisch auf dem echten Briefbogen der Andreas Mayer Holding / Ulmer Wirtschaftskanzlei — Logo, Absenderzeile Schwabstraße 3, Team-Spalte „Ulmer Wirtschaftskanzlei“ auf Seite 1, Fußzeile mit Bank, Steuernummer und Handelsregister; als PDF und als Word-Datei (dann auf der Word-Vorlage „Briefbogen AMayer Holding Ulmer Wirtschaftskanzlei“ aus dem CRM). Den Holding-Briefbogen gibt es also, und du benutzt ihn immer; schreib deshalb nie selbst einen Briefkopf, Firmennamen, eine Absenderanschrift oder Fußzeile in den Text. Bei eigenen privaten Kontakten steht das Dokument dagegen auf dem eigenen privaten Briefbogen bzw. mit dem Namen des Mitarbeiters, nie auf dem der Holding. Rechnungen NICHT mit diesem Werkzeug erstellen, dafür gibt es rechnung_erstellen.',
     input_schema: {
       type: 'object',
       properties: {
@@ -215,20 +225,19 @@ export async function fuehreDokumentWerkzeugAus(name: string, input: any, k: Dok
     }
   }
 
+  // Holding als Word: nur auf der echten Word-Vorlage, nie mit einem erfundenen Kopf.
+  let holdingVorlage: Uint8Array | undefined
+  if (word && !eigener) {
+    const v = await ladeHoldingWordVorlage(supabase)
+    if (typeof v === 'string') return v
+    holdingVorlage = v
+  }
+
   let datei: { bytes: Uint8Array; seiten?: number }
   try {
+    const wordEingabe = { titel, inhalt, artName: ART_NAME[art], fuer: ziel.fuer, stand: langesDatum(heute), urheber: eigener ? eigener.name : FIRMA }
     datei = word
-      ? {
-          bytes: erstelleDocx({
-            titel,
-            inhalt,
-            artName: ART_NAME[art],
-            fuer: ziel.fuer,
-            stand: langesDatum(heute),
-            kopf: eigener ? { name: eigener.name } : { name: FIRMA, zeile: FIRMA_ZEILE },
-            urheber: eigener ? eigener.name : FIRMA,
-          }),
-        }
+      ? { bytes: holdingVorlage ? erstelleHoldingDocx(holdingVorlage, wordEingabe) : erstelleDocx({ ...wordEingabe, kopf: { name: eigener!.name } }) }
       : await erstellePdf({ titel, inhalt, art, fuer: ziel.fuer, datum: heute, eigener })
   } catch (e) {
     return `Fehler beim Erstellen der ${word ? 'Word-Datei' : 'PDF'}: ${e instanceof Error ? e.message : String(e)}`
@@ -331,6 +340,34 @@ export async function legeAb(
 ): Promise<{ id: string; name: string; groesse: string } | string> {
   if (ziel.art === 'akte') return await legeInAkteAb(k, ziel.akte, heute, datei)
   return await legeInsObjektAb(k, ziel.objekt, heute, { ...datei, ordner: ziel.ordner })
+}
+
+let holdingVorlageZwischen: { bytes: Uint8Array; zeit: number } | null = null
+
+/** Word-Vorlage des Holding-Briefbogens aus dem CRM (10 Minuten zwischengespeichert); Fehlertext, wenn sie fehlt. */
+// deno-lint-ignore no-explicit-any
+export async function ladeHoldingWordVorlage(supabase: any): Promise<Uint8Array | string> {
+  if (holdingVorlageZwischen && Date.now() - holdingVorlageZwischen.zeit < 10 * 60_000) return holdingVorlageZwischen.bytes
+  const fehler = (grund: string) =>
+    `Fehler: Die Word-Datei konnte nicht erstellt werden, weil die Word-Vorlage des Holding-Briefbogens („Briefbogen AMayer Holding Ulmer Wirtschaftskanzlei“, CRM → Vorlagen) nicht ladbar ist (${grund}). Es wurde nichts abgelegt. Ein Dokument ohne den echten Briefbogen gibt es nicht — als PDF (format "pdf") geht es weiterhin auf dem Briefbogen; sag dem Mitarbeiter, dass die Word-Vorlage im CRM geprüft werden muss.`
+  try {
+    const { data: zeile, error } = await supabase.from('vorlagen').select('id, datei').eq('id', HOLDING_WORD_VORLAGE_ID).maybeSingle()
+    if (error) return fehler(error.message)
+    const pfad = String(zeile?.datei?.pfad ?? '').trim()
+    if (!pfad) return fehler(zeile ? 'die Vorlage hat keine Datei' : 'die Vorlage gibt es nicht mehr')
+    const { data: blob, error: ladeFehler } = await supabase.storage.from(BUCKET).download(pfad)
+    if (ladeFehler || !blob) return fehler(ladeFehler?.message ?? 'Datei fehlt im Speicher')
+    const bytes = new Uint8Array(await blob.arrayBuffer())
+    holdingVorlageZwischen = { bytes, zeit: Date.now() }
+    return bytes
+  } catch (e) {
+    return fehler(e instanceof Error ? e.message : String(e))
+  }
+}
+
+/** Nur für Tests: Zwischenspeicher der Word-Vorlage leeren. */
+export function vergissHoldingWordVorlage(): void {
+  holdingVorlageZwischen = null
 }
 
 /** Erster eigener Briefbogen (Bereich Privat) des Besitzers; ohne oder bei Fehlern undefined → schlichter Kopf. */
@@ -563,22 +600,35 @@ class Setzer {
   startY = 0
   seiten: PDFPage[] = []
   rand = { ...RAND }
+  /** Rechter Rand auf Folgeseiten (Punkt), falls anders als auf Seite 1 — Holding: Seite 1 hat rechts die Team-Spalte. */
+  rechtsFolge?: number
   constructor(
     private doc: PDFDocument,
     private f: Schriften,
-    private kopf: { name: string; zeile: string } = { name: FIRMA, zeile: FIRMA_ZEILE },
+    private kopf: { name: string; zeile: string },
     private hintergrund?: BriefbogenHintergrund,
   ) {}
 
+  /** Rechter Rand auf Seite nr (1 = erste Seite). */
+  rechtsAuf(nr: number) {
+    return nr <= 1 ? this.rand.rechts : (this.rechtsFolge ?? this.rand.rechts)
+  }
+
+  /** Rechter Rand der aktuellen Seite. */
+  get rechts() {
+    return this.rechtsAuf(this.seiten.length)
+  }
+
+  /** Textbreite der aktuellen Seite. Wer Text setzt, ruft vorher platz() auf, damit die Breite zur Seite passt. */
   get breite() {
-    return A4.breite - this.rand.links - this.rand.rechts
+    return A4.breite - this.rand.links - this.rechts
   }
 
   neueSeite() {
     this.seite = this.doc.addPage([A4.breite, A4.hoehe])
     this.seiten.push(this.seite)
     if (this.hintergrund) {
-      // Eigener Briefbogen: Kopf und Fuß stehen im Hintergrund, der Text beginnt unter dem Kopf.
+      // Briefbogen (Holding oder eigener): Kopf und Fuß stehen im Hintergrund, der Text beginnt unter dem Kopf.
       const bg = this.seiten.length === 1 ? this.hintergrund.erste : this.hintergrund.folge
       this.seite.drawPage(bg, { x: 0, y: 0, width: A4.breite, height: A4.hoehe })
       this.y = A4.hoehe - (this.seiten.length === 1 ? this.hintergrund.ersteOben : this.hintergrund.folgeOben)
@@ -626,8 +676,8 @@ class Setzer {
 
 export type EigenerKopf = {
   /** Briefbogen-PDF (leere Seite; Seite 2 = Folgeseite, falls vorhanden) und Ränder in mm aus den Briefbogen-Einstellungen. */
-  briefbogen?: { pdf: Uint8Array; raender?: { links?: number; rechts?: number; unten?: number; anschriftOben?: number; folgeseiteOben?: number } }
-  /** Name im Kopf, wenn kein Briefbogen da ist (nie die Mayer Holding für Private). */
+  briefbogen?: { pdf: Uint8Array; raender?: { links?: number; rechts?: number; rechtsFolge?: number; unten?: number; anschriftOben?: number; folgeseiteOben?: number } }
+  /** Name im Kopf, wenn kein eigener Briefbogen da ist (nie die Mayer Holding für Private). */
   name: string
 }
 
@@ -650,18 +700,26 @@ export async function erstellePdf(a: { titel: string; inhalt: string; art?: Art;
   doc.setProducer(`${urheber} – CRM`)
   doc.setLanguage('de-DE')
 
-  // Eigener Briefbogen (privater Bereich): Seiten des Briefbogens als Hintergrund, Ränder aus seinen Einstellungen.
+  // Briefbogen als Hintergrund, Ränder aus seinen Einstellungen: ohne eigener immer der echte Briefbogen der
+  // Holding (Seite 1 mit Team-Spalte, Folgeseiten ohne; rechter Rand hält die Team-Spalte auf allen Seiten frei),
+  // bei privaten Akten der eigene Briefbogen (Bereich Privat) — oder, wenn keiner da ist, nur der Name im Kopf.
   let hintergrund: BriefbogenHintergrund | undefined
   const MM = 72 / 25.4
-  const r = a.eigener?.briefbogen?.raender ?? {}
-  if (a.eigener?.briefbogen) {
-    const quelle = await PDFDocument.load(a.eigener.briefbogen.pdf)
+  const bogen: EigenerKopf['briefbogen'] = a.eigener
+    ? a.eigener.briefbogen
+    : { pdf: await holdingBriefbogenPdf(), raender: { ...HOLDING_HINTERGRUND_RAENDER, rechtsFolge: HOLDING_RAENDER.rechtsFolge } }
+  const r = bogen?.raender ?? {}
+  if (bogen) {
+    const quelle = await PDFDocument.load(bogen.pdf)
     const anzahl = quelle.getPageCount()
-    const [erste, folge] = await doc.embedPdf(a.eigener.briefbogen.pdf, anzahl > 1 ? [0, 1] : [0, 0])
+    const [erste, folge] = await doc.embedPdf(bogen.pdf, anzahl > 1 ? [0, 1] : [0, 0])
     hintergrund = { erste, folge, ersteOben: (r.anschriftOben ?? 50.7) * MM, folgeOben: (r.folgeseiteOben ?? 30) * MM }
   }
-  const s = new Setzer(doc, f, a.eigener ? { name: urheber, zeile: '' } : undefined, hintergrund)
-  if (hintergrund) s.rand = { links: (r.links ?? 25) * MM, rechts: (r.rechts ?? 20) * MM, oben: RAND.oben, unten: (r.unten ?? 25) * MM }
+  const s = new Setzer(doc, f, { name: urheber, zeile: '' }, hintergrund)
+  if (hintergrund) {
+    s.rand = { links: (r.links ?? 25) * MM, rechts: (r.rechts ?? 20) * MM, oben: RAND.oben, unten: (r.unten ?? 25) * MM }
+    if (r.rechtsFolge !== undefined) s.rechtsFolge = r.rechtsFolge * MM
+  }
   s.neueSeite()
 
   // Kopf der ersten Seite: Art, Titel, für wen und Stand.
@@ -697,16 +755,20 @@ export async function erstellePdf(a: { titel: string; inhalt: string; art?: Art;
       // Am Seitenanfang trennt eine Linie nichts mehr.
       if (s.y >= s.startY - 0.5) continue
       s.y -= 8
-      s.seite.drawLine({ start: { x: s.rand.links, y: s.y }, end: { x: A4.breite - s.rand.rechts, y: s.y }, thickness: 0.6, color: LINIE })
+      s.seite.drawLine({ start: { x: s.rand.links, y: s.y }, end: { x: A4.breite - s.rechts, y: s.y }, thickness: 0.6, color: LINIE })
       s.y -= 10
       continue
     }
     if (b.art === 'absatz') {
-      for (const z of b.zeilen) s.text(laeufe(z), s.rand.links, s.breite)
+      for (const z of b.zeilen) {
+        s.platz(ZEILE)
+        s.text(laeufe(z), s.rand.links, s.breite)
+      }
       s.y -= ABSATZ
       continue
     }
     if (b.art === 'zitat') {
+      s.platz(ZEILE)
       const start = s.y
       const seiteVorher = s.seite
       for (const z of b.zeilen) s.text(laeufe(z, { fett: false, kursiv: true }), s.rand.links + 14, s.breite - 14, GROESSE, ZEILE, GRAU)
@@ -722,7 +784,7 @@ export async function erstellePdf(a: { titel: string; inhalt: string; art?: Art;
       s.platz(ZEILE)
       const markeY = s.y - (ZEILE - (ZEILE - GROESSE) / 2)
       const seiteVorher = s.seite
-      for (const z of b.zeilen) s.text(laeufe(z), textX, A4.breite - s.rand.rechts - textX)
+      for (const z of b.zeilen) s.text(laeufe(z), textX, A4.breite - s.rechts - textX)
       // Die Marke steht neben der ersten Zeile; platz() oben stellt sicher, dass die auf dieser Seite liegt.
       seiteVorher.drawText(markeText, { x: einzug, y: markeText === '•' ? markeY - 1.2 : markeY, size: markeText === '•' ? GROESSE * 1.3 : GROESSE, font: markeFont, color: b.marke ? TEXT_FARBE : AKZENT })
       s.y -= naechster && naechster.art === 'punkt' ? 3 : ABSATZ
@@ -740,10 +802,11 @@ export async function erstellePdf(a: { titel: string; inhalt: string; art?: Art;
   const fussTitel = ohneSymbole.length > 70 ? `${ohneSymbole.slice(0, 68)}…` : ohneSymbole
   s.seiten.forEach((p, i) => {
     if (hintergrund) {
-      // Auf dem eigenen Briefbogen nur die Seitenzahl — Fußzeile und Linie hat der Briefbogen selbst.
+      // Auf dem Briefbogen nur die Seitenzahl (rechtsbündig am Textrand, über der Fußzeile des Briefbogens) —
+      // Fußzeile und Linie hat der Briefbogen selbst.
       if (gesamt > 1) {
         const nr = `Seite ${i + 1} von ${gesamt}`
-        p.drawText(nr, { x: A4.breite - s.rand.rechts - f.normal.widthOfTextAtSize(nr, 8), y: s.rand.unten + 2, size: 8, font: f.normal, color: GRAU })
+        p.drawText(nr, { x: A4.breite - s.rechtsAuf(i + 1) - f.normal.widthOfTextAtSize(nr, 8), y: s.rand.unten + 2, size: 8, font: f.normal, color: GRAU })
       }
       return
     }
@@ -767,8 +830,10 @@ function tabelle(s: Setzer, f: Schriften, zeilen: string[][]) {
     Math.max(30, ...zeilen.map((z, r) => (umbrechen(laeufe(z[c] ?? '', { fett: r === 0, kursiv: false }), f, groesse, 1e6)[0]?.breite ?? 0) + 2 * pad)),
   )
   const summe = natuerlich.reduce((a, b) => a + b, 0)
-  let breiten = summe <= s.breite ? natuerlich.map((w) => w * (s.breite / summe)) : natuerlich.map((w) => Math.max(s.breite * 0.12, (w / summe) * s.breite))
-  const skal = s.breite / breiten.reduce((a, b) => a + b, 0)
+  // Breite einmal festlegen: Läuft die Tabelle auf eine Folgeseite mit anderem Rand, bleibt sie gleich breit.
+  const gesamt = s.breite
+  let breiten = summe <= gesamt ? natuerlich.map((w) => w * (gesamt / summe)) : natuerlich.map((w) => Math.max(gesamt * 0.12, (w / summe) * gesamt))
+  const skal = gesamt / breiten.reduce((a, b) => a + b, 0)
   breiten = breiten.map((w) => w * skal)
 
   zeilen.forEach((z, r) => {
@@ -777,7 +842,7 @@ function tabelle(s: Setzer, f: Schriften, zeilen: string[][]) {
     const hoehe = Math.max(1, ...zellen.map((x) => x.length)) * abstand + 2 * pad - 2
     s.platz(hoehe)
     const oben = s.y
-    if (kopf) s.seite.drawRectangle({ x: s.rand.links, y: oben - hoehe, width: s.breite, height: hoehe, color: TABELLEN_KOPF })
+    if (kopf) s.seite.drawRectangle({ x: s.rand.links, y: oben - hoehe, width: gesamt, height: hoehe, color: TABELLEN_KOPF })
     let x = s.rand.links
     zellen.forEach((zellZeilen, c) => {
       s.y = oben - pad + 1
@@ -788,7 +853,7 @@ function tabelle(s: Setzer, f: Schriften, zeilen: string[][]) {
       }
       x += breiten[c]
     })
-    s.seite.drawRectangle({ x: s.rand.links, y: oben - hoehe, width: s.breite, height: hoehe, borderColor: LINIE, borderWidth: 0.5 })
+    s.seite.drawRectangle({ x: s.rand.links, y: oben - hoehe, width: gesamt, height: hoehe, borderColor: LINIE, borderWidth: 0.5 })
     let lx = s.rand.links
     for (let c = 0; c < spalten - 1; c++) {
       lx += breiten[c]

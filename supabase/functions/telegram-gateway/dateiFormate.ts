@@ -7,8 +7,13 @@
 //
 // Word hält sich streng an die Reihenfolge der Kind-Elemente (pPr, rPr, tblPr …) aus dem Schema; wer
 // hier etwas ergänzt, muss die Reihenfolge einhalten, sonst meldet Word „Datei beschädigt“.
+//
+// Holding-Dokumente (seit 24.11.2026) entstehen nicht frei, sondern auf der echten Word-Vorlage des
+// Briefbogens (erstelleHoldingDocx, holdingDocx.ts): Dafür lassen sich Formatvorlagen und Listen hier mit
+// einem Namensvorsatz bzw. Nummern-Versatz erzeugen (WortStil), damit sie nicht mit denen der Vorlage
+// zusammenstoßen.
 
-import { strToU8, zipSync } from 'npm:fflate@0.8.2'
+import { strFromU8, strToU8, unzipSync, zipSync } from 'npm:fflate@0.8.2'
 import { type Block, laeufe, type Lauf, ohneTitelUeberschrift, zerlege } from './auszeichnung.ts'
 
 export const DOCX_TYP = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
@@ -76,6 +81,22 @@ const TABELLEN_KOPF = 'F2F2F2'
 const SEITE = { breite: 11906, hoehe: 16838, links: 1280, rechts: 1280, oben: 1701, unten: 1418 }
 const TEXTBREITE = SEITE.breite - SEITE.links - SEITE.rechts
 
+/** Wie Formatvorlagen und Listen heißen: frei (eigene Datei) oder mit Vorsatz in einer fremden Vorlage. */
+export type WortStil = {
+  /** Vorsatz vor allen eigenen Formatvorlagen-IDs, z. B. "Crm" → "CrmHeading1". */
+  praefix: string
+  /** Formatvorlage für schlichte Absätze; leer = Standard der Datei. */
+  standard: string
+  /** Erste freie abstractNumId (in einer Vorlage: direkt nach deren höchster). */
+  abstraktBasis: number
+  /** Höchste schon vergebene numId (0 = keine). Ohne Lücke weiterzählen: Apples Vorschau verliert sonst die Aufzählungszeichen. */
+  numBasis: number
+  /** Breite von Tabellen in Zwanzigstel Punkt. */
+  tabellenBreite: number
+}
+
+const STIL_EIGEN: WortStil = { praefix: '', standard: '', abstraktBasis: 0, numBasis: 0, tabellenBreite: TEXTBREITE }
+
 export type WordKopf = {
   /** Erste Kopfzeile (fett, Akzentfarbe): Firmenname oder bei privaten Akten der Name des Besitzers. */
   name: string
@@ -136,14 +157,16 @@ function markeFormat(marke: string): { format: string; start: number } {
   return { format: kern === kern.toLowerCase() ? 'lowerLetter' : 'upperLetter', start: Math.max(1, z) }
 }
 
-function wTabelle(zeilen: string[][]): string {
+function wTabelle(zeilen: string[][], st: WortStil): string {
+  const breite = st.tabellenBreite
+  const std = st.standard ? `<w:pStyle w:val="${st.standard}"/>` : ''
   const spalten = Math.max(1, ...zeilen.map((z) => z.length))
   // Spaltenbreiten nach dem längsten Inhalt (Zeichen), jede mindestens 12 % der Breite.
   const natuerlich = Array.from({ length: spalten }, (_, c) => Math.max(4, ...zeilen.map((z) => (z[c] ?? '').replace(/\*/g, '').length)))
   const summe = natuerlich.reduce((a, b) => a + b, 0)
   let breiten = natuerlich.map((w) => Math.max(0.12, w / summe))
   const skal = 1 / breiten.reduce((a, b) => a + b, 0)
-  breiten = breiten.map((w) => Math.floor(w * skal * TEXTBREITE))
+  breiten = breiten.map((w) => Math.floor(w * skal * breite))
   const mitKopf = zeilen.length > 1
   const zeilenXml = zeilen
     .map((z, r) => {
@@ -152,23 +175,25 @@ function wTabelle(zeilen: string[][]): string {
         .map((b, c) => {
           const tcPr = `<w:tcW w:w="${b}" w:type="dxa"/>${kopf ? `<w:shd w:val="clear" w:color="auto" w:fill="${TABELLEN_KOPF}"/>` : ''}`
           const text = wLaeufe(laeufe(z[c] ?? '', { fett: kopf, kursiv: false }))
-          return `<w:tc><w:tcPr>${tcPr}</w:tcPr>${wAbsatz('<w:spacing w:before="0" w:after="0"/>', text)}</w:tc>`
+          return `<w:tc><w:tcPr>${tcPr}</w:tcPr>${wAbsatz(`${std}<w:spacing w:before="0" w:after="0"/>`, text)}</w:tc>`
         })
         .join('')
       return `<w:tr><w:trPr><w:cantSplit/>${kopf ? '<w:tblHeader/>' : ''}</w:trPr>${zellen}</w:tr>`
     })
     .join('')
   return (
-    `<w:tbl><w:tblPr><w:tblStyle w:val="TabelleRaster"/><w:tblW w:w="${TEXTBREITE}" w:type="dxa"/><w:tblLayout w:type="fixed"/>` +
+    `<w:tbl><w:tblPr><w:tblStyle w:val="${st.praefix}TabelleRaster"/><w:tblW w:w="${breite}" w:type="dxa"/><w:tblLayout w:type="fixed"/>` +
     `<w:tblLook w:val="04A0" w:firstRow="1" w:lastRow="0" w:firstColumn="0" w:lastColumn="0" w:noHBand="0" w:noVBand="1"/></w:tblPr>` +
     `<w:tblGrid>${breiten.map((b) => `<w:gridCol w:w="${b}"/>`).join('')}</w:tblGrid>${zeilenXml}</w:tbl>` +
     // Abstand nach der Tabelle; außerdem darf eine Tabelle nicht direkt an eine zweite oder ans Ende stoßen.
-    wAbsatz('<w:spacing w:before="0" w:after="60"/>', '')
+    wAbsatz(`${std}<w:spacing w:before="0" w:after="60"/>`, '')
   )
 }
 
 /** Inhalt von word/document.xml (ohne sectPr) und die nummerierten Listen dafür. */
-function wKoerper(bloecke: Block[]): { xml: string; listen: Liste[] } {
+function wKoerper(bloecke: Block[], st: WortStil = STIL_EIGEN): { xml: string; listen: Liste[] } {
+  const ps = (id: string) => `<w:pStyle w:val="${st.praefix}${id}"/>`
+  const std = st.standard ? `<w:pStyle w:val="${st.standard}"/>` : ''
   const listen: Liste[] = []
   let aktuelle: Liste | null = null
   const teile: string[] = []
@@ -180,21 +205,21 @@ function wKoerper(bloecke: Block[]): { xml: string; listen: Liste[] } {
     // Eine nummerierte Liste läuft weiter über Leerzeilen und eingeschobene Aufzählungspunkte; alles andere beendet sie.
     if (b.art !== 'punkt') aktuelle = null
     if (b.art === 'ueberschrift') {
-      teile.push(wAbsatz(`<w:pStyle w:val="Heading${b.ebene}"/>`, wLaeufe(laeufe(b.text))))
+      teile.push(wAbsatz(ps(`Heading${b.ebene}`), wLaeufe(laeufe(b.text))))
     } else if (b.art === 'linie') {
       if (!schonInhalt) continue
-      teile.push(wAbsatz(`<w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="${LINIE}"/></w:pBdr><w:spacing w:before="0" w:after="200"/>`, ''))
+      teile.push(wAbsatz(`${std}<w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="${LINIE}"/></w:pBdr><w:spacing w:before="0" w:after="200"/>`, ''))
     } else if (b.art === 'absatz') {
-      teile.push(wAbsatz('', wZeilen(b.zeilen)))
+      teile.push(wAbsatz(std, wZeilen(b.zeilen)))
     } else if (b.art === 'zitat') {
-      teile.push(wAbsatz('<w:pStyle w:val="Zitat"/>', wZeilen(b.zeilen)))
+      teile.push(wAbsatz(ps('Zitat'), wZeilen(b.zeilen)))
     } else if (b.art === 'tabelle') {
-      teile.push(wTabelle(b.zeilen))
+      teile.push(wTabelle(b.zeilen, st))
     } else if (b.art === 'punkt') {
-      let numId = 1
+      let numId = st.numBasis + 1
       if (b.marke) {
         if (!aktuelle) {
-          aktuelle = { abstraktId: listen.length + 1, numId: listen.length + 2, ebenen: new Map() }
+          aktuelle = { abstraktId: st.abstraktBasis + listen.length + 1, numId: st.numBasis + listen.length + 2, ebenen: new Map() }
           listen.push(aktuelle)
         }
         if (!aktuelle.ebenen.has(b.ebene)) aktuelle.ebenen.set(b.ebene, markeFormat(b.marke))
@@ -203,7 +228,7 @@ function wKoerper(bloecke: Block[]): { xml: string; listen: Liste[] } {
       const letzter = !naechster || naechster.art !== 'punkt'
       teile.push(
         wAbsatz(
-          `<w:pStyle w:val="Listenabsatz"/><w:numPr><w:ilvl w:val="${b.ebene}"/><w:numId w:val="${numId}"/></w:numPr>${letzter ? '<w:spacing w:after="140"/>' : ''}`,
+          `${ps('Listenabsatz')}<w:numPr><w:ilvl w:val="${b.ebene}"/><w:numId w:val="${numId}"/></w:numPr>${letzter ? '<w:spacing w:after="140"/>' : ''}`,
           wZeilen(b.zeilen),
         ),
       )
@@ -213,7 +238,8 @@ function wKoerper(bloecke: Block[]): { xml: string; listen: Liste[] } {
   return { xml: teile.join(''), listen }
 }
 
-function wNummerierung(listen: Liste[]): string {
+/** abstractNum- und num-Elemente (getrennt, weil in numbering.xml alle abstractNum vor den num stehen müssen). */
+function wNummerierungTeile(listen: Liste[], st: WortStil = STIL_EIGEN): { abstrakt: string; nums: string } {
   const EINZUG = 360
   const ebene = (ilvl: number, format: string, text: string, start = 1, rPr = '') =>
     `<w:lvl w:ilvl="${ilvl}"><w:start w:val="${start}"/><w:numFmt w:val="${format}"/><w:lvlText w:val="${xmlText(text)}"/><w:lvlJc w:val="left"/>` +
@@ -221,7 +247,7 @@ function wNummerierung(listen: Liste[]): string {
   // Aufzählungszeichen wie im PDF: • (Akzentfarbe), –, ·, ·
   const punkte = ['•', '–', '·', '·']
   const aufzaehlung =
-    '<w:abstractNum w:abstractNumId="0"><w:multiLevelType w:val="hybridMultilevel"/>' +
+    `<w:abstractNum w:abstractNumId="${st.abstraktBasis}"><w:multiLevelType w:val="hybridMultilevel"/>` +
     punkte.map((p, i) => ebene(i, 'bullet', p, 1, `<w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:b/>${i === 0 ? `<w:color w:val="${AKZENT}"/>` : ''}`)).join('') +
     '</w:abstractNum>'
   const nummern = listen
@@ -236,37 +262,70 @@ function wNummerierung(listen: Liste[]): string {
       return `<w:abstractNum w:abstractNumId="${l.abstraktId}"><w:multiLevelType w:val="hybridMultilevel"/>${lvls}</w:abstractNum>`
     })
     .join('')
-  const nums = '<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>' + listen.map((l) => `<w:num w:numId="${l.numId}"><w:abstractNumId w:val="${l.abstraktId}"/></w:num>`).join('')
-  return XML_KOPF + `<w:numbering ${W_NS}>${aufzaehlung}${nummern}${nums}</w:numbering>`
+  const nums = `<w:num w:numId="${st.numBasis + 1}"><w:abstractNumId w:val="${st.abstraktBasis}"/></w:num>` + listen.map((l) => `<w:num w:numId="${l.numId}"><w:abstractNumId w:val="${l.abstraktId}"/></w:num>`).join('')
+  return { abstrakt: aufzaehlung + nummern, nums }
 }
 
-function wFormatvorlagen(): string {
+function wNummerierung(listen: Liste[]): string {
+  const t = wNummerierungTeile(listen)
+  return XML_KOPF + `<w:numbering ${W_NS}>${t.abstrakt}${t.nums}</w:numbering>`
+}
+
+/** Deutsche Namen der eigenen Formatvorlagen, wenn sie in einer fremden Vorlage stehen (dort sichtbar in Word). */
+const DE_NAME: Record<string, string> = {
+  Titel: 'Titel', Heading1: 'Überschrift 1', Heading2: 'Überschrift 2', Heading3: 'Überschrift 3', Listenabsatz: 'Liste', Zitat: 'Zitat', TabelleRaster: 'Tabelle',
+}
+
+const SCHRIFT_RPR = '<w:rFonts w:ascii="Arial" w:eastAsia="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:color w:val="212121"/><w:sz w:val="21"/><w:szCs w:val="21"/>'
+
+/** Formatvorlagen für den Inhalt (Titel, Überschriften, Liste, Zitat, Tabelle) — frei oder mit Vorsatz für eine fremde Vorlage. */
+function wInhaltsVorlagen(st: WortStil): string {
+  const p = st.praefix
+  // In einer fremden Vorlage eigene Namen (Word verlangt eindeutige Namen) und eine eigene Grundvorlage mit Schrift und Abständen.
+  const basis = st.standard || 'Standard'
   const absatzVorlage = (id: string, name: string, pPr: string, rPr: string, extra = '') =>
-    `<w:style w:type="paragraph" w:styleId="${id}"><w:name w:val="${name}"/><w:basedOn w:val="Standard"/><w:next w:val="Standard"/>${extra}<w:qFormat/>` +
+    `<w:style w:type="paragraph"${p ? ' w:customStyle="1"' : ''} w:styleId="${p}${id}"><w:name w:val="${p ? `CRM ${DE_NAME[id] ?? id}` : name}"/><w:basedOn w:val="${basis}"/><w:next w:val="${basis}"/>${extra}<w:qFormat/>` +
     `${pPr ? `<w:pPr>${pPr}</w:pPr>` : ''}${rPr ? `<w:rPr>${rPr}</w:rPr>` : ''}</w:style>`
+  const grund = st.standard
+    ? `<w:style w:type="paragraph" w:customStyle="1" w:styleId="${st.standard}"><w:name w:val="CRM Standard"/><w:qFormat/>` +
+      '<w:pPr><w:widowControl/><w:spacing w:before="0" w:after="140" w:line="276" w:lineRule="auto"/></w:pPr>' +
+      `<w:rPr>${SCHRIFT_RPR}<w:lang w:val="de-DE" w:eastAsia="de-DE" w:bidi="ar-SA"/></w:rPr></w:style>`
+    : ''
+  const tabellenRand =
+    '<w:tblCellMar><w:top w:w="60" w:type="dxa"/><w:left w:w="100" w:type="dxa"/><w:bottom w:w="60" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tblCellMar>'
   return (
-    XML_KOPF +
-    `<w:styles ${W_NS}>` +
-    '<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Arial" w:eastAsia="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:color w:val="212121"/><w:sz w:val="21"/><w:szCs w:val="21"/><w:lang w:val="de-DE" w:eastAsia="de-DE" w:bidi="ar-SA"/></w:rPr></w:rPrDefault>' +
-    '<w:pPrDefault><w:pPr><w:spacing w:after="140" w:line="276" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults>' +
-    '<w:style w:type="paragraph" w:default="1" w:styleId="Standard"><w:name w:val="Normal"/><w:qFormat/></w:style>' +
-    '<w:style w:type="character" w:default="1" w:styleId="Absatz-Standardschriftart"><w:name w:val="Default Paragraph Font"/><w:uiPriority w:val="1"/><w:semiHidden/><w:unhideWhenUsed/></w:style>' +
+    grund +
     absatzVorlage('Titel', 'Title', '<w:keepNext/><w:spacing w:before="0" w:after="80" w:line="240" w:lineRule="auto"/>', `<w:b/><w:color w:val="${AKZENT}"/><w:sz w:val="38"/><w:szCs w:val="38"/>`) +
     absatzVorlage('Heading1', 'heading 1', '<w:keepNext/><w:keepLines/><w:spacing w:before="320" w:after="120"/><w:outlineLvl w:val="0"/>', `<w:b/><w:color w:val="${AKZENT}"/><w:sz w:val="30"/><w:szCs w:val="30"/>`, '<w:uiPriority w:val="9"/>') +
     absatzVorlage('Heading2', 'heading 2', '<w:keepNext/><w:keepLines/><w:spacing w:before="240" w:after="80"/><w:outlineLvl w:val="1"/>', `<w:b/><w:color w:val="${AKZENT}"/><w:sz w:val="26"/><w:szCs w:val="26"/>`, '<w:uiPriority w:val="9"/>') +
     absatzVorlage('Heading3', 'heading 3', '<w:keepNext/><w:keepLines/><w:spacing w:before="180" w:after="60"/><w:outlineLvl w:val="2"/>', '<w:b/><w:sz w:val="23"/><w:szCs w:val="23"/>', '<w:uiPriority w:val="9"/>') +
     absatzVorlage('Listenabsatz', 'List Paragraph', '<w:spacing w:after="60"/><w:contextualSpacing/>', '', '<w:uiPriority w:val="34"/>') +
     absatzVorlage('Zitat', 'Quote', `<w:pBdr><w:left w:val="single" w:sz="12" w:space="8" w:color="${LINIE}"/></w:pBdr><w:ind w:left="284"/>`, `<w:i/><w:color w:val="${GRAU}"/>`, '<w:uiPriority w:val="29"/>') +
+    `<w:style w:type="table"${p ? ' w:customStyle="1"' : ''} w:styleId="${p}TabelleRaster"><w:name w:val="${p ? `CRM ${DE_NAME.TabelleRaster}` : 'Table Grid'}"/>${p ? '' : '<w:basedOn w:val="NormaleTabelle"/>'}<w:uiPriority w:val="39"/>` +
+    '<w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr><w:rPr><w:sz w:val="19"/><w:szCs w:val="19"/></w:rPr>' +
+    `<w:tblPr>${p ? '<w:tblInd w:w="0" w:type="dxa"/>' : ''}<w:tblBorders><w:top w:val="single" w:sz="4" w:space="0" w:color="${LINIE}"/><w:left w:val="single" w:sz="4" w:space="0" w:color="${LINIE}"/>` +
+    `<w:bottom w:val="single" w:sz="4" w:space="0" w:color="${LINIE}"/><w:right w:val="single" w:sz="4" w:space="0" w:color="${LINIE}"/>` +
+    `<w:insideH w:val="single" w:sz="4" w:space="0" w:color="${LINIE}"/><w:insideV w:val="single" w:sz="4" w:space="0" w:color="${LINIE}"/></w:tblBorders>` +
+    `${tabellenRand}</w:tblPr></w:style>`
+  )
+}
+
+function wFormatvorlagen(): string {
+  const absatzVorlage = (id: string, name: string, pPr: string, rPr: string) =>
+    `<w:style w:type="paragraph" w:styleId="${id}"><w:name w:val="${name}"/><w:basedOn w:val="Standard"/><w:next w:val="Standard"/><w:qFormat/>` +
+    `${pPr ? `<w:pPr>${pPr}</w:pPr>` : ''}${rPr ? `<w:rPr>${rPr}</w:rPr>` : ''}</w:style>`
+  return (
+    XML_KOPF +
+    `<w:styles ${W_NS}>` +
+    `<w:docDefaults><w:rPrDefault><w:rPr>${SCHRIFT_RPR}<w:lang w:val="de-DE" w:eastAsia="de-DE" w:bidi="ar-SA"/></w:rPr></w:rPrDefault>` +
+    '<w:pPrDefault><w:pPr><w:spacing w:after="140" w:line="276" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults>' +
+    '<w:style w:type="paragraph" w:default="1" w:styleId="Standard"><w:name w:val="Normal"/><w:qFormat/></w:style>' +
+    '<w:style w:type="character" w:default="1" w:styleId="Absatz-Standardschriftart"><w:name w:val="Default Paragraph Font"/><w:uiPriority w:val="1"/><w:semiHidden/><w:unhideWhenUsed/></w:style>' +
+    wInhaltsVorlagen(STIL_EIGEN) +
     absatzVorlage('Kopfzeile', 'header', `<w:tabs><w:tab w:val="right" w:pos="${TEXTBREITE}"/></w:tabs><w:spacing w:after="0" w:line="240" w:lineRule="auto"/>`, '') +
     absatzVorlage('Fusszeile', 'footer', `<w:tabs><w:tab w:val="right" w:pos="${TEXTBREITE}"/></w:tabs><w:spacing w:after="0" w:line="240" w:lineRule="auto"/>`, `<w:color w:val="${GRAU}"/><w:sz w:val="16"/><w:szCs w:val="16"/>`) +
     '<w:style w:type="table" w:default="1" w:styleId="NormaleTabelle"><w:name w:val="Normal Table"/><w:uiPriority w:val="99"/><w:semiHidden/><w:unhideWhenUsed/>' +
     '<w:tblPr><w:tblInd w:w="0" w:type="dxa"/><w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:left w:w="108" w:type="dxa"/><w:bottom w:w="0" w:type="dxa"/><w:right w:w="108" w:type="dxa"/></w:tblCellMar></w:tblPr></w:style>' +
-    '<w:style w:type="table" w:styleId="TabelleRaster"><w:name w:val="Table Grid"/><w:basedOn w:val="NormaleTabelle"/><w:uiPriority w:val="39"/>' +
-    '<w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr><w:rPr><w:sz w:val="19"/><w:szCs w:val="19"/></w:rPr>' +
-    `<w:tblPr><w:tblBorders><w:top w:val="single" w:sz="4" w:space="0" w:color="${LINIE}"/><w:left w:val="single" w:sz="4" w:space="0" w:color="${LINIE}"/>` +
-    `<w:bottom w:val="single" w:sz="4" w:space="0" w:color="${LINIE}"/><w:right w:val="single" w:sz="4" w:space="0" w:color="${LINIE}"/>` +
-    `<w:insideH w:val="single" w:sz="4" w:space="0" w:color="${LINIE}"/><w:insideV w:val="single" w:sz="4" w:space="0" w:color="${LINIE}"/></w:tblBorders>` +
-    '<w:tblCellMar><w:top w:w="60" w:type="dxa"/><w:left w:w="100" w:type="dxa"/><w:bottom w:w="60" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tblCellMar></w:tblPr></w:style>' +
     '</w:styles>'
   )
 }
@@ -288,14 +347,21 @@ function wFusszeile(titel: string): string {
 }
 
 /** Erzeugt eine .docx aus der einfachen Auszeichnung, aufgebaut wie die PDF aus erstellePdf. */
+/** Art, Titel und „Für/Stand“ über dem Text. ankerLaeufe: zusätzliche Läufe im ersten Absatz (verankerte Formen der Vorlage). */
+function wKopfBlock(a: { artName: string; titel: string; fuer?: string; stand: string }, st: WortStil, ankerLaeufe = ''): string {
+  const std = st.standard ? `<w:pStyle w:val="${st.standard}"/>` : ''
+  const meta = [a.fuer ? `Für: ${a.fuer}` : '', `Stand: ${a.stand}`].filter(Boolean).join('   ·   ')
+  return (
+    wAbsatz(`${std}<w:spacing w:before="0" w:after="40"/>`, ankerLaeufe + wLauf(a.artName.toUpperCase(), { fett: true, farbe: GRAU, groesse: 16, sperren: 60 })) +
+    wAbsatz(`<w:pStyle w:val="${st.praefix}Titel"/>`, wLauf(a.titel)) +
+    wAbsatz(`${std}<w:spacing w:before="0" w:after="320"/>`, wLauf(meta, { farbe: GRAU, groesse: 19 }))
+  )
+}
+
 export function erstelleDocx(a: WordEingabe): Uint8Array {
   const bloecke = ohneTitelUeberschrift(zerlege(a.inhalt), a.titel)
   const koerper = wKoerper(bloecke)
-  const meta = [a.fuer ? `Für: ${a.fuer}` : '', `Stand: ${a.stand}`].filter(Boolean).join('   ·   ')
-  const kopfBlock =
-    wAbsatz('<w:spacing w:before="0" w:after="40"/>', wLauf(a.artName.toUpperCase(), { fett: true, farbe: GRAU, groesse: 16, sperren: 60 })) +
-    wAbsatz('<w:pStyle w:val="Titel"/>', wLauf(a.titel)) +
-    wAbsatz('<w:spacing w:before="0" w:after="320"/>', wLauf(meta, { farbe: GRAU, groesse: 19 }))
+  const kopfBlock = wKopfBlock(a, STIL_EIGEN)
   const sectPr =
     '<w:sectPr><w:headerReference w:type="default" r:id="rIdKopf"/><w:footerReference w:type="default" r:id="rIdFuss"/>' +
     `<w:pgSz w:w="${SEITE.breite}" w:h="${SEITE.hoehe}"/>` +
@@ -344,6 +410,171 @@ export function erstelleDocx(a: WordEingabe): Uint8Array {
     'word/header1.xml': wKopfzeile(a.kopf),
     'word/footer1.xml': wFusszeile(a.titel),
   })
+}
+
+// ---------- Word auf dem Holding-Briefbogen ----------
+// Seit 24.11.2026: Holding-Dokumente als Word entstehen auf der ECHTEN Word-Vorlage des Briefbogens
+// (CRM-Vorlage „Briefbogen AMayer Holding Ulmer Wirtschaftskanzlei“, lädt dokumentErstellen.ts aus dem
+// Speicher). Kopf- und Fußzeile der Vorlage bleiben unverändert (Logo, Absenderzeile, Bank, Register).
+// Aus dem Text der Vorlage bleibt nur die verankerte Team-Spalte „Ulmer Wirtschaftskanzlei“ (Seite 1,
+// Text fließt links daran vorbei); das Brief-Textfeld („Firma“, „Ulm, den …“, Grußblock) und leere
+// Rahmen fallen weg. Der Inhalt kommt als normale Absätze mit eigenen Formatvorlagen („CRM …“) dazu.
+
+/** Textfelder der Vorlage, die zum Briefformular gehören und in einem Merkblatt nichts verloren haben. */
+const BRIEF_PLATZHALTER = /Ulm, den|\bFirma\b/
+
+/** Seitenränder in Zwanzigstel Punkt: rechts 22 mm (Seite 1 hält die Team-Spalte selbst frei), oben/unten wie im PDF. */
+const HOLDING_SEITE = { rechts: 1247, oben: 3005, unten: 1701, links: 1219 }
+/** Tabellenbreite: Auf Seite 1 steht ab 153,9 mm die Team-Spalte; so schmal passt eine Tabelle auf jede Seite. */
+const HOLDING_TABELLE = 7200
+const HOLDING_PRAEFIX = 'Crm'
+
+export type HoldingWordEingabe = Omit<WordEingabe, 'kopf'>
+
+/** Sichtbarer Text eines XML-Stücks (Inhalt aller <w:t>). */
+function sichtbarerText(xml: string): string {
+  return [...xml.matchAll(/<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>/g)].map((m) => m[1]).join('')
+}
+
+/** Top-level-Blöcke <mc:AlternateContent>…</mc:AlternateContent> bzw. <w:drawing>…</w:drawing> (verschachtelt gezählt). */
+function formBloecke(xml: string): string[] {
+  const aus: string[] = []
+  const muster = /<(\/?)(mc:AlternateContent|w:drawing)(?=[\s>/])[^>]*?(\/?)>/g
+  let tiefe = 0
+  let start = -1
+  let art = ''
+  for (const m of xml.matchAll(muster)) {
+    if (m[3]) continue
+    if (!m[1]) {
+      if (tiefe === 0) {
+        start = m.index!
+        art = m[2]
+      }
+      if (m[2] === art) tiefe++
+    } else if (m[2] === art && tiefe > 0) {
+      tiefe--
+      if (tiefe === 0) aus.push(xml.slice(start, m.index! + m[0].length))
+    }
+  }
+  return aus
+}
+
+function attribut(tag: string, name: string): string | undefined {
+  return tag.match(new RegExp(`\\s${name}="([^"]*)"`))?.[1]
+}
+
+/** Höchste vergebene abstractNumId bzw. numId einer numbering.xml (-1 bzw. 0, wenn keine). */
+function hoechsteNummern(xml: string): { abstrakt: number; num: number } {
+  let abstrakt = -1
+  let num = 0
+  for (const m of xml.matchAll(/<w:abstractNum\b[^>]*\sw:abstractNumId="(\d+)"/g)) abstrakt = Math.max(abstrakt, Number(m[1]))
+  for (const m of xml.matchAll(/<w:num\b[^>]*\sw:numId="(\d+)"/g)) num = Math.max(num, Number(m[1]))
+  return { abstrakt, num }
+}
+
+/**
+ * Word-Datei auf der echten Briefbogen-Vorlage der Holding. vorlage = die .docx aus dem Speicher.
+ * Wirft mit deutschem Text, wenn die Vorlage nicht passt (dann lieber Fehler als ein erfundenes Layout).
+ */
+export function erstelleHoldingDocx(vorlage: Uint8Array, a: HoldingWordEingabe): Uint8Array {
+  let dateien: Record<string, Uint8Array>
+  try {
+    dateien = unzipSync(vorlage)
+  } catch {
+    throw new Error('Die Word-Vorlage des Holding-Briefbogens ist keine lesbare Word-Datei')
+  }
+  const lies = (n: string) => (dateien[n] ? strFromU8(dateien[n]) : '')
+  const schreib = (n: string, xml: string) => {
+    dateien[n] = strToU8(xml)
+  }
+  const doc = lies('word/document.xml')
+  const bodyAuf = doc.indexOf('<w:body>')
+  const bodyZu = doc.lastIndexOf('</w:body>')
+  if (bodyAuf < 0 || bodyZu < bodyAuf) throw new Error('Die Word-Vorlage des Holding-Briefbogens hat keinen Dokumentinhalt')
+  const body = doc.slice(bodyAuf + '<w:body>'.length, bodyZu)
+
+  // Abschnitt mit der Kopfzeile der Vorlage (Logo + Absenderzeile); nur Standard-Kopf/-Fuß übernehmen.
+  const abschnitte = [...body.matchAll(/<w:sectPr\b[^>]*>[\s\S]*?<\/w:sectPr>/g)].map((m) => m[0])
+  const abschnitt = abschnitte.find((x) => /<w:headerReference\b[^>]*w:type="default"/.test(x))
+  if (!abschnitt) throw new Error('Die Word-Vorlage des Holding-Briefbogens hat keine Kopfzeile')
+  const kopfRef = abschnitt.match(/<w:headerReference\b[^>]*w:type="default"[^>]*\/>/)![0]
+  const fussRef = abschnitt.match(/<w:footerReference\b[^>]*w:type="default"[^>]*\/>/)?.[0] ?? ''
+  const pgSz = abschnitt.match(/<w:pgSz\b[^>]*\/>/)?.[0] ?? `<w:pgSz w:w="${SEITE.breite}" w:h="${SEITE.hoehe}"/>`
+  const alterRand = abschnitt.match(/<w:pgMar\b[^>]*\/>/)?.[0] ?? ''
+  const zahl = (name: string, vorgabe: number) => {
+    const w = Number(attribut(alterRand, `w:${name}`))
+    return Number.isFinite(w) && attribut(alterRand, `w:${name}`) !== undefined ? w : vorgabe
+  }
+  const pgMar =
+    `<w:pgMar w:top="${Math.max(HOLDING_SEITE.oben, zahl('top', 0))}" w:right="${HOLDING_SEITE.rechts}" w:bottom="${Math.max(HOLDING_SEITE.unten, zahl('bottom', 0))}" ` +
+    `w:left="${zahl('left', HOLDING_SEITE.links)}" w:header="${zahl('header', 680)}" w:footer="${zahl('footer', 720)}" w:gutter="0"/>`
+  const docGrid = abschnitt.match(/<w:docGrid\b[^>]*\/>/)?.[0] ?? ''
+  const sectPr = `<w:sectPr>${kopfRef}${fussRef}${pgSz}${pgMar}<w:cols w:space="720"/>${docGrid}</w:sectPr>`
+
+  // Verankerte Formen behalten, die nicht zum Briefformular gehören (Team-Spalte); alles andere fällt weg.
+  const anker = formBloecke(body).filter((b) => {
+    if (!/<wp:anchor\b/.test(b)) return false
+    const t = sichtbarerText(b)
+    if (BRIEF_PLATZHALTER.test(t)) return false
+    return t.trim().length > 0 || /r:embed="/.test(b)
+  })
+  const ankerLaeufe = anker.map((b) => `<w:r><w:rPr><w:noProof/></w:rPr>${b}</w:r>`).join('')
+
+  // Listen-Nummern über denen der Vorlage, Formatvorlagen mit Vorsatz.
+  const nummernAlt = lies('word/numbering.xml')
+  const hoechste = hoechsteNummern(nummernAlt)
+  const st: WortStil = { praefix: HOLDING_PRAEFIX, standard: `${HOLDING_PRAEFIX}Standard`, abstraktBasis: hoechste.abstrakt + 1, numBasis: hoechste.num, tabellenBreite: HOLDING_TABELLE }
+  const koerper = wKoerper(ohneTitelUeberschrift(zerlege(a.inhalt), a.titel), st)
+  const kopfBlock = wKopfBlock(a, st, ankerLaeufe)
+  schreib('word/document.xml', doc.slice(0, bodyAuf) + `<w:body>${kopfBlock}${koerper.xml}${sectPr}</w:body>` + doc.slice(bodyZu + '</w:body>'.length))
+
+  let typen = lies('[Content_Types].xml')
+  let rels = lies('word/_rels/document.xml.rels')
+  const R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+  const sorgeFuerTyp = (teil: string, typ: string) => {
+    if (!typen.includes(`PartName="${teil}"`)) typen = typen.replace('</Types>', `<Override PartName="${teil}" ContentType="${typ}"/></Types>`)
+  }
+
+  const nummern = wNummerierungTeile(koerper.listen, st)
+  if (nummernAlt) {
+    const ersterNum = nummernAlt.search(/<w:num\s/)
+    const aufraeumen = nummernAlt.search(/<w:numIdMacAtCleanup\b/)
+    const ende = aufraeumen >= 0 ? aufraeumen : nummernAlt.lastIndexOf('</w:numbering>')
+    const vorNums = ersterNum >= 0 ? ersterNum : ende
+    schreib('word/numbering.xml', nummernAlt.slice(0, vorNums) + nummern.abstrakt + nummernAlt.slice(vorNums, ende) + nummern.nums + nummernAlt.slice(ende))
+  } else {
+    schreib('word/numbering.xml', XML_KOPF + `<w:numbering ${W_NS}>${nummern.abstrakt}${nummern.nums}</w:numbering>`)
+    if (!rels.includes('Target="numbering.xml"')) rels = rels.replace('</Relationships>', `<Relationship Id="rIdCrmNummern" Type="${R}/numbering" Target="numbering.xml"/></Relationships>`)
+    sorgeFuerTyp('/word/numbering.xml', 'application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml')
+  }
+
+  const stile = lies('word/styles.xml')
+  if (!stile.includes('</w:styles>')) throw new Error('Die Word-Vorlage des Holding-Briefbogens hat keine Formatvorlagen')
+  schreib('word/styles.xml', stile.replace('</w:styles>', `${wInhaltsVorlagen(st)}</w:styles>`))
+
+  // Gerade/ungerade Kopfzeilen aus: Es gibt nur noch den Standard-Kopf, sonst blieben gerade Seiten leer.
+  const einst = lies('word/settings.xml')
+  if (einst) schreib('word/settings.xml', einst.replace(/<w:evenAndOddHeaders\b[^>]*\/>/g, ''))
+
+  // Nicht mehr benutzte Kopf-/Fußzeilen (z. B. „erste Seite“ mit alter Anschrift) ganz entfernen.
+  const benutzt = new Set([kopfRef, fussRef].map((r) => attribut(r, 'r:id')).filter(Boolean))
+  rels = rels.replace(/<Relationship\b[^>]*\/>/g, (rel) => {
+    const typ = attribut(rel, 'Type') ?? ''
+    if (!/\/(header|footer)$/.test(typ) || benutzt.has(attribut(rel, 'Id'))) return rel
+    const ziel = (attribut(rel, 'Target') ?? '').replace(/^\/?word\//, '')
+    delete dateien[`word/${ziel}`]
+    delete dateien[`word/_rels/${ziel}.rels`]
+    typen = typen.replace(new RegExp(`<Override PartName="/word/${ziel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"[^>]*/>`), '')
+    return ''
+  })
+  schreib('word/_rels/document.xml.rels', rels)
+
+  schreib('docProps/core.xml', kernEigenschaften(a.titel, a.urheber, a.jetzt ?? new Date()))
+  sorgeFuerTyp('/docProps/core.xml', 'application/vnd.openxmlformats-package.core-properties+xml')
+  schreib('docProps/app.xml', anwendungsEigenschaften(a.urheber))
+  sorgeFuerTyp('/docProps/app.xml', 'application/vnd.openxmlformats-officedocument.extended-properties+xml')
+  schreib('[Content_Types].xml', typen)
+  return zipSync(dateien, { level: 6 })
 }
 
 // ---------- Excel ----------

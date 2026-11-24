@@ -5,6 +5,7 @@
 import { assert, assertEquals, assertMatch, assertStringIncludes } from 'jsr:@std/assert@1'
 import { decodeBase64 } from 'jsr:@std/encoding@1/base64'
 import { fuehreDokumentWerkzeugAus } from './dokumentErstellen.ts'
+import { falscheHoldingVorlage } from './holdingVorlageTestDoppel.ts'
 import { erstelleExposePdf } from './exposePdf.ts'
 import { exposeFakten, type ExposeKontext, fuehreExposeWerkzeugAus, istExposeWerkzeug, objektSpeicherOrt, ortVon } from './exposeWerkzeuge.ts'
 
@@ -110,6 +111,7 @@ function stand(): Record<string, Zeile[]> {
     vorlagen: [
       { id: 'briefkopf', bereich: 'beratung', text: JSON.stringify({ name: 'Andreas Mayer Holding', unterzeilen: [], fusszeilen: [] }), datei: null },
       { id: 'v_logo', bereich: 'immobilien', name: 'Logo Andreas Mayer Holding', text: '', datei: { name: 'Logo.png', typ: 'image/png', pfad: 'vorlagen/immobilien/v_logo_Logo.png' } },
+      { id: 'v_ql_8c0d7da428d', bereich: 'immobilien', name: 'Briefbogen Holding', text: '', datei: { name: 'Briefbogen.docx', typ: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', pfad: 'vorlagen/immobilien/v_briefbogen.docx' } },
     ],
     kunden: [{ id: 'k_dick', bereich: 'immobilienkunden', firma: 'HD-IMMO', ansprechpartner: 'Helmut Dick', verantwortlich_email: null, activities: [], dokumente: [] }],
     briefboegen: [],
@@ -123,6 +125,7 @@ function dateien(): Record<string, Uint8Array> {
     'objekt-dokumente/o_rems/b3_Plan.png': PNG,
     'objekt-dokumente/o_rems/b4_Handy.heic': new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112, 104, 101, 105, 99]),
     'kunden-dokumente/vorlagen/immobilien/v_logo_Logo.png': PNG,
+    'kunden-dokumente/vorlagen/immobilien/v_briefbogen.docx': falscheHoldingVorlage(),
   }
 }
 
