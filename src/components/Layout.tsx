@@ -23,7 +23,7 @@ import {
   ChevronDown,
   Phone,
   Lock,
-  BookUser, Mic, Search, CalendarDays, BarChart3, Lightbulb, ListChecks, Eye, ShieldCheck, Calculator, ClipboardList, Presentation, Library } from 'lucide-react'
+  BookUser, Mic, Search, CalendarDays, BarChart3, Lightbulb, ListChecks, Eye, ShieldCheck, Calculator, ClipboardList, Presentation, Library, MessagesSquare } from 'lucide-react'
 import type { Bereich } from '../types'
 import { useApp } from '../context/AppContext'
 import { useAuth } from '../context/AuthContext'
@@ -426,6 +426,11 @@ export function Layout({ children }: { children: ReactNode }) {
                     {isSupabaseConfigured && session && istSuperuser && (
                       <MenuItem icon={<ShieldCheck size={15} />} onClick={() => { setProfilMenuOpen(false); navigate('/superuser') }}>
                         Superuser
+                      </MenuItem>
+                    )}
+                    {isSupabaseConfigured && session && (echterMitarbeiter?.rolle === 'geschaeftsfuehrung' || echterMitarbeiter?.ist_admin || istSuperuser) && (
+                      <MenuItem icon={<MessagesSquare size={15} />} onClick={() => { setProfilMenuOpen(false); navigate('/automatische-nachrichten') }}>
+                        Automatische Nachrichten
                       </MenuItem>
                     )}
                     {isSupabaseConfigured && session && istSuperuser && !ansichtAls && (

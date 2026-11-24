@@ -20,6 +20,8 @@ import {
   type KundenFeld, kundenFelderAus, pruefeKundenwerte, pruefsumme, setzeKundenwerte, UNTERSCHRIFT_TOKEN, wertSauber, zeitDe,
 } from '../_shared/unterschriftKern.ts'
 import { erzeugeUnterschriftPdf } from './unterschriftPdf.ts'
+import { ladeMailVorlage, type MailText, rendere, unterschriftWerte, VORLAGE } from './automatikVorlagen.ts'
+import { protokolliereNachricht } from '../_shared/nachrichtenProtokoll.ts'
 
 // deno-lint-ignore no-explicit-any
 type Admin = any
@@ -154,6 +156,19 @@ async function kopieUrl(admin: Admin, a: Anfrage, jetzt: Date): Promise<string |
 function anredeAus(name: string | null): string {
   const n = String(name ?? '').trim()
   return n ? `Guten Tag ${n},` : 'Guten Tag,'
+}
+
+/** Bisheriger fester Text der Kopie — Ersatz, wenn die Vorlage mv-auto-unterschrift-kopie fehlt. */
+export function kopieMailText(anName: string, dokument: string): MailText {
+  return {
+    betreff: `Ihre unterschriebene ${dokument}`,
+    text: `${anredeAus(anName)}\n\nvielen Dank für Ihre Unterschrift. Im Anhang finden Sie „${dokument}“ mit Ihrer elektronischen Unterschrift für Ihre Unterlagen.\n\nMit freundlichen Grüßen\nAndreas Mayer Holding`,
+  }
+}
+
+/** Kopie-Mail aus der Vorlage (bearbeitbar unter „Automatische Nachrichten“), sonst der feste Text. */
+export function kopieMail(anName: string, dokument: string, vorlage: MailText | null): MailText {
+  return rendere(vorlage, unterschriftWerte({ anName, dokument }), () => kopieMailText(anName, dokument))
 }
 
 /** Seite laden. */
@@ -329,17 +344,23 @@ export async function unterschriftAbsenden(admin: Admin, token: unknown, e: Abse
     const an = String(a.email || akte?.email || '').trim()
     if (schalter?.kopie_an_kunde === true && /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/.test(an)) {
       const anName = String(a.an_name ?? '').trim() || name
+      const mail = kopieMail(anName, a.titel, await ladeMailVorlage(admin, VORLAGE.unterschriftKopie))
+      const eintrag = { art: 'unterschrift_kopie', kanal: 'mail' as const, an_email: an, an_name: anName, betreff: mail.betreff, text: mail.text, bezug: { kunde_id: a.kunde_id, anfrage_id: a.id } }
+      let kopieRaus = false
       try {
         await helfer.sendeKopie(
           an,
-          `Ihre unterschriebene ${a.titel}`,
-          `${anredeAus(anName)}\n\nvielen Dank für Ihre Unterschrift. Im Anhang finden Sie „${a.titel}“ mit Ihrer elektronischen Unterschrift für Ihre Unterlagen.\n\nMit freundlichen Grüßen\nAndreas Mayer Holding`,
+          mail.betreff,
+          mail.text,
           { filename: pfadName(a.titel), contentBase64: base64(pdf), contentType: 'application/pdf' },
           { kundeId: a.kunde_id, bereich: a.bereich, kundeName: akte?.firma ?? '', anName },
         )
+        kopieRaus = true
+        await protokolliereNachricht(eintrag)
         await ergaenzeAkte(admin, a.kunde_id, { aktivitaet: { id: crypto.randomUUID(), date: heute, text: `Kopie von „${a.titel}“ (unterschrieben) automatisch an ${an} gesendet.`, user: 'System (automatisiert)' } }, heute)
       } catch (err) {
         console.error('Unterschrift: Kopie nicht gesendet', err instanceof Error ? err.message : err)
+        if (!kopieRaus) await protokolliereNachricht({ ...eintrag, status: 'fehler' })
       }
     }
   }

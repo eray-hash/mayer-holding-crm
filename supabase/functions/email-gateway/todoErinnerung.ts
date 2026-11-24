@@ -110,7 +110,7 @@ export type TodoVersand = {
 }
 
 export async function sendeTodoErinnerungen(admin: Db, versand: TodoVersand = {}): Promise<{ gesendet: number }> {
-  const sende = versand.sende ?? sendeTelegram
+  const sende = versand.sende ?? ((chat: number | string | null, text: string) => sendeTelegram(chat, text, 'todo_erinnerung'))
   const sendeP = versand.sendePrivat ?? (async (chat: number | string | null, text: string) => !!(await sendePrivat(chat, text)))
   const jetzt = Date.now()
   const { data, error } = await admin

@@ -23,6 +23,8 @@
 import type { Aufrufer } from './postfach.ts'
 import { icsAnhang } from '../_shared/ics.ts'
 import { privatBotAktiv, sendePrivat } from '../_shared/telegramPrivat.ts'
+import { protokolliereNachricht } from '../_shared/nachrichtenProtokoll.ts'
+import { gastWerte, ladeMailVorlage, type MailText, rendere, VORLAGE, type VorlageId } from './automatikVorlagen.ts'
 
 // deno-lint-ignore no-explicit-any
 type Db = any
@@ -73,9 +75,16 @@ async function ladeTeam(admin: Db): Promise<Map<string, Person>> {
   return team
 }
 
-export async function sendeTelegram(chat: number | string | null, text: string): Promise<boolean> {
+/**
+ * Telegram über den Mayer-Bot. `art` = Kennung aus dem Katalog der automatischen Nachrichten (src/lib/automatik/katalog.ts);
+ * jede versuchte Nachricht steht danach in nachrichten_protokoll (gesendet oder fehler). Nie für den privaten Bot.
+ * `ohneInhalt`: nur DASS die Nachricht ging, nicht ihr Text — für Inhalte nur für Superuser (das Protokoll lesen auch
+ * Geschäftsführer, die keine Superuser sind).
+ */
+export async function sendeTelegram(chat: number | string | null, text: string, art = 'telegram', ohneInhalt = false): Promise<boolean> {
   const token = Deno.env.get('TELEGRAM_BOT_TOKEN')
   if (!token || !chat) return false
+  let ok = false
   try {
     const antwort = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: 'POST',
@@ -83,11 +92,19 @@ export async function sendeTelegram(chat: number | string | null, text: string):
       body: JSON.stringify({ chat_id: chat, text }),
     })
     if (!antwort.ok) console.error('Telegram-Nachricht zum Termin fehlgeschlagen:', antwort.status)
-    return antwort.ok
+    ok = antwort.ok
   } catch (err) {
     console.error('Telegram-Nachricht zum Termin fehlgeschlagen:', err)
-    return false
   }
+  await protokolliereNachricht({ art, kanal: 'telegram', an_chat: chat, text: ohneInhalt ? NUR_SUPERUSER_TEXT : text, status: ok ? 'gesendet' : 'fehler' })
+  return ok
+}
+
+export const NUR_SUPERUSER_TEXT = '(Inhalt nur für Superuser — nicht aufgezeichnet)'
+
+/** Wie sendeTelegram, mit fester Katalog-Kennung — zum Übergeben an Module, die nur (chat, text) kennen. */
+export function sendeTelegramAls(art: string, ohneInhalt = false): (chat: number | string | null, text: string) => Promise<boolean> {
+  return (chat, text) => sendeTelegram(chat, text, art, ohneInhalt)
 }
 
 const TAG = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' })
@@ -237,7 +254,7 @@ export function erinnerungsMailText(t: Termin, gastName: string | undefined, abs
   }
 }
 
-function gastMailText(art: 'neu' | 'geaendert' | 'abgesagt', t: Termin, gastName: string | undefined, absenderName: string): { betreff: string; text: string } {
+export function gastMailText(art: 'neu' | 'geaendert' | 'abgesagt', t: Termin, gastName: string | undefined, absenderName: string): { betreff: string; text: string } {
   const zeit = zeitraumText(t)
   const anrede = gastName ? `Guten Tag ${gastName},` : 'Guten Tag,'
   const eckdaten = [t.titel, zeit, t.ort ? `Ort: ${t.ort}` : ''].filter(Boolean).join('\n')
@@ -258,6 +275,64 @@ function gastMailText(art: 'neu' | 'geaendert' | 'abgesagt', t: Termin, gastName
     betreff: `Einladung: ${t.titel} – ${zeit}`,
     text: `${anrede}\n\nhiermit laden wir Sie zu folgendem Termin ein:\n\n${eckdaten}\n\nMit der angehängten Kalenderdatei können Sie den Termin in Ihren Kalender übernehmen. Sollte der Termin für Sie nicht passen, antworten Sie gern einfach auf diese Mail.\n\n${gruss}`,
   }
+}
+
+// Bearbeitbare Texte (automatikVorlagen.ts): gastMailText/erinnerungsMailText oben bleiben der feste Ersatz, falls die
+// Vorlage fehlt oder nicht lesbar ist.
+export type GastArt = 'neu' | 'geaendert' | 'abgesagt'
+const GAST_VORLAGE: Record<GastArt, VorlageId> = { neu: VORLAGE.gastEinladung, geaendert: VORLAGE.gastAenderung, abgesagt: VORLAGE.gastAbsage }
+const GAST_KATALOG: Record<GastArt, string> = { neu: 'gast_einladung', geaendert: 'gast_aenderung', abgesagt: 'gast_absage' }
+
+/** Lädt jede Vorlage höchstens einmal je Aufruf (und nur, wenn wirklich eine Mail hinausgeht). */
+export type VorlagenLader = (id: VorlageId) => Promise<MailText | null>
+export function vorlagenLader(admin: Db): VorlagenLader {
+  const geladen = new Map<VorlageId, Promise<MailText | null>>()
+  return (id) => {
+    if (!geladen.has(id)) geladen.set(id, ladeMailVorlage(admin, id))
+    return geladen.get(id)!
+  }
+}
+
+/** Text einer Gast-Mail aus der Vorlage (sonst der feste Text). */
+export function gastMail(art: GastArt, t: Termin, gastName: string | undefined, absenderName: string, vorlage: MailText | null): MailText {
+  return rendere(vorlage, gastWerte({ titel: t.titel, zeit: zeitraumText(t), ort: t.ort, gastName, absender: absenderName }), () => gastMailText(art, t, gastName, absenderName))
+}
+
+/** Text der Erinnerungsmail aus der Vorlage (sonst der feste Text). */
+export function erinnerungsMail(t: Termin, gastName: string | undefined, absenderName: string, vorlauf: number, vorlage: MailText | null): MailText {
+  return rendere(vorlage, gastWerte({ titel: t.titel, zeit: zeitraumText(t), ort: t.ort, gastName, absender: absenderName, vorlauf }), () => erinnerungsMailText(t, gastName, absenderName, vorlauf))
+}
+
+/** Mail an einen Gast senden und aufzeichnen (nachrichten_protokoll). Wirft wie sendeMail, wenn der Versand scheitert. */
+async function sendeUndProtokolliere(
+  sendeMail: SendeMail,
+  art: string,
+  gast: { email: string; name?: string },
+  mail: MailText,
+  anhaenge: Parameters<SendeMail>[3],
+  terminId: string,
+): Promise<void> {
+  const eintrag = { art, kanal: 'mail' as const, an_email: gast.email, an_name: gast.name || null, betreff: mail.betreff, text: mail.text, bezug: { termin_id: terminId } }
+  try {
+    await sendeMail(gast.email, mail.betreff, mail.text, anhaenge)
+  } catch (err) {
+    await protokolliereNachricht({ ...eintrag, status: 'fehler' })
+    throw err
+  }
+  await protokolliereNachricht({ ...eintrag, status: 'gesendet' })
+}
+
+async function sendeGastMail(
+  sendeMail: SendeMail,
+  vorlagen: VorlagenLader,
+  art: GastArt,
+  t: Termin,
+  gast: { email: string; name?: string },
+  absenderName: string,
+  anhang: { filename: string; contentBase64: string; contentType: string },
+): Promise<void> {
+  const mail = gastMail(art, t, gast.name, absenderName, await vorlagen(GAST_VORLAGE[art]))
+  await sendeUndProtokolliere(sendeMail, GAST_KATALOG[art], gast, mail, [anhang], t.id)
 }
 
 export async function speichereTermin(admin: Db, a: Aufrufer, e: TerminEingabe, sendeMail?: SendeMail): Promise<SpeicherErgebnis> {
@@ -336,12 +411,12 @@ export async function speichereTermin(admin: Db, a: Aufrufer, e: TerminEingabe, 
     if (!neuDabei && !sichtbarGeaendert) continue
     const person = team.get(p)
     const kopf = neuDabei ? `📅 Neuer Termin von ${a.name}` : `📅 Termin geändert von ${a.name}`
-    if (await sendeTelegram(person?.chat ?? null, `${kopf}\n\n${terminText(termin, team)}`)) benachrichtigt.push(person?.name ?? p)
+    if (await sendeTelegram(person?.chat ?? null, `${kopf}\n\n${terminText(termin, team)}`, 'termin_teilnehmer_info')) benachrichtigt.push(person?.name ?? p)
     else ohneTelegram.push(person?.name ?? p)
   }
   if (vorher) {
     for (const p of (vorher.teilnehmer ?? []).filter((x) => !termin.teilnehmer.includes(x))) {
-      await sendeTelegram(team.get(p)?.chat ?? null, `📅 ${a.name} hat dich aus einem Termin genommen\n\n${vorher.titel}\n${zeitraumText(vorher)}`)
+      await sendeTelegram(team.get(p)?.chat ?? null, `📅 ${a.name} hat dich aus einem Termin genommen\n\n${vorher.titel}\n${zeitraumText(vorher)}`, 'termin_teilnehmer_info')
     }
   }
 
@@ -378,6 +453,7 @@ async function gastAbgleichen(
   if (!soll && !alterGast) return { termin, eingeladen: false }
 
   const organisator = { name: team.get(a.email)?.name || a.name || a.email, email: termin.besitzer_email.toLowerCase() }
+  const vorlagen = vorlagenLader(admin)
   let sequenz = typeof bisher.sequenz === 'number' ? bisher.sequenz : -1
   let neuerGast: { email: string; name: string } | null = null
   const hinweise: string[] = []
@@ -405,8 +481,7 @@ async function gastAbgleichen(
       sequenz++
       try {
         const vorlage = vorher ?? termin
-        const { betreff, text } = gastMailText('abgesagt', vorlage, alterGast.name, organisator.name)
-        await sendeMail(alterGast.email, betreff, text, [icsFuerGast(vorlage, organisator, alterGast, 'CANCEL', sequenz)])
+        await sendeGastMail(sendeMail, vorlagen, 'abgesagt', vorlage, alterGast, organisator.name, icsFuerGast(vorlage, organisator, alterGast, 'CANCEL', sequenz))
         hinweise.push(`Absage an ${alterGast.email} verschickt.`)
         gastNeu = { ...gastNeu, eingeladen: false, sequenz }
       } catch (err) {
@@ -424,8 +499,7 @@ async function gastAbgleichen(
     if (neuDabei || sichtbarGeaendert) {
       sequenz++
       try {
-        const { betreff, text } = gastMailText(neuDabei ? 'neu' : 'geaendert', termin, neuerGast.name, organisator.name)
-        await sendeMail(neuerGast.email, betreff, text, [icsFuerGast(termin, organisator, neuerGast, 'REQUEST', sequenz)])
+        await sendeGastMail(sendeMail, vorlagen, neuDabei ? 'neu' : 'geaendert', termin, neuerGast, organisator.name, icsFuerGast(termin, organisator, neuerGast, 'REQUEST', sequenz))
         eingeladen = true
         gastNeu = { ...gastNeu, email: neuerGast.email, name: neuerGast.name, eingeladen: true, sequenz }
       } catch (err) {
@@ -463,6 +537,7 @@ async function gaesteAbgleichen(
   if (bisher.length === 0 && soll.length === 0 && ungueltig.length === 0 && !(kundeGast.eingeladen && kundeGast.email)) return { termin, eingeladen: [] }
   const organisator = { name: team.get(a.email)?.name || a.name || a.email, email: termin.besitzer_email.toLowerCase() }
   const hinweise: string[] = ungueltig.length > 0 ? [`Keine gültige E-Mail-Adresse: ${ungueltig.join(', ')}.`] : []
+  const vorlagen = vorlagenLader(admin)
   const eingeladen: string[] = []
   const neu: ExternerGast[] = []
   const nachBisher = new Map(bisher.map((g) => [g.email.toLowerCase(), g]))
@@ -474,8 +549,7 @@ async function gaesteAbgleichen(
     const sequenz = (typeof g.sequenz === 'number' ? g.sequenz : 0) + 1
     try {
       const vorlage = vorher ?? termin
-      const { betreff, text } = gastMailText('abgesagt', vorlage, g.name, organisator.name)
-      await sendeMail(g.email, betreff, text, [icsFuerGast(vorlage, organisator, { email: g.email, name: g.name }, 'CANCEL', sequenz)])
+      await sendeGastMail(sendeMail, vorlagen, 'abgesagt', vorlage, { email: g.email, name: g.name }, organisator.name, icsFuerGast(vorlage, organisator, { email: g.email, name: g.name }, 'CANCEL', sequenz))
       hinweise.push(`Absage an ${g.email} verschickt.`)
     } catch (err) {
       hinweise.push(`Die Absage an ${g.email} konnte nicht verschickt werden: ${(err as Error)?.message ?? 'unbekannter Fehler'}`)
@@ -493,8 +567,7 @@ async function gaesteAbgleichen(
     if ((neuDabei || sichtbarGeaendert) && sendeMail) {
       sequenz++
       try {
-        const { betreff, text } = gastMailText(neuDabei ? 'neu' : 'geaendert', termin, name || undefined, organisator.name)
-        await sendeMail(g.email, betreff, text, [icsFuerGast(termin, organisator, { email: g.email, name }, 'REQUEST', sequenz)])
+        await sendeGastMail(sendeMail, vorlagen, neuDabei ? 'neu' : 'geaendert', termin, { email: g.email, name: name || undefined }, organisator.name, icsFuerGast(termin, organisator, { email: g.email, name }, 'REQUEST', sequenz))
         eingeladen.push(g.email)
         // Vorläufe, die schon verstrichen sind, gelten für diesen Gast als erledigt.
         if (neuDabei || sichtbarGeaendert) erinnertNeu[`gast:${g.email}`] = [...new Set([...(neuDabei ? [] : erinnertNeu[`gast:${g.email}`] ?? []), ...vorbei])]
@@ -537,14 +610,14 @@ export async function loescheTermin(
   if (t.besitzer_email.toLowerCase() === a.email) {
     const { error } = await admin.from('termine').delete().eq('id', id)
     if (error) return { ok: false, status: 500, fehler: error.message }
-    for (const p of t.teilnehmer ?? []) await sendeTelegram(team.get(p)?.chat ?? null, `📅 Termin abgesagt von ${a.name}\n\n${t.titel}\n${zeitraumText(t)}`)
+    for (const p of t.teilnehmer ?? []) await sendeTelegram(team.get(p)?.chat ?? null, `📅 Termin abgesagt von ${a.name}\n\n${t.titel}\n${zeitraumText(t)}`, 'termin_teilnehmer_info')
     let gastAbgesagt = false
+    const vorlagen = vorlagenLader(admin)
     const gast = (t.gast ?? {}) as TerminGast
     if (gast.eingeladen && gast.email && sendeMail) {
       try {
         const organisator = { name: team.get(a.email)?.name || a.name || a.email, email: t.besitzer_email.toLowerCase() }
-        const { betreff, text } = gastMailText('abgesagt', t, gast.name, organisator.name)
-        await sendeMail(gast.email, betreff, text, [icsFuerGast(t, organisator, { email: gast.email, name: gast.name }, 'CANCEL', (typeof gast.sequenz === 'number' ? gast.sequenz : 0) + 1)])
+        await sendeGastMail(sendeMail, vorlagen, 'abgesagt', t, { email: gast.email, name: gast.name }, organisator.name, icsFuerGast(t, organisator, { email: gast.email, name: gast.name }, 'CANCEL', (typeof gast.sequenz === 'number' ? gast.sequenz : 0) + 1))
         gastAbgesagt = true
       } catch (err) {
         console.error('Absage an den Kunden fehlgeschlagen', id, (err as Error)?.message ?? err)
@@ -554,8 +627,7 @@ export async function loescheTermin(
       const organisator = { name: team.get(a.email)?.name || a.name || a.email, email: t.besitzer_email.toLowerCase() }
       for (const g of ((t.gaeste ?? []) as ExternerGast[]).filter((x) => x?.eingeladen && x.email)) {
         try {
-          const { betreff, text } = gastMailText('abgesagt', t, g.name, organisator.name)
-          await sendeMail(g.email, betreff, text, [icsFuerGast(t, organisator, { email: g.email, name: g.name }, 'CANCEL', (typeof g.sequenz === 'number' ? g.sequenz : 0) + 1)])
+          await sendeGastMail(sendeMail, vorlagen, 'abgesagt', t, { email: g.email, name: g.name }, organisator.name, icsFuerGast(t, organisator, { email: g.email, name: g.name }, 'CANCEL', (typeof g.sequenz === 'number' ? g.sequenz : 0) + 1))
           gastAbgesagt = true
         } catch (err) {
           console.error('Absage an Gast fehlgeschlagen', id, (err as Error)?.message ?? err)
@@ -567,7 +639,7 @@ export async function loescheTermin(
   if (!(t.teilnehmer ?? []).includes(a.email)) return { ok: false, status: 403, fehler: 'Das ist nicht dein Termin.' }
   const { error } = await admin.from('termine').update({ teilnehmer: t.teilnehmer.filter((p) => p !== a.email), geaendert_am: new Date().toISOString() }).eq('id', id)
   if (error) return { ok: false, status: 500, fehler: error.message }
-  await sendeTelegram(team.get(t.besitzer_email.toLowerCase())?.chat ?? null, `📅 ${a.name} hat abgesagt\n\n${t.titel}\n${zeitraumText(t)}`)
+  await sendeTelegram(team.get(t.besitzer_email.toLowerCase())?.chat ?? null, `📅 ${a.name} hat abgesagt\n\n${t.titel}\n${zeitraumText(t)}`, 'termin_teilnehmer_info')
   return { ok: true, art: 'ausgetragen' }
 }
 
@@ -632,7 +704,10 @@ export type ErinnerungsVersand = {
 // kämen bei einem kurzfristig angelegten Termin vier Nachrichten auf einmal.
 // Ablauf je Termin: erst den neuen Stand `erinnert` bedingt speichern (beanspruchen), dann senden.
 export async function sendeErinnerungen(admin: Db, versand: ErinnerungsVersand = {}): Promise<{ gesendet: number }> {
-  const sende = versand.sende ?? sendeTelegram
+  const sende = versand.sende ?? sendeTelegramAls('termin_erinnerung')
+  // Private Termine (ohne Kollegen, ohne Mayer-Akte) bei Leuten ohne privaten Bot: im Protokoll nur DASS erinnert wurde,
+  // nicht der Inhalt — das Protokoll liest die Geschäftsführung (Privates bleibt privat).
+  const sendeOhneInhalt = versand.sende ?? sendeTelegramAls('termin_erinnerung', true)
   const sendeP = versand.sendePrivat ?? (async (chat: number | string | null, text: string) => !!(await sendePrivat(chat, text)))
   const jetzt = Date.now()
   const { data } = await admin
@@ -655,13 +730,14 @@ export async function sendeErinnerungen(admin: Db, versand: ErinnerungsVersand =
     return privatAktiv.get(email)!
   }
   let gesendet = 0
+  const vorlagen = vorlagenLader(admin)
   for (const t of termine) {
     const privaterTermin = (t.teilnehmer ?? []).length === 0 && (!t.kunde_id || t.kunde_bereich === 'privat')
     const bisBeginn = (new Date(t.beginn).getTime() - jetzt) / 60000
     const alt = (t.erinnert ?? null) as Record<string, number[]> | null
     const erinnert: Record<string, number[]> = { ...(alt ?? {}) }
     // Erst alles Fällige sammeln und als erledigt vormerken …
-    const nachrichten: { p: string; chat: number | string | null; text: string; privat: boolean; faellig: number[] }[] = []
+    const nachrichten: { p: string; chat: number | string | null; text: string; privat: boolean; privaterInhalt: boolean; faellig: number[] }[] = []
     for (const p of [t.besitzer_email.toLowerCase(), ...(t.teilnehmer ?? [])]) {
       const person = team.get(p)
       if (!person) continue
@@ -676,7 +752,7 @@ export async function sendeErinnerungen(admin: Db, versand: ErinnerungsVersand =
       const wann = knappste >= 1440 ? `am ${zeitraumText(t)}` : `${vorlaufText(Math.max(1, Math.round(bisBeginn)))} (${zeitraumText(t)})`
       const text = `⏰ Erinnerung: ${t.titel} ${wann}${t.ort ? `\nOrt: ${t.ort}` : ''}${t.kunde_name ? `\nKunde: ${t.kunde_name}` : ''}`
       const privat = privaterTermin && p === t.besitzer_email.toLowerCase() && (await hatPrivatBot(p))
-      nachrichten.push({ p, chat: person.chat, text, privat, faellig })
+      nachrichten.push({ p, chat: person.chat, text, privat, privaterInhalt: privaterTermin, faellig })
     }
     // Eingeladene Gäste (Kunde aus der Akte und externe): Erinnerungsmail 1 Tag und 1 Stunde vorher.
     const mails: { schluessel: string; email: string; name?: string; vorlauf: number; faellig: number[] }[] = []
@@ -701,17 +777,18 @@ export async function sendeErinnerungen(admin: Db, versand: ErinnerungsVersand =
     // … und erst jetzt senden.
     const frei = new Map<string, number[]>()
     for (const n of nachrichten) {
-      const ok = n.privat ? await sendeP(n.chat, n.text).catch(() => false) : await sende(n.chat, n.text).catch(() => false)
+      const ok = n.privat ? await sendeP(n.chat, n.text).catch(() => false) : await (n.privaterInhalt ? sendeOhneInhalt : sende)(n.chat, n.text).catch(() => false)
       if (ok) gesendet++
       // Privat und nicht zugestellt: beim nächsten Lauf erneut versuchen, nie ersatzweise über den Mayer-Bot.
       else if (n.privat) frei.set(n.p, n.faellig)
     }
     if (mails.length > 0 && versand.sendeMail) {
       const absender = team.get(t.besitzer_email.toLowerCase())?.name || 'Ihr Ansprechpartner'
+      const vorlage = await vorlagen(VORLAGE.gastErinnerung)
       for (const m of mails) {
         try {
-          const { betreff, text } = erinnerungsMailText(t, m.name, absender, m.vorlauf)
-          await versand.sendeMail(m.email, betreff, text)
+          const mail = erinnerungsMail(t, m.name, absender, m.vorlauf, vorlage)
+          await sendeUndProtokolliere(versand.sendeMail, 'gast_erinnerung', { email: m.email, name: m.name }, mail, undefined, t.id)
           gesendet++
         } catch (err) {
           console.error('Erinnerungsmail an Gast fehlgeschlagen', t.id, m.email, (err as Error)?.message ?? err)

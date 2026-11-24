@@ -1,4 +1,5 @@
 import { Link, useLocation } from 'react-router-dom'
+import { AutomatikSideLink } from './AutomatikSideLink'
 import { ChevronLeft, ChevronRight, Sun, UserCog, ListTodo, Library, BookOpen, Contact } from 'lucide-react'
 import { UngeklaertSideLink } from './UngeklaertSideLink'
 
@@ -24,6 +25,7 @@ export function SidebarBuecher({ collapsed, onToggle }: { collapsed: boolean; on
             <Library size={14} /> Bücher & Verlag
           </div>
         )}
+        <AutomatikSideLink collapsed={collapsed} />
         <SideLink to="/profil" icon={<UserCog size={17} />} label="Mein Profil" collapsed={collapsed} active={isActive('/profil')} />
         <button
           onClick={onToggle}

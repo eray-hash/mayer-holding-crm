@@ -46,7 +46,7 @@ export function hinweisText(anzahl: number, privat: boolean): string {
 }
 
 const STANDARD_WEGE = (admin: Db): HinweisWege => ({
-  sendeMayer: (chat, text) => sendeTelegram(chat, text),
+  sendeMayer: (chat, text) => sendeTelegram(chat, text, 'todo_aufraeumen'),
   sendePrivat: async (chat, text) => !!(await sendePrivat(chat, text)),
   privatBotAktiv: (email) => privatBotAktiv(admin, email),
 })

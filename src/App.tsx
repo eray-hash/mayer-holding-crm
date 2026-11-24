@@ -83,6 +83,7 @@ import { BuecherListe } from './pages/buecher/BuecherListe'
 import { BuchDetail } from './pages/buecher/BuchDetail'
 import { BuchKontakte } from './pages/buecher/BuchKontakte'
 import { SuperuserSeite } from './pages/superuser/SuperuserSeite'
+import { AutomatischeNachrichten } from './pages/automatik/AutomatischeNachrichten'
 import { ProjekteListe } from './pages/projekte/ProjekteListe'
 import { PortalLogin } from './pages/portal/PortalLogin'
 import { PortalMagicLink } from './pages/portal/PortalMagicLink'
@@ -123,6 +124,7 @@ function AdminRoutesContent() {
         <Route path="/kalender" element={<Kalender />} />
         <Route path="/aufgaben" element={<AufgabenUebersicht />} />
         <Route path="/superuser" element={<SuperuserSeite />} />
+        <Route path="/automatische-nachrichten" element={<AutomatischeNachrichten />} />
         {/* Für alle: Was jemand sieht, begrenzt die Datenbank (Bereichsrechte) schon im App-Zustand. */}
         <Route path="/auswertungen" element={<Auswertungen />} />
         <Route path="/auswertungen/umsatz" element={<Umsatzvorschau />} />

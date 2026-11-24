@@ -1,5 +1,6 @@
 import { useId, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
+import { AutomatikSideLink } from './AutomatikSideLink'
 import { Building2, Landmark, FileText, ChevronDown, ChevronLeft, ChevronRight, ScrollText, Sun, LayoutGrid, UserCog, ListTodo, Users, Search, MessageCircleQuestion, Clock, CalendarClock, Forward, MailCheck } from 'lucide-react'
 import { UngeklaertSideLink } from './UngeklaertSideLink'
 import { useApp } from '../context/AppContext'
@@ -145,7 +146,7 @@ export function SidebarImmobilien({ collapsed, onToggle }: { collapsed: boolean;
           <SideLink to="/immobilien/kunden" icon={<Users size={17} />} label="Kontakte" collapsed={collapsed} active={isActive('/immobilien/kunden')} />
           <SideLink to="/immobilien/gesuche" icon={<Search size={17} />} label="Gesuche" collapsed={collapsed} active={isActive('/immobilien/gesuche')} />
           <SideLink to="/immobilien/weitergaben" icon={<Forward size={17} />} label="Weitergaben" collapsed={collapsed} active={isActive('/immobilien/weitergaben')} />
-          <SideLink to="/immobilien/automatische-nachrichten" icon={<MailCheck size={17} />} label="Automatische Nachrichten" collapsed={collapsed} active={isActive('/immobilien/automatische-nachrichten')} />
+          <SideLink to="/immobilien/automatische-nachrichten" icon={<MailCheck size={17} />} label="Immobilien-Nachrichten" collapsed={collapsed} active={isActive('/immobilien/automatische-nachrichten')} />
         </Gruppe>
 
         <Gruppe titel="Abstimmung" {...gruppenProps('abstimmung')}>
@@ -208,6 +209,7 @@ export function SidebarImmobilien({ collapsed, onToggle }: { collapsed: boolean;
             <ScrollText size={14} /> Immobilien
           </div>
         )}
+        <AutomatikSideLink collapsed={collapsed} />
         <SideLink to="/profil" icon={<UserCog size={17} />} label="Mein Profil" collapsed={collapsed} active={isActive('/profil')} />
         <button
           onClick={onToggle}

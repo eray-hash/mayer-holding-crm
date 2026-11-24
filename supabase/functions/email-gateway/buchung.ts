@@ -17,6 +17,8 @@
 //   noch einmal auf gleichzeitige Buchung prüfen, Mitarbeiter per Telegram benachrichtigen, Kunde
 //   bekommt eine Bestätigung mit Kalenderdatei (.ics).
 import { ERLAUBTE_ERINNERUNGEN, sendeTelegram, zeitraumText } from './kalender.ts'
+import { buchungWerte, ladeMailVorlage, type MailText, rendere, VORLAGE } from './automatikVorlagen.ts'
+import { protokolliereNachricht } from '../_shared/nachrichtenProtokoll.ts'
 import { icsAnhang } from '../_shared/ics.ts'
 import { alleZeilen } from '../_shared/alleZeilen.ts'
 
@@ -283,6 +285,39 @@ async function freieZeitenFuer(admin: Db, k: Kontext, jetzt: Date): Promise<Frei
 const TAG_LANG = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' })
 const UHR = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit' })
 
+export type BuchungMailDaten = { name: string; titel: string; tag: string; von: string; bis: string; ort?: string | null; hinweis?: string | null; absender: string }
+
+/** Bisheriger fester Text der Bestätigung — Ersatz, wenn die Vorlage mv-auto-buchung-bestaetigung fehlt. */
+export function buchungMailText(d: BuchungMailDaten): MailText {
+  const text = [
+    `Guten Tag ${d.name},`,
+    '',
+    'vielen Dank für Ihre Buchung. Hiermit bestätigen wir Ihren Termin:',
+    '',
+    d.titel,
+    `${d.tag}, ${d.von}–${d.bis} Uhr (deutsche Zeit)`,
+    d.ort ? `Ort: ${d.ort}` : null,
+    `Gesprächspartner: ${d.absender}`,
+    d.hinweis ? `\n${d.hinweis}` : null,
+    '',
+    'Im Anhang finden Sie den Termin als Kalenderdatei. Mit einem Klick darauf können Sie ihn in Ihren Kalender übernehmen.',
+    '',
+    'Falls Sie den Termin absagen oder verschieben möchten, antworten Sie einfach auf diese E-Mail oder rufen Sie uns an.',
+    '',
+    'Mit freundlichen Grüßen',
+    d.absender,
+    'Andreas Mayer Holding',
+  ]
+    .filter((z) => z !== null)
+    .join('\n')
+  return { betreff: `Terminbestätigung: ${d.titel} am ${d.tag.replace(/^[^,]+,\s*/, '')} um ${d.von} Uhr`, text }
+}
+
+/** Bestätigung aus der Vorlage (bearbeitbar unter „Automatische Nachrichten“), sonst der feste Text. */
+export function buchungMail(d: BuchungMailDaten, vorlage: MailText | null): MailText {
+  return rendere(vorlage, buchungWerte(d), () => buchungMailText(d))
+}
+
 function fehler(status: number, text: string) {
   return { status, inhalt: { error: text } }
 }
@@ -443,9 +478,11 @@ export async function buchungAktion(admin: any, body: any, k: BuchungsKontext): 
         ]
           .filter((z) => z !== null)
           .join('\n'),
+        'buchung_telegram',
       )
 
       let bestaetigungGesendet = false
+      let bestaetigung: MailText | null = null
       try {
         const tag = TAG_LANG.format(beginn)
         const von = UHR.format(beginn)
@@ -463,31 +500,16 @@ export async function buchungAktion(admin: any, body: any, k: BuchungsKontext): 
           },
           'termin.ics',
         )
-        const text = [
-          `Guten Tag ${name},`,
-          '',
-          'vielen Dank für Ihre Buchung. Hiermit bestätigen wir Ihren Termin:',
-          '',
-          b.titel,
-          `${tag}, ${von}–${bis} Uhr (deutsche Zeit)`,
-          b.ort ? `Ort: ${b.ort}` : null,
-          `Gesprächspartner: ${ktx.name}`,
-          b.hinweis ? `\n${b.hinweis}` : null,
-          '',
-          'Im Anhang finden Sie den Termin als Kalenderdatei. Mit einem Klick darauf können Sie ihn in Ihren Kalender übernehmen.',
-          '',
-          'Falls Sie den Termin absagen oder verschieben möchten, antworten Sie einfach auf diese E-Mail oder rufen Sie uns an.',
-          '',
-          'Mit freundlichen Grüßen',
-          ktx.name,
-          'Andreas Mayer Holding',
-        ]
-          .filter((z) => z !== null)
-          .join('\n')
-        await k.sendeMail(email, `Terminbestätigung: ${b.titel} am ${tag.replace(/^[^,]+,\s*/, '')} um ${von} Uhr`, text, [anhang])
+        bestaetigung = buchungMail(
+          { name, titel: b.titel, tag, von, bis, ort: b.ort, hinweis: b.hinweis, absender: ktx.name },
+          await ladeMailVorlage(admin, VORLAGE.buchungBestaetigung),
+        )
+        await k.sendeMail(email, bestaetigung.betreff, bestaetigung.text, [anhang])
         bestaetigungGesendet = true
+        await protokolliereNachricht({ art: 'buchung_bestaetigung', kanal: 'mail', an_email: email, an_name: name, betreff: bestaetigung.betreff, text: bestaetigung.text, bezug: { termin_id: String(termin.id) } })
       } catch (err) {
         console.error('Buchung: Bestätigung per Mail fehlgeschlagen:', err instanceof Error ? err.message : err)
+        if (bestaetigung) await protokolliereNachricht({ art: 'buchung_bestaetigung', kanal: 'mail', an_email: email, an_name: name, betreff: bestaetigung.betreff, text: bestaetigung.text, status: 'fehler', bezug: { termin_id: String(termin.id) } })
       }
 
       return { status: 200, inhalt: { ok: true, beginn: zeile.beginn, ende: zeile.ende, bestaetigungGesendet } }

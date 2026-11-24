@@ -48,6 +48,7 @@ import { darfAkte, darfObjekt, darfPostfachBereich, type RechteMitarbeiter, SAMM
 import { darfZiel } from '../telegram-gateway/privatPostWerkzeug.ts'
 import { inhaltSchluessel } from './akteZuObjekt.ts'
 import { berlinZeit } from './tagesmeldung.ts'
+import { protokolliereNachricht } from '../_shared/nachrichtenProtokoll.ts'
 
 // deno-lint-ignore no-explicit-any
 type Db = any
@@ -76,22 +77,26 @@ const BIS_MINUTE = 11 * 60
 const AKTE_UNGEKLAERT = 'k_eingang_ungeklaert'
 const AKTE_INTERN = 'k_intern_holding'
 
-/** Standard-Versand über den Mayer-Bot (TELEGRAM_BOT_TOKEN). */
-export const telegramMayerBot: TelegramApi = async (methode, daten) => {
+/** Standard-Versand über den Mayer-Bot (TELEGRAM_BOT_TOKEN). Mit `art` (Kennung aus dem Katalog der automatischen
+ *  Nachrichten) wird jede sendMessage in nachrichten_protokoll aufgezeichnet; `ohneInhalt` = ohne den Text (Inhalte
+ *  nur für Superuser). */
+export const telegramMayerBot = async (methode: string, daten: Record<string, unknown>, art?: string, ohneInhalt = false): Promise<Record<string, unknown> | null> => {
   const token = Deno.env.get('TELEGRAM_BOT_TOKEN')
   if (!token) {
     console.log(`[Telegram ${methode}] ${String(daten.text ?? '').slice(0, 200)}`)
     return null
   }
+  let ergebnis: Record<string, unknown> | null = null
   try {
     const r = await fetch(`https://api.telegram.org/bot${token}/${methode}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(daten) })
     const j = await r.json().catch(() => null)
     if (!r.ok) console.error(`Telegram ${methode} fehlgeschlagen`, r.status, j?.description)
-    return j?.result ?? null
+    ergebnis = j?.result ?? null
   } catch (err) {
     console.error(`Telegram ${methode} fehlgeschlagen`, err)
-    return null
   }
+  if (art && methode === 'sendMessage') await protokolliereNachricht({ art, kanal: 'telegram', an_chat: daten.chat_id as string | number | null, text: ohneInhalt ? '(Inhalt nur für Superuser — nicht aufgezeichnet)' : String(daten.text ?? ''), status: ergebnis ? 'gesendet' : 'fehler' })
+  return ergebnis
 }
 
 export function imFenster(jetzt: Date): boolean {

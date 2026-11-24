@@ -59,6 +59,8 @@ export type BriefingOptionen = {
   jetzt?: Date
   /** Senden über den Mayer-Bot (Standard: kalender.ts sendeTelegram, vom Aufrufer übergeben). */
   sende: Senden
+  /** Wie `sende`, aber im Nachrichten-Protokoll ohne Inhalt — für private Akten/Termine ohne privaten Bot. */
+  sendeVertraulich?: (chat: number | string, text: string) => Promise<boolean>
   /** Senden über den privaten Bot (Standard: _shared/telegramPrivat.ts). */
   sendePrivat?: Senden
   /** Nutzt die Person den privaten Assistenten? (Standard: _shared/telegramPrivat.ts) */
@@ -188,7 +190,7 @@ async function zustellen(admin: Db, o: BriefingOptionen, p: Person, privat: bool
       return await ueberPrivat(p.chat, text)
     }
   }
-  return await o.sende(p.chat, text)
+  return await (privat && o.sendeVertraulich ? o.sendeVertraulich : o.sende)(p.chat, text)
 }
 
 async function vorDemTermin(admin: Db, o: BriefingOptionen, jetzt: Date, einst: Map<string, Einstellung>, ergebnis: BriefingErgebnis): Promise<void> {

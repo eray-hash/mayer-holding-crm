@@ -450,7 +450,9 @@ export async function sendeAbendRueckblicke(admin: Db, o: AbendOptionen = {}): P
     const einstellung = o.einstellung ?? (await einstellungGemerkt(admin))
     if (einstellung.modus === 'aus' || !imAbendFenster(jetzt, einstellung.uhrzeit)) return ergebnis
     const heute = berlinZeit(jetzt).datum
-    const telegram = o.telegram ?? telegramMayerBot
+    const telegram: TelegramApi = o.telegram ?? ((methode, daten) => telegramMayerBot(methode, daten, 'abend_rueckblick'))
+    // Probelauf: Superuser sehen die Nachrichten der Kollegen — deren Inhalt kommt nicht ins Protokoll (das lesen auch Geschäftsführer).
+    const telegramProbe: TelegramApi = o.telegram ?? ((methode, daten) => telegramMayerBot(methode, daten, 'abend_rueckblick', true))
     const privatAktiv = o.privatAktiv ?? ((e: string) => privatBotAktiv(admin, e))
 
     const [alle, einst] = await Promise.all([ladeAlleAktiven(admin), ladeEinstellungen(admin, ART)])
@@ -481,7 +483,7 @@ export async function sendeAbendRueckblicke(admin: Db, o: AbendOptionen = {}): P
           const extra = eigene.knoepfe.length ? { reply_markup: { inline_keyboard: eigene.knoepfe } } : {}
           ok = !!(await telegram('sendMessage', { chat_id: p.chat, text: eigene.text, ...extra }))
         }
-        for (const t of probe) ok = !!(await telegram('sendMessage', { chat_id: p.chat, text: t })) && ok
+        for (const t of probe) ok = !!(await telegramProbe('sendMessage', { chat_id: p.chat, text: t })) && ok
         if (ok) ergebnis.gesendet++
         else ergebnis.fehler.push(`Abend-Rückblick an ${p.email}: nicht (ganz) zugestellt.`)
       } catch (err) {
