@@ -119,7 +119,7 @@ export const GRUPPEN: Record<GruppenName, Gruppe> = {
   },
   rechnungen: {
     titel: 'Rechnungen und Buchhaltung',
-    wofuer: 'Rechnungen ausstellen (PDF) und per Mail versenden, Rechnungen erfassen, Status und Zahlungen, offene Rechnungen, Kontoauszug abgleichen, Rechnungsvorschläge, Mahnungen, Verbindlichkeiten, Übergabe an den Steuerberater, Kostenvoranschläge',
+    wofuer: 'Rechnungen ausstellen (PDF) und per Mail versenden, Rechnungen erfassen, Status und Zahlungen, offene Rechnungen, Kontoauszug abgleichen, Rechnungsvorschläge, Zahlungserinnerungen und Mahnungen erstellen und senden, Follow-up einer Rechnung vorführen, Verbindlichkeiten, Übergabe an den Steuerberater, Kostenvoranschläge',
     werkzeuge: [
       'rechnung_erfassen',
       // 24.11.2026: Rechnung ausstellen (PDF auf dem Briefbogen) und mit Anhang versenden — rechnungErstellen.ts.
@@ -136,10 +136,13 @@ export const GRUPPEN: Record<GruppenName, Gruppe> = {
       'kostenvoranschlaege_auflisten',
       'kostenvoranschlag_aendern',
       'mahn_vorschlaege',
+      // 24.11.2026: Zahlungserinnerung/Mahnung direkt hier, Follow-up vorführen — mahnungWerkzeuge.ts.
+      'mahnung_erstellen',
+      'followup_durchspielen',
       'verbindlichkeiten_pruefen',
     ],
     stichworte:
-      /rechnung|zahlung|bezahl|gezahlt|zahlt\b|ueberwies|ueberweisung|kontoauszug|\bmahn|offene posten|\bgeld\b|\bschuld(et|en|ig)|forderung|steuerberater|datev|buchhaltung|\bbeleg|kostenvoranschlag|\bkv\b|angebot|skonto|verbindlichkeit|abrechn|abgerechnet|honorar|gutschrift/,
+      /rechnung|zahlung|bezahl|durchspiel|vorfuehr|gezahlt|zahlt\b|ueberwies|ueberweisung|kontoauszug|\bmahn|offene posten|\bgeld\b|\bschuld(et|en|ig)|forderung|steuerberater|datev|buchhaltung|\bbeleg|kostenvoranschlag|\bkv\b|angebot|skonto|verbindlichkeit|abrechn|abgerechnet|honorar|gutschrift/,
   },
   vertrieb: {
     titel: 'Umsatz und Partner',

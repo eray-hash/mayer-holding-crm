@@ -2,7 +2,8 @@
 // Rechnet mit denselben Regeln wie der Tageslauf (email-gateway/mahnVorschlag.ts, Regeln in
 // _shared/mahnVorschlagKern.ts): wie viele Rechnungen heute einen Mahnvorschlag bekämen, welche Vorschläge offen
 // oder zurückgestellt sind und welche bewusst übersprungen werden (Zahlung eingegangen, Kontoauszug-Abgleich offen).
-// Erstellt und gesendet wird das Schreiben im CRM (Link), nie hier.
+// Das Schreiben selbst erstellt seit 24.11.2026 mahnung_erstellen direkt im Assistenten (mahnungWerkzeuge.ts; raus erst
+// nach dem Ja des Mitarbeiters) — oder wie bisher das CRM (Link).
 //
 // Rechte: Der Assistent arbeitet mit vollen Datenbankrechten, deshalb wie die Zeilenregel: nur mit dem Bereich
 // Unternehmensberatung (Rechnungen), dazu die Akte der Rechnung (darfAkte). Im privaten Assistenten nicht.
@@ -28,7 +29,7 @@ export const MAHN_VORSCHLAG_WERKZEUGE = [
   {
     name: 'mahn_vorschlaege',
     description:
-      'Zeigt das Mahnwesen von heute (nur lesen): wie viele überfällige Rechnungen heute einen Mahnvorschlag bekommen (Zahlungserinnerung, 1. oder 2. Mahnung nach den eingestellten Tagen), welche Vorschläge noch offen oder zurückgestellt sind (z. B. Ratenzahlung) und welche Rechnungen bewusst übersprungen werden (Zahlung in den letzten Tagen, Kontoauszug noch nicht bestätigt). Für Fragen wie „Wen müssen wir mahnen?“, „Welche Mahnungen stehen an?“, „Wie viele Rechnungen bekommen heute eine Zahlungserinnerung?“. Gesendet wird hier nichts — das Schreiben wird im CRM auf der Seite Mahnwesen geprüft und gesendet (Link im Ergebnis).',
+      'Zeigt das Mahnwesen von heute (nur lesen): wie viele überfällige Rechnungen heute einen Mahnvorschlag bekommen (Zahlungserinnerung, 1. oder 2. Mahnung nach den eingestellten Tagen), welche Vorschläge noch offen oder zurückgestellt sind (z. B. Ratenzahlung) und welche Rechnungen bewusst übersprungen werden (Zahlung in den letzten Tagen, Kontoauszug noch nicht bestätigt). Für Fragen wie „Wen müssen wir mahnen?“, „Welche Mahnungen stehen an?“, „Wie viele Rechnungen bekommen heute eine Zahlungserinnerung?“. Dieses Werkzeug sendet nichts. Das Schreiben (PDF + Mail an den Kunden) erstellst du dann mit mahnung_erstellen direkt hier — oder der Mitarbeiter im CRM auf der Seite Mahnwesen (Link im Ergebnis).',
     input_schema: { type: 'object', properties: {} },
   },
 ]
@@ -76,7 +77,7 @@ export async function fuehreMahnVorschlagWerkzeugAus(name: string, _input: Recor
   if (heuteFaellig.length) zeilen.push(`Der Tageslauf legt sie ab 9 Uhr als Vorschlag an und meldet sie dem Zuständigen.`)
 
   if (offen.length) {
-    zeilen.push('', `Offene Vorschläge (${offen.length}), im CRM zu prüfen und zu senden:`)
+    zeilen.push('', `Offene Vorschläge (${offen.length}) — hier mit mahnung_erstellen oder im CRM zu prüfen und zu senden:`)
     for (const z of offen) {
       const r = rechnungJe.get(z.rechnung_id)
       zeilen.push(`• ${z.rechnung_nummer ?? r?.nummer ?? z.rechnung_id} (${r ? wer(r) : akteName(akteVon(z.kunde_id))}): ${STUFE_NAME[z.stufe]}, vorgeschlagen am ${deDatum(String(z.erstellt_am ?? '').slice(0, 10))} — ${mahnLink(basis, z.id)}`)

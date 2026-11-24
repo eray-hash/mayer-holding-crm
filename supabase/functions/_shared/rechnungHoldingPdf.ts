@@ -156,7 +156,8 @@ class Satz {
   /** Text in Zeilen bis breiteMm umbrechen (zu lange Wörter hart teilen). */
   umbrechen(t: string, s: Stil, breiteMm: number): string[] {
     const zeilen: string[] = []
-    for (const absatz of this.sauber(t).split('\n')) {
+    // Erst an Zeilenumbrüchen teilen, dann filtern — der Zeichenfilter entfernt \n sonst.
+    for (const absatz of String(t ?? '').split(/\r?\n/).map((z) => this.sauber(z))) {
       if (!absatz.trim()) {
         zeilen.push('')
         continue

@@ -73,6 +73,7 @@ import { ABGLEICH_WERKZEUGE, fuehreAbgleichWerkzeugAus, istAbgleichWerkzeug } fr
 import { fuehreUmsatzWerkzeugAus, istUmsatzWerkzeug, UMSATZ_WERKZEUGE } from './umsatzWerkzeuge.ts'
 import { fuehreRechnungVorschlagWerkzeugAus, istRechnungVorschlagWerkzeug, RECHNUNG_VORSCHLAG_WERKZEUGE } from './rechnungVorschlagWerkzeug.ts'
 import { fuehreMahnVorschlagWerkzeugAus, istMahnVorschlagWerkzeug, MAHN_VORSCHLAG_WERKZEUGE } from './mahnVorschlagWerkzeug.ts'
+import { fuehreMahnungWerkzeugAus, folgeNachMahnung, istMahnungWerkzeug, ladeRechnungMitAkte, MAHNUNG_WERKZEUGE, type MahnungBezug, mahnungNachVersand, sendeVorschauen, spieleFollowupDurch } from './mahnungWerkzeuge.ts'
 import { folgeNachVersand, fuehreRechnungErstellenWerkzeugAus, istRechnungErstellenWerkzeug, RECHNUNG_ERSTELLEN_WERKZEUGE, type RechnungAnhang, type RechnungBezug, rechnungNachVersand, versandAnhaenge } from './rechnungErstellen.ts'
 import { CHANCE_WERKZEUGE, fuehreChanceWerkzeugAus, istChanceWerkzeug } from './chanceWerkzeug.ts'
 import { DATEV_WERKZEUGE, fuehreDatevWerkzeugAus, istDatevWerkzeug } from './datevWerkzeug.ts'
@@ -1077,7 +1078,8 @@ type AgentState = {
 // kunde_id und bereich leer = Adresse ohne Kundenakte (an_adressen in mail_vorbereiten, externeMail.ts).
 type MailEmpfaenger = { kunde_id: string; bereich: string; name: string; firma: string; email: string; status: string }
 // anhaenge/rechnung: Rechnungsversand (rechnung_versenden, rechnungErstellen.ts) — Datei aus der Akte als Anhang, nach dem Versand Status „Versendet“.
-type MailEntwurf = { id: string; betreff: string; text: string; empfaenger: MailEmpfaenger[]; z: string; anhaenge?: RechnungAnhang[]; rechnung?: RechnungBezug }
+// mahnung: Zahlungserinnerung/Mahnung (mahnung_erstellen, mahnungWerkzeuge.ts) — nach dem Versand Eintrag an der Rechnung wie im CRM.
+type MailEntwurf = { id: string; betreff: string; text: string; empfaenger: MailEmpfaenger[]; z: string; anhaenge?: RechnungAnhang[]; rechnung?: RechnungBezug; mahnung?: MahnungBezug }
 
 // Liest ältere Zustände tolerant (ohne "zuege") — die werden einfach verworfen.
 export function ladeState(raw: unknown): AgentState {
@@ -1717,6 +1719,7 @@ export const TOOLS = [
   ...RECHNUNG_VORSCHLAG_WERKZEUGE,
   ...MAHN_VORSCHLAG_WERKZEUGE,
   ...RECHNUNG_ERSTELLEN_WERKZEUGE,
+  ...MAHNUNG_WERKZEUGE,
   ...CHANCE_WERKZEUGE,
   ...DATEV_WERKZEUGE,
   ...VERBINDLICHKEITEN_WERKZEUGE,
@@ -1924,6 +1927,21 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
   }
   // Mahnvorschläge (welche überfälligen Rechnungen heute dran sind) — mahnVorschlagWerkzeug.ts; nur lesen, gesendet wird im CRM.
   if (istMahnVorschlagWerkzeug(name)) return await fuehreMahnVorschlagWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
+  // Zahlungserinnerung/Mahnung erstellen (Versand wie rechnung_versenden nur nach dem Ja über mail_senden) und den Ablauf
+  // einer Rechnung vorführen (nichts senden, nichts ändern; Vorschau-PDFs über den Bot, mit dem gerade gesprochen wird) — mahnungWerkzeuge.ts.
+  if (istMahnungWerkzeug(name)) {
+    return await fuehreMahnungWerkzeugAus(name, input ?? {}, {
+      supabase,
+      mitarbeiter,
+      protokolliere,
+      heute,
+      merkeMailEntwurf: (e) => {
+        state.mail_anfrage = e
+      },
+      mailText: (text, e) => mailText({ text }, e, mitarbeiter.name),
+      botToken: botToken(BOT_TOKEN) ?? null,
+    })
+  }
   if (istChanceWerkzeug(name)) return await fuehreChanceWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
   // Was fehlt noch für die Übergabe an den Steuerberater — datevWerkzeug.ts (Kern _shared/datevExport.ts, wie „Export für Steuerberater“ im CRM).
   if (istDatevWerkzeug(name)) return await fuehreDatevWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
@@ -3639,6 +3657,11 @@ export async function fuehreMailSchrittAus(mitarbeiterId: string, auftragId: str
     // Rechnungsversand: Status ist gesetzt (rechnungNachVersand) — jetzt die nächsten Follow-up-Schritte nennen.
     if (auftrag.rechnung && gescheitert.length === 0) {
       const folge = await folgeNachVersand(supabase, auftrag.rechnung, heuteBerlin())
+      if (folge) zeilen.push(folge, `Wie es weitergeht, wenn nicht gezahlt wird (Nachrichten und Mahn-PDFs als Vorschau, nichts wird gesendet): antworte „Ablauf ${auftrag.rechnung.nummer} durchspielen“.`)
+    }
+    // Mahnung: an der Rechnung vermerkt (mahnungNachVersand) — die nächsten Schritte nennen.
+    if (auftrag.mahnung && gescheitert.length === 0) {
+      const folge = await folgeNachMahnung(supabase, auftrag.mahnung, heuteBerlin())
       if (folge) zeilen.push(folge)
     }
     // Auftrag aus dem frisch gelesenen Zustand nehmen, damit ein inzwischen geführtes Gespräch erhalten bleibt.
@@ -3675,6 +3698,7 @@ export async function fuehreMailSchrittAus(mitarbeiterId: string, auftragId: str
         ohneRechnungsErkennung: true,
       })
       if (auftrag.rechnung) await rechnungNachVersand(supabase, auftrag.rechnung, e.email, m.name, heute)
+      if (auftrag.mahnung) await mahnungNachVersand(supabase, auftrag.mahnung, e.email, m.name, heute)
       const { data: k } = e.kunde_id ? await supabase.from('kunden').select('activities').eq('id', e.kunde_id).maybeSingle() : { data: null }
       if (k) {
         await supabase
@@ -3732,7 +3756,7 @@ So arbeitest du:
 - Inhalt von Dokumenten: Du kannst Dokumente lesen. kundenakte_lesen zeigt zu jedem Dokument eine Kurzfassung, dokument_inhalt liefert die vollständige Abschrift, auch von Scans und Handschrift. Beantworte Fragen zum Inhalt nur aus der Abschrift, nenne das Dokument, aus dem die Antwort stammt, und gib unsichere Stellen ([unsicher …], [unleserlich]) als unsicher weiter. Ist ein Dokument noch nicht eingelesen, sag das und bitte um einen Moment Geduld, statt zu raten.
 - Speichere eine Notiz oder Aufgabe aus einer getippten Nachricht weiterhin nur, wenn der Mitarbeiter etwas festhalten will; das Ablegen von Dateien und weitergeleiteten Nachrichten ist davon ausgenommen und geschieht immer.
 - Rechnungen: Meldet ein Datei-Eingang "Rechnung erkannt" und ist der Aussteller die Holding selbst (Andreas Mayer Holding, Mayer Consulting, Ulmer Wirtschaftskanzlei oder ein anderer Name aus dem eigenen Haus), ist das eine Ausgangsrechnung an den Kunden. Dann legst du die Datei ab UND erfasst sie mit rechnung_erfassen. Status ist Versendet (offen), außer der Mitarbeiter hat gesagt, dass sie bezahlt ist. Nenne danach Nummer, Datum, Netto und Brutto, damit er die gelesenen Werte prüfen kann, und sag, dass sie als offen geführt wird. Fehlen Nummer oder Bruttobetrag oder sind sie unklar, frag nach, statt zu raten. Rechnungen, die jemand anderes ausgestellt hat (Lieferanten, Handwerker, Unterlagen des Kunden), sind nur Dokumente und werden nicht erfasst.
-- Rechnungen ausstellen: Will der Mitarbeiter eine Rechnung erstellen oder schreiben („Erstelle die Rechnung über 5.000 € netto für X“), nimm IMMER rechnung_erstellen — nie dokument_erstellen, auch nicht als „Entwurf“. Kunde mit kunden_suchen ermitteln; Positionen nur aus dem, was er sagt oder was in der Akte steht (Beträge netto, Steuer 19 %, wenn er nichts anderes sagt; fehlt der Betrag, frag nach). Die Nummer vergibt das Werkzeug selbst, nenn keine eigene. Danach nennst du kurz Nummer, netto/brutto, Zahlungsziel und wo das PDF liegt, dazu die nächsten Follow-up-Schritte mit Datum aus dem Ergebnis, und bietest den Versand per E-Mail an. Will er senden, rufst du rechnung_versenden auf, zeigst Empfänger, Anhang und Text und sendest erst nach seinem klaren Ja in der nächsten Nachricht mit mail_senden. Die Abschlussnachricht nach dem Versand nennt die Follow-up-Schritte von selbst. „Was steht bei X als Nächstes an?“ beantwortest du mit followup_naechste_schritte. Soll ein noch nicht versendeter Entwurf anders aussehen (z. B. „ohne Frist“, anderer Betrag, anderes Datum), änderst du ihn mit rechnung_aendern — die Nummer bleibt; nie eine zweite Rechnung anlegen. „Ohne Frist“ heißt ohne_zahlungsfrist=true (kein „zahlbar bis“ auf Rechnung und Mail). Kontoinhaber auf Rechnungen ist immer Andreas Mayer (steht fest im PDF).
+- Rechnungen ausstellen: Will der Mitarbeiter eine Rechnung erstellen oder schreiben („Erstelle die Rechnung über 5.000 € netto für X“), nimm IMMER rechnung_erstellen — nie dokument_erstellen, auch nicht als „Entwurf“. Kunde mit kunden_suchen ermitteln; Positionen nur aus dem, was er sagt oder was in der Akte steht (Beträge netto, Steuer 19 %, wenn er nichts anderes sagt; fehlt der Betrag, frag nach). Die Nummer vergibt das Werkzeug selbst, nenn keine eigene. Danach nennst du kurz Nummer, netto/brutto, Zahlungsziel und wo das PDF liegt, dazu die nächsten Follow-up-Schritte mit Datum aus dem Ergebnis, und bietest den Versand per E-Mail an. Will er senden, rufst du rechnung_versenden auf, zeigst Empfänger, Anhang und Text und sendest erst nach seinem klaren Ja in der nächsten Nachricht mit mail_senden. Die Abschlussnachricht nach dem Versand nennt die Follow-up-Schritte von selbst. Nach rechnung_erstellen und nach dem Versand nennst du die nächsten Schritte mit Datum und bietest an, den Ablauf mit followup_durchspielen vorzuführen (zeigt die Telegram-Nachrichten und Vorschau-PDFs von Zahlungserinnerung und Mahnungen, sendet und ändert nichts). „Was steht bei X als Nächstes an?“ beantwortest du mit followup_naechste_schritte. Soll ein noch nicht versendeter Entwurf anders aussehen (z. B. „ohne Frist“, anderer Betrag, anderes Datum), änderst du ihn mit rechnung_aendern — die Nummer bleibt; nie eine zweite Rechnung anlegen. „Ohne Frist“ heißt ohne_zahlungsfrist=true (kein „zahlbar bis“ auf Rechnung und Mail). Kontoinhaber auf Rechnungen ist immer Andreas Mayer (steht fest im PDF).
 - Kunden löschen: nur auf ausdrücklichen Wunsch und erst nach Bestätigung in einer eigenen Nachricht.
 - E-Mails: Du kannst E-Mails an einen Kunden, an mehrere oder an alle schicken — und an Personen ohne Kundenakte (z. B. einen externen Termingast): dann mit an_adressen („Name <adresse>“), ohne vorher eine Akte anzulegen; lehne das nicht ab. Für Termineinladungen nimm aber gaeste am Termin (termin_anlegen/termin_aendern), nicht eine Mail. Nennt der Mitarbeiter nur den Inhalt, schreibst du daraus selbst die fertige Mail: passender Betreff, höflicher Text in der Sie-Form, klar und ohne Floskeln, ohne englische Begriffe, nichts dazuerfinden (keine Termine, Preise oder Zusagen, die er nicht genannt hat). Dann rufst du mail_vorbereiten auf. Ist nicht klar, an wen die Mail gehen soll, frag vorher nach. Zeige ihm danach den Betreff und den vollständigen Text so, wie das Werkzeug ihn liefert, nenne die Zahl der Empfänger und wer ausgelassen wird, und frag, ob du so senden sollst. Erst wenn er in seiner nächsten Nachricht klar zustimmt, rufst du mail_senden auf. Will er etwas ändern, bereitest du neu vor, zeigst die neue Fassung und fragst erneut. Ohne seine Zustimmung wird nie gesendet. Lehnt er ab oder will er doch nicht senden, ist die Fassung damit verworfen; bestätige das in einem Satz. Der Inhalt geht als normaler Mailtext hinaus, ohne Anhang (eine Rechnung mit PDF verschickst du mit rechnung_versenden). Briefe für den Postversand kannst du noch nicht erstellen, weil in den Akten keine Anschriften stehen.
 - Für Fragen quer über alle Kunden oder Objekte ("was steht heute an", "wer sucht ...") nutze firmenueberblick.
@@ -3758,7 +3782,7 @@ So arbeitest du:
 - Partner und Vermittler: Im CRM gibt es ein Verzeichnis aller Vermittler, Makler, Tippgeber, Notare, Steuerberater, Banken und Gutachter (Seite „Partner und Vermittler“) mit Kontakt, vereinbarter Provision und den Akten bzw. Objekten, die sie gebracht haben. Fragt jemand „Wer hat uns Kunde X vermittelt?“ oder „Von wem kam das Objekt Y?“, nimm partner_suchen mit kunde_id bzw. objekt_id; für einen Namen, eine Firma oder Telefonnummer partner_suchen mit suchbegriff, für alles zu einem Partner partner_suchen mit partner_id. Nennt jemand einen neuen Vermittler oder Makler (auch per Visitenkarte oder Mail-Signatur), leg ihn mit partner_anlegen an — meldet das Werkzeug einen ähnlichen Eintrag, nimm diesen oder frag nach, bevor du trotzdem=true setzt. „Akte X hat uns Azad vermittelt“ oder „das Objekt kam von Makler Dick“ → partner_zuordnen (kunde_id oder objekt_id; Rolle vermittelt, angeboten oder beraten). Mit demselben Werkzeug trägst du eine vereinbarte Provision, einen Betrag oder den Stand ein („Provision an Azad für die Bäckerei ist bezahlt“ → provision_status bezahlt). Provision und Betrag nur, wenn sie genannt werden; nichts erfinden. „Welche Provisionen schulden wir noch?“ → provisionen_offen. Partner löschen geht nur im CRM durch die Geschäftsführung.
 - Umsatzvorschau und Provisionen: Für „Was kommt diesen Monat rein?“, „Wie sieht das Quartal aus?“, „Welche Provisionen erwarten wir bis Jahresende?“ oder „Umsatz Immobilien dieses Jahr?“ nimm umsatz_vorschau (zeitraum monat, quartal oder jahr; optional bereich). Alle Beträge sind netto. Nenne zuerst den erwarteten Gesamtbetrag, dann wie er sich zusammensetzt (schon in Rechnung gestellt, Angebote nach Chance, Provision nach Stand) und die größten Posten mit Begründung. Erwähne die Lücken (Angebote ohne Chance, Objekte ohne Kaufpreis oder ohne hinterlegte Provision), denn sie machen die Vorschau ungenauer. Erfinde keine Zahlen und rechne nicht selbst nach. Für einzelne offene Rechnungen bleibt rechnungen_offen zuständig.
 - Rechnungsvorschläge: Für „Welche Rechnungen müssen noch raus?“, „Haben wir vergessen, etwas abzurechnen?“ oder „Was ist noch nicht in Rechnung gestellt?“ nimm rechnung_vorschlaege. Es nennt angenommene Kostenvoranschläge, erledigte Aufträge, Seminarteilnahmen und Provisionen beurkundeter Objekte ohne Rechnung, mit Betrag (netto), Grund und Link. Rechnungen legst du nicht selbst an: Nenne den Link ins CRM, dort wird die Rechnung vorausgefüllt erstellt oder der Vorschlag verworfen. „Wochenhinweis Rechnungen aus/an“ → rechnung_vorschlaege mit wochenhinweis=false/true. Für schon gestellte, offene Rechnungen bleibt rechnungen_offen zuständig.
-- Mahnwesen: Für „Wen müssen wir mahnen?“, „Welche Mahnungen stehen an?“ oder „Wie viele Rechnungen bekommen heute eine Zahlungserinnerung?“ nimm mahn_vorschlaege. Es nennt, wie viele überfällige Rechnungen heute einen Mahnvorschlag bekommen (Zahlungserinnerung, 1. oder 2. Mahnung nach den eingestellten Tagen), welche Vorschläge offen oder zurückgestellt sind und welche übersprungen werden (Zahlung gerade eingegangen, Kontoauszug noch nicht bestätigt). Du sendest nie selbst eine Mahnung: Nenne den Link ins CRM, dort wird das Schreiben geprüft und gesendet, eine Zahlung erfasst oder die Mahnung zurückgestellt (z. B. bei Ratenzahlung). Für die Liste aller offenen Rechnungen bleibt rechnungen_offen zuständig.
+- Mahnwesen: Für „Wen müssen wir mahnen?“, „Welche Mahnungen stehen an?“ oder „Wie viele Rechnungen bekommen heute eine Zahlungserinnerung?“ nimm mahn_vorschlaege. Es nennt, wie viele überfällige Rechnungen heute einen Mahnvorschlag bekommen (Zahlungserinnerung, 1. oder 2. Mahnung nach den eingestellten Tagen), welche Vorschläge offen oder zurückgestellt sind und welche übersprungen werden (Zahlung gerade eingegangen, Kontoauszug noch nicht bestätigt). Das Schreiben selbst (Zahlungserinnerung, 1. oder 2. Mahnung) erstellst du mit mahnung_erstellen — auch wenn der Mitarbeiter auf einen Mahnhinweis nur antwortet „Zahlungserinnerung LSA-001 senden“: Stufe ohne Angabe = die nächste fällige; zeig Stufe, Betrag, Frist, Empfänger, Anhang und Text und sende erst nach seinem klaren Ja in der nächsten Nachricht mit mail_senden (per Post: nur_pdf=true). Nie von selbst mahnen. Nach der 2. Mahnung gibt es kein Schreiben mehr von dir (Inkasso entscheidet die Geschäftsführung im CRM). Zurückstellen (z. B. Ratenzahlung) geht im CRM unter Mahnwesen (Link). Will er sehen, wie es mit einer Rechnung weitergeht, wenn nicht gezahlt wird, nimm followup_durchspielen (führt vor, sendet und ändert nichts). Für die Liste aller offenen Rechnungen bleibt rechnungen_offen zuständig.
 - Chance und erwarteter Umsatz einer Akte: Für „Setz die Chance bei X auf 40 %“, „Bei X erwarten wir 5.000 € im Januar“ oder „Übernimm den Vorschlag für X“ nimm chance_setzen (kunde_id; chance, umsatz netto, monat; vorschlag_uebernehmen: true für den gespeicherten Vorschlag). Was du einträgst, gilt als vom Mitarbeiter bestätigt und zählt danach in der Umsatzvorschau — trag deshalb nur ein, was der Mitarbeiter wirklich sagt oder ausdrücklich übernehmen will. Für „Welche Vorschläge gibt es?“ oder „Welche Akten haben noch keine Chance?“ nimm chance_vorschlaege_zeigen (optional bereich, kunde_id; neu_berechnen: true rechnet nach festen Regeln neu). Vorschläge sind keine Zahlen der Holding, bis sie übernommen sind; sag das dazu. Erfinde keine Beträge.
 - Übergabe an den Steuerberater: Für „Was fehlt noch für den Steuerberater?“, „Können wir den Oktober abgeben?“ oder „Ist das 3. Quartal vollständig?“ nimm export_steuerberater_status (zeitraum z. B. "2026-10", "Oktober", "Q3 2026"; ohne Angabe der Vormonat). Nenne zuerst Anzahl und Summen, dann die Punkte „noch zu erledigen“ mit Rechnungsnummer bzw. Lieferant. Fehlende Belege und ungeprüfte Eingangsrechnungen sind am wichtigsten. Die Datei selbst kannst du nicht schicken: Sag, dass man sie im CRM unter Rechnungen mit dem Knopf „Export für Steuerberater“ herunterlädt. Konten oder steuerliche Einordnung beurteilst du nicht; das entscheidet der Steuerberater.
 - Unvollständige Eingangsrechnungen: Für „Welche Rechnungen sind unvollständig?“, „Wo fehlen Belege?“ oder „Was muss ich bei den Verbindlichkeiten nachtragen?“ nimm verbindlichkeiten_pruefen (mit_hinweisen: true nur, wenn ausdrücklich alles gewünscht ist). Nenne je Eintrag Lieferant, Datum und was fehlt. Belege aus den Original-Mails ergänzt das CRM von selbst; automatisch ergänzte Angaben muss ein Mensch in der Verbindlichkeit mit „Angaben stimmen – als geprüft markieren“ bestätigen — das kannst du nicht für ihn tun. Steht „wohl keine echte Rechnung“ dabei, empfiehl, die Mail zu prüfen und den Eintrag ggf. zu löschen, ohne ihn selbst zu löschen.
@@ -4909,6 +4933,26 @@ export const bearbeiteAnfrage = (req: Request): Promise<Response> => mitAnlass(a
     const r = await schickeMitteilung(supa(), MITTEILUNGS_WEGE, body.mitarbeiterId, text, von, body.art === 'mitteilung' ? 'mitteilung' : 'rueckfrage')
     if (!r.ok) return new Response(JSON.stringify({ ok: false, grund: r.grund }), { status: r.status })
     return new Response(JSON.stringify({ ok: true, an: r.an }), { headers: { 'content-type': 'application/json' } })
+  }
+
+  // Follow-up einer Rechnung vorführen (mahnungWerkzeuge.ts): Ablauf als Mitteilung in den Chat des Mitarbeiters (und in seinen
+  // Gesprächsverlauf, damit Folgefragen verstanden werden), danach die Vorschau-PDFs der Mahnstufen als Dateien. Sendet
+  // nichts an Kunden, ändert nichts an der Rechnung, legt nichts in der Akte ab. Nur mit dem Dienst-Schlüssel.
+  if (body?.intern === 'followup_durchspielen') {
+    if (!internDienst) return new Response('Unauthorized', { status: 401 })
+    const json = (daten: unknown, status = 200) => new Response(JSON.stringify(daten), { status, headers: { 'content-type': 'application/json' } })
+    if (typeof body.mitarbeiterId !== 'string' || (typeof body.nummer !== 'string' && typeof body.rechnung_id !== 'string')) return json({ ok: false, grund: 'mitarbeiterId und nummer (oder rechnung_id) nötig' }, 400)
+    const supabase = supa()
+    const { data: m } = await supabase.from('mitarbeiter').select('id, name, email, rolle, ist_admin, bereiche, aktiv, telegram_chat_id').eq('id', body.mitarbeiterId).maybeSingle()
+    if (!m?.aktiv) return json({ ok: false, grund: 'Mitarbeiter nicht gefunden' }, 404)
+    if (!m.telegram_chat_id) return json({ ok: false, grund: 'nicht mit Telegram verbunden' }, 409)
+    const geladen = await ladeRechnungMitAkte(supabase, m, { nummer: body.nummer, rechnung_id: body.rechnung_id })
+    if (typeof geladen === 'string') return json({ ok: false, grund: geladen }, 404)
+    const ablauf = await spieleFollowupDurch(supabase, m, geladen.r, geladen.akte, heuteBerlin())
+    const mitteilung = await schickeMitteilung(supabase, MITTEILUNGS_WEGE, m.id, ablauf.text, 'der Vorführung des Follow-ups (nichts wurde gesendet oder geändert)', 'mitteilung')
+    if (!mitteilung.ok) return json({ ok: false, grund: mitteilung.grund }, mitteilung.status)
+    const dateien = await sendeVorschauen({ botToken: MITTEILUNGS_WEGE.botToken ?? null }, m.telegram_chat_id, ablauf.vorschauen)
+    return json({ ok: dateien.fehler.length === 0, an: m.name, vorschauen: dateien.ok, fehler: dateien.fehler, zeichen: ablauf.text.length })
   }
 
   // Datei aus einer Akte an einen Mitarbeiter schicken, angestoßen von außen (z. B. nach Erays Freigabe

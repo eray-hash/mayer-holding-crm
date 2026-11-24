@@ -2,9 +2,10 @@
 // (email-gateway/mahnVorschlag.ts), das Assistent-Werkzeug mahn_vorschlaege (telegram-gateway/mahnVorschlagWerkzeug.ts)
 // und die Seite Mahnwesen im CRM (src/pages/beratung/Mahnwesen.tsx, nur Typen/Konstanten).
 //
-// Grundsatz: Es wird NIE etwas an Kunden geschickt. Der Server legt nur einen Vorschlag an (Tabelle mahn_vorschlaege)
-// und sagt dem zuständigen Mitarbeiter per Telegram Bescheid; erstellt und gesendet wird das Schreiben im CRM mit dem
-// vorhandenen Mahn-Dialog.
+// Grundsatz: Es wird NIE etwas automatisch an Kunden geschickt. Der Server legt nur einen Vorschlag an (Tabelle
+// mahn_vorschlaege) und sagt dem zuständigen Mitarbeiter per Telegram Bescheid; erstellt und gesendet wird das Schreiben
+// im CRM mit dem vorhandenen Mahn-Dialog oder seit 24.11.2026 direkt in Telegram (Antwort „Zahlungserinnerung LSA-001
+// senden“ → Werkzeug mahnung_erstellen, telegram-gateway/mahnungWerkzeuge.ts; raus erst nach dem Ja des Mitarbeiters).
 //
 // Wann ist der nächste Schritt fällig? (Tage einstellbar in mahn_einstellung, Vorgabe 3 / 14 / 28)
 //   - Rechnung versendet oder überfällig, noch etwas offen, gültiges Zahlungsziel.
@@ -295,20 +296,25 @@ export function grundText(f: Pick<Faellig, 'stufe' | 'tage' | 'offen'>, rechnung
 export type HinweisEintrag = { id: string; nummer: string; kunde: string; stufe: MahnStufe; tage: number; offen: number; wieder?: boolean }
 
 /** Telegram-Text an einen Mitarbeiter (ein oder mehrere Vorschläge). */
+/** Antwortvorschlag: damit bereitet der Assistent das Schreiben direkt in Telegram vor (mahnung_erstellen). */
+export function antwortVorschlag(e: Pick<HinweisEintrag, 'nummer' | 'stufe'>): string {
+  return `„${STUFE_NAME[e.stufe]} ${e.nummer} senden“`
+}
+
 export function hinweisText(eintraege: HinweisEintrag[], basis: string): string {
   const fuss = 'Gesendet wird nichts automatisch. Abschalten: auf der Seite Mahnwesen unten den Haken entfernen.'
   if (eintraege.length === 1) {
     const e = eintraege[0]
     return [
       `${e.wieder ? 'Zurückstellung abgelaufen: ' : ''}Rechnung ${e.nummer} (${e.kunde}) ist ${tageText(e.tage)} überfällig — ${STUFE_NAME[e.stufe]} vorbereitet, bitte prüfen und senden (offen ${euro(e.offen)}).`,
-      mahnLink(basis, e.id),
+      `Antworte z. B. ${antwortVorschlag(e)}, dann bereite ich sie hier vor (PDF und Mail, raus erst nach deinem Ja). Oder im CRM: ${mahnLink(basis, e.id)}`,
       fuss,
     ].join('\n')
   }
   return [
     `Mahnwesen: ${eintraege.length} Rechnungen sind überfällig — Schreiben vorbereitet, bitte prüfen und senden.`,
     ...eintraege.map((e) => `• ${e.nummer} (${e.kunde}): ${tageText(e.tage)} überfällig — ${STUFE_NAME[e.stufe]}, offen ${euro(e.offen)}${e.wieder ? ' (Zurückstellung abgelaufen)' : ''}`),
-    mahnLink(basis),
+    `Antworte z. B. ${antwortVorschlag(eintraege[0])}, dann bereite ich das Schreiben hier vor (PDF und Mail, raus erst nach deinem Ja). Oder im CRM: ${mahnLink(basis)}`,
     fuss,
   ].join('\n')
 }

@@ -325,7 +325,8 @@ export type Daten = {
   wiedervorlagen?: WvZeile[]
 }
 
-type WvZeile = { id: string; kunde_id: string; bereich?: string | null; titel?: string | null; faellig?: string | null; verantwortlich?: string | null }
+/** `rechnung`: aus einer Regel mit Auslöser „ereignis:rechnung“ (z. B. „Geldeingang prüfen“). */
+type WvZeile = { id: string; kunde_id: string; bereich?: string | null; titel?: string | null; faellig?: string | null; verantwortlich?: string | null; regel?: string | null; rechnung?: boolean }
 
 export type WochenDaten = {
   kunden: KundeZeile[]
@@ -347,9 +348,17 @@ async function ladeUngeklaert(admin: Db): Promise<number> {
 /** Offene Wiedervorlagen (Tabelle wiedervorlagen) bis heute. Wirft nie (dann keine) — die Übersicht soll nie daran scheitern. */
 async function ladeWiedervorlagen(admin: Db, heute: string): Promise<WvZeile[]> {
   try {
-    const { data, error } = await alleZeilen(() => admin.from('wiedervorlagen').select('id, kunde_id, bereich, titel, faellig, verantwortlich').is('erledigt_am', null).lte('faellig', heute))
+    const { data, error } = await alleZeilen(() => admin.from('wiedervorlagen').select('id, kunde_id, bereich, titel, faellig, verantwortlich, regel').is('erledigt_am', null).lte('faellig', heute))
     if (error) return []
-    return (data ?? []) as WvZeile[]
+    // Rechnungs-Wiedervorlagen erkennen (für die Vertretung durch die Geschäftsführung, siehe morgenAbschnitte).
+    const rechnungsRegeln = new Set<string>()
+    try {
+      const { data: regeln } = await admin.from('wiedervorlage_regeln').select('id').eq('ausloeser', 'ereignis:rechnung')
+      for (const r of (regeln ?? []) as { id: string }[]) rechnungsRegeln.add(r.id)
+    } catch {
+      // ohne Regeln keine Vertretung — die übrigen Wiedervorlagen kommen trotzdem
+    }
+    return ((data ?? []) as WvZeile[]).map((w) => ({ ...w, rechnung: !!w.regel && rechnungsRegeln.has(w.regel) }))
   } catch {
     return []
   }
@@ -556,7 +565,10 @@ export function morgenAbschnitte(p: Person, d: Daten, jetzt: Date, optionen: Mor
     const kundenNachId = new Map(d.kunden.map((k) => [k.id, k]))
     for (const w of d.wiedervorlagen ?? []) {
       const tag = alsDatum(w.faellig)
-      if (!tag || tag > heute || !gehoertZu(w.verantwortlich, p.name) || !darfBereich(p, w.bereich) || w.bereich === 'privat') continue
+      // Rechnungs-Wiedervorlagen („Geldeingang prüfen“) in Akten ohne Verantwortlichen gehen an die Geschäftsführung
+      // (wie die Mahnvorschläge) — sonst bekäme sie niemand (24.11.2026: Follow-up jeder Rechnung in Telegram).
+      const zustaendig = gehoertZu(w.verantwortlich, p.name) || (w.rechnung === true && !text(w.verantwortlich).trim() && p.gf)
+      if (!tag || tag > heute || !zustaendig || !darfBereich(p, w.bereich) || w.bereich === 'privat') continue
       const k = kundenNachId.get(w.kunde_id)
       wv.push({ tag, zeile: `• ${kurz(text(w.titel) || 'Wiedervorlage', 60)}: ${kurz(k ? kundenName(k) : 'Akte', 40)} – ${faelligText(tag, heute)}` })
     }

@@ -5,7 +5,8 @@
 //    Für eine Rechnung, die gerade erst erstellt ist, wird sie hier vorausgesagt („legt das CRM beim Versand an“).
 //  - Mahnvorschläge (_shared/mahnVorschlagKern.ts, Einstellung mahn_einstellung, Vorgabe 3/14/28 Tage nach dem
 //    Zahlungsziel; die nächste Stufe frühestens am Tag nach der neuen Frist des vorigen Schreibens — Fristen wie
-//    mahnVorlage im CRM: Erinnerung 7, 1. Mahnung 10 Tage). Der Server schlägt nur vor (Telegram), gesendet wird im CRM.
+//    mahnVorlage im CRM: Erinnerung 7, 1. Mahnung 10 Tage). Der Server schlägt nur vor (Telegram); gesendet wird nach dem
+//    Ja des Mitarbeiters — im CRM oder in Telegram mit mahnung_erstellen (telegram-gateway/mahnungWerkzeuge.ts).
 //  - Offene Wiedervorlagen der Akte (Tabelle wiedervorlagen), das alte einzelne Follow-up (kunden.follow_up) und
 //    fehlende angeforderte Unterlagen (kunden.unterlagen_anforderungen) — wie die Projekt-Checkliste im CRM.
 // Reine Rechnung in berechneFolgeSchritte (Tests: followupKern.test.ts), Laden in ladeFolgeDaten.
@@ -104,7 +105,7 @@ export function berechneFolgeSchritte(d: FolgeDaten, o: { versandHeute?: string 
       text = `${STUFE_NAME[naechste]} zu ${r.nummer} (zurückgestellt bis dahin)`
     } else if (vorschlag?.status === 'offen') {
       datum = d.heute
-      text = `${STUFE_NAME[naechste]} zu ${r.nummer} liegt als Vorschlag bereit (im CRM unter Mahnwesen erstellen und senden)`
+      text = `${STUFE_NAME[naechste]} zu ${r.nummer} liegt als Vorschlag bereit (hier mit „${STUFE_NAME[naechste]} ${r.nummer} senden“ oder im CRM unter Mahnwesen)`
     } else if (p.ergebnis === 'warten') {
       datum = p.ab
       text = `${STUFE_NAME[naechste]} zu ${r.nummer} wird vorgeschlagen, falls bis dahin nicht bezahlt`
