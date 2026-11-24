@@ -76,6 +76,9 @@ export const KATALOG: AutomatikEintrag[] = [
   ] as const).map(([id, name, anlass, zeitpunkt]): AutomatikEintrag => ({
     id, name, kanal: 'kunde', empfaenger: id.startsWith('akademie') ? 'Seminar-Teilnehmer' : 'Interessent bzw. Eigentümer (laut Regel)',
     anlass, zeitpunkt, schalter: { art: 'regel', id }, text: { art: 'regel', regelId: id }, protokoll: 'auto_nachrichten',
+    ...(id.startsWith('immo_portal')
+      ? { hinweis: 'AGB, Provisionsvereinbarung und Widerrufsbelehrung: Wortlaut unter Vorlagen → Verträge („Interessenten-Portal …“); die Bestätigung schickt den zugestimmten Wortlaut mit.' }
+      : {}),
   })),
   {
     id: 'buchung_bestaetigung', name: 'Terminbestätigung nach Online-Buchung', kanal: 'kunde',
