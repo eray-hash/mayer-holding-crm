@@ -72,11 +72,14 @@ import { darfRechnungen, fuehreRechnungZahlungWerkzeugAus, istRechnungZahlungWer
 import { anzeigeNameAusOrdner, besitzerMarkeAusName, besitzerZusatz, fremdPruefer, MARKE_MUSTER } from './dateiBesitz.ts'
 import { ABGLEICH_WERKZEUGE, fuehreAbgleichWerkzeugAus, istAbgleichWerkzeug } from './abgleichWerkzeug.ts'
 import { fuehreUmsatzWerkzeugAus, istUmsatzWerkzeug, UMSATZ_WERKZEUGE } from './umsatzWerkzeuge.ts'
+import { fuehreUmsatzZielWerkzeugAus, istUmsatzZielWerkzeug, UMSATZZIEL_WERKZEUGE } from './umsatzZielWerkzeug.ts'
 import { fuehreRechnungVorschlagWerkzeugAus, istRechnungVorschlagWerkzeug, RECHNUNG_VORSCHLAG_WERKZEUGE } from './rechnungVorschlagWerkzeug.ts'
 import { fuehreMahnVorschlagWerkzeugAus, istMahnVorschlagWerkzeug, MAHN_VORSCHLAG_WERKZEUGE } from './mahnVorschlagWerkzeug.ts'
 import { fuehreMahnungWerkzeugAus, folgeNachMahnung, istMahnungWerkzeug, ladeRechnungMitAkte, MAHNUNG_WERKZEUGE, type MahnungBezug, mahnungNachVersand, sendeVorschauen, spieleFollowupDurch } from './mahnungWerkzeuge.ts'
 import { folgeNachVersand, fuehreRechnungErstellenWerkzeugAus, istRechnungErstellenWerkzeug, RECHNUNG_ERSTELLEN_WERKZEUGE, type RechnungAnhang, type RechnungBezug, rechnungNachVersand, versandAnhaenge } from './rechnungErstellen.ts'
 import { CHANCE_WERKZEUGE, fuehreChanceWerkzeugAus, istChanceWerkzeug } from './chanceWerkzeug.ts'
+import { ENTGANGEN_WERKZEUGE, fuehreEntgangenWerkzeugAus, istEntgangenWerkzeug } from './entgangenWerkzeuge.ts'
+import { ENTGANGEN_GRUENDE, grundLabel, leseVerloren } from '../_shared/entgangenKern.ts'
 import { DATEV_WERKZEUGE, fuehreDatevWerkzeugAus, istDatevWerkzeug } from './datevWerkzeug.ts'
 import { fuehreVerbindlichkeitenWerkzeugAus, istVerbindlichkeitenWerkzeug, VERBINDLICHKEITEN_WERKZEUGE } from './verbindlichkeitenWerkzeug.ts'
 import { fuehrePartnerWerkzeugAus, istPartnerWerkzeug, PARTNER_WERKZEUGE } from './partnerWerkzeuge.ts'
@@ -1718,11 +1721,13 @@ export const TOOLS = [
   ...RECHNUNG_ZAHLUNG_WERKZEUGE,
   ...ABGLEICH_WERKZEUGE,
   ...UMSATZ_WERKZEUGE,
+  ...UMSATZZIEL_WERKZEUGE,
   ...RECHNUNG_VORSCHLAG_WERKZEUGE,
   ...MAHN_VORSCHLAG_WERKZEUGE,
   ...RECHNUNG_ERSTELLEN_WERKZEUGE,
   ...MAHNUNG_WERKZEUGE,
   ...CHANCE_WERKZEUGE,
+  ...ENTGANGEN_WERKZEUGE,
   ...DATEV_WERKZEUGE,
   ...VERBINDLICHKEITEN_WERKZEUGE,
   ...PARTNER_WERKZEUGE,
@@ -1913,6 +1918,8 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
   if (istAbgleichWerkzeug(name)) return await fuehreAbgleichWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
   // Umsatzvorschau und Provisionen — umsatzWerkzeuge.ts (Rechenkern _shared/umsatzKern.ts, wie /auswertungen/umsatz).
   if (istUmsatzWerkzeug(name)) return await fuehreUmsatzWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
+  // Umsatzziel des Monats (Soll/Ist je Sparte, Trichter, nötige Leads) — umsatzZielWerkzeug.ts (Kern _shared/umsatzZielKern.ts, wie /ziele).
+  if (istUmsatzZielWerkzeug(name)) return await fuehreUmsatzZielWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
   // Rechnungsvorschläge (was noch in Rechnung zu stellen ist) — rechnungVorschlagWerkzeug.ts; Anlegen bleibt im CRM.
   if (istRechnungVorschlagWerkzeug(name)) return await fuehreRechnungVorschlagWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
   // Rechnung ausstellen (PDF auf dem Briefbogen, Nummer je Kunde), Versand vorbereiten, Follow-up — rechnungErstellen.ts.
@@ -1947,6 +1954,13 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     })
   }
   if (istChanceWerkzeug(name)) return await fuehreChanceWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
+  // Entgangene Klienten (24.11.2026) — entgangenWerkzeuge.ts (Kern _shared/entgangenKern.ts, wie Seite /entgangen).
+  if (istEntgangenWerkzeug(name)) {
+    return await fuehreEntgangenWerkzeugAus(name, input ?? {}, {
+      supabase, mitarbeiter, protokolliere, heute,
+      statusName: (akte, status) => statusNetz({ bereich: String(akte.bereich ?? ''), privat_art: akte.privat_art ?? null })[status] ?? status,
+    })
+  }
   // Was fehlt noch für die Übergabe an den Steuerberater — datevWerkzeug.ts (Kern _shared/datevExport.ts, wie „Export für Steuerberater“ im CRM).
   if (istDatevWerkzeug(name)) return await fuehreDatevWerkzeugAus(name, input ?? {}, { supabase, mitarbeiter, protokolliere, heute })
   // Unvollständige Eingangsrechnungen (fehlender Beleg, Betrag …) — verbindlichkeitenWerkzeug.ts.
@@ -2899,8 +2913,21 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     if (typeof input.status === 'string') {
       const erlaubt = statusNetz(k)
       if (!erlaubt[input.status]) return `Fehler: ungültiger Status für ${statusNetzVon(k)}. Erlaubt: ${Object.entries(erlaubt).map(([id, l]) => `${id} (${l})`).join(', ')}.`
+      // Entgangene Klienten (24.11.2026): „verloren“ nur mit Grund — über als_entgangen_markieren (nicht bei privaten Kontakten).
+      if (input.status === 'verloren' && k.status !== 'verloren' && !istPrivat(k)) {
+        return `Nicht geändert: Für „${erlaubt.verloren}“ brauche ich den Grund. Frag den Mitarbeiter, warum ${kundeName(k)} abgesprungen ist (Auswahl: ${ENTGANGEN_GRUENDE.map((g) => g.label).join('; ')}), und nimm dann als_entgangen_markieren (kunde_id, grund, notiz). Andere Änderungen danach erneut mit kunde_aendern.`
+      }
       patch.status = input.status
       geaendert.push(`Status: ${erlaubt[input.status]}`)
+      // Wieder aufgenommen: Grund bleibt im Verlauf, das Feld kunden.verloren wird geleert.
+      if (k.status === 'verloren' && input.status !== 'verloren') {
+        const { data: alt, error: altFehler } = await supabase.from('kunden').select('verloren').eq('id', k.id).maybeSingle()
+        if (!altFehler && alt && 'verloren' in alt) {
+          const v = leseVerloren(alt.verloren)
+          if (v) geaendert.push(`wieder aufgenommen (war entgangen seit ${v.am}, Grund: ${grundLabel(v.grund)}${v.notiz ? ` — ${v.notiz}` : ''})`)
+          if (alt.verloren !== null) patch.verloren = null
+        }
+      }
     }
     if (geaendert.length === 0) return 'Fehler: kein Feld zum Ändern angegeben.'
     patch.activities = [{ id: crypto.randomUUID(), date: heute, text: `Per Telegram geändert — ${geaendert.join('; ')}`, user: mitarbeiter.name }, ...(k.activities ?? [])]
@@ -3785,9 +3812,11 @@ So arbeitest du:
 - Kurzprüfung von Objekten: Die Vorab-Kurzprüfung eines Objekts (lohnt sich der Auftrag?) füllst du mit kurzpruefung_ausfuellen aus — „Kurzprüfung für Geislingen“: erst ohne antworten aufrufen und genau die genannte nächste Frage stellen (immer nur einen Punkt, kurz), dann seine Antwort mit antworten speichern und die nächste Frage stellen. Bei Tabellenzeilen fragst du Ist, Marktwert und unser Ergebnis zusammen; was er nicht nennt, bleibt leer. Weiß er etwas nicht, trag "–" ein. Will er aufhören, ist das in Ordnung — das Gespeicherte bleibt. Ohne objekt_id zeigt das Werkzeug die Akquise-Objekte ohne Kurzprüfung. Kommt der Montags-Hinweis „Wochenhinweis Kurzprüfung“ und er nennt ein Objekt, fang damit an. Den Hinweis schaltest du nur auf ausdrücklichen Wunsch mit wochenhinweis an oder aus.
 - Partner und Vermittler: Im CRM gibt es ein Verzeichnis aller Vermittler, Makler, Tippgeber, Notare, Steuerberater, Banken und Gutachter (Seite „Partner und Vermittler“) mit Kontakt, vereinbarter Provision und den Akten bzw. Objekten, die sie gebracht haben. Fragt jemand „Wer hat uns Kunde X vermittelt?“ oder „Von wem kam das Objekt Y?“, nimm partner_suchen mit kunde_id bzw. objekt_id; für einen Namen, eine Firma oder Telefonnummer partner_suchen mit suchbegriff, für alles zu einem Partner partner_suchen mit partner_id. Nennt jemand einen neuen Vermittler oder Makler (auch per Visitenkarte oder Mail-Signatur), leg ihn mit partner_anlegen an — meldet das Werkzeug einen ähnlichen Eintrag, nimm diesen oder frag nach, bevor du trotzdem=true setzt. „Akte X hat uns Azad vermittelt“ oder „das Objekt kam von Makler Dick“ → partner_zuordnen (kunde_id oder objekt_id; Rolle vermittelt, angeboten oder beraten). Mit demselben Werkzeug trägst du eine vereinbarte Provision, einen Betrag oder den Stand ein („Provision an Azad für die Bäckerei ist bezahlt“ → provision_status bezahlt). Provision und Betrag nur, wenn sie genannt werden; nichts erfinden. „Welche Provisionen schulden wir noch?“ → provisionen_offen. Partner löschen geht nur im CRM durch die Geschäftsführung.
 - Umsatzvorschau und Provisionen: Für „Was kommt diesen Monat rein?“, „Wie sieht das Quartal aus?“, „Welche Provisionen erwarten wir bis Jahresende?“ oder „Umsatz Immobilien dieses Jahr?“ nimm umsatz_vorschau (zeitraum monat, quartal oder jahr; optional bereich). Alle Beträge sind netto. Nenne zuerst den erwarteten Gesamtbetrag, dann wie er sich zusammensetzt (schon in Rechnung gestellt, Angebote nach Chance, Provision nach Stand) und die größten Posten mit Begründung. Erwähne die Lücken (Angebote ohne Chance, Objekte ohne Kaufpreis oder ohne hinterlegte Provision), denn sie machen die Vorschau ungenauer. Erfinde keine Zahlen und rechne nicht selbst nach. Für einzelne offene Rechnungen bleibt rechnungen_offen zuständig.
+- Umsatzziele: Für „Wo stehen wir beim Umsatzziel?“, „Schaffen wir die 50.000 diesen Monat?“, „Wie viele Leads brauchen wir?“ oder „Wie läuft der Trichter in der Immobilienabteilung?“ nimm umsatzziel_stand (monat optional JJJJ-MM; sparte optional: ki, immobilien, beratung oder ein Bereich wie erben). Nenne zuerst Ist von Soll mit Prozent und den Rückstand oder Vorsprung gegenüber dem Soll bis heute, dann die Sparten; bei Fragen nach Leads den Trichter und die nötigen Leads. Steht dort „zu wenig Daten“, sag das ehrlich statt zu schätzen. Alle Beträge netto; rechne nicht selbst nach.
 - Rechnungsvorschläge: Für „Welche Rechnungen müssen noch raus?“, „Haben wir vergessen, etwas abzurechnen?“ oder „Was ist noch nicht in Rechnung gestellt?“ nimm rechnung_vorschlaege. Es nennt angenommene Kostenvoranschläge, erledigte Aufträge, Seminarteilnahmen und Provisionen beurkundeter Objekte ohne Rechnung, mit Betrag (netto), Grund und Link. Rechnungen legst du nicht selbst an: Nenne den Link ins CRM, dort wird die Rechnung vorausgefüllt erstellt oder der Vorschlag verworfen. „Wochenhinweis Rechnungen aus/an“ → rechnung_vorschlaege mit wochenhinweis=false/true. Für schon gestellte, offene Rechnungen bleibt rechnungen_offen zuständig.
 - Mahnwesen: Für „Wen müssen wir mahnen?“, „Welche Mahnungen stehen an?“ oder „Wie viele Rechnungen bekommen heute eine Zahlungserinnerung?“ nimm mahn_vorschlaege. Es nennt, wie viele überfällige Rechnungen heute einen Mahnvorschlag bekommen (Zahlungserinnerung, 1. oder 2. Mahnung nach den eingestellten Tagen), welche Vorschläge offen oder zurückgestellt sind und welche übersprungen werden (Zahlung gerade eingegangen, Kontoauszug noch nicht bestätigt). Das Schreiben selbst (Zahlungserinnerung, 1. oder 2. Mahnung) erstellst du mit mahnung_erstellen — auch wenn der Mitarbeiter auf einen Mahnhinweis nur antwortet „Zahlungserinnerung LSA-001 senden“: Stufe ohne Angabe = die nächste fällige; zeig Stufe, Betrag, Frist, Empfänger, Anhang und Text und sende erst nach seinem klaren Ja in der nächsten Nachricht mit mail_senden (per Post: nur_pdf=true). Nie von selbst mahnen. Nach der 2. Mahnung gibt es kein Schreiben mehr von dir (Inkasso entscheidet die Geschäftsführung im CRM). Zurückstellen (z. B. Ratenzahlung) geht im CRM unter Mahnwesen (Link). Will er sehen, wie es mit einer Rechnung weitergeht, wenn nicht gezahlt wird, nimm followup_durchspielen (führt vor, sendet und ändert nichts). Für die Liste aller offenen Rechnungen bleibt rechnungen_offen zuständig.
 - Chance und erwarteter Umsatz einer Akte: Für „Setz die Chance bei X auf 40 %“, „Bei X erwarten wir 5.000 € im Januar“ oder „Übernimm den Vorschlag für X“ nimm chance_setzen (kunde_id; chance, umsatz netto, monat; vorschlag_uebernehmen: true für den gespeicherten Vorschlag). Was du einträgst, gilt als vom Mitarbeiter bestätigt und zählt danach in der Umsatzvorschau — trag deshalb nur ein, was der Mitarbeiter wirklich sagt oder ausdrücklich übernehmen will. Für „Welche Vorschläge gibt es?“ oder „Welche Akten haben noch keine Chance?“ nimm chance_vorschlaege_zeigen (optional bereich, kunde_id; neu_berechnen: true rechnet nach festen Regeln neu). Vorschläge sind keine Zahlen der Holding, bis sie übernommen sind; sag das dazu. Erfinde keine Beträge.
+- Entgangene Klienten: Will ein Mitarbeiter eine Akte aufgeben („X ist abgesprungen“, „X hat kein Interesse mehr“, „setz X auf verloren“), nimm als_entgangen_markieren — mit Grund (feste Kategorie), Notiz in seinen Worten und optional Betrag. Ohne erkennbaren Grund frag zuerst nach und nenne die Auswahl; rate nie. kunde_aendern setzt „verloren“ nicht, es verweist hierher. Für „Warum verlieren wir Kunden?“, „Wen haben wir verloren?“ oder „Welche Akten drohen uns zu entgehen?“ nimm entgangene_klienten (zeitraum, bereich, grund; drohend: true für die gefährdeten Akten). Nenne die wichtigsten Gründe und Phasen in Sätzen, nicht nur Zahlen.
 - Übergabe an den Steuerberater: Für „Was fehlt noch für den Steuerberater?“, „Können wir den Oktober abgeben?“ oder „Ist das 3. Quartal vollständig?“ nimm export_steuerberater_status (zeitraum z. B. "2026-10", "Oktober", "Q3 2026"; ohne Angabe der Vormonat). Nenne zuerst Anzahl und Summen, dann die Punkte „noch zu erledigen“ mit Rechnungsnummer bzw. Lieferant. Fehlende Belege und ungeprüfte Eingangsrechnungen sind am wichtigsten. Die Datei selbst kannst du nicht schicken: Sag, dass man sie im CRM unter Rechnungen mit dem Knopf „Export für Steuerberater“ herunterlädt. Konten oder steuerliche Einordnung beurteilst du nicht; das entscheidet der Steuerberater.
 - Unvollständige Eingangsrechnungen: Für „Welche Rechnungen sind unvollständig?“, „Wo fehlen Belege?“ oder „Was muss ich bei den Verbindlichkeiten nachtragen?“ nimm verbindlichkeiten_pruefen (mit_hinweisen: true nur, wenn ausdrücklich alles gewünscht ist). Nenne je Eintrag Lieferant, Datum und was fehlt. Belege aus den Original-Mails ergänzt das CRM von selbst; automatisch ergänzte Angaben muss ein Mensch in der Verbindlichkeit mit „Angaben stimmen – als geprüft markieren“ bestätigen — das kannst du nicht für ihn tun. Steht „wohl keine echte Rechnung“ dabei, empfiehl, die Mail zu prüfen und den Eintrag ggf. zu löschen, ohne ihn selbst zu löschen.
 - Kollegen Bescheid geben: Bittet der Mitarbeiter, einem Kollegen etwas auszurichten oder ihm kurz Bescheid zu geben ("sag Hasan, dass die Akte angelegt ist"), schickst du das mit kollegen_benachrichtigen. Dafür ist kein Termin nötig. Sag danach, wem du was geschickt hast und wer nicht mit Telegram verbunden ist.

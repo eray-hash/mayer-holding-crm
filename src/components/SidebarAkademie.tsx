@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { AutomatikSideLink } from './AutomatikSideLink'
+import { EntgangenSideLink } from './EntgangenSideLink'
 import { Users, FileText, ChevronDown, ChevronLeft, ChevronRight, GraduationCap, Sun, LayoutGrid, UserCog, ListTodo, BookOpen } from 'lucide-react'
 import { UngeklaertSideLink } from './UngeklaertSideLink'
 
@@ -75,6 +76,7 @@ export function SidebarAkademie({ collapsed, onToggle }: { collapsed: boolean; o
             <GraduationCap size={14} /> Akademie
           </div>
         )}
+        <EntgangenSideLink collapsed={collapsed} />
         <AutomatikSideLink collapsed={collapsed} />
         <SideLink to="/profil" icon={<UserCog size={17} />} label="Mein Profil" collapsed={collapsed} active={isActive('/profil')} />
         <button

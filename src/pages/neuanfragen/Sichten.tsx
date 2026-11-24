@@ -38,6 +38,7 @@ import { MITARBEITER } from '../../data/constants'
 import { kundeDetailPfad } from '../../data/kundenBereiche'
 import type { ActivityEntry, FollowUp, Kunde, KundeBereich } from '../../types'
 import { AKTION_TEXT, GRUND_TEXT, HERKUNFT_TEXT } from '../../../supabase/functions/_shared/neuanfrageKern.ts'
+import { baueVerloren, vermittlerName, wertAusChance } from '../../../supabase/functions/_shared/entgangenKern.ts'
 import {
   holeEinschaetzungen, ladeEinzelheiten, merkeEntscheidung, statusLabel, useNeuanfragen, zielArchiv, zielQualifiziert,
   type AkteLage, type ArchivGrund, type DublettenHinweis, type Neuanfrage,
@@ -230,7 +231,7 @@ export function NeuanfragenSichten() {
       type: 'UPDATE_KUNDE_IN_BEREICH',
       bereich: n.bereich,
       id: k.id,
-      patch: { status: vorher.status, verantwortlich: vorher.verantwortlich, followUp: vorher.followUp, activities: [eintrag(`Sichtung rückgängig gemacht – wieder ${statusLabel(n.bereich, vorher.status)} (durch ${nutzer.name})`), ...k.activities] },
+      patch: { status: vorher.status, verantwortlich: vorher.verantwortlich, followUp: vorher.followUp, verloren: vorher.status === 'verloren' ? (k.verloren ?? null) : null, activities: [eintrag(`Sichtung rückgängig gemacht – wieder ${statusLabel(n.bereich, vorher.status)} (durch ${nutzer.name})`), ...k.activities] },
     })
     if (wvId) await loescheWiedervorlage(wvId).catch(() => undefined)
     await merkeEntscheidung(k.id, { art: 'zuruecksetzen' }).catch(() => undefined)
@@ -285,6 +286,10 @@ export function NeuanfragenSichten() {
       activities: [eintrag(`Neuanfrage gesichtet: archiviert – ${GRUND_TEXT[grund]} → ${statusLabel(n.bereich, ziel)} (durch ${nutzer.name})${notiz.trim() ? `: ${notiz.trim()}` : ''}`), ...k.activities],
     }
     if (k.followUp && !k.followUp.done && (k.followUp.date || k.followUp.note)) patch.followUp = { ...k.followUp, done: true }
+    // „Kein Interesse“ → verloren: Grund für die Seite „Entgangene Klienten“ gleich mit eintragen.
+    if (ziel === 'verloren') {
+      patch.verloren = baueVerloren({ grund: 'kein_bedarf', notiz: notiz.trim() || 'Bei der Sichtung der Neuanfragen archiviert.', am: today(), von: nutzer.name, phaseVorher: k.status, wertNetto: wertAusChance(k.auftragChance), vermittler: vermittlerName(k.vermittler) })
+    }
     setAktuellId(naechsteNach(k.id))
     ausblenden(k.id, true)
     setDialog(null)

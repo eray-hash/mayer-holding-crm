@@ -51,6 +51,7 @@ import type {
 } from '../types'
 import type { Projekt } from '../types/project'
 import { alleZeilen } from './alleZeilen'
+import { leseVerloren } from '../../supabase/functions/_shared/entgangenKern.ts'
 import { meldeFehler } from './fehlerMelden'
 import { alsListe, fuehreListeZusammen, gleich, type ListenEintrag } from './syncZusammenfuehren'
 import {
@@ -137,6 +138,9 @@ function kundeToRow(bereich: KundeBereich, k: Kunde) {
     naechste_schritte: k.naechsteSchritte?.trim() ? k.naechsteSchritte : null,
     ampel_manuell: k.ampelManuell ?? null,
     seminare: k.seminare?.length ? k.seminare : null,
+    // Entgangener Klient (24.11.2026): nur mitschicken, wenn das Fenster den Wert kennt (gesetzt oder bewusst
+    // auf null geleert) — eine neue Akte ohne den Wert schreibt die Spalte nicht.
+    ...(k.verloren !== undefined ? { verloren: k.verloren } : {}),
     dokumente: k.dokumente ?? null,
     pruef_hinweis: k.pruefHinweis ?? null,
     verknuepfte_kunden: k.verknuepfteKunden ?? null,
@@ -184,6 +188,7 @@ function rowToKunde(row: any): Kunde {
     naechsteSchritte: row.naechste_schritte ?? undefined,
     ampelManuell: row.ampel_manuell ?? undefined,
     seminare: row.seminare ?? undefined,
+    verloren: leseVerloren(row.verloren),
     dokumente: row.dokumente ?? undefined,
     pruefHinweis: row.pruef_hinweis ?? undefined,
     verknuepfteKunden: row.verknuepfte_kunden ?? undefined,

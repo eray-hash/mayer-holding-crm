@@ -103,6 +103,7 @@ export function FinanzierungenDetail() {
               bereich="finanzierungen"
               status={mandant.status}
               onChange={(next) => dispatch({ type: 'SET_FINANZIERUNGEN_STATUS', id: mandant.id, status: next })}
+              akte={{ kunde: mandant, bereich: 'finanzierungen' }}
             />
           </div>
           <div>

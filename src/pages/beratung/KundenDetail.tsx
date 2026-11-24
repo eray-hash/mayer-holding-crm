@@ -163,7 +163,7 @@ export function KundenDetail() {
         <div className="flex flex-wrap items-center gap-6 border-t border-slate-100 pt-4">
           <div>
             <div className="mb-1 text-xs font-medium text-slate-400">Status</div>
-            <StatusWidget bereich="beratung" status={kunde.status} onChange={(next) => dispatch({ type: 'SET_KUNDE_STATUS', id: kunde.id, status: next })} />
+            <StatusWidget bereich="beratung" status={kunde.status} onChange={(next) => dispatch({ type: 'SET_KUNDE_STATUS', id: kunde.id, status: next })} akte={{ kunde, bereich: 'beratung' }} />
           </div>
           <div>
             <div className="mb-1 text-xs font-medium text-slate-400">Follow-up</div>

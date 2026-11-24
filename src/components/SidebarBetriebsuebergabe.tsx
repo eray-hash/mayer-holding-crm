@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { AutomatikSideLink } from './AutomatikSideLink'
+import { EntgangenSideLink } from './EntgangenSideLink'
 import { Users, FileText, ChevronDown, ChevronLeft, ChevronRight, Handshake, Sun, LayoutGrid, UserCog, ListTodo } from 'lucide-react'
 import { UngeklaertSideLink } from './UngeklaertSideLink'
 
@@ -74,6 +75,7 @@ export function SidebarBetriebsuebergabe({ collapsed, onToggle }: { collapsed: b
             <Handshake size={14} /> Betriebsübergabe
           </div>
         )}
+        <EntgangenSideLink collapsed={collapsed} />
         <AutomatikSideLink collapsed={collapsed} />
         <SideLink to="/profil" icon={<UserCog size={17} />} label="Mein Profil" collapsed={collapsed} active={isActive('/profil')} />
         <button

@@ -45,6 +45,8 @@ export const SCHALTER: Record<string, SchalterDef> = {
   unterschrift_kopie: { art: 'an_aus', tabelle: 'unterschrift_einstellung', spalte: 'kopie_an_kunde' },
   kundenbericht: { art: 'an_aus', tabelle: 'kundenbericht_schalter', spalte: 'aktiv' },
   mahn: { art: 'an_aus', tabelle: 'mahn_einstellung', spalte: 'aktiv' },
+  // Umsatzziel in der Morgen-Übersicht der Geschäftsführung (umsatzZiel.ts, 24.11.2026) — Vorgabe aus.
+  umsatzziel_meldung: { art: 'an_aus', tabelle: 'umsatz_ziel_einstellung', spalte: 'meldung_aktiv' },
   abend_rueckblick: { art: 'stufe', tabelle: 'assistent_hinweis_einstellung', spalte: 'abend_rueckblick', uhrzeitSpalte: 'abend_rueckblick_uhrzeit' },
   kontakt_nachfrage: { art: 'stufe', tabelle: 'assistent_hinweis_einstellung', spalte: 'kontakt_nachfrage' },
   kurzpruefung_hinweis: { art: 'stufe', tabelle: 'assistent_hinweis_einstellung', spalte: 'kurzpruefung_hinweis' },
@@ -93,6 +95,7 @@ export type StandZeilen = {
   unterschrift_einstellung?: Record<string, unknown> | null
   kundenbericht_schalter?: Record<string, unknown> | null
   mahn_einstellung?: Record<string, unknown> | null
+  umsatz_ziel_einstellung?: Record<string, unknown> | null
   assistent_hinweis_einstellung?: Record<string, unknown> | null
   /** daten der Zeile telegram_vorschlaege 'einstellung' */
   vorschlagDaten?: unknown
@@ -341,15 +344,17 @@ async function vorschlagDaten(admin: Db): Promise<{ da: boolean; daten: unknown 
 }
 
 async function ladeZeilen(admin: Db): Promise<StandZeilen> {
-  const [w, u, k, m, a, v] = await Promise.all([
+  const [w, u, k, m, a, v, z] = await Promise.all([
     eineZeile(admin, 'willkommen_einstellung'),
     eineZeile(admin, 'unterschrift_einstellung'),
     eineZeile(admin, 'kundenbericht_schalter'),
     eineZeile(admin, 'mahn_einstellung'),
     eineZeile(admin, 'assistent_hinweis_einstellung'),
     vorschlagDaten(admin),
+    // Erst nach supabase/sql/2026-11-24_umsatzziele.sql da — fehlt die Tabelle, gilt der Schalter als aus.
+    eineZeile(admin, 'umsatz_ziel_einstellung').catch(() => null),
   ])
-  return { willkommen_einstellung: w, unterschrift_einstellung: u, kundenbericht_schalter: k, mahn_einstellung: m, assistent_hinweis_einstellung: a, vorschlagDaten: v.daten }
+  return { willkommen_einstellung: w, unterschrift_einstellung: u, kundenbericht_schalter: k, mahn_einstellung: m, assistent_hinweis_einstellung: a, vorschlagDaten: v.daten, umsatz_ziel_einstellung: z }
 }
 
 export async function automatikStand(req: Request, admin: Db, body: Record<string, unknown>): Promise<Ergebnis> {

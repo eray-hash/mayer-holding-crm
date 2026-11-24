@@ -103,6 +103,7 @@ export function BetriebsuebergabeDetail() {
               bereich="betriebsuebergabe"
               status={mandant.status}
               onChange={(next) => dispatch({ type: 'SET_BETRIEBSUEBERGABE_STATUS', id: mandant.id, status: next })}
+              akte={{ kunde: mandant, bereich: 'betriebsuebergabe' }}
             />
           </div>
           <div>

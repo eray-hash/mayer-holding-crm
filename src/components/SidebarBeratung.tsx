@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { AutomatikSideLink } from './AutomatikSideLink'
+import { EntgangenSideLink } from './EntgangenSideLink'
 import { PFAD_UNGEKLAERT } from '../data/sammelakten'
 import { UngeklaertSideLink } from './UngeklaertSideLink'
 import { Users, FileText, AlertTriangle, Receipt, Euro, ChevronDown, ChevronLeft, ChevronRight, ScrollText, Sun, LayoutGrid, UserCog, ListTodo, Wallet } from 'lucide-react'
@@ -68,6 +69,7 @@ export function SidebarBeratung({ collapsed, onToggle }: { collapsed: boolean; o
             <ScrollText size={14} /> Unternehmensberatung
           </div>
         )}
+        <EntgangenSideLink collapsed={collapsed} />
         <AutomatikSideLink collapsed={collapsed} />
         <SideLink to="/profil" icon={<UserCog size={17} />} label="Mein Profil" collapsed={collapsed} active={isActive('/profil')} />
         <button

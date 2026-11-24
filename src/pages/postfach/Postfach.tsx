@@ -473,7 +473,7 @@ export function Postfach() {
                 (gesendet.length === 0 ? (
                   <EmptyState text={query.trim() ? 'Keine Treffer für diese Suche.' : 'Noch keine gesendeten E-Mails.'} />
                 ) : (
-                  gesendet.map((mail) => (
+                  gesendet.filter((mail) => !fachFilter || mail.postfachBereich === fachFilter).map((mail) => (
                     <button
                       key={mail.id}
                       onClick={() => setSelectedId(mail.id)}
@@ -484,6 +484,11 @@ export function Postfach() {
                         <span className="flex-shrink-0 text-[11px] text-slate-400">{fmtDateTime(mail.gesendetAm).split(',')[0]}</span>
                       </div>
                       <div className="truncate text-xs text-slate-600">{mail.betreff}</div>
+                      {mail.postfachBereich && (
+                        <div className="mt-1 inline-flex items-center gap-1 rounded bg-slate-100 px-1.5 text-[10px] font-medium text-slate-500">
+                          <Building2 size={10} /> Postfach {bereichLabel(mail.postfachBereich as Bereich)}
+                        </div>
+                      )}
                       {mail.kundeName && (
                         <div className="mt-1 flex items-center gap-1 text-[11px] font-medium text-slate-400">
                           <Check size={11} /> {mail.kundeName}

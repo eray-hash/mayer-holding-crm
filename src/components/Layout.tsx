@@ -23,7 +23,7 @@ import {
   ChevronDown,
   Phone,
   Lock,
-  BookUser, Mic, Search, CalendarDays, BarChart3, Lightbulb, ListChecks, Eye, ShieldCheck, Calculator, ClipboardList, Presentation, Library, MessagesSquare } from 'lucide-react'
+  BookUser, Mic, Search, CalendarDays, BarChart3, Lightbulb, ListChecks, Eye, ShieldCheck, Calculator, ClipboardList, Presentation, Library, MessagesSquare, Target } from 'lucide-react'
 import type { Bereich } from '../types'
 import { useApp } from '../context/AppContext'
 import { useAuth } from '../context/AuthContext'
@@ -44,6 +44,7 @@ import { GlobaleSuche } from './GlobaleSuche'
 import { NeuigkeitenKnopf } from './NeuigkeitenKnopf'
 import { NeuHinweis } from './NeuHinweis'
 import { KopfHinweis } from './KopfHinweis'
+import { UnserZielSideLink } from './UnserZielSideLink'
 import { SidebarBeratung } from './SidebarBeratung'
 import { SidebarImmobilien } from './SidebarImmobilien'
 import { SidebarErben } from './SidebarErben'
@@ -231,6 +232,17 @@ export function Layout({ children }: { children: ReactNode }) {
               <CalendarDays size={16} />
             </button>
           </KopfHinweis>
+          {!imPrivatBereich && (
+            <KopfHinweis text="Umsatzziele: Soll und Ist des Monats je Sparte, Trichter" className="hidden sm:inline-flex">
+              <button
+                onClick={() => navigate('/ziele')}
+                className="hidden rounded-lg p-2 text-slate-500 hover:bg-slate-100 sm:inline-flex"
+                aria-label="Umsatzziele"
+              >
+                <Target size={16} />
+              </button>
+            </KopfHinweis>
+          )}
           <KopfHinweis text="Auswertungen" className="hidden sm:inline-flex">
             <button
               onClick={() => navigate('/auswertungen')}
@@ -459,7 +471,13 @@ export function Layout({ children }: { children: ReactNode }) {
             sidebarCollapsed ? 'w-14' : 'w-60'
           }`}
         >
-          <aktuellerBereich.Sidebar collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed((c) => !c)} />
+          {/* „Unser Ziel“ (Umsatzziel der Sparte dieser Abteilung, 24.11.2026) oben über der Navigation der Abteilung. */}
+          <div className="flex h-full w-full flex-col">
+            <UnserZielSideLink bereich={aktuellerBereich.id} collapsed={sidebarCollapsed} />
+            <div className="min-h-0 flex-1">
+              <aktuellerBereich.Sidebar collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed((c) => !c)} />
+            </div>
+          </div>
         </aside>
 
         {/* Main */}
@@ -490,6 +508,7 @@ export function Layout({ children }: { children: ReactNode }) {
                   if ((e.target as HTMLElement).closest('a')) setDrawerOpen(false)
                 }}
               >
+                <UnserZielSideLink bereich={aktuellerBereich.id} collapsed={false} />
                 <aktuellerBereich.Sidebar collapsed={false} onToggle={() => setDrawerOpen(false)} />
               </div>
 
@@ -522,6 +541,15 @@ export function Layout({ children }: { children: ReactNode }) {
                 <Camera size={17} className="text-slate-400" />
                 Datei ablegen
               </button>
+              {!imPrivatBereich && (
+                <button
+                  onClick={() => { setDrawerOpen(false); navigate('/ziele') }}
+                  className="mb-1 flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm font-medium text-slate-700 hover:bg-slate-50 sm:hidden"
+                >
+                  <Target size={17} className="text-slate-400" />
+                  Umsatzziele
+                </button>
+              )}
               {/* Auf dem Handy ist in der Kopfleiste kein Platz für das Auswertungs-Symbol. */}
               <button
                 onClick={() => { setDrawerOpen(false); navigate('/auswertungen') }}

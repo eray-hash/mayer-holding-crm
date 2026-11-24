@@ -202,6 +202,13 @@
 //                                                   Vermittler) — nur mit eigenem Login und Recht auf
 //                                                   die Akte; schreibt nichts, die Oberfläche speichert
 //                                                   (siehe checklisteVorschlag.ts).
+//   { action: "entgangen_grund_vorschlag", kundeId } -> KI-Vorschlag (Haiku 5.5), warum ein Klient entgangen ist:
+//                                                   feste Kategorie + ein Satz aus Verlauf, Protokollen und
+//                                                   Rechnungen — nur mit eigenem Login und Recht auf die Akte;
+//                                                   schreibt nichts (siehe entgangen.ts, Seite /entgangen).
+//   { action: "umsatzziel_stand", monat?, bereich? } -> Umsatzziele (Seite /ziele, Karte „Unser Ziel“): Soll, Ist,
+//                                                   offen, erwartet, Trichter — Summen ohne Namen, für jeden
+//                                                   aktiven Mitarbeiter (siehe umsatzZiel.ts)
 //   { action: "automatik_stand" }                -> Seite „Automatische Nachrichten“: Stand aller Schalter
 //                                                   ({ schalter, regeln, wvRegeln }, siehe automatik.ts) — nur
 //                                                   Geschäftsführung/Admin oder Superuser
@@ -247,6 +254,7 @@ import {
 } from './postfach.ts'
 import { loescheTermin, sendeErinnerungen, sendeTelegram, sendeTelegramAls, speichereTermin } from './kalender.ts'
 import { automatikSchalter, automatikStand, telegramArtNachText } from './automatik.ts'
+import { umsatzzielStand } from './umsatzZiel.ts'
 import { ordneTermineZu, terminZuordnenAktion } from './terminZuordnung.ts'
 import { ordneNeueMailsZu } from './mailZuordnung.ts'
 import { verarbeiteScanEingang, type ScanDienste, type Wahl } from './scanEingang.ts'
@@ -304,6 +312,7 @@ import { pruefeBonitaet } from './bonitaet.ts'
 import { lieseKontoauszug } from './kontoauszug.ts'
 import { lieseAuszugFuerAbgleich } from './abgleichAuslesen.ts'
 import { erstelleChecklisteVorschlag } from './checklisteVorschlag.ts'
+import { haikuFrage as entgangenHaiku, schlageGrundVor } from './entgangen.ts'
 import { berechneChanceVorschlaege, ergebnisText as chanceErgebnisText } from './chanceVorschlag.ts'
 import { priorisiereListe, pruefeTodoPriorisierung, type Liste as TodoListe } from './todoPriorisierung.ts'
 import { versendeWillkommen } from './willkommen.ts'
@@ -3918,6 +3927,13 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       return new Response(JSON.stringify(ergebnis.daten), { status: ergebnis.status, headers })
     }
 
+    // ---------- Umsatzziele (siehe umsatzZiel.ts): jeder aktive Mitarbeiter, nur Summen ----------
+    if (body.action === 'umsatzziel_stand') {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const ergebnis = await umsatzzielStand(req, admin, body)
+      return new Response(JSON.stringify(ergebnis.daten), { status: ergebnis.status, headers })
+    }
+
     // ---------- Automatische Nachrichten (siehe automatik.ts): nur Geschäftsführung/Admin und Superuser ----------
     if (body.action === 'automatik_stand' || body.action === 'automatik_schalter') {
       const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
@@ -5603,6 +5619,31 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       }
     }
 
+    // Entgangene Klienten: Grund vorschlagen (siehe entgangen.ts) — nur mit eigenem Login und Recht auf die Akte,
+    // schreibt nichts; der Dialog im CRM zeigt den Vorschlag, gespeichert wird erst dort.
+    if (body.action === 'entgangen_grund_vorschlag') {
+      const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const aufrufer = await ermittleAufrufer(req, admin, body)
+      if (!aufrufer) {
+        return new Response(JSON.stringify({ error: 'Bitte neu einloggen — der Login-Nachweis fehlt oder ist abgelaufen.' }), { status: 401, headers })
+      }
+      if (typeof body.kundeId !== 'string' || !body.kundeId.trim()) {
+        return new Response(JSON.stringify({ error: 'kundeId fehlt.' }), { status: 400, headers })
+      }
+      if (!(await darfKundeServer(admin, aufrufer.email, body.kundeId))) return keinRecht(headers)
+      const schluessel = Deno.env.get('ANTHROPIC_API_KEY')
+      if (!schluessel) return new Response(JSON.stringify({ error: 'Die KI ist auf dem Server nicht eingerichtet.' }), { status: 500, headers })
+      try {
+        const ergebnis = await schlageGrundVor(admin, body.kundeId.trim(), heuteBerlin(), entgangenHaiku(schluessel))
+        if (!ergebnis.ok) return new Response(JSON.stringify({ error: ergebnis.fehler }), { status: ergebnis.status, headers })
+        return new Response(JSON.stringify(ergebnis.vorschlag), { headers })
+      } catch (err) {
+        console.error('entgangen_grund_vorschlag fehlgeschlagen:', err)
+        const grund = err instanceof Error ? err.message : String(err)
+        return new Response(JSON.stringify({ error: `Der Vorschlag für den Grund konnte nicht erstellt werden: ${grund}` }), { status: 500, headers })
+      }
+    }
+
     // Vorschläge für Chance, erwarteten Umsatz und Monat je Akte (siehe chanceVorschlag.ts) — nur mit eigenem
     // Login und nur für Akten der freigegebenen Bereiche. Schreibt nur kunden.chance_vorschlag, nie auftrag_chance.
     if (body.action === 'chance_vorschlaege') {
@@ -5850,7 +5891,7 @@ Deno.serve((req: Request) => mitAnlass(async () => {
       return new Response(JSON.stringify({ ok: true }), { headers })
     }
 
-    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "public_objekt_portal", "public_objekt_portal_zustimmen", "public_objekt_portal_dokument", "public_objekt_portal_besichtigung", "bewertung_recherche_start", "bewertung_recherche_schritt", "kunden_umfeld_recherche", "steuer_analyse_start", "steuer_analyse_schritt", "dokument_lesen", "dokument_inhalte", "postfaecher_liste", "postfach_verbinden", "postfach_trennen", "postfach_abruf", "postfach_ordner", "mail_zuordnen", "mail_freigeben", "mail_anhang_url", "termin_speichern", "termin_loeschen", "termin_erinnerungen", "tagesmeldung_test", "kontoauszug_auslesen", "kontoauszug_abgleich_auslesen", "rendite_marktvergleich", "checkliste_vorschlag", "todos_priorisieren", "willkommen_jetzt", "auto_nachricht_jetzt", "anfrage_pruefen_jetzt", "akte_zu_objekt", "mail_zuordnung_lauf", "wochenrueckblick_test", "wochenrueckblick_einstellung", "chance_vorschlaege", "stammdaten_nachtrag", "beleg_ergaenzen", "dubletten", "neuanfrage_einschaetzung", "kv_zuordnen", "termin_zuordnen", "datensicherung", "tagesplan", "public_seminar_termin", "public_seminar_anmelden", "public_unterschrift_laden", "public_unterschrift_absenden", "gesendet_abruf", "bereichspostfach_ueberfuehren", "kontrollbericht_test", "abend_rueckblick_test", "scan_eingang_lauf", "automatik_stand", "automatik_schalter" oder "firmenwissen_answer"' }), { status: 400, headers })
+    return new Response(JSON.stringify({ error: 'Unbekannte action — erwartet "sync", "send", "summarize", "assistant_classify", "assistant_answer", "potenzial_analyse", "draft_campaign", "assistant_vision", "invite_mitarbeiter", "generate_login_link", "update_mitarbeiter_email", "request_password_reset", "self_register", "classify_new_leads", "public_get_kunde", "public_submit_formular", "public_create_lead", "immoradar_top", "pflege_classify", "classify_objekt_dokument", "classify_kunden_dokument", "split_scan_dokument", "public_get_objekt", "public_objekt_upload_url", "public_submit_objekt_formular", "public_get_vorschlag", "public_entscheide_vorschlag", "public_objekt_portal", "public_objekt_portal_zustimmen", "public_objekt_portal_dokument", "public_objekt_portal_besichtigung", "bewertung_recherche_start", "bewertung_recherche_schritt", "kunden_umfeld_recherche", "steuer_analyse_start", "steuer_analyse_schritt", "dokument_lesen", "dokument_inhalte", "postfaecher_liste", "postfach_verbinden", "postfach_trennen", "postfach_abruf", "postfach_ordner", "mail_zuordnen", "mail_freigeben", "mail_anhang_url", "termin_speichern", "termin_loeschen", "termin_erinnerungen", "tagesmeldung_test", "kontoauszug_auslesen", "kontoauszug_abgleich_auslesen", "rendite_marktvergleich", "checkliste_vorschlag", "entgangen_grund_vorschlag", "todos_priorisieren", "willkommen_jetzt", "auto_nachricht_jetzt", "anfrage_pruefen_jetzt", "akte_zu_objekt", "mail_zuordnung_lauf", "wochenrueckblick_test", "wochenrueckblick_einstellung", "chance_vorschlaege", "stammdaten_nachtrag", "beleg_ergaenzen", "dubletten", "neuanfrage_einschaetzung", "kv_zuordnen", "termin_zuordnen", "datensicherung", "tagesplan", "public_seminar_termin", "public_seminar_anmelden", "public_unterschrift_laden", "public_unterschrift_absenden", "gesendet_abruf", "bereichspostfach_ueberfuehren", "kontrollbericht_test", "abend_rueckblick_test", "scan_eingang_lauf", "automatik_stand", "automatik_schalter", "umsatzziel_stand" oder "firmenwissen_answer"' }), { status: 400, headers })
   } catch (err) {
     return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers })
   }

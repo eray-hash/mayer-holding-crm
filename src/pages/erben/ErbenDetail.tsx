@@ -115,7 +115,7 @@ export function ErbenDetail() {
         <div className="flex flex-wrap items-center gap-6 border-t border-slate-100 pt-4">
           <div>
             <div className="mb-1 text-xs font-medium text-slate-400">Status</div>
-            <StatusWidget bereich="erben" status={mandant.status} onChange={(next) => dispatch({ type: 'SET_ERBEN_STATUS', id: mandant.id, status: next })} />
+            <StatusWidget bereich="erben" status={mandant.status} onChange={(next) => dispatch({ type: 'SET_ERBEN_STATUS', id: mandant.id, status: next })} akte={{ kunde: mandant, bereich: 'erben' }} />
           </div>
           <div>
             <div className="mb-1 text-xs font-medium text-slate-400">Follow-up</div>

@@ -104,6 +104,7 @@ export function AkademieDetail() {
               bereich="akademie"
               status={teilnehmer.status}
               onChange={(next) => dispatch({ type: 'SET_AKADEMIE_STATUS', id: teilnehmer.id, status: next })}
+              akte={{ kunde: teilnehmer, bereich: 'akademie' }}
             />
           </div>
           <div>

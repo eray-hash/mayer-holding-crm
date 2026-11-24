@@ -21,9 +21,10 @@ type Row = {
   kunde_name: string | null
   von: string | null
   postfach_id: string | null
+  postfach_bereich?: string | null
 }
 
-const SPALTEN = 'id, an, an_name, betreff, text, gesendet_am, kunde_bereich, kunde_id, kunde_name, von, postfach_id'
+const SPALTEN = 'id, an, an_name, betreff, text, gesendet_am, kunde_bereich, kunde_id, kunde_name, von, postfach_id, postfach_bereich'
 
 function toMail(row: Row): GesendeteEmail {
   return {
@@ -38,6 +39,7 @@ function toMail(row: Row): GesendeteEmail {
     kundeName: row.kunde_name ?? undefined,
     von: row.von ?? undefined,
     postfachId: row.postfach_id ?? undefined,
+    postfachBereich: row.postfach_bereich ?? undefined,
   }
 }
 

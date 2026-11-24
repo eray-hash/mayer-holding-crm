@@ -11,6 +11,9 @@
 //   Benutzt jemand den privaten Assistenten (eigener Bot, _shared/telegramPrivat.ts), kommt der Hotmail-Teil
 //   stattdessen als eigene kurze „Privat-Übersicht“ über diesen Bot; die Mayer-Nachricht bleibt sonst gleich.
 //   Klappt das Senden dort nicht, geht sie verloren statt über den Mayer-Bot (Privates bleibt privat, 23.11.2026).
+// - Umsatzziel (seit 24.11.2026, umsatzZiel.ts): Geschäftsführung und Admins bekommen in der Morgen-Übersicht einen
+//   Abschnitt „Umsatzziel <Monat>: Ist von Soll“ — nur mit eingeschaltetem Schalter (Vorgabe aus). Mit Schalter an
+//   geht die Morgen-Übersicht an sie also an jedem Werktag hinaus, auch wenn sonst nichts ansteht.
 // - Wochenbericht: freitags ab 16 Uhr (bis 19 Uhr), nur Geschäftsführung und Admins. Nur Zahlen.
 //   Nicht an Empfänger des Wochenrückblicks (wochenrueckblick.ts, Einstellung berichtAn): die bekommen nur den
 //   Rückblick (seit 22.11.2026 — vorher kamen freitags drei Berichte).
@@ -40,6 +43,7 @@ import { darfObjekt, istPrivatesObjekt, nurMayerObjekte, normalisiereAdresse } f
 import { wochenrueckblickAdressen } from './wochenrueckblickEmpfaenger.ts'
 import { ausgeblendeteListen } from './todoAbgleich.ts'
 import { alleZeilen } from '../_shared/alleZeilen.ts'
+import { umsatzZielAbschnitt } from './umsatzZiel.ts'
 
 // Der Dienst-Zugang zur Datenbank — wie in gesuchTreffer.ts.
 // deno-lint-ignore no-explicit-any
@@ -688,16 +692,20 @@ export function privatUebersichtText(p: Person, abschnitte: Abschnitt[], jetzt: 
  *  (eigene Aufgaben samt Microsoft To Do und Hotmail). Privat bleibt privat: die eigene Liste dann nicht im Mayer-Teil. */
 export async function morgenNachrichten(admin: Db, p: Person, daten: Daten, jetzt: Date, privatAktiv?: (email: string) => Promise<boolean>): Promise<{ mayer: string | null; privat: string | null }> {
   const hotmail = await hotmailAbschnitte(admin, p.email, jetzt)
+  // Umsatzziel (umsatzZiel.ts, 24.11.2026): nur Geschäftsführung/Admins und nur mit eingeschaltetem Schalter
+  // (umsatz_ziel_einstellung.meldung_aktiv, Vorgabe aus) — als Abschnitt hier statt als eigene Nachricht. Wirft nie.
+  const ziel = p.gf ? await umsatzZielAbschnitt(admin, jetzt) : null
+  const zielTeil = ziel ? [ziel] : []
   const privat = p.chat != null && (await (privatAktiv ?? ((e: string) => privatBotAktiv(admin, e)))(p.email).catch(() => false))
   if (privat) {
     // Hat die Person den neuen privaten Morgenplan (privatTagesplan.ts, jeden Tag inkl. Wochenende), bringt der die
     // eigene Liste und den Hotmail-Teil — hier dann keine zweite Privat-Übersicht.
-    if (await privatMorgenplanAktiv(admin, p.email).catch(() => false)) return { mayer: morgenText(p, daten, jetzt, [], { eigeneListe: false }), privat: null }
+    if (await privatMorgenplanAktiv(admin, p.email).catch(() => false)) return { mayer: morgenText(p, daten, jetzt, zielTeil, { eigeneListe: false }), privat: null }
     const eigene = aufgabenZeilen(p, daten, berlinZeit(jetzt).datum, 'privat')
     const teile = [...(eigene.length ? [{ titel: 'Eigene Aufgaben', zeilen: eigene }] : []), ...hotmail]
-    return { mayer: morgenText(p, daten, jetzt, [], { eigeneListe: false }), privat: privatUebersichtText(p, teile, jetzt) }
+    return { mayer: morgenText(p, daten, jetzt, zielTeil, { eigeneListe: false }), privat: privatUebersichtText(p, teile, jetzt) }
   }
-  return { mayer: morgenText(p, daten, jetzt, hotmail), privat: null }
+  return { mayer: morgenText(p, daten, jetzt, [...zielTeil, ...hotmail]), privat: null }
 }
 
 // ---------------------------------------------------------------------------------------------

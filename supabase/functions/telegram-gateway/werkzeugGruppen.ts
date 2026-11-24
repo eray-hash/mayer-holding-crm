@@ -146,9 +146,10 @@ export const GRUPPEN: Record<GruppenName, Gruppe> = {
   },
   vertrieb: {
     titel: 'Umsatz und Partner',
-    wofuer: 'Umsatzvorschau, Chance und erwarteter Umsatz einer Akte, Provisionen, Verzeichnis der Partner und Vermittler',
-    werkzeuge: ['umsatz_vorschau', 'chance_setzen', 'chance_vorschlaege_zeigen', 'provisionen_offen', 'partner_suchen', 'partner_anlegen', 'partner_zuordnen'],
-    stichworte: /umsatz|provision|chance|wahrscheinlich|prozent|%|erwart|quartal|reinkommt|kommt .{0,30}rein|pipeline|partner|vermittler|tippgeber|notar|gutachter|empfehl|empfohlen|vermittelt|steuerberater|€|\beuro\b/,
+    wofuer: 'Umsatzvorschau, Chance und erwarteter Umsatz einer Akte, Provisionen, Verzeichnis der Partner und Vermittler, entgangene Klienten (als entgangen markieren, warum wir Kunden verlieren, wer zu entgehen droht)',
+    // 24.11.2026: entgangene Klienten — entgangenWerkzeuge.ts.
+    werkzeuge: ['umsatz_vorschau', 'umsatzziel_stand', 'chance_setzen', 'chance_vorschlaege_zeigen', 'provisionen_offen', 'partner_suchen', 'partner_anlegen', 'partner_zuordnen', 'als_entgangen_markieren', 'entgangene_klienten'],
+    stichworte: /umsatz|\bziel|\bsoll\b|rueckstand|trichter|\bleads?\b|provision|chance|wahrscheinlich|prozent|%|erwart|quartal|reinkommt|kommt .{0,30}rein|pipeline|partner|vermittler|tippgeber|notar|gutachter|empfehl|empfohlen|vermittelt|steuerberater|€|\beuro\b|verloren|verlier|entgangen|entgeh|abgesprung|abspring|kein interesse|abgesagt|aufgeben|funkstille/,
   },
   akademie: {
     titel: 'Akademie',
@@ -264,7 +265,9 @@ export const ABSATZ_GRUPPE: readonly [string, GruppenName][] = [
   ['- Rendite und Kaufpreis eines Objekts:', 'vermarktung'],
   ['- Partner und Vermittler:', 'vertrieb'],
   ['- Umsatzvorschau und Provisionen:', 'vertrieb'],
+  ['- Umsatzziele:', 'vertrieb'],
   ['- Chance und erwarteter Umsatz einer Akte:', 'vertrieb'],
+  ['- Entgangene Klienten:', 'vertrieb'],
   ['- Seminartermine der Akademie:', 'akademie'],
   ['- Bücher & Verlag:', 'buecher'],
   ['- Dateien in Akten verwalten:', 'dateien'],

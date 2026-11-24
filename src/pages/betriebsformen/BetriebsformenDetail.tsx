@@ -103,6 +103,7 @@ export function BetriebsformenDetail() {
               bereich="betriebsformen"
               status={mandant.status}
               onChange={(next) => dispatch({ type: 'SET_BETRIEBSFORMEN_STATUS', id: mandant.id, status: next })}
+              akte={{ kunde: mandant, bereich: 'betriebsformen' }}
             />
           </div>
           <div>

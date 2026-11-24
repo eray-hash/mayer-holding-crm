@@ -59,6 +59,7 @@ import { PrivatGesuche, PrivatImmoKundeDetail, PrivatImmoKundenListe, PrivatObje
 import { Kalender } from './pages/kalender/Kalender'
 import { Auswertungen } from './pages/auswertungen/Auswertungen'
 import { Umsatzvorschau } from './pages/auswertungen/Umsatzvorschau'
+import { Umsatzziele } from './pages/ziele/Umsatzziele'
 import { PartnerSeite } from './pages/partner/Partner'
 import { PostfachEinrichtenHinweis } from './components/PostfachEinstellungen'
 import { ToDoListe, BereichToDoListe } from './pages/todo/ToDoListe'
@@ -74,6 +75,7 @@ import { Neuigkeiten } from './pages/neuigkeiten/Neuigkeiten'
 import { Dubletten } from './pages/admin/Dubletten'
 import { NeuanfragenSichten } from './pages/neuanfragen/Sichten'
 import { AufgabenUebersicht } from './pages/aufgaben/AufgabenUebersicht'
+import { EntgangeneKlienten } from './pages/entgangen/EntgangeneKlienten'
 import { Kostenvoranschlaege } from './pages/kostenvoranschlaege/Kostenvoranschlaege'
 import { Checkliste } from './pages/checkliste/Checkliste'
 import { Wochenbesprechung } from './pages/besprechung/Wochenbesprechung'
@@ -123,11 +125,14 @@ function AdminRoutesContent() {
         <Route path="/ablegen" element={<Ablegen />} />
         <Route path="/kalender" element={<Kalender />} />
         <Route path="/aufgaben" element={<AufgabenUebersicht />} />
+        <Route path="/entgangen" element={<EntgangeneKlienten />} />
         <Route path="/superuser" element={<SuperuserSeite />} />
         <Route path="/automatische-nachrichten" element={<AutomatischeNachrichten />} />
         {/* Für alle: Was jemand sieht, begrenzt die Datenbank (Bereichsrechte) schon im App-Zustand. */}
         <Route path="/auswertungen" element={<Auswertungen />} />
         <Route path="/auswertungen/umsatz" element={<Umsatzvorschau />} />
+        {/* Für alle: Umsatzziele (Summen ohne Namen, rechnet der Server — email-gateway/umsatzZiel.ts). */}
+        <Route path="/ziele" element={<Umsatzziele />} />
         {/* Für alle: Partner sieht jeder aktive Mitarbeiter, Zuordnungen nur mit Rechten an Akte/Objekt (Datenbank). */}
         <Route path="/partner" element={<PartnerSeite />} />
         {/* Für alle: Sichtbarkeit regelt die Datenbank (Bereichsrechte, private Einträge nur für den Besitzer). */}

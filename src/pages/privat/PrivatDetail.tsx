@@ -142,6 +142,7 @@ export function PrivatDetail() {
               bereich={ablauf}
               status={kontakt.status}
               onChange={(next) => dispatch({ type: 'SET_PRIVAT_STATUS', id: kontakt.id, status: next })}
+              akte={{ kunde: kontakt, bereich: 'privat' }}
             />
           </div>
           {(ms?.erlaubt || kontakt.privatArt) && <div>

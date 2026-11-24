@@ -120,6 +120,7 @@ export function ImmobilienKundenDetail({ privat }: { privat?: boolean } = {}) {
               bereich="immobilienkunden"
               status={kunde.status}
               onChange={(next) => dispatch({ type: 'UPDATE_KUNDE_IN_BEREICH', bereich, id: kunde.id, patch: { status: next } })}
+              akte={{ kunde, bereich }}
             />
           </div>
           <div>

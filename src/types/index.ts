@@ -1,4 +1,5 @@
 // Zentrale Typdefinitionen für das Mayer Holding CRM
+import type { Verloren } from '../../supabase/functions/_shared/entgangenKern.ts'
 
 export type Bereich =
   | 'beratung'
@@ -384,12 +385,17 @@ export type Kunde = {
   ampelManuell?: AmpelManuell
   /** Akademie: angefragte, gebuchte oder besuchte Seminare (id = seminare.id). Seit 21.11.2026. */
   seminare?: SeminarBuchung[]
+  /** Entgangener Klient (24.11.2026): gesetzt, solange status = 'verloren'; null = beim Wieder-Aufnehmen geleert
+   *  (wird so in die Datenbank geschrieben). Form und Gründe: supabase/functions/_shared/entgangenKern.ts. */
+  verloren?: Verloren | null
 }
 
 export type SeminarStand = 'interessiert' | 'angemeldet' | 'teilgenommen'
 export type SeminarBuchung = { id: string; titel: string; stand: SeminarStand }
 
 export type Vermittler = { name: string; kundeId?: string; bereich?: KundeBereich }
+
+export type { Verloren, EntgangenGrund } from '../../supabase/functions/_shared/entgangenKern.ts'
 
 /** Chance, dass der Auftrag kommt. Ein Vorschlag des Assistenten ist bestaetigt=false, bis ihn ein Berater bestätigt. */
 export type AuftragChance = {
@@ -1068,6 +1074,8 @@ export type GesendeteEmail = {
   /** Absender-Adresse (ab 2026-11-15 mitgeschrieben). */
   von?: string
   postfachId?: string
+  /** Gesendet über ein Bereichspostfach (z. B. immo@ → 'immobilien'); sichtbar nur mit Rechten für diesen Bereich. */
+  postfachBereich?: string
 }
 
 // ---------- Investorenportal (Investitionsfonds) ----------
