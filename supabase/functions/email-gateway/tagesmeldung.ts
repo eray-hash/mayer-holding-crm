@@ -44,6 +44,7 @@ import { wochenrueckblickAdressen } from './wochenrueckblickEmpfaenger.ts'
 import { ausgeblendeteListen } from './todoAbgleich.ts'
 import { alleZeilen } from '../_shared/alleZeilen.ts'
 import { spartenFuerBereiche, umsatzZielAbschnitt } from './umsatzZiel.ts'
+import { istPrivaterTermin } from '../_shared/privatGrenze.ts'
 
 // Der Dienst-Zugang zur Datenbank — wie in gesuchTreffer.ts.
 // deno-lint-ignore no-explicit-any
@@ -537,8 +538,8 @@ export function morgenAbschnitte(p: Person, d: Daten, jetzt: Date, optionen: Mor
       // Privat bleibt privat (24.11.2026: ein privater Outlook-Termin stand in der Mayer-Morgennachricht): ein eigener
       // Termin ohne Kollegen und ohne Mayer-Akte fehlt hier, wenn er aus Microsoft kommt oder die Person den privaten
       // Assistenten nutzt — dann steht er in ihrem privaten Morgenplan.
-      const privat = !teilnehmer.some((x) => x.trim()) && (!text(t.kunde_id).trim() || text(t.kunde_bereich).trim() === 'privat')
-      if (privat && (optionen.eigeneListe === false || !!text(t.ms_id).trim() || text(t.kunde_bereich).trim() === 'privat')) return false
+      // Regel zentral in _shared/privatGrenze.ts.
+      if (istPrivaterTermin(t, { besitzerPrivatAssistent: optionen.eigeneListe === false })) return false
       return new Date(t.beginn) < bis && new Date(t.ende) > von
     })
     .sort((a, b) => Number(!a.ganztags) - Number(!b.ganztags) || a.beginn.localeCompare(b.beginn))

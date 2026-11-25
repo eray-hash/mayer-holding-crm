@@ -9,6 +9,7 @@
 // eigenen Liste steht; Wiedervorlagen nur, wenn der Bereich freigegeben ist. Jede Änderung liest den Plan frisch und
 // schreibt ihn ganz zurück (ein Tag, eine Zeile).
 
+import { istPrivaterTermin, ladeBesitzer, privatAssistentMerker, standardPrivatPruefer } from '../_shared/privatGrenze.ts'
 import { darfBereich, type RechteMitarbeiter } from './rechte.ts'
 import {
   BLOCK_REIHENFOLGE,
@@ -216,15 +217,21 @@ export async function ohneFremdeTermine(supabase: Supa, plan: PlanTag, ichEmail:
   const ids = [...new Set(plan.zeilen.map((z) => z.terminId).filter(Boolean) as string[])]
   if (!ids.length) return plan
   const ich = ichEmail.trim().toLowerCase()
-  const { data } = await supabase.from('termine').select('id, besitzer_email, teilnehmer').in('id', ids)
+  const { data } = await supabase.from('termine').select('id, besitzer_email, teilnehmer, kunde_id, kunde_bereich, ms_id').in('id', ids)
+  type Zeile = { id: string; besitzer_email: string | null; teilnehmer: string[] | null; kunde_id: string | null; kunde_bereich: string | null; ms_id: string | null }
+  const zeilen = (data ?? []) as Zeile[]
   const dabei = new Set(
-    ((data ?? []) as { id: string; besitzer_email: string | null; teilnehmer: string[] | null }[])
+    zeilen
       .filter((t) => !!ich && (String(t.besitzer_email ?? '').toLowerCase() === ich || (t.teilnehmer ?? []).some((p) => String(p).toLowerCase() === ich)))
       .map((t) => String(t.id)),
   )
+  // Private Termine (_shared/privatGrenze.ts) fehlen ganz — auch als „belegt“ und auch in früher gespeicherten Plänen.
+  const merker = privatAssistentMerker(standardPrivatPruefer(supabase))
+  await ladeBesitzer(zeilen, merker)
+  const privat = new Set(zeilen.filter((t) => istPrivaterTermin(t, { besitzerPrivatAssistent: merker.bekannt(String(t.besitzer_email ?? '')) })).map((t) => String(t.id)))
   return {
     ...plan,
-    zeilen: plan.zeilen.map((z) => {
+    zeilen: plan.zeilen.filter((z) => !z.terminId || !privat.has(z.terminId)).map((z) => {
       if (!z.terminId || dabei.has(z.terminId)) return z
       // Uhrzeit vorn behalten („09:00–10:00 Uhr: …“ bzw. „ganztägig: …“), den Rest ersetzen.
       const zeit = /^((?:[\d:]+(?:–[\d:]+)? Uhr)|ganztägig):/.exec(String(z.was ?? ''))?.[1]
@@ -261,7 +268,8 @@ export async function fuehreTagesplanWerkzeugAus(name: string, input: any, k: Ta
     if (!plan || !plan.zeilen.some((z) => String(z.was ?? '').trim())) {
       return fremd ? `${name_} hat für ${deDatum(datum)} keinen Tagesplan gespeichert.` : `Für ${deDatum(datum)} gibt es noch keinen Tagesplan. Mit tag_vorschlagen baue ich ihn aus deiner To-do-Liste und deinen Terminen.`
     }
-    return planText(fremd ? await ohneFremdeTermine(supabase, plan, ich.email) : plan, { fremd })
+    // Auch beim eigenen Plan: private Termine aus früher gespeicherten Zeilen fallen weg (eigene bleiben sonst unverändert).
+    return planText(await ohneFremdeTermine(supabase, plan, ich.email), { fremd })
   }
 
   if (name === 'tag_vorschlagen') {

@@ -11,6 +11,7 @@
 // - Der Kundenname steht in der Beschreibung, nie ein Verweis ins CRM.
 
 import { alleZeilen } from '../_shared/alleZeilen.ts'
+import { istPrivaterTermin } from '../_shared/privatGrenze.ts'
 
 // Der Dienst-Zugang zur Datenbank — in postfach.ts genauso typisiert, dort aber nicht exportiert.
 // deno-lint-ignore no-explicit-any
@@ -28,6 +29,9 @@ export type AboTermin = {
   teilnehmer: string[] | null
   kunde_name: string | null
   geaendert_am?: string | null
+  kunde_id?: string | null
+  kunde_bereich?: string | null
+  ms_id?: string | null
 }
 
 const TAG_MS = 86400000
@@ -221,7 +225,7 @@ export async function kalenderAboAntwort(admin: Db, token: string | null, method
     const bisDatum = new Date(jetzt.getTime())
     bisDatum.setUTCMonth(bisDatum.getUTCMonth() + MONATE_VORAUS)
     const bis = bisDatum.toISOString()
-    const spalten = 'id, titel, beschreibung, ort, beginn, ende, ganztags, besitzer_email, teilnehmer, kunde_name, geaendert_am'
+    const spalten = 'id, titel, beschreibung, ort, beginn, ende, ganztags, besitzer_email, teilnehmer, kunde_name, geaendert_am, kunde_id, kunde_bereich, ms_id'
     const muster = ich.replace(/[\\%_]/g, (z) => `\\${z}`)
     const [eigene, dabei] = await Promise.all([
       // Per Mail-Einladung übernommene Termine stehen schon im Kalender des Postfachs — nicht doppelt liefern.
@@ -233,7 +237,9 @@ export async function kalenderAboAntwort(admin: Db, token: string | null, method
     const termine = new Map<string, AboTermin>()
     for (const t of [...(eigene.data ?? []), ...(dabei.data ?? [])] as AboTermin[]) {
       const beteiligt = String(t.besitzer_email ?? '').toLowerCase() === ich || (t.teilnehmer ?? []).some((p) => String(p).toLowerCase() === ich)
-      if (beteiligt) termine.set(t.id, t)
+      // Das Abo heißt „Mayer Holding CRM“: private Termine (_shared/privatGrenze.ts) gehören nicht hinein — Outlook-Termine
+      // stehen ohnehin im Outlook-Kalender.
+      if (beteiligt && !istPrivaterTermin(t)) termine.set(t.id, t)
     }
     const liste = [...termine.values()].sort((a, b) => new Date(a.beginn).getTime() - new Date(b.beginn).getTime())
     const ics = baueIcs(liste, ich, namen, jetzt)

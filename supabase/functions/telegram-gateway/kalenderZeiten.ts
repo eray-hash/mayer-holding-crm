@@ -17,6 +17,7 @@
 import { ortszeitZuUtc } from '../_shared/icsBelegt.ts'
 import type { RechteMitarbeiter } from './rechte.ts'
 import { alleZeilen } from '../_shared/alleZeilen.ts'
+import { istPrivaterTermin } from '../_shared/privatGrenze.ts'
 
 // deno-lint-ignore no-explicit-any
 type Supa = any
@@ -112,6 +113,7 @@ type TerminZeile = {
   besitzer_email: string | null
   teilnehmer: string[] | null
   ms_id: string | null
+  kunde_id?: string | null
   kunde_bereich: string | null
 }
 
@@ -208,7 +210,7 @@ export async function fuehreKalenderZeitenWerkzeugAus(name: string, input: any, 
   const { data: terminZeilen, error: terminFehler } = await alleZeilen(() =>
     supabase
       .from('termine')
-      .select('id, titel, beginn, ende, ganztags, besitzer_email, teilnehmer, ms_id, kunde_bereich')
+      .select('id, titel, beginn, ende, ganztags, besitzer_email, teilnehmer, ms_id, kunde_id, kunde_bereich')
       .lt('beginn', new Date(abfrageBis).toISOString())
       .gt('ende', new Date(abfrageVon).toISOString())
       .order('beginn'),
@@ -221,10 +223,12 @@ export async function fuehreKalenderZeitenWerkzeugAus(name: string, input: any, 
       if (!beteiligte.includes(p.email)) continue
       if (p.email !== ich) {
         // Wie kalender_belegt — außer der Termin ist gemeinsam mit dem Fragenden gebucht.
-        if (!mitIch && (!darfSehen(p.email) || t.ms_id || t.kunde_bereich === 'privat')) continue
+        // Private Termine (_shared/privatGrenze.ts) gibt es für Kollegen nicht, auch nicht als „belegt“.
+        if (!mitIch && (!darfSehen(p.email) || t.ms_id || t.kunde_bereich === 'privat' || istPrivaterTermin(t))) continue
       }
-      // Privater Assistent: Termine mit Kollegen belegen trotzdem, aber ohne Titel.
-      const titel = mitIch && !(nurPrivat && (t.teilnehmer ?? []).length > 0) ? `„${String(t.titel ?? '').trim() || 'Termin'}“` : 'belegt'
+      // Privater Assistent: Termine mit Kollegen belegen trotzdem, aber ohne Titel. Mayer-Assistent: eigene private
+      // Termine belegen die Zeit, aber ohne Titel (Privat bleibt privat).
+      const titel = mitIch && !(nurPrivat && (t.teilnehmer ?? []).length > 0) && !(!nurPrivat && istPrivaterTermin(t)) ? `„${String(t.titel ?? '').trim() || 'Termin'}“` : 'belegt'
       belegungen.push({ von: Date.parse(t.beginn), bis: Date.parse(t.ende), person: p.email, text: titel, ganztags: !!t.ganztags, sperrt: false })
     }
   }

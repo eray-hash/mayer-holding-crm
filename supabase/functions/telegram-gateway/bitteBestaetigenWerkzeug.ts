@@ -5,6 +5,11 @@
 // Ausgeführt wird genau das, was die Bestätigung im Browser heute tut — mit denselben Funktionen und Rechten:
 //  - termin       _shared/terminZuordnungKern.ts ordneVonHandZu (wie Aktion termin_zuordnen des Kalenders):
 //                 Ja/Andere Akte = zuordnen, Ignorieren = Vorschlag ablehnen (kommt für diesen Termin nie wieder).
+//                 Seit 25.11.2026 immer für die ganze Serie (serie: true): Ja/Andere Akte ordnet alle Vorkommen ohne
+//                 Akte derselben Akte zu (neue Vorkommen erbt der Minutentakt), Ignorieren lehnt die Akte für alle
+//                 Vorkommen ab — nächste Woche kommt dieselbe Frage nicht wieder.
+//                 Private Termine (_shared/privatGrenze.ts) zeigt die Liste nie; ein alter offener Vorschlag dazu wird
+//                 beim Auflisten still zurückgezogen.
 //  - mail         email-gateway mail_zuordnen im Auftrag des Mitarbeiters (Bereichsrecht wie im Browser), danach
 //                 Vorschlag „uebernommen“; Ignorieren = Vorschlag „verworfen“ (wie src/lib/mailVorschlaege.ts).
 //  - mail_privat  Werkzeug meine_post_vorschlaege (privatPostWerkzeug.ts) annehmen/verwerfen — Holding-Akte: Mail ins
@@ -33,6 +38,7 @@ import {
   type ZuordnungDaten,
 } from '../_shared/bestaetigenKern.ts'
 import { ordneVonHandZu, type ZuordnungVorschlag } from '../_shared/terminZuordnungKern.ts'
+import { istPrivaterTermin, standardPrivatPruefer } from '../_shared/privatGrenze.ts'
 import { darfAkte, ohneNurPrivat, type RechteMitarbeiter } from './rechte.ts'
 import { fuehrePrivatPostWerkzeugAus } from './privatPostWerkzeug.ts'
 
@@ -160,9 +166,10 @@ async function fuehreAus(k: EntscheidKontext, z: VorschlagZeile, wahl: Wahl, o: 
     const offenerVorschlag = v.stand === 'vorschlag' && String(v.kunde_id ?? '') === String(z.kunde_id ?? '')
     if (wahl !== 'andere' && (t.kunde_id || !offenerVorschlag)) return { status: 'veraltet', text: t.kunde_id ? `Der Termin gehört inzwischen schon zur Akte ${t.kunde_name ?? t.kunde_id}.` : 'Der Vorschlag ist inzwischen nicht mehr aktuell.' }
     const person = { email: ich, name: m.name, rolle: m.rolle ?? null, ist_admin: m.ist_admin === true, bereiche: m.bereiche ?? [] }
+    // Für die ganze Serie (gleicher Titel, Wochentag, Uhrzeit) — sonst käme nächste Woche das nächste Vorkommen.
     const r = wahl === 'ignorieren'
-      ? await ordneVonHandZu(supabase, person, { terminId: z.bezug_id, kundeId: null, vorschlagAblehnen: true }, jetzt)
-      : await ordneVonHandZu(supabase, person, { terminId: z.bezug_id, kundeId: zielKunde }, jetzt)
+      ? await ordneVonHandZu(supabase, person, { terminId: z.bezug_id, kundeId: null, vorschlagAblehnen: true, serie: true }, jetzt)
+      : await ordneVonHandZu(supabase, person, { terminId: z.bezug_id, kundeId: zielKunde, serie: true }, jetzt)
     if (!r.ok) return { status: r.status === 403 ? 'veraltet' : 'offen', text: r.fehler }
     return { status: wahl === 'ignorieren' ? 'ignoriert' : 'erledigt', text: r.text }
   }
@@ -339,7 +346,8 @@ export async function fuehreBestaetigenWerkzeugAus(name: string, input: any, k: 
     const seit = new Date((k.jetzt ?? new Date()).getTime() - 14 * 86_400_000).toISOString()
     const { data, error } = await k.supabase.from(TABELLE).select(ZEILE_SPALTEN).eq('empfaenger_email', ich).eq('status', 'offen').gte('erstellt_am', seit).order('erstellt_am', { ascending: false }).limit(50)
     if (error) return `Fehler beim Lesen: ${error.message}`
-    const zeilen = ((data ?? []) as VorschlagZeile[]).filter((z) => z.art !== 'lauf')
+    let zeilen = ((data ?? []) as VorschlagZeile[]).filter((z) => z.art !== 'lauf')
+    zeilen = await ohnePrivateTermine(k, zeilen)
     if (zeilen.length === 0) return 'Keine offenen Vorschläge.'
     return JSON.stringify({
       offen: zeilen.length,
@@ -360,4 +368,29 @@ export async function fuehreBestaetigenWerkzeugAus(name: string, input: any, k: 
   if (wahl === 'andere' && !input?.kunde_id && !input?.objekt_id) return 'Fehler: Bei andere_akte bitte kunde_id (oder bei einer Datei objekt_id) angeben — ermittle sie mit kunden_suchen.'
   const r = await entscheideVorschlag(k, id, wahl, { kundeId: input?.kunde_id ? String(input.kunde_id) : undefined, objektId: input?.objekt_id ? String(input.objekt_id) : undefined, ordner: input?.ordner ? String(input.ordner) : undefined })
   return r.ok ? `Erledigt: ${r.text}` : `Fehler: ${r.text}`
+}
+
+/** Offene Termin-Vorschläge zu privaten Terminen (bzw. auf private Akten) und — bei Nutzern des privaten Assistenten —
+ *  Vorschläge aus dem persönlichen Postfach gehören nicht in den Mayer-Assistenten:
+ *  aus der Liste nehmen und still zurückziehen (status 'ignoriert'). Regel: _shared/privatGrenze.ts. */
+async function ohnePrivateTermine(k: EntscheidKontext, zeilen: VorschlagZeile[]): Promise<VorschlagZeile[]> {
+  const terminZeilen = zeilen.filter((z) => z.art === 'termin')
+  const mailZeilen = zeilen.filter((z) => z.art === 'mail_privat')
+  if (terminZeilen.length === 0 && mailZeilen.length === 0) return zeilen
+  const ich = adresse(k.mitarbeiter.email)
+  const privatAssistent = await standardPrivatPruefer(k.supabase)(ich).catch(() => false)
+  const weg = new Set<string>()
+  // Persönliche Post von Nutzern des privaten Assistenten ist privat (istPrivateMail) — alte Vorschläge zurückziehen.
+  if (privatAssistent) for (const z of mailZeilen) weg.add(z.id)
+  const { data } = terminZeilen.length ? await k.supabase.from('termine').select('id, besitzer_email, teilnehmer, kunde_id, kunde_bereich, ms_id').in('id', terminZeilen.map((z) => z.bezug_id)) : { data: [] }
+  // deno-lint-ignore no-explicit-any
+  const termine = new Map(((data ?? []) as any[]).map((t) => [String(t.id), t]))
+  for (const z of terminZeilen) {
+    const t = termine.get(String(z.bezug_id))
+    const zielPrivat = (z.daten as ZuordnungDaten)?.ziel?.bereich === 'privat'
+    if (zielPrivat || (t && istPrivaterTermin(t, { besitzerPrivatAssistent: adresse(t.besitzer_email) === ich && privatAssistent }))) weg.add(z.id)
+  }
+  if (weg.size === 0) return zeilen
+  await k.supabase.from(TABELLE).update({ status: 'ignoriert', ergebnis: 'privat – automatisch zurückgezogen', erledigt_am: (k.jetzt ?? new Date()).toISOString() }).in('id', [...weg]).eq('status', 'offen')
+  return zeilen.filter((z) => !weg.has(z.id))
 }

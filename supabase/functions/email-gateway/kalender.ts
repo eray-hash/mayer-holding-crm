@@ -24,6 +24,7 @@ import type { Aufrufer } from './postfach.ts'
 import { icsAnhang } from '../_shared/ics.ts'
 import { privatBotAktiv, sendePrivat } from '../_shared/telegramPrivat.ts'
 import { protokolliereNachricht } from '../_shared/nachrichtenProtokoll.ts'
+import { istPrivaterTermin } from '../_shared/privatGrenze.ts'
 import { gastWerte, ladeMailVorlage, type MailText, rendere, VORLAGE, type VorlageId } from './automatikVorlagen.ts'
 
 // deno-lint-ignore no-explicit-any
@@ -139,12 +140,15 @@ function terminText(t: Termin, team: Map<string, Person>): string {
 // („Antwort an … klären“) und dürfen eine Buchung mit Uhrzeit nicht verhindern — so lehnte der
 // Assistent am 18.11.2026 eine Besprechung von Andreas wegen seiner ganztägigen Erinnerung ab.
 // Umgekehrt blockiert ein neuer ganztägiger Eintrag nichts (der Aufrufer prüft dann gar nicht).
-async function findeUeberschneidungen(admin: Db, personen: string[], beginn: string, ende: string, ohneId?: string): Promise<string[]> {
+// Private Termine (_shared/privatGrenze.ts) eines Kollegen verraten hier nichts — auch nicht, dass er belegt ist (wie
+// kalender_belegt im Assistenten); die eigenen zählen für den Anlegenden selbst (`ich`).
+async function findeUeberschneidungen(admin: Db, personen: string[], beginn: string, ende: string, ohneId?: string, ich = ''): Promise<string[]> {
   if (personen.length === 0) return []
-  const { data } = await admin.from('termine').select('id, besitzer_email, teilnehmer').eq('ganztags', false).lt('beginn', ende).gt('ende', beginn)
+  const { data } = await admin.from('termine').select('id, besitzer_email, teilnehmer, kunde_id, kunde_bereich, ms_id').eq('ganztags', false).lt('beginn', ende).gt('ende', beginn)
   const belegt = new Set<string>()
-  for (const t of (data ?? []) as { id: string; besitzer_email: string; teilnehmer: string[] }[]) {
+  for (const t of (data ?? []) as { id: string; besitzer_email: string; teilnehmer: string[]; kunde_id: string | null; kunde_bereich: string | null; ms_id: string | null }[]) {
     if (t.id === ohneId) continue
+    if (t.besitzer_email.toLowerCase() !== ich && istPrivaterTermin(t)) continue
     for (const p of [t.besitzer_email.toLowerCase(), ...(t.teilnehmer ?? [])]) if (personen.includes(p)) belegt.add(p)
   }
   return [...belegt]
@@ -362,7 +366,7 @@ export async function speichereTermin(admin: Db, a: Aufrufer, e: TerminEingabe, 
   // nur Titel/Ort/Notiz geändert → niemand; neu hinzugekommene Teilnehmer → nur diese.
   if (e.trotzUeberschneidung !== true && e.ganztags !== true) {
     const zuPruefen = zeitGeaendert ? [a.email, ...teilnehmer] : teilnehmer.filter((p) => !(vorher?.teilnehmer ?? []).includes(p))
-    const belegt = await findeUeberschneidungen(admin, zuPruefen, beginn.toISOString(), ende.toISOString(), vorher?.id)
+    const belegt = await findeUeberschneidungen(admin, zuPruefen, beginn.toISOString(), ende.toISOString(), vorher?.id, a.email)
     if (belegt.length > 0) {
       const namen = belegt.map((p) => (p === a.email ? 'du selbst' : team.get(p)?.name ?? p))
       return { ok: false, status: 409, fehler: `In dieser Zeit schon belegt: ${namen.join(', ')}.`, belegt }

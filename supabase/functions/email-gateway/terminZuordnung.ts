@@ -3,7 +3,9 @@
 //  - E-Mail-Adresse eines Gastes bei genau einer Akte → kunde_id/kunde_bereich/kunde_name werden gesetzt,
 //  - Name genau einer Akte im Titel → nur ein Vorschlag (termine.zuordnung_vorschlag), den der Mitarbeiter im Kalender
 //    oder per Assistent (termin_zuordnen) bestätigt,
-//  - private Termine, reine Team-Termine und abgesagte Termine bleiben unberührt.
+//  - reine Team-Termine und abgesagte Termine bleiben unberührt; PRIVATE Termine (_shared/privatGrenze.ts) bekommen nie
+//    eine Mayer-Akte, höchstens eine private Akte desselben Besitzers,
+//  - Serien: eine von Hand gesetzte bzw. abgelehnte Akte gilt für alle Vorkommen (serienEntscheidung).
 //
 // Ablauf je Lauf (kleine Mengen, damit der Minutentakt nicht leidet):
 //  - Offen = ohne Akte und noch nie geprüft (zuordnung_geprueft_am leer). Zuerst kommende Termine (nächste zuerst), dann
@@ -95,7 +97,7 @@ export function aenderungFuer(t: ZuordnungTermin, b: Bewertung, am: string): Rec
       kunde_id: b.kunde.id,
       kunde_bereich: b.kunde.bereich || null,
       kunde_name: b.name,
-      zuordnung_vorschlag: { stand: 'automatisch', kunde_id: b.kunde.id, bereich: b.kunde.bereich, name: b.name, wie: 'gast', am, ...mitAbgelehnt } satisfies ZuordnungVorschlag,
+      zuordnung_vorschlag: { stand: 'automatisch', kunde_id: b.kunde.id, bereich: b.kunde.bereich, name: b.name, wie: b.wie ?? 'gast', am, ...mitAbgelehnt } satisfies ZuordnungVorschlag,
     }
   }
   if (b.art === 'vorschlag') {

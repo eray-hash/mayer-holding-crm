@@ -348,7 +348,7 @@ Deno.test('Telegram-Weg: ohne oder mit falschem Geheimnis 401 (auch wenn keines 
 // 6. Tagesplan eines Kollegen
 // ---------------------------------------------------------------------------------------------
 
-Deno.test('Tagesplan: fremde Termine im Plan eines Kollegen nur als „Termin (belegt)“', async () => {
+Deno.test('Tagesplan: fremde Termine im Plan eines Kollegen nur als „Termin (belegt)“, private Outlook-Termine gar nicht (25.11.2026)', async () => {
   const datum = '2030-01-10'
   const plan: PlanTag = {
     id: `Hasan Haber|${datum}`, mitarbeiter: 'Hasan Haber', datum, anrufe: '', aktualisiertAm: '',
@@ -362,9 +362,9 @@ Deno.test('Tagesplan: fremde Termine im Plan eines Kollegen nur als „Termin (b
   const db = falscheDatenbank({ ...daten(), abteilung_eintraege: [{ id: plan.id, art: 'tagesplan', daten: plan }] })
 
   const maskiert = await ohneFremdeTermine(db, plan, 'CARL@firma.de')
-  assertEquals(maskiert.zeilen.map((z) => z.was), ['10:00–11:00 Uhr: Termin (belegt)', '12:00–13:00 Uhr: Gemeinsame Besichtigung', 'ganztägig: Termin (belegt)', 'Bankgespräch vorbereiten'])
-  assertEquals(maskiert.zeilen[0].bezug, undefined)
-  assertEquals((await ohneFremdeTermine(db, plan, 'hasan@firma.de')).zeilen.map((z) => z.was).slice(0, 2), [plan.zeilen[0].was, plan.zeilen[1].was], 'der Besitzer selbst (über ohneFremdeTermine) sieht seine Termine')
+  // Der private Outlook-Termin fehlt ganz (auch nicht „belegt“, _shared/privatGrenze.ts); gelöschte bleiben „belegt“.
+  assertEquals(maskiert.zeilen.map((z) => z.was), ['12:00–13:00 Uhr: Gemeinsame Besichtigung', 'ganztägig: Termin (belegt)', 'Bankgespräch vorbereiten'])
+  assertEquals((await ohneFremdeTermine(db, plan, 'hasan@firma.de')).zeilen.map((z) => z.was).slice(0, 1), [plan.zeilen[1].was], 'der Besitzer selbst sieht seine Mayer-Termine; private Outlook-Termine nur im privaten Assistenten')
 
   const k = { supabase: db, mitarbeiter: CARL, protokolliere: () => {}, heute: datum }
   const text = await fuehreTagesplanWerkzeugAus('tag_zeigen', { wer: 'Hasan', datum }, k)
@@ -372,7 +372,8 @@ Deno.test('Tagesplan: fremde Termine im Plan eines Kollegen nur als „Termin (b
   assertStringIncludes(text, 'Termin (belegt)')
   assertStringIncludes(text, 'Gemeinsame Besichtigung')
   assertStringIncludes(text, 'Bankgespräch vorbereiten')
-  // Der eigene Plan bleibt unverändert.
+  // Der eigene Plan im Mayer-Assistenten: Mayer-Termine bleiben, der private Outlook-Termin fehlt (Privat bleibt privat).
   const eigen = await fuehreTagesplanWerkzeugAus('tag_zeigen', { datum }, { ...k, mitarbeiter: { ...HASAN, bereiche: ['immobilien'] } })
-  assertStringIncludes(eigen, 'Geheimes Outlook-Treffen')
+  assert(!eigen.includes('Geheimes Outlook-Treffen'), eigen)
+  assertStringIncludes(eigen, 'Gemeinsame Besichtigung')
 })

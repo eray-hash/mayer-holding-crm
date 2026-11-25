@@ -56,6 +56,7 @@ import { fuehreLinkWerkzeugAus, istLinkWerkzeug, LINK_WERKZEUGE } from './linkLe
 import { BERICHT_WERKZEUGE, fuehreBerichtWerkzeugAus, istBerichtWerkzeug } from './kundenberichtWerkzeug.ts'
 import { BRIEFING_WERKZEUGE, fuehreBriefingWerkzeugAus, istBriefingWerkzeug } from './briefingWerkzeug.ts'
 import { akteVorschlagText, fuehreZuordnungWerkzeugAus, istZuordnungWerkzeug, ZUORDNUNG_WERKZEUGE } from './terminZuordnungWerkzeug.ts'
+import { istPrivaterTermin } from '../_shared/privatGrenze.ts'
 import { fuehreNachTerminWerkzeugAus, istNachTerminWerkzeug, NACHTERMIN_WERKZEUGE } from './nachTerminWerkzeug.ts'
 import { fuehreKalenderZeitenWerkzeugAus, istKalenderZeitenWerkzeug, KALENDER_ZEITEN_WERKZEUGE } from './kalenderZeiten.ts'
 import { fuehreGesucheWerkzeugAus, GESUCHE_WERKZEUGE, istGesucheWerkzeug } from './gesucheWerkzeuge.ts'
@@ -2064,8 +2065,14 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     // deno-lint-ignore no-explicit-any
     const privaterTermin = (t: any, nachgeschlagen: Map<string, AkteRecht>) =>
       String(t.besitzer_email ?? '').toLowerCase() === ich && (t.teilnehmer ?? []).length === 0 && darfZuordnung(mitarbeiter, t.kunde_id, t.kunde_bereich, nachgeschlagen)
+    // Private Termine (Outlook bzw. private Akte, ohne Kollegen, ohne Mayer-Akte) — Regel zentral in _shared/privatGrenze.ts.
     // deno-lint-ignore no-explicit-any
-    const outlookPrivat = (t: any) => !!String(t.ms_id ?? '').trim() && (t.teilnehmer ?? []).length === 0 && (!t.kunde_id || t.kunde_bereich === 'privat')
+    const outlookPrivat = (t: any) => istPrivaterTermin(t)
+    if (!nurPrivat && (name === 'termin_absagen' || name === 'termin_aendern')) {
+      // Mayer-Assistent: private Termine gibt es hier nicht (auch nicht zum Absagen/Ändern) — nur im privaten Assistenten.
+      const { data: t } = await supabase.from('termine').select('id, besitzer_email, teilnehmer, kunde_id, kunde_bereich, ms_id').eq('id', String(input.termin_id ?? '').trim()).maybeSingle()
+      if (t && String(t.besitzer_email ?? '').toLowerCase() === ich && istPrivaterTermin(t)) return 'Fehler: Diesen Termin gibt es nicht (mehr). Ermittle die termin_id mit termine_zeigen.'
+    }
     if (nurPrivat && (name === 'termin_absagen' || name === 'termin_aendern')) {
       const { data: t } = await supabase.from('termine').select('id, besitzer_email, teilnehmer, kunde_id, kunde_bereich').eq('id', String(input.termin_id ?? '').trim()).maybeSingle()
       if (!t || !privaterTermin(t, await bereicheDerAkten(supabase, t.kunde_id ? [String(t.kunde_id)] : []))) return 'Fehler: Diesen Termin gibt es nicht (mehr). Ermittle die termin_id mit termine_zeigen.'

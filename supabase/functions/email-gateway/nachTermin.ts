@@ -36,6 +36,7 @@ import {
   uhrzeit,
 } from '../_shared/terminBriefingKern.ts'
 import { privatBotAktiv } from '../_shared/telegramPrivat.ts'
+import { istPrivaterTermin } from '../_shared/privatGrenze.ts'
 import { berlinTagesbeginn, berlinZeit } from './tagesmeldung.ts'
 
 // deno-lint-ignore no-explicit-any
@@ -240,6 +241,13 @@ async function lauf(admin: Db, o: NachfrageOptionen, ergebnis: NachfrageErgebnis
     const p = team.get(email)!
     if (dranInDiesemLauf.has(email)) continue
     if ((anzahl.get(email) ?? 0) >= HOECHSTENS_JE_TAG) continue
+    // Private Termine (_shared/privatGrenze.ts) fragt der Mayer-Bot nie nach — auch nicht, wenn ein Gast oder der Titel
+    // zu einer Mayer-Akte passt (25.11.2026).
+    if (!privatMerker.has(email)) {
+      const pruefe = o.privatAktiv ?? ((e: string) => privatBotAktiv(admin, e))
+      privatMerker.set(email, await pruefe(email).catch(() => true))
+    }
+    if (istPrivaterTermin(t, { besitzerPrivatAssistent: privatMerker.get(email) === true })) continue
 
     let bezug
     try {

@@ -13,9 +13,14 @@
 //  - Je Person höchstens einmal am Tag (Sperrzeile 'lauf|<adresse>|<datum>' VOR dem Senden) und höchstens 5 Vorschläge,
 //    reihum aus den Quellen:
 //      termin       Termin→Akte-Vorschläge seiner eigenen Termine (termine.zuordnung_vorschlag, terminZuordnung.ts) —
-//                   nur wenn er die Akte sehen darf (vorschlagSichtbar).
+//                   nur wenn er die Akte sehen darf (vorschlagSichtbar). NIE private Termine (_shared/privatGrenze.ts)
+//                   und nie Vorschläge auf private Akten (die sieht er nur im privaten Assistenten) — 25.11.2026 nach
+//                   zwei Vorfällen. Je Serie (serienSchluessel) höchstens ein Vorschlag, und eine Serie, zu der in den
+//                   letzten 14 Tagen schon gefragt wurde, kommt nicht wieder (auch nicht mit dem nächsten Vorkommen).
 //      mail_privat  Vorschläge in seinem persönlichen Postfach (privatPostZuordnung.ts, Status 'privat_offen') — der
 //                   erste Kandidat, den er als Ziel wählen darf (darfZiel wie das Werkzeug meine_post_vorschlaege).
+//                   Nicht für Nutzer des privaten Assistenten (deren persönliche Post ist privat, istPrivateMail;
+//                   dort gibt es meine_post_vorschlaege) und nie mit einer privaten Akte als Ziel.
 //      mail         Vorschläge im gemeinsamen Postfach (mailZuordnung.ts, Status 'offen') — an den Verantwortlichen
 //                   der vermuteten Akte, wenn er sie sehen darf.
 //      eingang      Dateien in „Ungeklärte Eingänge“ mit genau einem eindeutigen Vorschlag (gleiche Bewertung wie die
@@ -41,7 +46,8 @@ import {
   zuordnungKnoepfe,
   zuordnungText,
 } from '../_shared/bestaetigenKern.ts'
-import { vorschlagSichtbar, type ZuordnungVorschlag } from '../_shared/terminZuordnungKern.ts'
+import { serienSchluessel, vorschlagSichtbar, type ZuordnungVorschlag } from '../_shared/terminZuordnungKern.ts'
+import { istPrivateAkte, istPrivaterTermin, privatAssistentMerker, standardPrivatPruefer } from '../_shared/privatGrenze.ts'
 import { type EingangKandidat, haeufigkeitAus, type Merkmale, merkmaleAus, ordnerFuer, vorschlaegeFuer, woerter } from '../_shared/eingangVorschlagKern.ts'
 import { alleZeilen } from '../_shared/alleZeilen.ts'
 import { darfAkte, darfObjekt, darfPostfachBereich, type RechteMitarbeiter, SAMMELAKTEN } from '../telegram-gateway/rechte.ts'
@@ -125,6 +131,8 @@ export type Umgebung = {
   /** Schon gefragt (art|bezug), egal an wen. */
   schonGefragt: Set<string>
   jetzt: Date
+  /** Nutzt die Person den privaten Assistenten? (Vorgabe: privatBotAktiv, je Lauf gemerkt.) */
+  privatAssistent?: (email: string) => Promise<boolean>
 }
 
 /** Verantwortlicher einer Akte oder eines Objekts (Adresse, sonst über den Namen). */
@@ -141,9 +149,10 @@ function verantwortlicher(team: Person[], email: string | null | undefined, name
 /** Termin→Akte-Vorschläge der eigenen Termine: kommende zuerst (nächste zuerst), dann die letzten 30 Tage. */
 export async function terminKandidaten(admin: Db, p: Person, u: Umgebung): Promise<Kandidat[]> {
   const seit = new Date(u.jetzt.getTime() - RUECKBLICK_TAGE * TAG_MS).toISOString()
+  const privatAssistent = await (u.privatAssistent ?? standardPrivatPruefer(admin))(adresse(p.email)).catch(() => false)
   const { data, error } = await admin
     .from('termine')
-    .select('id, titel, beginn, ganztags, besitzer_email, kunde_id, zuordnung_vorschlag')
+    .select('id, titel, beginn, ganztags, besitzer_email, teilnehmer, kunde_id, kunde_bereich, ms_id, zuordnung_vorschlag')
     .eq('besitzer_email', adresse(p.email))
     .is('kunde_id', null)
     .gte('beginn', seit)
@@ -151,15 +160,30 @@ export async function terminKandidaten(admin: Db, p: Person, u: Umgebung): Promi
     .limit(1000)
   if (error) throw new Error(`Termine nicht lesbar: ${error.message}`)
   const jetztIso = u.jetzt.toISOString()
-  const zeilen = ((data ?? []) as { id: string; titel: string | null; beginn: string; ganztags: boolean | null; besitzer_email: string; kunde_id: string | null; zuordnung_vorschlag: ZuordnungVorschlag | null }[])
+  type Zeile = { id: string; titel: string | null; beginn: string; ganztags: boolean | null; besitzer_email: string; teilnehmer: string[] | null; kunde_id: string | null; kunde_bereich: string | null; ms_id: string | null; zuordnung_vorschlag: ZuordnungVorschlag | null }
+  // Privat bleibt privat: private Termine nie im Mayer-Bot (Regel _shared/privatGrenze.ts).
+  const zeilen = ((data ?? []) as Zeile[]).filter((t) => !istPrivaterTermin(t, { besitzerPrivatAssistent: privatAssistent }))
   const kommend = zeilen.filter((t) => t.beginn >= jetztIso)
   const vorbei = zeilen.filter((t) => t.beginn < jetztIso).reverse()
+
+  // Serien: schon gefragte Serien (anderes Vorkommen in den letzten 14 Tagen) und je Serie nur ein Vorschlag.
+  const gefragteIds = [...u.schonGefragt].filter((x) => x.startsWith('termin|')).map((x) => x.slice('termin|'.length))
+  const serienGefragt = new Set<string>()
+  for (let i = 0; i < gefragteIds.length; i += 200) {
+    const { data: gefragt } = await admin.from('termine').select('id, titel, beginn, ganztags, besitzer_email').in('id', gefragteIds.slice(i, i + 200))
+    for (const g of (gefragt ?? []) as Zeile[]) if (serienSchluessel(g)) serienGefragt.add(serienSchluessel(g))
+  }
   const aus: Kandidat[] = []
   for (const t of [...kommend, ...vorbei]) {
     const v = vorschlagSichtbar(p, t)
-    if (!v?.kunde_id) continue
+    if (!v?.kunde_id || v.bereich === 'privat') continue
     const k = u.kunden.get(v.kunde_id)
-    if (!k || SAMMELAKTEN.includes(k.id) || !darfAkte(p, k)) continue
+    if (!k || SAMMELAKTEN.includes(k.id) || istPrivateAkte(k) || !darfAkte(p, k)) continue
+    const serie = serienSchluessel(t)
+    if (serie) {
+      if (serienGefragt.has(serie)) continue
+      serienGefragt.add(serie)
+    }
     aus.push({
       art: 'termin',
       bezugId: t.id,
@@ -210,7 +234,7 @@ export async function privatMailKandidaten(admin: Db, p: Person, u: Umgebung): P
     if (m.ignoriert || v?.art !== 'privat' || v.status !== 'privat_offen') continue
     for (const k of v.kandidaten ?? []) {
       const akte = u.kunden.get(String(k.kundeId))
-      if (!akte || !darfZiel(p, akte)) continue
+      if (!akte || istPrivateAkte(akte) || !darfZiel(p, akte)) continue
       aus.push({
         art: 'mail_privat',
         bezugId: m.id,
@@ -367,7 +391,7 @@ async function ladeUmgebung(admin: Db, jetzt: Date): Promise<Umgebung> {
   const seit = new Date(jetzt.getTime() - SCHON_GEFRAGT_TAGE * TAG_MS).toISOString()
   const { data: gefragt } = await alleZeilen(() => admin.from(TABELLE).select('art, bezug_id').neq('art', 'lauf').gte('erstellt_am', seit))
   const schonGefragt = new Set(((gefragt ?? []) as { art: string; bezug_id: string }[]).map((z) => `${z.art}|${z.bezug_id}`))
-  return { team: personen, kunden, objekte, schonGefragt, jetzt }
+  return { team: personen, kunden, objekte, schonGefragt, jetzt, privatAssistent: privatAssistentMerker(standardPrivatPruefer(admin)).nutzt }
 }
 
 /** Kandidaten einer Person (höchstens n). Fehler einzelner Quellen landen in `fehler`, die übrigen zählen weiter. */
@@ -381,7 +405,9 @@ export async function kandidatenFuer(admin: Db, p: Person, u: Umgebung, mailJe: 
     }
   }
   const termine = await sicher(() => terminKandidaten(admin, p, u), 'Termine')
-  const privat = await sicher(() => privatMailKandidaten(admin, p, u), 'persönliches Postfach')
+  // Persönliche Post von Nutzern des privaten Assistenten ist privat (istPrivateMail) — nie im Mayer-Bot.
+  const mitPrivatAssistent = await (u.privatAssistent ?? standardPrivatPruefer(admin))(adresse(p.email)).catch(() => false)
+  const privat = mitPrivatAssistent ? [] : await sicher(() => privatMailKandidaten(admin, p, u), 'persönliches Postfach')
   return reihum([termine, privat, mailJe.get(adresse(p.email)) ?? [], eingangJe.get(adresse(p.email)) ?? []], u.schonGefragt, n)
 }
 

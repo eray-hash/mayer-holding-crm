@@ -25,6 +25,7 @@ import {
   TERMIN_SPALTEN,
 } from '../_shared/terminBriefingKern.ts'
 import { darfAkte, darfObjekt, istFremdePrivatakte, istUnsichtbaresObjekt, nichtFreigegeben, type RechteMitarbeiter } from './rechte.ts'
+import { istPrivaterTermin } from '../_shared/privatGrenze.ts'
 
 // deno-lint-ignore no-explicit-any
 type Supa = any
@@ -69,11 +70,12 @@ function beteiligt(t: BriefingTermin, ich: string): boolean {
   return adresse(t.besitzer_email) === ich || (t.teilnehmer ?? []).map(adresse).includes(ich)
 }
 
-/** Im privaten Assistenten gibt es nur eigene Termine ohne Kollegen. */
+/** Im privaten Assistenten gibt es nur eigene Termine ohne Kollegen; im Mayer-Assistenten keine privaten Termine
+ *  (_shared/privatGrenze.ts — wie termine_zeigen). */
 function sichtbarerTermin(m: RechteMitarbeiter, t: BriefingTermin, ich: string): boolean {
   if (!beteiligt(t, ich)) return false
   if (m.nurPrivat === true) return adresse(t.besitzer_email) === ich && (t.teilnehmer ?? []).length === 0
-  return true
+  return !istPrivaterTermin(t)
 }
 
 /** Fehlertext, wenn der Mitarbeiter den Bezug nicht sehen darf — sonst null. */

@@ -48,9 +48,11 @@ export type BriefingTermin = {
   quelle?: string | null
   gast?: { email?: string | null; name?: string | null } | null
   ms_teilnehmer?: { email?: string | null; name?: string | null }[] | null
+  /** Aus Microsoft/Outlook übernommen (für die Privat-Regel in _shared/privatGrenze.ts). */
+  ms_id?: string | null
 }
 
-export const TERMIN_SPALTEN = 'id, titel, ort, beginn, ende, ganztags, besitzer_email, teilnehmer, kunde_id, kunde_bereich, kunde_name, quelle, gast, ms_teilnehmer'
+export const TERMIN_SPALTEN = 'id, titel, ort, beginn, ende, ganztags, besitzer_email, teilnehmer, kunde_id, kunde_bereich, kunde_name, quelle, gast, ms_teilnehmer, ms_id'
 
 export type Bezug =
   | { art: 'kunde'; id: string; bereich: string; verantwortlichEmail: string | null; wie: 'verknuepft' | 'gast' | 'titel' }

@@ -14,8 +14,15 @@
 //    (zuordnung_vorschlag.stand = 'vorschlag'), den der Mitarbeiter im Kalender oder per Assistent bestätigt.
 //    Anders als findeBezug auch bei aus Outlook übernommenen Terminen und Einladungen — als Vorschlag ist das
 //    ungefährlich, und Hasans Outlook-Termine sind fast der ganze Bestand.
-//  - Übersprungen: private Termine (Titel mit „privat“, „persönlich“, „Urlaub“), reine Team-Termine (alle anderen
+//  - Übersprungen: Titel mit „privat“, „persönlich“, „Urlaub“, reine Team-Termine (alle anderen
 //    Beteiligten sind Mitarbeiter bzw. Adressen der Holding), abgesagte Termine, Bezug auf ein Objekt statt einer Akte.
+//  - PRIVATE Termine (_shared/privatGrenze.ts istPrivaterTermin: ohne Kollegen, ohne Mayer-Akte, aus Outlook bzw.
+//    Besitzer mit privatem Assistenten; 25.11.2026 nach zwei Vorfällen) bekommen NIE eine Mayer-Akte — weder sicher
+//    noch als Vorschlag. Erlaubt ist nur eine PRIVATE Akte desselben Besitzers (sichtbar nur im privaten Assistenten,
+//    termine_zeigen → akte_vorschlag; „Bitte bestätigen“ im Mayer-Bot zeigt sie nie).
+//  - Serien (gleicher Besitzer, Titel, Wochentag und Uhrzeit; serienSchluessel): Wer bei einem Vorkommen von Hand
+//    entschieden hat, entscheidet für die ganze Serie — eine abgelehnte Akte kommt für kein Vorkommen wieder, eine von
+//    Hand gesetzte Akte bekommen auch neue Vorkommen (stand 'automatisch', wie 'serie').
 //  - Eine Akte, die schon einmal von diesem Termin gelöst bzw. als Vorschlag abgelehnt wurde
 //    (zuordnung_vorschlag.abgelehnt), kommt für diesen Termin nie wieder.
 //  - Der Besitzer des Termins muss die Akte sehen dürfen (darfBezug); private Kontakte nur seine eigenen.
@@ -23,6 +30,7 @@
 // Bewusst ohne Deno- oder Browser-Funktionen, damit es sich mit Testdoppeln prüfen lässt.
 
 import { type BriefingPerson, type BriefingTermin, darfBezug, findeBezug, istAbgesagterTitel, kandidatenLader, type KundeKurz, normName, SAMMELAKTEN } from './terminBriefingKern.ts'
+import { istPrivaterTermin, privatAssistentMerker, standardPrivatPruefer } from './privatGrenze.ts'
 
 // deno-lint-ignore no-explicit-any
 type Db = any
@@ -46,10 +54,10 @@ export type ZuordnungVorschlag = {
 
 export type ZuordnungTermin = BriefingTermin & { zuordnung_vorschlag?: ZuordnungVorschlag | null; zuordnung_geprueft_am?: string | null }
 
-export const ZUORDNUNG_SPALTEN = 'id, titel, ort, beginn, ende, ganztags, besitzer_email, teilnehmer, kunde_id, kunde_bereich, kunde_name, quelle, gast, ms_teilnehmer, zuordnung_vorschlag, zuordnung_geprueft_am'
+export const ZUORDNUNG_SPALTEN = 'id, titel, ort, beginn, ende, ganztags, besitzer_email, teilnehmer, kunde_id, kunde_bereich, kunde_name, quelle, gast, ms_teilnehmer, ms_id, zuordnung_vorschlag, zuordnung_geprueft_am'
 
 export type Bewertung =
-  | { art: 'sicher'; kunde: KundeKurz; name: string }
+  | { art: 'sicher'; kunde: KundeKurz; name: string; wie?: 'gast' | 'serie' }
   | { art: 'vorschlag'; kunde: KundeKurz; name: string }
   | { art: 'uebersprungen'; grund: 'privat' | 'team' | 'abgesagt' | 'besitzer' }
   | { art: 'keiner' }
@@ -62,6 +70,8 @@ export type ZuordnungsUmgebung = {
   /** Mitarbeiter je Adresse (für die Rechte des Besitzers). */
   personen: Map<string, BriefingPerson>
   lader: ReturnType<typeof kandidatenLader>
+  /** Nutzt der Besitzer den privaten Assistenten? (Privat-Regel, je Lauf gemerkt.) */
+  privatAssistent: (email: string) => Promise<boolean>
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -86,8 +96,9 @@ export function akteName(k: Pick<KundeKurz, 'id' | 'firma' | 'ansprechpartner'>)
 
 const PRIVAT_TITEL = /(^|[^a-zäöüß])(privat|private|persönlich|urlaub)([^a-zäöüß]|$)/i
 
-/** Privater Termin (nach dem Titel) — wird nie zugeordnet. */
-export function istPrivaterTermin(t: Pick<BriefingTermin, 'titel'>): boolean {
+/** Privater Titel („privat“, „persönlich“, „Urlaub“) — wird nie zugeordnet. Die eigentliche Privat-Regel für Termine
+ *  steht in _shared/privatGrenze.ts (istPrivaterTermin). */
+export function istPrivatTitel(t: Pick<BriefingTermin, 'titel'>): boolean {
   return PRIVAT_TITEL.test(String(t.titel ?? ''))
 }
 
@@ -114,10 +125,82 @@ export function abgelehnteAkten(v: ZuordnungVorschlag | null | undefined): strin
 }
 
 // ---------------------------------------------------------------------------------------------
+// Serien (25.11.2026): Outlook liefert jedes Vorkommen als eigenen Termin (ms_serie = true), ohne Kennung der Serie.
+// Eine Serie ist deshalb: gleicher Besitzer, gleicher Titel, gleicher Wochentag und gleiche Uhrzeit (Berliner Zeit).
+// Dieselbe Regel gilt für CRM-Termine ohne ms_serie (wöchentlich gleich angelegte Termine).
+
+const BERLIN_WOCHE = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+
+/** Schlüssel der Serie eines Termins ('' ohne Titel oder Beginn). */
+export function serienSchluessel(t: { besitzer_email?: string | null; titel?: string | null; beginn?: string | null; ganztags?: boolean | null }): string {
+  const titel = normName(String(t.titel ?? ''))
+  const beginn = new Date(String(t.beginn ?? ''))
+  if (!titel || Number.isNaN(beginn.getTime())) return ''
+  const wann = t.ganztags ? BERLIN_WOCHE.format(beginn).split(',')[0] + '|ganztags' : BERLIN_WOCHE.format(beginn)
+  return `${adresse(t.besitzer_email)}|${titel}|${wann}`
+}
+
+type SerienZeile = { id: string; titel?: string | null; beginn: string; ganztags?: boolean | null; besitzer_email?: string | null; teilnehmer?: string[] | null; kunde_id?: string | null; zuordnung_vorschlag?: ZuordnungVorschlag | null }
+
+/** Die anderen Vorkommen derselben Serie (seitenweise, höchstens 5000). */
+export async function serienGeschwister(db: Db, t: { id: string; titel?: string | null; beginn: string; ganztags?: boolean | null; besitzer_email?: string | null }): Promise<SerienZeile[]> {
+  const schl = serienSchluessel(t)
+  if (!schl || !String(t.titel ?? '').trim()) return []
+  const aus: SerienZeile[] = []
+  for (let letzte = '', seite = 0; seite < 5; seite++) {
+    let q = db.from('termine').select('id, titel, beginn, ganztags, besitzer_email, teilnehmer, kunde_id, zuordnung_vorschlag').eq('besitzer_email', adresse(t.besitzer_email)).eq('titel', String(t.titel)).order('id', { ascending: true }).limit(1000)
+    if (letzte) q = q.gt('id', letzte)
+    const { data, error } = await q
+    if (error) throw new Error(`Serie nicht lesbar: ${error.message}`)
+    const teil = (data ?? []) as SerienZeile[]
+    for (const z of teil) if (String(z.id) !== String(t.id) && serienSchluessel(z) === schl) aus.push(z)
+    if (teil.length < 1000) break
+    letzte = String(teil[teil.length - 1].id)
+  }
+  return aus
+}
+
+/** Was bei anderen Vorkommen von Hand entschieden wurde: abgelehnte Akten und die zuletzt von Hand gesetzte Akte. */
+export async function serienEntscheidung(db: Db, t: { id: string; titel?: string | null; beginn: string; ganztags?: boolean | null; besitzer_email?: string | null }): Promise<{ abgelehnt: string[]; kundeId: string | null }> {
+  const geschwister = await serienGeschwister(db, t)
+  const abgelehnt = new Set<string>()
+  let kundeId: string | null = null
+  let am = ''
+  for (const z of geschwister) {
+    for (const a of abgelehnteAkten(z.zuordnung_vorschlag)) abgelehnt.add(a)
+    const v = z.zuordnung_vorschlag
+    if (z.kunde_id && v?.stand === 'hand' && String(v.kunde_id ?? '') === String(z.kunde_id) && String(v.am ?? '') >= am) {
+      kundeId = String(z.kunde_id)
+      am = String(v.am ?? '')
+    }
+  }
+  return { abgelehnt: [...abgelehnt], kundeId }
+}
+
+/** „Ignorieren“ für die ganze Serie: die Akte bei allen Vorkommen ohne Akte als abgelehnt eintragen; ein offener
+ *  Vorschlag genau dieser Akte wird zurückgenommen. Liefert die Anzahl geänderter Vorkommen. */
+async function serieAblehnen(db: Db, t: { id: string; titel?: string | null; beginn: string; ganztags?: boolean | null; besitzer_email?: string | null }, kundeId: string, wer: string, am: string): Promise<number> {
+  let anzahl = 0
+  for (const z of await serienGeschwister(db, t)) {
+    if (z.kunde_id) continue
+    const v: ZuordnungVorschlag = z.zuordnung_vorschlag && typeof z.zuordnung_vorschlag === 'object' ? { ...z.zuordnung_vorschlag } : {}
+    const abgelehnt = new Set(abgelehnteAkten(v))
+    const offen = v.stand === 'vorschlag' && String(v.kunde_id ?? '') === kundeId
+    if (abgelehnt.has(kundeId) && !offen) continue
+    abgelehnt.add(kundeId)
+    const neu: ZuordnungVorschlag = offen ? { stand: 'keiner', wie: wer, am, abgelehnt: [...abgelehnt] } : { ...v, abgelehnt: [...abgelehnt] }
+    const { data, error } = await db.from('termine').update({ zuordnung_vorschlag: neu }).eq('id', z.id).is('kunde_id', null).select('id')
+    if (error) throw new Error(error.message)
+    anzahl += Array.isArray(data) ? data.length : 0
+  }
+  return anzahl
+}
+
+// ---------------------------------------------------------------------------------------------
 // Umgebung laden
 
 /** Team-Adressen und Mitarbeiter (alle, auch ehemalige: deren Adressen sind trotzdem keine Kunden). */
-export async function ladeZuordnungsUmgebung(db: Db): Promise<ZuordnungsUmgebung> {
+export async function ladeZuordnungsUmgebung(db: Db, o: { privatPruefer?: (email: string) => Promise<boolean> } = {}): Promise<ZuordnungsUmgebung> {
   const { data, error } = await db.from('mitarbeiter').select('name, email, rolle, ist_admin, bereiche, aktiv')
   if (error) throw new Error(`Mitarbeiter nicht lesbar: ${error.message}`)
   const team = new Set<string>()
@@ -139,7 +222,7 @@ export async function ladeZuordnungsUmgebung(db: Db): Promise<ZuordnungsUmgebung
     const { data: konten } = await db.from('ms_konten').select('ms_adresse')
     for (const k of (konten ?? []) as { ms_adresse?: string }[]) if (adresse(k.ms_adresse)) team.add(adresse(k.ms_adresse))
   } catch { /* ohne Microsoft-Konten weiter */ }
-  return { team, teamNamen, personen, lader: kandidatenLader(db) }
+  return { team, teamNamen, personen, lader: kandidatenLader(db), privatAssistent: privatAssistentMerker(o.privatPruefer ?? standardPrivatPruefer(db)).nutzt }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -148,10 +231,27 @@ export async function ladeZuordnungsUmgebung(db: Db): Promise<ZuordnungsUmgebung
 /** Wohin gehört der Termin? Schreibt nichts. */
 export async function bewerteTermin(db: Db, t: ZuordnungTermin, u: ZuordnungsUmgebung): Promise<Bewertung> {
   if (istAbgesagterTitel(String(t.titel ?? ''))) return { art: 'uebersprungen', grund: 'abgesagt' }
-  if (istPrivaterTermin(t)) return { art: 'uebersprungen', grund: 'privat' }
+  if (istPrivatTitel(t)) return { art: 'uebersprungen', grund: 'privat' }
   if (istTeamTermin(t, u.team)) return { art: 'uebersprungen', grund: 'team' }
   const besitzer = u.personen.get(adresse(t.besitzer_email))
   if (!besitzer) return { art: 'uebersprungen', grund: 'besitzer' }
+  const besitzerAdresse = adresse(t.besitzer_email)
+  const kunden = await u.lader.kunden()
+  const kundeVon = (id: string) => kunden.find((k) => k.id === id) ?? null
+
+  // Serie: Entscheidungen von Hand bei einem anderen Vorkommen gelten auch hier.
+  const serie = await serienEntscheidung(db, t)
+  const abgelehnt = new Set([...abgelehnteAkten(t.zuordnung_vorschlag), ...serie.abgelehnt])
+  if (serie.kundeId && !abgelehnt.has(serie.kundeId)) {
+    const k = kundeVon(serie.kundeId)
+    if (k && !SAMMELAKTEN.includes(k.id) && (k.bereich !== 'privat' || adresse(k.verantwortlich_email) === besitzerAdresse) &&
+      darfBezug(besitzer, { art: 'kunde', id: k.id, bereich: String(k.bereich ?? ''), verantwortlichEmail: k.verantwortlich_email ?? null, wie: 'titel' })) {
+      return { art: 'sicher', kunde: k, name: akteName(k), wie: 'serie' }
+    }
+  }
+
+  // Privater Termin: nur eine private Akte desselben Besitzers kommt in Frage (nie eine Mayer-Akte).
+  const privat = istPrivaterTermin(t, { besitzerPrivatAssistent: await u.privatAssistent(besitzerAdresse) })
 
   // Gast-Adressen der Holding gelten wie Team-Adressen (findeBezug übergeht nur die genaue Liste).
   const team = new Set(u.team)
@@ -163,12 +263,9 @@ export async function bewerteTermin(db: Db, t: ZuordnungTermin, u: ZuordnungsUmg
   const teamNamen = [...u.teamNamen, ...u.teamNamen.flatMap((n) => normName(n).split(' ').filter((w) => w.length >= 4))]
   const opts = { team, teamNamen, lader: u.lader }
   const titel = ohneTeamNamen(String(t.titel ?? ''), u.teamNamen)
-  const abgelehnt = new Set(abgelehnteAkten(t.zuordnung_vorschlag))
-  const kunden = await u.lader.kunden()
-  const kundeVon = (id: string) => kunden.find((k) => k.id === id) ?? null
-  const besitzerAdresse = adresse(t.besitzer_email)
   const erlaubt = (k: KundeKurz) =>
     !SAMMELAKTEN.includes(k.id) && !abgelehnt.has(k.id) && (k.bereich !== 'privat' || adresse(k.verantwortlich_email) === besitzerAdresse) &&
+    (!privat || k.bereich === 'privat') &&
     darfBezug(besitzer, { art: 'kunde', id: k.id, bereich: String(k.bereich ?? ''), verantwortlichEmail: k.verantwortlich_email ?? null, wie: 'titel' })
 
   const pruefe = (b: Awaited<ReturnType<typeof findeBezug>>): KundeKurz | null => {
@@ -224,6 +321,9 @@ export type HandEingabe = {
   /** Nur beim Zuordnen und nur für den Besitzer: auch seine anderen Termine mit genau diesem Titel ohne Akte
    *  (Serientermine wie „Caras“) derselben Akte zuordnen — außer denen, bei denen die Akte abgelehnt wurde. */
   gleicheTitel?: boolean
+  /** Für die ganze Serie (gleicher Titel, Wochentag, Uhrzeit; serienSchluessel): Zuordnen ordnet alle Vorkommen ohne
+   *  Akte derselben Akte zu, Ablehnen lehnt die Akte für alle Vorkommen ab („Bitte bestätigen“, 25.11.2026). */
+  serie?: boolean
 }
 
 export type HandErgebnis =
@@ -243,7 +343,7 @@ export async function ordneVonHandZu(db: Db, p: HandPerson, e: HandEingabe, jetz
   if (!ich) return { ok: false, status: 401, fehler: 'Unbekannter Mitarbeiter.' }
   const id = String(e.terminId ?? '').trim()
   if (!id) return { ok: false, status: 400, fehler: 'Welcher Termin? (termin_id fehlt)' }
-  const { data: zeile, error } = await db.from('termine').select('id, titel, beginn, besitzer_email, teilnehmer, kunde_id, kunde_bereich, kunde_name, zuordnung_vorschlag').eq('id', id).maybeSingle()
+  const { data: zeile, error } = await db.from('termine').select('id, titel, beginn, ganztags, besitzer_email, teilnehmer, kunde_id, kunde_bereich, kunde_name, zuordnung_vorschlag').eq('id', id).maybeSingle()
   if (error) return { ok: false, status: 500, fehler: `Termin nicht lesbar: ${error.message}` }
   const t = zeile as (ZuordnungTermin & { teilnehmer?: string[] }) | null
   const besitzer = adresse(t?.besitzer_email)
@@ -292,30 +392,40 @@ export async function ordneVonHandZu(db: Db, p: HandPerson, e: HandEingabe, jetz
   if (schreibFehler) return { ok: false, status: 500, fehler: `Nicht gespeichert: ${schreibFehler.message}` }
   if (!neu) return { ok: false, status: 404, fehler: 'Diesen Termin gibt es nicht mehr.' }
   let weitere = 0
-  if (e.gleicheTitel && neu.kunde_id && besitzer === ich) {
+  if ((e.gleicheTitel || e.serie) && neu.kunde_id && besitzer === ich) {
+    const was = e.gleicheTitel ? 'mit demselben Titel' : 'derselben Serie'
     try {
-      weitere = await gleicheTitelZuordnen(db, { id, titel: String(t.titel ?? ''), besitzer }, aenderung, String(neu.kunde_id), neu.kunde_bereich === 'privat')
-      if (weitere > 0) text += ` Dazu ${weitere} weitere Termin${weitere === 1 ? '' : 'e'} mit demselben Titel.`
+      weitere = await gleicheTitelZuordnen(db, { id, titel: String(t.titel ?? ''), besitzer }, aenderung, String(neu.kunde_id), neu.kunde_bereich === 'privat', e.gleicheTitel ? '' : serienSchluessel(t))
+      if (weitere > 0) text += ` Dazu ${weitere} weitere Termin${weitere === 1 ? '' : 'e'} ${was}.`
     } catch (err) {
-      text += ` Die weiteren Termine mit demselben Titel ließen sich nicht zuordnen (${err instanceof Error ? err.message : err}).`
+      text += ` Die weiteren Termine ${was} ließen sich nicht zuordnen (${err instanceof Error ? err.message : err}).`
+    }
+  }
+  if (e.serie && e.vorschlagAblehnen && vorher.kunde_id && besitzer === ich) {
+    try {
+      weitere = await serieAblehnen(db, t, String(vorher.kunde_id), wer, am)
+      if (weitere > 0) text += ` Gilt auch für ${weitere} weitere Termin${weitere === 1 ? '' : 'e'} derselben Serie.`
+    } catch (err) {
+      text += ` Für die übrigen Termine der Serie ließ sich das nicht vermerken (${err instanceof Error ? err.message : err}).`
     }
   }
   return { ok: true, termin: neu, text, weitere }
 }
 
 /** Ordnet die anderen eigenen Termine mit genau diesem Titel (ohne Akte) derselben Akte zu. Liefert die Anzahl. */
-async function gleicheTitelZuordnen(db: Db, t: { id: string; titel: string; besitzer: string }, aenderung: Record<string, unknown>, kundeId: string, privat: boolean): Promise<number> {
+async function gleicheTitelZuordnen(db: Db, t: { id: string; titel: string; besitzer: string }, aenderung: Record<string, unknown>, kundeId: string, privat: boolean, nurSerie = ''): Promise<number> {
   const ids: string[] = []
   const einzeln: { id: string; abgelehnt: string[] }[] = []
   // Seitenweise (die Datenbank liefert höchstens 1000 Zeilen je Abfrage).
   for (let letzte = '', seite = 0; seite < 20; seite++) {
-    let q = db.from('termine').select('id, teilnehmer, zuordnung_vorschlag').eq('besitzer_email', t.besitzer).eq('titel', t.titel).is('kunde_id', null).order('id', { ascending: true }).limit(1000)
+    let q = db.from('termine').select('id, titel, beginn, ganztags, besitzer_email, teilnehmer, zuordnung_vorschlag').eq('besitzer_email', t.besitzer).eq('titel', t.titel).is('kunde_id', null).order('id', { ascending: true }).limit(1000)
     if (letzte) q = q.gt('id', letzte)
     const { data, error } = await q
     if (error) throw new Error(error.message)
-    const teil = (data ?? []) as { id: string; teilnehmer?: string[] | null; zuordnung_vorschlag?: ZuordnungVorschlag | null }[]
+    const teil = (data ?? []) as SerienZeile[]
     for (const z of teil) {
       if (z.id === t.id || abgelehnteAkten(z.zuordnung_vorschlag).includes(kundeId)) continue
+      if (nurSerie && serienSchluessel(z) !== nurSerie) continue
       if (privat && (z.teilnehmer ?? []).length > 0) continue
       const abgelehnt = abgelehnteAkten(z.zuordnung_vorschlag)
       if (abgelehnt.length > 0) einzeln.push({ id: z.id, abgelehnt })

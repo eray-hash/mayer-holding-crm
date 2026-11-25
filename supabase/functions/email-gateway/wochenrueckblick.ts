@@ -38,6 +38,7 @@
 //
 // Wirft nie im Minutentakt: Fehler stehen im Protokoll.
 
+import { istPrivaterTermin } from '../_shared/privatGrenze.ts'
 import { alsDatum, berlinTagesbeginn, berlinZeit, plusTage } from './tagesmeldung.ts'
 import type { Aufrufer } from './postfach.ts'
 import { ordneAufgabenZu, personenNamen, OBJEKT_ABGESCHLOSSEN, type RohAufgabe } from '../_shared/aufgabenKern.ts'
@@ -259,6 +260,8 @@ export async function ladeRueckblickDaten(admin: Db, jetzt: Date): Promise<Rueck
   const kundenMitTermin = new Set<string>()
   for (const t of termineAb as BriefingTermin[]) {
     if (istAbgesagterTitel(text(t.titel))) continue
+    // Private Termine zählen nie mit (_shared/privatGrenze.ts) — auch nicht, wenn ein Gast zu einer Mayer-Akte passt.
+    if (istPrivaterTermin(t)) continue
     if (t.kunde_id && kundenIds.has(t.kunde_id)) kundenMitTermin.add(t.kunde_id)
     if (t.beginn < morgen) continue
     const schluessel = `${text(t.titel).trim().toLowerCase()}|${t.beginn}`

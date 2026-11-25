@@ -2,11 +2,14 @@
 // (telegram-gateway/tagesplanWerkzeuge.ts) und die Meldungen morgens/abends (email-gateway/tagesplanMeldungen.ts).
 // Läuft mit Dienstrechten; die Zeilenregeln der Datenbank bildet diese Datei nach:
 // - To-dos: nur die eigene Liste (besitzer_email = Adresse, bereich leer), offen, zuständig leer oder die Person.
-// - Termine: eigene und die, bei denen die Person Teilnehmer ist (wie der Kalender); abgesagte nicht.
+// - Termine: eigene und die, bei denen die Person Teilnehmer ist (wie der Kalender); abgesagte nicht. Private Termine
+//   (_shared/privatGrenze.ts: Outlook bzw. privater Assistent, ohne Kollegen und Mayer-Akte) nie — der Mayer-Tagesplan
+//   ist Mayer-seitig (Seite „Tagesablauf & Woche“, Mayer-Bot); sie stehen im privaten Morgenplan.
 // - Wiedervorlagen: offen, fällig bis zum Tag, verantwortlich die Person, nur aus Bereichen, die sie sehen darf.
 // - Pläne: abteilung_eintraege art 'tagesplan', id `${name}|${datum}` (wie die Seite „Tagesablauf & Woche“).
 
 import { alleZeilen } from './alleZeilen.ts'
+import { istPrivaterTermin, standardPrivatPruefer } from './privatGrenze.ts'
 import { istAbgesagterTitel } from './terminBriefingKern.ts'
 import { alsBezug } from './tagesplanBezug.ts'
 import { gehoertZu, type PlanTag, type PlanTermin, type PlanTodo, type PlanWiedervorlage, type PlanZeile } from './tagesplanKern.ts'
@@ -103,7 +106,8 @@ export async function ladeEigeneTodos(db: Db, person: TagPerson, fehler: string[
   return (r.data as Record<string, any>[]).filter((t) => gehoertZu(t.zustaendig, person.name)).map(alsPlanTodo)
 }
 
-export async function ladeTermineDesTags(db: Db, email: string, datum: string, fehler: string[] = []): Promise<PlanTermin[]> {
+/** `privatAssistent`: nutzt die Person den privaten Assistenten? Ohne Angabe wird es nachgeschlagen (privatBotAktiv). */
+export async function ladeTermineDesTags(db: Db, email: string, datum: string, fehler: string[] = [], privatAssistent?: boolean): Promise<PlanTermin[]> {
   const beginn = berlinTagesbeginn(datum)
   const ende = berlinTagesbeginn(plusTag(datum, 1))
   const adresse = email.trim().toLowerCase()
@@ -111,7 +115,7 @@ export async function ladeTermineDesTags(db: Db, email: string, datum: string, f
   try {
     const r = await db
       .from('termine')
-      .select('id, titel, ort, beginn, ende, ganztags, besitzer_email, teilnehmer, kunde_id, kunde_bereich, kunde_name')
+      .select('id, titel, ort, beginn, ende, ganztags, besitzer_email, teilnehmer, kunde_id, kunde_bereich, kunde_name, ms_id')
       .lt('beginn', ende.toISOString())
       .gt('ende', beginn.toISOString())
       .or(`besitzer_email.eq.${adresse},teilnehmer.cs.{${adresse}}`)
@@ -124,10 +128,13 @@ export async function ladeTermineDesTags(db: Db, email: string, datum: string, f
     return []
   }
   const raus: PlanTermin[] = []
+  const mitPrivatAssistent = privatAssistent ?? (await standardPrivatPruefer(db)(adresse).catch(() => false))
   // deno-lint-ignore no-explicit-any
   for (const t of (data ?? []) as Record<string, any>[]) {
     const titel = String(t.titel ?? '')
     if (istAbgesagterTitel(titel)) continue
+    // Privat bleibt privat (ohne Kollegen gehört ein Termin nur dem Besitzer, also dieser Person).
+    if (istPrivaterTermin(t, { besitzerPrivatAssistent: mitPrivatAssistent })) continue
     const b = new Date(t.beginn)
     const e = new Date(t.ende)
     const beginntHeute = b >= beginn

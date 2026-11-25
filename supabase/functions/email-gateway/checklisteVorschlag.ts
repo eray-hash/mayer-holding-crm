@@ -17,6 +17,8 @@ type Db = any
 // deno-lint-ignore no-explicit-any
 type Zeile = Record<string, any>
 
+import { standardPrivatPruefer } from '../_shared/privatGrenze.ts'
+
 export const BEREICH_NAMEN: Record<string, string> = {
   beratung: 'Unternehmensberatung',
   erben: 'Erben',
@@ -340,10 +342,11 @@ const KUNDEN_SPALTEN = [
   'sachverhalt', 'branche', 'vermittler', 'dienstleistungen', 'auftrag_chance', 'naechste_schritte',
 ].join(', ')
 
-/** Mail aus einem privaten Postfach nur für dessen Besitzer. */
-function mailSichtbar(m: Zeile, email: string): boolean {
+/** Mail aus einem privaten Postfach nur für dessen Besitzer — und nie, wenn er den privaten Assistenten nutzt (dann ist
+ *  seine persönliche Post privat, _shared/privatGrenze.ts istPrivateMail; der Vorschlag landet in der Mayer-Akte). */
+function mailSichtbar(m: Zeile, email: string, privatAssistent = false): boolean {
   const besitzer = String(m.besitzer_email ?? '').trim().toLowerCase()
-  return !besitzer || besitzer === email
+  return !besitzer || (besitzer === email && !privatAssistent)
 }
 
 function terminSichtbar(t: Zeile, email: string): boolean {
@@ -376,6 +379,7 @@ export async function erstelleChecklisteVorschlag(
     if (antwort.error) throw new Error(`${name} nicht lesbar (${antwort.error.message})`)
   }
 
+  const privatAssistent = await standardPrivatPruefer(admin)(email).catch(() => false)
   const preisliste = [...new Set(((preise.data ?? []) as Zeile[]).map((p) => String(p.bezeichnung ?? '').trim()).filter(Boolean))]
   const mitSicht = (t: Zeile) => ({ titel: t.titel, beginn: t.beginn, sichtbar: terminSichtbar(t, email) })
   const kontext: ChecklisteKontext = {
@@ -383,8 +387,8 @@ export async function erstelleChecklisteVorschlag(
     kunde,
     protokolle: protokolle.data ?? [],
     kostenvoranschlaege: kvs.data ?? [],
-    gesendet: ((gesendet.data ?? []) as Zeile[]).filter((m) => mailSichtbar(m, email)).slice(0, 8),
-    eingegangen: ((eingegangen.data ?? []) as Zeile[]).filter((m) => mailSichtbar(m, email)).slice(0, 8),
+    gesendet: ((gesendet.data ?? []) as Zeile[]).filter((m) => mailSichtbar(m, email, privatAssistent)).slice(0, 8),
+    eingegangen: ((eingegangen.data ?? []) as Zeile[]).filter((m) => mailSichtbar(m, email, privatAssistent)).slice(0, 8),
     termineVergangen: ((vergangen.data ?? []) as Zeile[]).map(mitSicht),
     termineKommend: ((kommend.data ?? []) as Zeile[]).map(mitSicht),
     preisliste,

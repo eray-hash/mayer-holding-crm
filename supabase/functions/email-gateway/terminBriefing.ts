@@ -17,6 +17,8 @@
 // - Rechte: Nur wer die Akte bzw. das Objekt sehen darf (darfBezug), bekommt das Briefing; private Akten und
 //   Objekte nur ihr Besitzer. Ist die Akte privat und nutzt der Besitzer den privaten Assistenten, geht das
 //   Briefing über diesen Bot (wie die Erinnerungen in kalender.ts) — nie ersatzweise über den Mayer-Bot.
+// - Private Termine (_shared/privatGrenze.ts, 25.11.2026): nie über den Mayer-Bot — auch nicht, wenn ein Gast oder der
+//   Titel zu einer Mayer-Akte passt. Nutzt der Besitzer den privaten Assistenten, geht es über diesen, sonst gar nicht.
 // - Höchstens 6 Briefings mit KI je Lauf (der Rest folgt im nächsten Takt, solange das Fenster offen ist).
 // - Runde 5: Das Briefing endet mit „🎙️ Gespräch aufnehmen: <Link>“ — Direkt-Link in die Gesprächs-App mit Termin
 //   und Akte (_shared/gespraechLink.ts), ein Tipp bis zur Einwilligung.
@@ -46,6 +48,7 @@ import {
   uhrzeit,
 } from '../_shared/terminBriefingKern.ts'
 import { privatBotAktiv, sendePrivat } from '../_shared/telegramPrivat.ts'
+import { istPrivaterTermin } from '../_shared/privatGrenze.ts'
 import { aufnehmenLink } from '../_shared/gespraechLink.ts'
 import { termineMitAufnahme } from './nachTermin.ts'
 import { berlinTagesbeginn, berlinZeit, plusTage } from './tagesmeldung.ts'
@@ -180,6 +183,13 @@ async function privatGenutzt(admin: Db, o: BriefingOptionen, email: string, merk
   return merker.get(email) === true
 }
 
+/** Privater Termin? 'mayer' = kein privater Termin; 'privat' = nur über den privaten Assistenten; 'nie' = gar nicht. */
+async function privatWeg(admin: Db, o: BriefingOptionen, t: BriefingTermin, merker: Map<string, boolean>): Promise<'mayer' | 'privat' | 'nie'> {
+  const nutzt = await privatGenutzt(admin, o, adresse(t.besitzer_email), merker)
+  if (!istPrivaterTermin(t, { besitzerPrivatAssistent: nutzt })) return 'mayer'
+  return nutzt ? 'privat' : 'nie'
+}
+
 /** Senden an eine Person: private Akte und privater Assistent → nur dieser Bot, sonst der Mayer-Bot. */
 async function zustellen(admin: Db, o: BriefingOptionen, p: Person, privat: boolean, text: string, privatMerker: Map<string, boolean>): Promise<boolean> {
   if (!p.chat) return false
@@ -249,6 +259,8 @@ async function vorDemTermin(admin: Db, o: BriefingOptionen, jetzt: Date, einst: 
       continue
     }
     if (!bezug) continue
+    const weg = await privatWeg(admin, o, f.t, privatMerker)
+    if (weg === 'nie') continue
     const gefunden = bezug
     const empfaenger = offen.filter((k) => darfBezug(team.get(k.p)!, gefunden))
     if (empfaenger.length === 0) continue
@@ -275,7 +287,7 @@ async function vorDemTermin(admin: Db, o: BriefingOptionen, jetzt: Date, einst: 
     const punkte = await gespraechspunkte(akteText(daten), { funktion: 'email-gateway', ki: o.ki, apiKey: o.apiKey })
     const text = mitAufnahmeLink(briefingText(daten, { termin: f.t, minutenBis: f.minutenBis, namen, gespraechspunkte: punkte }), linkBasis ?? (await ladeLinkBasis(admin)), f.t.id, bezug)
     for (const k of meine) {
-      const ok = await zustellen(admin, o, team.get(k.p)!, istPrivaterBezug(bezug), text, privatMerker).catch(() => false)
+      const ok = await zustellen(admin, o, team.get(k.p)!, istPrivaterBezug(bezug) || weg === 'privat', text, privatMerker).catch(() => false)
       if (ok) ergebnis.gesendet++
       await vermerkeZustellung(admin, k.id, ok)
     }
@@ -335,6 +347,8 @@ async function morgenUebersicht(admin: Db, o: BriefingOptionen, jetzt: Date, ein
       }
       const bezug = bezuege.get(t.id)
       if (!bezug || !darfBezug(p, bezug)) continue
+      const weg = await privatWeg(admin, o, t, privatMerker)
+      if (weg === 'nie') continue
       const schl = `${bezug.art}:${bezug.id}`
       if (!datenJe.has(schl)) {
         try {
@@ -346,7 +360,7 @@ async function morgenUebersicht(admin: Db, o: BriefingOptionen, jetzt: Date, ein
       }
       const d = datenJe.get(schl)
       if (!d) continue
-      ;(istPrivaterBezug(bezug) ? privat : mayer).push(morgenBlock(t, d))
+      ;(istPrivaterBezug(bezug) || weg === 'privat' ? privat : mayer).push(morgenBlock(t, d))
     }
     if (mayer.length + privat.length === 0) {
       await vermerkeZustellung(admin, id, false)
@@ -470,12 +484,14 @@ async function beimTerminbeginn(admin: Db, o: BriefingOptionen, jetzt: Date, erg
     const bezug = bezuege.get(t.id)
     const p = team.get(k.p)!
     if (!bezug || !darfBezug(p, bezug)) continue
+    const weg = await privatWeg(admin, o, t, privatMerker)
+    if (weg === 'nie') continue
     if (!(await beanspruche(admin, { id: k.id, termin_id: t.id, empfaenger: k.p, art: 'aufnahme', beginn: t.beginn, gesendet_am: jetzt.toISOString() }, ergebnis.fehler))) continue
     versucht++
     linkBasis ??= await ladeLinkBasis(admin)
     const zusatz = await akteZusatz(admin, bezug).catch(() => '')
     const text = erinnerungsText(t, zusatz, aufnahmeLinkZu(linkBasis, t.id, bezug))
-    const ok = await zustellen(admin, o, p, istPrivaterBezug(bezug), text, privatMerker).catch(() => false)
+    const ok = await zustellen(admin, o, p, istPrivaterBezug(bezug) || weg === 'privat', text, privatMerker).catch(() => false)
     if (ok) ergebnis.aufnahme++
     await vermerkeZustellung(admin, k.id, ok)
   }

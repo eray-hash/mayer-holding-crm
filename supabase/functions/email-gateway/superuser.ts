@@ -20,6 +20,7 @@
 // Verlaufseinträge tragen nur einen Tag, keine Uhrzeit; Akten haben kein Anlegedatum (erster
 // Verlaufseintrag gilt als Anlage).
 
+import { istPrivateMail, istPrivaterTermin, ladeBesitzer, privatAssistentMerker, standardPrivatPruefer } from '../_shared/privatGrenze.ts'
 import { ermittleAufrufer } from './postfach.ts'
 import { berlinZeit, plusTage, istDienstSchluessel } from './tagesmeldung.ts'
 import { ordneAufgabenZu, ordneZu, personenNamen, OBJEKT_ABGESCHLOSSEN, type RohAufgabe } from '../_shared/aufgabenKern.ts'
@@ -183,8 +184,12 @@ async function ladeGrunddaten(admin: Db, tage: number, jetzt: Date): Promise<Gru
     ladeAlle(admin, 'kunden', 'id, bereich, firma, ansprechpartner, activities, follow_up, verantwortlich, status'),
     ladeAlle(admin, 'objekte', 'id, bezeichnung, status, activities, follow_up, verantwortlich, privat_besitzer'),
     ladeAlle(admin, 'gesendete_emails', 'id, von, an, an_name, betreff, gesendet_am, besitzer_email, kunde_id, kunde_bereich, kunde_name', (q) => q.gte('gesendet_am', vonIso)),
-    ladeAlle(admin, 'termine', 'id, titel, beginn, besitzer_email, erstellt_am, quelle, kunde_name', (q) => q.gte('erstellt_am', vonIso)),
+    ladeAlle(admin, 'termine', 'id, titel, beginn, besitzer_email, erstellt_am, quelle, kunde_name, teilnehmer, kunde_id, kunde_bereich, ms_id', (q) => q.gte('erstellt_am', vonIso)),
   ])
+  // Privat bleibt privat (_shared/privatGrenze.ts): private Termine und persönliche Post erscheinen hier nicht — auch
+  // nicht für Superuser.
+  const privatMerker = privatAssistentMerker(standardPrivatPruefer(admin))
+  await ladeBesitzer(termine, privatMerker)
 
   // Private Objekte (Bereich Privat) gehören nur ihrem Besitzer — wie private Kontakte: weder in Listen noch in Zahlen.
   const objekte = nurMayerObjekte(alleObjekte)
@@ -209,6 +214,8 @@ async function ladeGrunddaten(admin: Db, tage: number, jetzt: Date): Promise<Gru
     const d = tag(m.gesendet_am)
     if (!d || d < von) continue
     if (m.kunde_bereich === 'privat') continue // Mails an private Kontakte gehören wie die Kontakte nur dem Besitzer
+    // Mails aus einem persönlichen Postfach gehören ihrem Besitzer (istPrivateMail) — nie in die Ansicht eines anderen.
+    if (istPrivateMail(m)) continue
     // Absender: privates Postfach → Besitzer; sonst über die Absenderadresse, falls sie einem Mitarbeiter gehört.
     const wer = (m.besitzer_email && emailZuName.get(String(m.besitzer_email).toLowerCase())) || emailZuName.get(String(m.von ?? '').toLowerCase()) || null
     eintraege.push({
@@ -226,6 +233,7 @@ async function ladeGrunddaten(admin: Db, tage: number, jetzt: Date): Promise<Gru
   for (const t of termine) {
     const d = tag(t.erstellt_am)
     if (!d || d < von) continue
+    if (istPrivaterTermin(t, { besitzerPrivatAssistent: privatMerker.bekannt(String(t.besitzer_email ?? '')) })) continue
     const wer = emailZuName.get(String(t.besitzer_email ?? '').toLowerCase()) ?? null
     eintraege.push({ datum: d, zeit: t.erstellt_am, wer, werText: wer ?? 'unbekannt', bereich: '', akte: t.kunde_name ?? '', pfad: '/kalender', text: kurz(`Termin angelegt: „${t.titel ?? ''}“ am ${tag(t.beginn).split('-').reverse().join('.')}`), art: 'termin' })
   }

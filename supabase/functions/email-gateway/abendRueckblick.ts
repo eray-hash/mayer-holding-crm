@@ -24,6 +24,7 @@
 // - Trockenlauf ohne Senden und ohne Schreiben: abendRueckblickTrockenlauf (Aktion abend_rueckblick_test).
 // - Wirft nie: Fehler stehen im Ergebnis.
 
+import { istPrivaterTermin } from '../_shared/privatGrenze.ts'
 import { alleZeilen } from '../_shared/alleZeilen.ts'
 import { istAbgesagterTitel } from '../_shared/terminBriefingKern.ts'
 import { privatBotAktiv } from '../_shared/telegramPrivat.ts'
@@ -170,7 +171,7 @@ export function istMayerAufgabe(p: RueckblickPerson, t: RueckblickTodo, eigeneLi
   return text(t.besitzer_email).trim().toLowerCase() === p.email && (!zustaendig || gehoertZu(zustaendig, p.name))
 }
 
-type TerminZeile = { id: string; titel?: string | null; beginn?: string | null; ende?: string | null; ganztags?: boolean | null; besitzer_email?: string | null; teilnehmer?: unknown; kunde_bereich?: string | null; ms_id?: string | null }
+type TerminZeile = { id: string; titel?: string | null; beginn?: string | null; ende?: string | null; ganztags?: boolean | null; besitzer_email?: string | null; teilnehmer?: unknown; kunde_id?: string | null; kunde_bereich?: string | null; ms_id?: string | null }
 type WvZeile = { id: string; bereich?: string | null; faellig?: string | null; verantwortlich?: string | null }
 type FolgeZeile = { id: string; bereich?: string | null; verantwortlich?: string | null; follow_up?: { date?: unknown; done?: unknown } | null; privat_besitzer?: string | null }
 
@@ -200,7 +201,7 @@ export async function ladeGemeinsameDaten(admin: Db, heute: string): Promise<Gem
   const [offen, erledigt, termine, wv, kunden, objekte] = await Promise.all([
     alleZeilen<RueckblickTodo>(() => admin.from('todos').select(TODO_SPALTEN).is('erledigt_am', null).is('ms_id', null).or(`erledigen_bis.lte.${heute},geplante_wiedervorlage.lte.${heute}`)),
     alleZeilen<RueckblickTodo>(() => admin.from('todos').select(TODO_SPALTEN).eq('erledigt_am', heute).is('ms_id', null)),
-    alleZeilen<TerminZeile>(() => admin.from('termine').select('id, titel, beginn, ende, ganztags, besitzer_email, teilnehmer, kunde_bereich, ms_id').lt('beginn', bis).gt('ende', von)),
+    alleZeilen<TerminZeile>(() => admin.from('termine').select('id, titel, beginn, ende, ganztags, besitzer_email, teilnehmer, kunde_id, kunde_bereich, ms_id').lt('beginn', bis).gt('ende', von)),
     alleZeilen<WvZeile>(() => admin.from('wiedervorlagen').select('id, bereich, faellig, verantwortlich').is('erledigt_am', null).lte('faellig', naechster)),
     alleZeilen<FolgeZeile>(() => admin.from('kunden').select('id, bereich, verantwortlich, follow_up')),
     alleZeilen<FolgeZeile>(() => admin.from('objekte').select('id, verantwortlich, follow_up, privat_besitzer')),
@@ -242,7 +243,10 @@ export function rueckblickFuer(p: RueckblickPerson, d: GemeinsameDaten, heute: s
   const bis = berlinTagesbeginn(plusTage(naechster, 1)).getTime()
   const termine = d.termine
     .filter((t) => {
+      // Outlook-Termine und private Akten nie (strenger als die zentrale Regel); dazu private Termine nach
+      // _shared/privatGrenze.ts (z. B. eigene CRM-Termine ohne Kollegen und Akte bei Nutzern des privaten Assistenten).
       if (text(t.ms_id).trim() || text(t.kunde_bereich).trim() === 'privat' || istAbgesagterTitel(text(t.titel))) return false
+      if (istPrivaterTermin(t, { besitzerPrivatAssistent: !eigeneListe })) return false
       const teilnehmer = Array.isArray(t.teilnehmer) ? t.teilnehmer.map((x) => text(x).trim().toLowerCase()) : []
       if (text(t.besitzer_email).trim().toLowerCase() !== p.email && !teilnehmer.includes(p.email)) return false
       const b = Date.parse(text(t.beginn))

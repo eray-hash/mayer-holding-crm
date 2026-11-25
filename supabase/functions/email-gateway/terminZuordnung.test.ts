@@ -3,7 +3,7 @@
 // einmal), Reihenfolge, Trockenlauf, Zuordnung von Hand mit Rechten, und das Assistent-Werkzeug termin_zuordnen.
 import { assert, assertEquals, assertStringIncludes } from 'jsr:@std/assert@1'
 import { aenderungFuer, ordneTermineZu, terminZuordnenAktion } from './terminZuordnung.ts'
-import { bewerteTermin, istPrivaterTermin, istTeamTermin, ladeZuordnungsUmgebung, ordneVonHandZu, vorschlagSichtbar, type ZuordnungTermin } from '../_shared/terminZuordnungKern.ts'
+import { bewerteTermin, istPrivatTitel, istTeamTermin, ladeZuordnungsUmgebung, ordneVonHandZu, vorschlagSichtbar, type ZuordnungTermin } from '../_shared/terminZuordnungKern.ts'
 import { akteVorschlagText, fuehreZuordnungWerkzeugAus, istZuordnungWerkzeug } from '../telegram-gateway/terminZuordnungWerkzeug.ts'
 import { FalscheDatenbank } from '../_shared/testDoppel.ts'
 
@@ -188,9 +188,9 @@ Deno.test('Zwischendurch von Hand verknüpft → der Lauf überschreibt nichts',
 })
 
 Deno.test('Hilfsregeln: privat, Team, Änderung nur bei Bedarf', async () => {
-  assert(istPrivaterTermin({ titel: 'Privat: Arzt' }))
-  assert(istPrivaterTermin({ titel: 'Urlaub Italien' }))
-  assert(!istPrivaterTermin({ titel: 'Privatkunde Huber' }))
+  assert(istPrivatTitel({ titel: 'Privat: Arzt' }))
+  assert(istPrivatTitel({ titel: 'Urlaub Italien' }))
+  assert(!istPrivatTitel({ titel: 'Privatkunde Huber' }))
   const team = new Set([ANDREAS, HASAN])
   assert(istTeamTermin({ besitzer_email: HASAN, teilnehmer: [ANDREAS], gast: null, ms_teilnehmer: null }, team))
   assert(!istTeamTermin({ besitzer_email: HASAN, teilnehmer: [], gast: null, ms_teilnehmer: null }, team))
