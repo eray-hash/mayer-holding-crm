@@ -3865,20 +3865,53 @@ Ton und Form:
 const ANTWORT_TOKENS = 4000
 const ANTWORT_TOKENS_GROSS = 12000
 
+/** Nachrichten ohne Denk-Blöcke (thinking / redacted_thinking); eine Nachricht, die dadurch leer würde, bleibt unverändert. */
+export function ohneDenkBloecke(messages: unknown[]): unknown[] {
+  // deno-lint-ignore no-explicit-any
+  return (messages as any[]).map((m) => {
+    if (!Array.isArray(m?.content)) return m
+    // deno-lint-ignore no-explicit-any
+    const rest = m.content.filter((b: any) => b?.type !== 'thinking' && b?.type !== 'redacted_thinking')
+    return rest.length ? { ...m, content: rest } : m
+  })
+}
+
+/** Denk-Blöcke nur in der letzten Assistenten-Nachricht behalten. */
+export function nurLetzteDenkBloecke(messages: unknown[]): unknown[] {
+  // deno-lint-ignore no-explicit-any
+  const liste = messages as any[]
+  let letzte = -1
+  for (let i = liste.length - 1; i >= 0; i--) if (liste[i]?.role === 'assistant') { letzte = i; break }
+  return liste.map((m, i) => (i === letzte ? m : ohneDenkBloecke([m])[0]))
+}
+
 // deno-lint-ignore no-explicit-any
 async function claude(system: unknown[], messages: unknown[], maxTokens = ANTWORT_TOKENS, werkzeuge: unknown[] = TOOLS): Promise<any> {
   if (!ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY ist nicht gesetzt.')
   // Mengengrenze (429) oder Überlast (529) des KI-Dienstes: kurz warten und noch einmal versuchen,
   // statt dem Mitarbeiter sofort einen Fehler zu zeigen.
+  let ohneDenken = false
   for (let versuch = 0; ; versuch++) {
+    // Denk-Blöcke nur in der letzten Antwort des Modells mitschicken (nur die braucht der Dienst für den laufenden
+    // Werkzeug-Schritt); ältere sind an einen früheren Stand gebunden und lösen sonst die Ablehnung unten aus.
+    const nachrichten = ohneDenken ? ohneDenkBloecke(messages) : nurLetzteDenkBloecke(messages)
     const res = await kiAufruf('telegram-gateway', 'https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
       // Marke am letzten Nachrichtenblock: weitere Schritte eines Zugs lesen den Verlauf aus dem Zwischenspeicher (werkzeugGruppen.ts).
-      body: JSON.stringify({ model: AGENT_MODEL, max_tokens: maxTokens, system, tools: werkzeuge, messages: mitNachrichtenCache(messages as VerlaufNachricht[]) }),
+      body: JSON.stringify({ model: AGENT_MODEL, max_tokens: maxTokens, system, tools: werkzeuge, messages: mitNachrichtenCache(nachrichten as VerlaufNachricht[]) }),
     })
     const data = await res.json().catch(() => ({}))
     if (res.ok) return data
+    // 25.11.2026: Innerhalb eines Zugs ändern sich Systemtext (Aktionsprotokoll) und Werkzeugliste (Werkzeuggruppen
+    // werden nachgeladen). Denk-Blöcke früherer Schritte sind an den alten Stand gebunden, und der KI-Dienst lehnt
+    // dann mit „Invalid signature in thinking block … bound to a different conversation“ ab. Dann einmal ohne alle
+    // Denk-Blöcke wiederholen (vom Dienst ausdrücklich erlaubt) statt dem Mitarbeiter einen Fehler zu zeigen.
+    if (res.status === 400 && !ohneDenken && /signature/i.test(String(data?.error?.message ?? '')) && /thinking/i.test(String(data?.error?.message ?? ''))) {
+      console.warn('Denk-Blöcke passen nicht mehr zum Stand — Wiederholung ohne Denk-Blöcke.')
+      ohneDenken = true
+      continue
+    }
     if ((res.status === 429 || res.status === 529) && versuch < 2) {
       const warten = Math.min(20, Math.max(3, Number(res.headers.get('retry-after')) || 8 * (versuch + 1)))
       await new Promise((r) => setTimeout(r, warten * 1000))
