@@ -3917,7 +3917,9 @@ async function claude(system: unknown[], messages: unknown[], maxTokens = ANTWOR
       await new Promise((r) => setTimeout(r, warten * 1000))
       continue
     }
-    throw new Error(kiFehlerText(String(data?.error?.message ?? ''), `KI-Dienst antwortet mit ${res.status}: ${data?.error?.message ?? 'unbekannter Fehler'}`))
+    // Die rohe (englische) Meldung nur ins Protokoll — der Mitarbeiter bekommt einen deutschen Satz.
+    console.error(`KI-Dienst ${res.status}:`, data?.error?.message ?? 'unbekannter Fehler')
+    throw new Error(kiFehlerText(String(data?.error?.message ?? ''), `der KI-Dienst hat die Anfrage technisch abgelehnt (Fehler ${res.status})`))
   }
 }
 
