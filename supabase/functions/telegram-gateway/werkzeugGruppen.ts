@@ -99,6 +99,8 @@ export const KERN: readonly string[] = [
   'dokument_erstellen',
   'datei_senden',
   'alles_durchsuchen',
+  // 25.11.2026: Datei über ungefähren Namen finden („die Übersichtsliste von gestern“) — kommt ohne festes Stichwort.
+  'datei_finden',
   // Runde 5: eigenes Profil (klein; die Nachfrage nach der Telefonnummer wird ohne Stichwort beantwortet)
   // und „was ist neu im CRM“.
   'mein_profil_aendern',

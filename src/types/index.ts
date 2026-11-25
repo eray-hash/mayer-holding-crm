@@ -909,6 +909,8 @@ export type ToDoEintrag = {
   /** Erinnerung per Telegram zu diesem Zeitpunkt (ISO); '' = gelöscht. Server setzt erinnertAm nach dem Versand. */
   erinnernUm?: string
   erinnertAm?: string
+  /** Wiederholt die Erinnerung, bis das To-do erledigt ist (todos.erinnerung_wiederholung); '' = einmalig (bewusst zurückgesetzt). */
+  erinnerungWiederholung?: '' | 'taeglich' | 'werktags' | 'woechentlich'
   stundensatz?: number
   /** Herkunft der Prio: 'hand' = von Hand (bleibt), 'auto' = automatische Priorisierung (Server), leer = noch offen. */
   prioQuelle?: 'hand' | 'auto'

@@ -81,3 +81,54 @@ export function zuweisungsMitteilung(o: { von: string; aufgabe: string; faellig?
 export function mitAbsender(aufgabe: string, von: string): string {
   return /\(von [^()]+\)\s*$/.test(aufgabe) ? aufgabe : `${aufgabe} (von ${von})`
 }
+
+/** Absender aus „… (von X)“ am Ende des Aufgabentexts, sonst ''. */
+export function absenderAus(aufgabe: string): string {
+  const m = String(aufgabe ?? '').match(/\(von ([^()]+)\)\s*$/)
+  return m ? m[1].trim() : ''
+}
+
+// Wörter, die zwei Aufgaben nicht unterscheiden.
+const FUELLWOERTER = new Set(['der', 'die', 'das', 'den', 'dem', 'des', 'ein', 'eine', 'einen', 'einem', 'einer', 'und', 'oder', 'mit', 'fuer', 'von', 'vom', 'zum', 'zur', 'bei', 'auf', 'an', 'am', 'im', 'in', 'zu', 'bis', 'noch', 'bitte', 'mal', 'nach', 'wegen', 'ueber', 'aus'])
+
+/** Bedeutungstragende Wörter einer Aufgabe (ohne „(von X)“, Umlaute vereinfacht, ab 3 Buchstaben). */
+export function aufgabenWoerter(aufgabe: string): string[] {
+  const ohneAbsender = String(aufgabe ?? '').replace(/\(von [^()]+\)\s*$/, '')
+  const w = einfach(ohneAbsender).replace(/\./g, ' ').split(' ').filter((x) => x.length >= 3 && !FUELLWOERTER.has(x))
+  return [...new Set(w)]
+}
+
+/**
+ * Meinen zwei Aufgabentexte dieselbe Aufgabe? (Wunsch 25.11.2026: Statt einem To-do in der Liste eines Kollegen
+ * eine Erinnerung zu geben, entstand ein zweites.) Gleich nach Vereinfachung, oder fast dieselben Wörter
+ * (Jaccard ≥ 0,7), oder die kürzere mit mindestens drei Wörtern steckt ganz in der längeren.
+ */
+export function aehnlicheAufgabe(a: string, b: string): boolean {
+  const x = aufgabenWoerter(a)
+  const y = aufgabenWoerter(b)
+  if (x.length === 0 || y.length === 0) return false
+  if (x.join(' ') === y.join(' ')) return true
+  const sy = new Set(y)
+  const gemeinsam = x.filter((w) => sy.has(w)).length
+  const vereinigt = new Set([...x, ...y]).size
+  if (gemeinsam / vereinigt >= 0.7) return true
+  const kuerzer = x.length <= y.length ? x : y
+  return kuerzer.length >= 3 && gemeinsam === kuerzer.length
+}
+
+export type Wiederholung = 'taeglich' | 'werktags' | 'woechentlich'
+
+/** Wiederholung der To-do-Erinnerung aus der Werkzeug-Angabe: undefined = nicht angegeben, null = einmalig. */
+export function leseWiederholung(roh: unknown): { wert?: Wiederholung | null; fehler?: string } {
+  if (roh === undefined || roh === null) return {}
+  const s = einfach(String(roh)).replace(/\s+/g, '')
+  if (!s || s === 'einmalig' || s === 'nie' || s === 'keine') return { wert: null }
+  if (s === 'taeglich' || s === 'jedentag') return { wert: 'taeglich' }
+  if (s === 'werktags' || s === 'werktaeglich') return { wert: 'werktags' }
+  if (s === 'woechentlich' || s === 'jedewoche') return { wert: 'woechentlich' }
+  return { fehler: `Fehler: Wiederholung „${roh}" nicht erkannt. Erlaubt: einmalig, taeglich, werktags, woechentlich.` }
+}
+
+export function wiederholungText(w: Wiederholung): string {
+  return w === 'taeglich' ? 'täglich' : w === 'werktags' ? 'werktags (Mo–Fr)' : 'wöchentlich'
+}

@@ -13,7 +13,8 @@
 import { alsIso, ordneZu, personenNamen } from '../_shared/aufgabenKern.ts'
 import { BEREICH_IDS, bereichName, darfBereich, type RechteMitarbeiter } from './rechte.ts'
 import { imPrivatBot } from './privatBot.ts'
-import { findeKollege, kollegeUnklar, loeschWunsch, mitAbsender, zuweisungsMitteilung } from './todoZuweisung.ts'
+import { absenderAus, aehnlicheAufgabe, aufgabenWoerter, findeKollege, kollegeUnklar, leseWiederholung, loeschWunsch, mitAbsender, type Wiederholung, wiederholungText, zuweisungsMitteilung } from './todoZuweisung.ts'
+import { privatBotAktiv } from '../_shared/telegramPrivat.ts'
 
 // deno-lint-ignore no-explicit-any
 type Supa = any
@@ -244,6 +245,10 @@ export async function todoAnlegen(
   const erinnerung = leseErinnerung(input?.erinnern_um)
   if (erinnerung.fehler) return erinnerung.fehler
   const erinnernUm = erinnerung.wert || null
+  const wiederholung = leseWiederholung(input?.wiederholen)
+  if (wiederholung.fehler) return wiederholung.fehler
+  const wiederholen: Wiederholung | null = wiederholung.wert ?? null
+  if (wiederholen && !erinnernUm) return 'Fehler: Eine Wiederholung braucht eine Erinnerungszeit (erinnern_um), z. B. täglich um 09:00 ab morgen. Frag nach der Uhrzeit, wenn sie fehlt.'
   // Erinnerung ohne Fälligkeit: fällig am Tag der Erinnerung, damit die Aufgabe nicht „ohne Datum“ untergeht.
   const faellig = bis ?? (erinnernUm ? BERLIN_DATUM.format(new Date(erinnernUm)) : undefined)
   const prio = String(input?.prio ?? '').trim().toUpperCase().slice(0, 1)
@@ -292,12 +297,22 @@ export async function todoAnlegen(
     }
   }
 
+  // Kein zweites To-do, wenn in der Ziel-Liste schon ein passendes offenes steht (Wunsch 25.11.2026: Statt einem
+  // To-do in der Liste eines Kollegen eine Erinnerung zu geben, entstand ein Duplikat).
+  if (input?.trotzdem_neu !== true) {
+    const doppelt = await aehnlichesOffenesTodo(supabase, bereich, besitzer, aufgabe)
+    if (doppelt) {
+      const wo = bereich ? `der To-do-Liste ${bereichName(bereich)}` : besitzer === eigeneEmail ? 'seiner eigenen Liste' : liste
+      return `NICHT ANGELEGT: In ${wo} steht schon das offene To-do „${doppelt.aufgabe}"${doppelt.erledigen_bis ? ` (bis ${deDatum(doppelt.erledigen_bis)})` : ''} · todo_id=${doppelt.id}. Soll es eine Frist, eine Erinnerung oder einen anderen Text bekommen, nimm todo_aendern mit dieser todo_id. Nur wenn der Mitarbeiter ausdrücklich ein zweites, eigenes To-do will, ruf todo_anlegen erneut mit trotzdem_neu=true auf.`
+    }
+  }
+
   // Ans Ende der jeweiligen Liste (wie im CRM: höchste Reihenfolge + 1).
   const reihenfolge = await naechsteReihenfolge(supabase, bereich, besitzer)
   const heute = heuteIso()
   const id = todoId()
   const text = (vonKollege ? mitAbsender(aufgabe, vonKollege) : aufgabe).slice(0, 500)
-  const { error } = await supabase.from('todos').insert({
+  const zeile: Record<string, unknown> = {
     id,
     besitzer_email: besitzer,
     bereich,
@@ -310,10 +325,13 @@ export async function todoAnlegen(
     erinnern_um: erinnernUm,
     erhalten_am: heute,
     erstellt_am: heute,
-  })
-  if (error) return `Fehler beim Anlegen: ${error.message}`
+  }
+  // Spalte erinnerung_wiederholung nur schreiben, wenn gewünscht (supabase/sql/2026-11-25_todo_wiederholung.sql).
+  if (wiederholen) zeile.erinnerung_wiederholung = wiederholen
+  const { error } = await supabase.from('todos').insert(zeile)
+  if (error) return wiederholen && fehltWiederholungsSpalte(error) ? WIEDERHOLUNG_FEHLT : `Fehler beim Anlegen: ${error.message}`
   // Wer erinnert wird: bei der eigenen Liste ihr Besitzer, bei einer Bereichsliste der Zuständige (todoErinnerung.ts im email-gateway).
-  const erinnerungText = erinnernUm ? `, Erinnerung per Telegram am ${deZeitpunkt(erinnernUm)}${bereich || kollege ? ` an ${zustaendig ?? 'den Zuständigen'}` : ''}` : ''
+  const erinnerungText = erinnernUm ? `, Erinnerung per Telegram am ${deZeitpunkt(erinnernUm)}${bereich || kollege ? ` an ${zustaendig ?? 'den Zuständigen'}` : ''}${wiederholen ? `, wiederholt sich ${wiederholungText(wiederholen)}, bis es erledigt ist` : ''}` : ''
   protokolliere(`To-do „${aufgabe.slice(0, 120)}" in ${liste} angelegt${kollege ? `, zugewiesen an ${kollege.name}` : ''}${faellig ? `, erledigen bis ${deDatum(faellig)}` : ''}${erinnernUm ? `, Erinnerung ${deZeitpunkt(erinnernUm)}` : ''} (todo_id=${id})`)
   const wo = imPrivatBot() && !bereich
     ? ' Sie ist privat (nur für ihn sichtbar), die Erinnerung kommt hier im privaten Chat, und sie erscheint beim nächsten Abgleich in seinem Microsoft To Do.'
@@ -338,6 +356,30 @@ async function naechsteReihenfolge(supabase: Supa, bereich: string | null, besit
   return (Number(letzte?.[0]?.reihenfolge) || 0) + 1
 }
 
+const WIEDERHOLUNG_FEHLT = 'Fehler: Wiederkehrende Erinnerungen sind in der Datenbank noch nicht eingerichtet (Spalte erinnerung_wiederholung fehlt). Sag dem Mitarbeiter, dass das To-do deshalb NICHT gespeichert wurde, und biete eine einmalige Erinnerung an.'
+
+/** Fehlt die Spalte erinnerung_wiederholung noch (SQL nicht ausgeführt)? */
+function fehltWiederholungsSpalte(error: { message?: string; code?: string } | null): boolean {
+  return !!error && /erinnerung_wiederholung/.test(String(error.message ?? ''))
+}
+
+/**
+ * Offenes To-do in derselben Liste mit (fast) gleichem Text — oder null. Vorfilter in der Datenbank über das
+ * längste Wort (Hasans eigene Liste hat über 2.600 offene To-dos), dann aehnlicheAufgabe.
+ */
+async function aehnlichesOffenesTodo(supabase: Supa, bereich: string | null, besitzer: string, aufgabe: string): Promise<{ id: string; aufgabe: string; erledigen_bis: string | null } | null> {
+  const woerter = aufgabenWoerter(aufgabe).sort((a, b) => b.length - a.length)
+  if (woerter.length === 0) return null
+  // Vereinfachte Wörter (ae statt ä) stehen so nicht im Text: dann nach dem Wortstamm vor dem ersten Umlaut suchen.
+  const stamm = woerter[0].split(/ae|oe|ue|ss/)[0]
+  if (stamm.length < 3) return null
+  let q = supabase.from('todos').select('id, aufgabe, erledigen_bis').is('erledigt_am', null).ilike('aufgabe', `%${stamm.replace(/[%_]/g, ' ')}%`)
+  q = bereich ? q.eq('bereich', bereich) : q.is('bereich', null).ilike('besitzer_email', besitzer)
+  const { data, error } = await q.order('id').limit(200)
+  if (error) return null
+  return ((data ?? []) as { id: string; aufgabe: string; erledigen_bis: string | null }[]).find((t) => aehnlicheAufgabe(t.aufgabe, aufgabe)) ?? null
+}
+
 type TodoZeile = {
   id: string
   aufgabe: string
@@ -354,6 +396,17 @@ type TodoZeile = {
 }
 const TODO_SPALTEN = 'id, aufgabe, bereich, besitzer_email, erledigen_bis, erledigt_am, zustaendig, kunde_projekt, aktueller_stand, prio, erinnern_um, ms_id'
 
+function istGeschaeftsfuehrung(m: Fragender): boolean {
+  return m.nurPrivat !== true && (m.rolle === 'geschaeftsfuehrung' || !!m.ist_admin)
+}
+
+/** „Liste Immobilien“, „eigene Liste“ oder „Liste von <Kollege>“ (To-do in der eigenen Liste eines Kollegen). */
+function listenName(t: TodoZeile, eigeneEmail: string): string {
+  if (t.bereich) return `Liste ${bereichName(t.bereich)}`
+  if (String(t.besitzer_email ?? '').toLowerCase() === eigeneEmail) return 'eigene Liste'
+  return `Liste von ${t.zustaendig || t.besitzer_email || 'einem Kollegen'}`
+}
+
 /**
  * Sucht genau ein To-do für todo_erledigen / todo_aendern: per todo_id oder Suchbegriff im Aufgabentext
  * (nur offene), nur in Listen, die der Mitarbeiter ändern darf (eigene Liste, freigegebene Bereichsliste).
@@ -364,12 +417,20 @@ async function findeTodo(
   fragender: Fragender,
   input: { todo_id?: unknown; suchbegriff?: unknown } | undefined,
   // todo_loeschen: auch schon abgehakte To-dos (ein erledigter Stichpunkt soll von der Liste verschwinden).
-  o: { auchErledigte?: boolean } = {},
+  // fremde (todo_aendern): auch To-dos in der eigenen Liste eines Kollegen, die der Fragende dorthin geschickt hat
+  // („(von <Name>)“) — die Geschäftsführung alle, außer privaten (Microsoft To Do, Besitzer mit privatem Assistenten).
+  o: { auchErledigte?: boolean; fremde?: boolean } = {},
 ): Promise<TodoZeile | string> {
   // deno-lint-ignore no-explicit-any
   const offen = (q: any) => (o.auchErledigte ? q : q.is('erledigt_am', null))
   const eigeneEmail = String(fragender.email ?? '').toLowerCase()
-  const darf = (t: TodoZeile) => (t.bereich ? darfBereich(fragender, t.bereich) : String(t.besitzer_email ?? '').toLowerCase() === eigeneEmail)
+  const mitFremden = o.fremde === true && !imPrivatBot() && !!eigeneEmail
+  const gf = istGeschaeftsfuehrung(fragender)
+  const eigeneListe = (t: TodoZeile) => (t.bereich ? darfBereich(fragender, t.bereich) : String(t.besitzer_email ?? '').toLowerCase() === eigeneEmail)
+  const fremdErlaubt = (t: TodoZeile) =>
+    mitFremden && !t.bereich && !t.ms_id && String(t.besitzer_email ?? '').toLowerCase() !== eigeneEmail &&
+    (absenderAus(t.aufgabe).toLowerCase() === fragender.name.toLowerCase() || gf)
+  const darf = (t: TodoZeile) => eigeneListe(t) || fremdErlaubt(t)
   const id = String(input?.todo_id ?? '').trim()
   let treffer: TodoZeile[]
   if (id) {
@@ -390,8 +451,31 @@ async function findeTodo(
       offen(supabase.from('todos').select(TODO_SPALTEN)).not('bereich', 'is', null).ilike('aufgabe', muster).order('id').limit(200),
     ])
     treffer = [...((eigene.data ?? []) as TodoZeile[]), ...((bereichsListen.data ?? []) as TodoZeile[])]
+    if (mitFremden) {
+      // Listen der Kollegen: nur, was er selbst geschickt hat (die Geschäftsführung: alles Passende).
+      let q = offen(supabase.from('todos').select(TODO_SPALTEN)).is('bereich', null).not('besitzer_email', 'ilike', eigeneEmail).ilike('aufgabe', muster)
+      if (!gf) q = q.ilike('aufgabe', `%(von ${fragender.name.replace(/[%_]/g, ' ')})%`)
+      const { data: fremd } = await q.order('id').limit(50)
+      treffer.push(...((fremd ?? []) as TodoZeile[]))
+    }
   }
-  treffer = treffer.filter(darf)
+  treffer = [...new Map(treffer.map((t) => [t.id, t])).values()].filter(darf)
+  // Geschäftsführung in fremden Listen: nichts aus einer privaten Liste (Besitzer nutzt den privaten Assistenten),
+  // außer er hat es selbst dorthin geschickt.
+  if (mitFremden && gf) {
+    const privat = new Map<string, boolean>()
+    const geprueft: TodoZeile[] = []
+    for (const t of treffer) {
+      if (eigeneListe(t) || absenderAus(t.aufgabe).toLowerCase() === fragender.name.toLowerCase()) {
+        geprueft.push(t)
+        continue
+      }
+      const b = String(t.besitzer_email ?? '').toLowerCase()
+      if (!privat.has(b)) privat.set(b, await privatBotAktiv(supabase, b).catch(() => true))
+      if (!privat.get(b)) geprueft.push(t)
+    }
+    treffer = geprueft
+  }
   if (treffer.length === 0) {
     const kopf = `Kein passendes ${o.auchErledigte ? '' : 'offenes '}To-do in Listen gefunden, die dieser Mitarbeiter ändern darf.`
     if (id || !eigeneEmail) return kopf
@@ -403,7 +487,7 @@ async function findeTodo(
     return `${kopf} Der Suchbegriff kann falsch verstanden sein (z. B. aus einer Sprachnachricht). Zuletzt geänderte offene To-dos seiner eigenen Liste — meint er eines davon, nimm dessen todo_id; sonst frag kurz nach, bevor du ein neues anlegst:\n${liste.map((t) => `- ${t.aufgabe}${t.erledigen_bis ? ` (bis ${deDatum(t.erledigen_bis)})` : ''} · todo_id=${t.id}`).join('\n')}`
   }
   if (treffer.length > 1) {
-    return `Mehrere passende To-dos, frag nach, welches gemeint ist:\n${treffer.map((t) => `- ${t.aufgabe}${t.erledigen_bis ? ` (bis ${deDatum(t.erledigen_bis)})` : ''}${t.erledigt_am ? ` (erledigt am ${deDatum(t.erledigt_am)})` : ''} · ${t.bereich ? bereichName(t.bereich) : 'eigene Liste'} · todo_id=${t.id}`).join('\n')}`
+    return `Mehrere passende To-dos, frag nach, welches gemeint ist:\n${treffer.map((t) => `- ${t.aufgabe}${t.erledigen_bis ? ` (bis ${deDatum(t.erledigen_bis)})` : ''}${t.erledigt_am ? ` (erledigt am ${deDatum(t.erledigt_am)})` : ''} · ${listenName(t, eigeneEmail)} · todo_id=${t.id}`).join('\n')}`
   }
   return treffer[0]
 }
@@ -440,8 +524,10 @@ export async function todoAendern(
   protokolliere: (text: string) => void,
   wege?: MitteilungsWege,
 ): Promise<string> {
-  const t = await findeTodo(supabase, fragender, input)
+  const t = await findeTodo(supabase, fragender, input, { fremde: true })
   if (typeof t === 'string') return t
+  const eigeneEmail = String(fragender.email ?? '').toLowerCase()
+  const inFremderListe = !t.bereich && String(t.besitzer_email ?? '').toLowerCase() !== eigeneEmail
   const angegeben = (feld: string) => input?.[feld] !== undefined && input?.[feld] !== null
   const patch: Record<string, string | number | null> = {}
   const was: string[] = []
@@ -493,7 +579,7 @@ export async function todoAendern(
   if (erinnerung.wert !== undefined) {
     patch.erinnern_um = erinnerung.wert || null
     if (erinnerung.wert) {
-      const empfaenger = t.bereich || kollege ? ` an ${kollege?.name || String(input?.zustaendig ?? '').trim() || t.zustaendig || 'den Zuständigen'}` : ''
+      const empfaenger = t.bereich || kollege || inFremderListe ? ` an ${kollege?.name || String(input?.zustaendig ?? '').trim() || t.zustaendig || (inFremderListe ? t.besitzer_email : '') || 'den Zuständigen'}` : ''
       was.push(`Erinnerung per Telegram am ${deZeitpunkt(erinnerung.wert)}${empfaenger}`)
       // Wie bei todo_anlegen: Ohne Fälligkeit wird der Tag der Erinnerung die Fälligkeit.
       if (!('erledigen_bis' in patch) && !t.erledigen_bis) {
@@ -501,6 +587,17 @@ export async function todoAendern(
         was.push(`erledigen bis ${deDatum(String(patch.erledigen_bis))}`)
       }
     } else was.push('Erinnerung entfernt')
+  }
+  const wiederholung = leseWiederholung(input?.wiederholen)
+  if (wiederholung.fehler) return wiederholung.fehler
+  if (wiederholung.wert !== undefined) {
+    const hatErinnerung = erinnerung.wert !== undefined ? !!erinnerung.wert : !!t.erinnern_um
+    if (wiederholung.wert && !hatErinnerung) return 'Fehler: Eine Wiederholung braucht eine Erinnerungszeit. Gib erinnern_um mit an (z. B. morgen 09:00) oder frag nach der Uhrzeit.'
+    patch.erinnerung_wiederholung = wiederholung.wert
+    was.push(wiederholung.wert ? `Erinnerung wiederholt sich ${wiederholungText(wiederholung.wert)}, bis es erledigt ist` : 'Erinnerung nur noch einmalig')
+  } else if (erinnerung.wert === '') {
+    // Erinnerung weg → auch keine Wiederholung mehr (fehlt die Spalte noch, wird das unten ohne sie geschrieben).
+    patch.erinnerung_wiederholung = null
   }
   const textFelder: [string, string][] = [['zustaendig', 'zuständig'], ['kunde_projekt', 'Kunde/Projekt'], ['aktueller_stand', 'aktueller Stand']]
   for (const [feld, name] of textFelder) {
@@ -517,9 +614,14 @@ export async function todoAendern(
   }
 
   if (Object.keys(patch).length === 0) return `Nichts geändert: Es wurde keine neue Angabe gemacht (todo_id=${t.id}, „${t.aufgabe}").`
-  const { error } = await supabase.from('todos').update(patch).eq('id', t.id)
+  let { error } = await supabase.from('todos').update(patch).eq('id', t.id)
+  if (error && fehltWiederholungsSpalte(error)) {
+    if (patch.erinnerung_wiederholung) return WIEDERHOLUNG_FEHLT
+    delete patch.erinnerung_wiederholung
+    ;({ error } = await supabase.from('todos').update(patch).eq('id', t.id))
+  }
   if (error) return `Fehler beim Ändern: ${error.message}`
-  const liste = t.bereich ? `Liste ${bereichName(t.bereich)}` : 'eigene Liste'
+  const liste = listenName(t, eigeneEmail)
   protokolliere(`To-do „${t.aufgabe.slice(0, 120)}" geändert: ${was.join('; ').slice(0, 300)} (todo_id=${t.id})`)
   const erledigtHinweis = t.erledigt_am ? ` Hinweis: Das To-do ist seit ${deDatum(t.erledigt_am)} erledigt${patch.erinnern_um ? ', eine Erinnerung kommt dafür nicht' : ''}.` : ''
   const grund = `Geändert (${liste}, kein neues To-do angelegt): „${patch.aufgabe ?? t.aufgabe}" — ${was.join('; ')}.${erledigtHinweis}`

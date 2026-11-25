@@ -183,6 +183,16 @@ class Abfrage implements PromiseLike<Ergebnis> {
     this.filter.push(filterAus(s, 'in', w))
     return this
   }
+  ilike(s: string, w: unknown): this {
+    this.filter.push(filterAus(s, 'ilike', w))
+    return this
+  }
+  /** Verneinung eines einfachen Filters, z. B. not('spalte', 'is', null). */
+  not(s: string, op: string, w: unknown): this {
+    const f = filterAus(s, op, op === 'is' && w === null ? 'null' : w)
+    this.filter.push((z) => !f(z))
+    return this
+  }
   or(ausdruck: string): this {
     this.filter.push(oderFilter(ausdruck))
     return this

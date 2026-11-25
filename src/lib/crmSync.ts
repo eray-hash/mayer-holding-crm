@@ -660,6 +660,8 @@ function todoToRow(t: ToDoEintrag) {
     // Erinnerungszeit nur mitschicken, wenn das Fenster sie kennt — sonst könnte ein älterer Stand im
     // Browser eine vom Assistenten gesetzte Erinnerung überschreiben. '' = bewusst gelöscht.
     ...(t.erinnernUm !== undefined ? { erinnern_um: t.erinnernUm || null } : {}),
+    // Wiederholung genauso nur, wenn bekannt — die Spalte gibt es erst nach supabase/sql/2026-11-25_todo_wiederholung.sql.
+    ...(t.erinnerungWiederholung !== undefined ? { erinnerung_wiederholung: t.erinnerungWiederholung || null } : {}),
     // prio_grund und prio_am schreibt nur der Server (automatische Priorisierung, todoPriorisierung.ts).
     prio_quelle: t.prioQuelle ?? null,
   }
@@ -699,6 +701,7 @@ function rowToTodo(row: any): ToDoEintrag {
     stundensatz: row.stundensatz ?? undefined,
     erinnernUm: row.erinnern_um ?? undefined,
     erinnertAm: row.erinnert_am ?? undefined,
+    erinnerungWiederholung: ['taeglich', 'werktags', 'woechentlich'].includes(row.erinnerung_wiederholung) ? row.erinnerung_wiederholung : undefined,
     prioQuelle: row.prio_quelle === 'hand' || row.prio_quelle === 'auto' ? row.prio_quelle : undefined,
     prioGrund: row.prio_grund ?? undefined,
     prioAm: row.prio_am ?? undefined,

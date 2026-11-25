@@ -74,6 +74,8 @@ export const PRIVAT_BOT_WERKZEUGE: readonly string[] = [
   'in_oeffentlich_holen',
   'meine_post_vorschlaege',
   'alles_durchsuchen',
+  // 25.11.2026: Datei über ungefähren Namen finden (Rechte wie überall: im privaten Assistenten nur eigene private Akten/Objekte).
+  'datei_finden',
   'internet_recherche',
   'wunsch_notieren',
   'objekt_ins_mayer_crm',

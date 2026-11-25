@@ -32,6 +32,8 @@ import { aufgabenUebersicht } from './aufgaben.ts'
 import { type AbteilungZeile, alleObjektDokumente, lesenVonSelbst, leseRef, OBJEKT_SPALTEN, objektakteText, objektStatus, type ObjektRow, sucheObjekte } from './objektakte.ts'
 import { richteFotoAus } from './bildDrehung.ts'
 import { loescheTelegramNachricht, sensibelHinweis, sensibleArt, sensiblerEingang } from './sensibel.ts'
+import { loeschBitteAnGf, selbstLoeschRecht } from './akteLoeschen.ts'
+import { verlaufEintragAendern } from './verlaufEintrag.ts'
 import { kollegenBenachrichtigen, type MitteilungsWege, schickeMitteilung, todoAendern, todoAnlegen, todoErledigen, todoLoeschen } from './teamWerkzeuge.ts'
 import { fuehrePflegeWerkzeugAus, istPflegeWerkzeug, type PflegeAnfrage, PFLEGE_WERKZEUGE } from './pflegeWerkzeuge.ts'
 import { DOKUMENT_WERKZEUGE, fuehreDokumentWerkzeugAus, istDokumentWerkzeug } from './dokumentErstellen.ts'
@@ -1180,6 +1182,8 @@ type ToolKontext = {
   eingang?: string
   // Internetrecherchen in diesem Zug (begrenzt, siehe internet_recherche).
   recherchen?: number
+  // Akten, für die in diesem Zug schon eine Löschbitte an die Geschäftsführung ging (kunde_loeschen).
+  loeschBitten?: Set<string>
 }
 
 const STATUS_HINWEIS = Object.entries(STATUS_JE_BEREICH)
@@ -1272,16 +1276,17 @@ export const TOOLS = [
   },
   {
     name: 'aktivitaet_aendern',
-    description: 'Korrigiert oder löscht einen einzelnen Eintrag der Aktivitäten-Timeline (z. B. eine falsch abgelegte Notiz). Die aktivitaet_id steht in kundenakte_lesen.',
+    description: 'Korrigiert oder löscht einen einzelnen Eintrag im Verlauf (Aktivitäten/Notizen) einer Kundenakte ODER einer Objektakte (z. B. eine falsche oder falsch abgelegte Notiz) — statt eine Korrektur dazuzuschreiben, wenn der Mitarbeiter den Eintrag ändern oder weg haben will. Die aktivitaet_id steht in kundenakte_lesen bzw. objektakte_lesen. Nur eigene Einträge; die Geschäftsführung darf alle. Löschen: Der erste Aufruf löscht nie, sondern verlangt eine ausdrückliche Bestätigung in der nächsten Nachricht; erst der Aufruf danach löscht (im Verlauf bleibt ein Vermerk ohne Inhalt).',
     input_schema: {
       type: 'object',
       properties: {
-        kunde_id: { type: 'string' },
+        kunde_id: { type: 'string', description: 'Bei einem Eintrag in einer Kundenakte.' },
+        objekt_id: { type: 'string', description: 'Bei einem Eintrag in einer Objektakte (Immobilien).' },
         aktivitaet_id: { type: 'string' },
         neuer_text: { type: 'string', description: 'Neuer Text des Eintrags.' },
         loeschen: { type: 'boolean', description: 'true, um den Eintrag zu entfernen.' },
       },
-      required: ['kunde_id', 'aktivitaet_id'],
+      required: ['aktivitaet_id'],
     },
   },
   {
@@ -1351,7 +1356,7 @@ export const TOOLS = [
   },
   {
     name: 'kunde_loeschen',
-    description: 'Löscht eine Kundenakte unwiderruflich — eigene private Kontakte darf jeder löschen, Akten der Holding nur Geschäftsführung/Admin. Der erste Aufruf löscht nie, sondern verlangt eine ausdrückliche Bestätigung des Mitarbeiters in seiner nächsten Nachricht; erst der Aufruf danach löscht.',
+    description: 'Löscht eine Kundenakte unwiderruflich — eigene private Kontakte darf jeder löschen, Akten der Holding Geschäftsführung/Admin; eine selbst angelegte Akte (höchstens 14 Tage alt, ohne Rechnungen, Kostenvoranschläge und Protokolle) darf auch der Mitarbeiter selbst löschen. Darf er es nicht, schickt das Werkzeug selbst eine Löschbitte an die Geschäftsführung. Der erste Aufruf löscht nie, sondern verlangt eine ausdrückliche Bestätigung des Mitarbeiters in seiner nächsten Nachricht; erst der Aufruf danach löscht.',
     input_schema: { type: 'object', properties: { kunde_id: { type: 'string' } }, required: ['kunde_id'] },
   },
   {
@@ -1688,6 +1693,8 @@ export const TOOLS = [
         prio: { type: 'string', enum: ['A', 'B', 'C'], description: 'Optional: A = dringend, B = normal, C = wenn Zeit ist.' },
         bereich: { type: 'string', enum: ['beratung', 'immobilien', 'erben', 'betriebsuebergabe', 'betriebsformen', 'akademie', 'finanzierungen', 'buecher'], description: 'Optional: in die gemeinsame To-do-Liste dieses Bereichs statt in die eigene.' },
         fuer: { type: 'string', description: 'Optional: Name eines Kollegen, dem das To-do zugewiesen wird — es kommt in seine eigene Liste, mit deinem Namen als Absender, und er bekommt eine Telegram-Nachricht („schick Hasan ein To-do …“, „Aufgabe für Quirin …“). Ist der Name nicht eindeutig, kommt eine Liste der Kollegen zum Nachfragen.' },
+        wiederholen: { type: 'string', enum: ['einmalig', 'taeglich', 'werktags', 'woechentlich'], description: 'Optional, nur zusammen mit erinnern_um: Die Erinnerung kommt danach täglich / werktags (Mo–Fr) / wöchentlich zur selben Uhrzeit wieder, bis das To-do erledigt ist („erinnere mich jeden Tag daran, bis es erledigt ist“).' },
+        trotzdem_neu: { type: 'boolean', description: 'Nur true, wenn das Werkzeug ein passendes offenes To-do gemeldet hat und der Mitarbeiter ausdrücklich ein zweites will.' },
       },
       required: ['aufgabe'],
     },
@@ -1770,7 +1777,8 @@ export const TOOLS = [
   {
     name: 'todo_aendern',
     description:
-      'Ändert ein bestehendes To-do (eigene Liste oder freigegebene Bereichsliste): Text korrigieren, Fälligkeit setzen oder entfernen, Erinnerung per Telegram setzen oder entfernen, Zuständig, Kunde/Projekt, aktueller Stand, Prio. Legt nie ein neues To-do an. ' +
+      'Ändert ein bestehendes To-do (eigene Liste, freigegebene Bereichsliste, oder in der Liste eines Kollegen, wenn der Mitarbeiter es ihm geschickt hat — „(von <Name>)“ —; die Geschäftsführung auch andere To-dos in Kollegen-Listen): Text korrigieren, Fälligkeit setzen oder entfernen, Erinnerung per Telegram setzen oder entfernen (auch wiederkehrend), Zuständig, Kunde/Projekt, aktueller Stand, Prio. Legt nie ein neues To-do an. ' +
+      'Soll ein To-do in der Liste eines Kollegen nachträglich eine Frist oder Erinnerung bekommen, nimm IMMER todo_aendern (Suchbegriff aus dem Text) — nie todo_anlegen, das ergibt ein Duplikat. ' +
       'Nimm es immer, wenn der Mitarbeiter ein vorhandenes To-do umbenennen, ergänzen oder terminieren will — nicht neu anlegen und das alte abhaken. Mit todo_id (aus einer früheren Antwort) oder einem Suchbegriff aus dem Aufgabentext; bei mehreren Treffern kommt eine Liste zum Nachfragen. ' +
       'Gib nur die Felder an, die sich ändern; ein leerer Text löscht das Feld. Ist ein Name unklar, trag ihn so wie gesagt ein und nenne den Zweifel in der Antwort. ' +
       'Einem Kollegen zuweisen: fuer=<Kollege> (ein To-do der eigenen Liste wandert in seine Liste, in einer Bereichsliste wird er zuständig; er bekommt eine Telegram-Nachricht). Nenne danach ausdrücklich, wem es zugewiesen ist.',
@@ -1787,6 +1795,7 @@ export const TOOLS = [
         kunde_projekt: { type: 'string', description: 'Stichwort zu Kunde, Projekt, Person oder Thema; leer = entfernen.' },
         aktueller_stand: { type: 'string', description: 'Notiz zum aktuellen Stand (ersetzt die bisherige); leer = entfernen.' },
         prio: { type: 'string', enum: ['A', 'B', 'C', ''], description: 'A = dringend, B = normal, C = wenn Zeit ist; leer = entfernen.' },
+        wiederholen: { type: 'string', enum: ['einmalig', 'taeglich', 'werktags', 'woechentlich'], description: 'Erinnerung wiederkehrend machen (täglich / werktags / wöchentlich zur selben Uhrzeit, bis erledigt) oder mit einmalig zurück auf einmal. Braucht eine Erinnerungszeit (vorhanden oder erinnern_um).' },
       },
     },
   },
@@ -2811,20 +2820,16 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
   }
 
   if (name === 'aktivitaet_aendern') {
-    const k = await ladeErlaubteAkte(supabase, mitarbeiter, { kunde_id: input.kunde_id })
-    if (typeof k === 'string') return k
-    const eintrag = (k.activities ?? []).find((a) => a.id === input.aktivitaet_id)
-    if (!eintrag) return 'Fehler: Diesen Eintrag gibt es in der Akte nicht. Lies die Akte neu (kundenakte_lesen).'
-    const neuerText = String(input.neuer_text ?? '').trim()
-    if (input.loeschen !== true && !neuerText) return 'Fehler: neuer_text oder loeschen=true angeben.'
-    const activities = input.loeschen === true
-      ? (k.activities ?? []).filter((a) => a.id !== eintrag.id)
-      : (k.activities ?? []).map((a) => (a.id === eintrag.id ? { ...a, text: neuerText } : a))
-    const { error } = await supabase.from('kunden').update({ activities }).eq('id', k.id)
-    if (error) return `Fehler beim Speichern: ${error.message}`
-    const was = input.loeschen === true ? 'gelöscht' : 'geändert'
-    protokolliere(`Eintrag bei ${kundeName(k)} ${was}: „${kuerze(eintrag.text, 100)}"`)
-    return `Eintrag „${kuerze(eintrag.text, 100)}" bei ${kundeName(k)} ${was}.`
+    return await verlaufEintragAendern(input, {
+      supabase,
+      mitarbeiter,
+      heute,
+      protokolliere,
+      vorherigeAnfrage: ctx.vorherigeLoeschAnfrage,
+      setzeAnfrage: (a) => {
+        state.loesch_anfrage = a
+      },
+    })
   }
 
   if (name === 'kunde_anlegen') {
@@ -3020,8 +3025,20 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     // Geschäftsführung/Admin — und im privaten Assistenten ausschließlich eigene private Akten.
     const eigenerPrivater = istPrivat(k) && istEigene(mitarbeiter, k.verantwortlich_email)
     if (SAMMELAKTEN.includes(k.id)) return 'Nicht erlaubt: Die Sammelakten lassen sich nicht löschen.'
-    if (!eigenerPrivater && (mitarbeiter.nurPrivat === true || !(mitarbeiter.rolle === 'geschaeftsfuehrung' || mitarbeiter.ist_admin))) {
-      return 'Nicht erlaubt: Kundenakten der Holding darf nur Geschäftsführung/Admin löschen; eigene private Kontakte darf jeder löschen.'
+    if (!eigenerPrivater && mitarbeiter.nurPrivat === true) {
+      return 'Nicht erlaubt: Im privaten Assistenten lassen sich nur eigene private Kontakte löschen.'
+    }
+    // Seit 25.11.2026: Eine selbst angelegte, frische Akte ohne Rechnungen/Kostenvoranschläge/Protokolle darf der
+    // Mitarbeiter selbst löschen (_shared/akteSelbstLoeschen.ts); sonst Löschbitte an die Geschäftsführung.
+    let selbstAngelegt = false
+    if (!eigenerPrivater && !(mitarbeiter.rolle === 'geschaeftsfuehrung' || mitarbeiter.ist_admin)) {
+      const recht = await selbstLoeschRecht(supabase, mitarbeiter, k)
+      if (!recht.ok) {
+        if (ctx.loeschBitten?.has(k.id)) return 'NICHT GELÖSCHT. Die Löschbitte an die Geschäftsführung ist in diesem Zug schon verschickt.'
+        ;(ctx.loeschBitten ??= new Set()).add(k.id)
+        return await loeschBitteAnGf(supabase, MITTEILUNGS_WEGE, mitarbeiter, { id: k.id, name: kundeName(k), bereich: BEREICH_LABEL[k.bereich] ?? k.bereich }, recht.grund, ctx.eingang, protokolliere)
+      }
+      selbstAngelegt = true
     }
     const anfrage = ctx.vorherigeLoeschAnfrage
     const bestaetigbar = anfrage?.kunde_id === k.id && Date.now() - new Date(anfrage.z).getTime() < 10 * 60 * 1000
@@ -3031,7 +3048,7 @@ export async function fuehreWerkzeugAus(name: string, input: any, ctx: ToolKonte
     }
     const { error } = await supabase.from('kunden').delete().eq('id', k.id)
     if (error) return `Fehler beim Löschen: ${error.message}`
-    protokolliere(`Kunde ${kundeName(k)} gelöscht`)
+    protokolliere(`Kunde ${kundeName(k)} gelöscht${selbstAngelegt ? ' (selbst angelegt)' : ''}`)
     return `Gelöscht: ${kundeName(k)}.`
   }
 
@@ -3811,6 +3828,8 @@ So arbeitest du:
 - Aufgaben und Zuständigkeiten: Fragt jemand, wer was bis wann erledigen muss, was bei ihm oder einem Kollegen ansteht oder was überfällig ist, nutze aufgaben_uebersicht (nicht firmenueberblick). Antworte nach Person gegliedert, Überfälliges zuerst, mit Datum. Ist die Liste lang, nenne zuerst das Fällige und sag, wie viel ohne Datum dazukommt; die vollständige Liste steht im CRM unter „Aufgaben nach Mitarbeiter“ (Symbol mit Häkchenliste oben rechts).
 - Neu im CRM: Fragt jemand „Was ist neu?“, „Was kann das CRM inzwischen?“ oder „Gibt es was Neues für mich?“, nutze neuigkeiten_im_crm und erkläre die Neuerungen kurz in einfachen Worten (was bringt es, wo im CRM, Beispielsatz für Telegram). Als gelesen vermerken (als_gelesen=true) nur, wenn der Mitarbeiter das will. „Tipp der Woche aus/an“ → neuigkeiten_im_crm mit tipp_der_woche=false/true.
 - Volltextsuche: Mit alles_durchsuchen findest du Wörter, Namen, Beträge oder Aktenzeichen auch IN Texten — Verlauf und Sachverhalt der Akten, Inhalte gelesener Dokumente, Mails (gemeinsames und eigenes Postfach), Gesprächsprotokolle, Objekte samt Exposé, To-dos, Wiedervorlagen, Bücher und Partner. Nimm es bei Fragen wie „Wo stand nochmal …?“, „In welchem Dokument steht …?“, „Wer hat … erwähnt?“ oder wenn kunden_suchen bzw. objekte_suchen nichts finden. Die Fundstellen sind nur kurze Ausschnitte: Bevor du Einzelheiten nennst, lies mit den gelieferten Kennungen weiter (kundenakte_lesen, objektakte_lesen, dokument_inhalt, mail_lesen).
+- Dateien über den Namen: Sucht jemand eine hochgeladene Datei über einen ungefähren Namen oder einen Zeitpunkt („die Übersichtsliste von gestern“, „die Exceltabelle, die ich geschickt habe“), nimm datei_finden — es verzeiht Tippfehler, Umlaute und Wortteile und sucht in allen Akten, Objekten, Ungeklärte Eingänge und Unterlagen des Hauses.
+- Falsche Notiz im Verlauf: Will jemand einen Eintrag im Verlauf einer Kunden- oder Objektakte ändern oder löschen, nimm aktivitaet_aendern (mit kunde_id bzw. objekt_id) statt eine Korrektur dazuzuschreiben.
 - Immobilien-Objekte: Fragt jemand nach einem Ort, einer Adresse oder einer Immobilie ("was weißt du über Suppingen"), suchst du mit objekte_suchen und liest dann mit objektakte_lesen die ganze Objektakte. Antworte daraus vollständig, aber übersichtlich: Eckdaten, Preis, Eigentümer, Stand von Verkaufsdatenblatt, Kurzprüfung und Bewertung, welche Unterlagen da sind und was sie enthalten, offene Fragen, nächste Schritte. Ist ein Feld leer, sag kurz, dass es noch nicht eingetragen ist, statt es wegzulassen. Für den Inhalt einzelner Unterlagen nutzt du dokument_inhalt mit objekt_id.
 - Objektakten anlegen und befüllen: Will jemand ein Objekt, eine Immobilie oder eine Objektakte anlegen – auch wenn ein Makler oder Tippgeber es angeboten hat –, nimm objekt_anlegen und lege nie ersatzweise eine Kundenakte an. Den Makler oder Anbieter gibst du als anbieter mit; er wird im Verlauf der Objektakte vermerkt. Findet objekt_anlegen ein schon vorhandenes gleiches Objekt, nenne es dem Mitarbeiter und arbeite damit weiter; trotzdem=true nur, wenn er bestätigt, dass es ein anderes Objekt ist. Exposés, Prospekte, Grundbuchauszüge, Flächenaufstellungen, Pläne, Fotos und Mieterlisten zu einem Objekt gehören in die Objektakte (dateien_ins_objekt, Ordner nach Inhalt), nicht in eine Kundenakte – auch Dokumente, die bisher in einer Kundenakte geparkt sind (dann mit aus_kundenakte_entfernen=true). Eckdaten, Status, Kaufpreis, Verantwortlichen oder Follow-up eines Objekts änderst du mit objekt_aendern und gibst nur an, was sich ändert.
 - Kundenakte ist eigentlich ein Objekt: Liegt in einer Kundenakte in Wahrheit ein Objekt (z. B. ein vom Makler angebotenes Hotel mit Exposé und vielen Fotos) und will der Mitarbeiter daraus eine Objektakte machen, nimm akte_in_objekt_umwandeln statt objekt_anlegen und dateien_ins_objekt einzeln. Der erste Aufruf zeigt nur eine Vorschau (Name, Adresse, Kaufpreis, Objektart, wie viele Dateien in welchen Ordner kommen, was zu einem anderen schon vorhandenen Objekt gehört); gib sie kurz wieder und starte erst nach seinem Ja mit bestaetigt=true, Korrekturen dabei mitgeben. Danach läuft es im Hintergrund; fragt er nach dem Stand, ruf das Werkzeug mit derselben kunde_id erneut auf.

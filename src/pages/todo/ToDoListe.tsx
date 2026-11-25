@@ -59,6 +59,9 @@ function isoZuEingabe(iso?: string): string {
   return `${d.getFullYear()}-${zwei(d.getMonth() + 1)}-${zwei(d.getDate())}T${zwei(d.getHours())}:${zwei(d.getMinutes())}`
 }
 
+type Wiederholung = NonNullable<ToDoEintrag['erinnerungWiederholung']>
+const WIEDERHOLUNG_TEXT: Record<Exclude<Wiederholung, ''>, string> = { taeglich: 'täglich', werktags: 'werktags', woechentlich: 'wöchentlich' }
+
 function erinnerungKurz(iso: string): string {
   return new Date(iso).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
@@ -74,6 +77,7 @@ function ErinnerungsHinweis({ t }: { t: ToDoEintrag }) {
     >
       <Bell size={11} />
       {erinnerungKurz(t.erinnernUm)}
+      {t.erinnerungWiederholung && <span title="Wiederholt sich, bis erledigt">· {WIEDERHOLUNG_TEXT[t.erinnerungWiederholung]}</span>}
     </span>
   )
 }
@@ -1254,6 +1258,8 @@ function ToDoModal({
   const [erinnerung, setErinnerung] = useState(erinnerungAnfang)
   const erinnerungGeaendert = erinnerung !== erinnerungAnfang
   const erinnerungVorbei = !!erinnerung && erinnerungGeaendert && new Date(erinnerung).getTime() < Date.now()
+  const wiederholungAnfang: Wiederholung = initial?.erinnerungWiederholung ?? ''
+  const [wiederholung, setWiederholung] = useState<Wiederholung>(wiederholungAnfang)
   const [stundensatz, setStundensatz] = useState(initial?.stundensatz?.toString() ?? '')
 
   const kostenVorschau = zeitaufwandskosten({
@@ -1268,6 +1274,9 @@ function ToDoModal({
     const erinnerungFelder: Partial<ToDoFormWert> = erinnerungGeaendert
       ? { erinnernUm: erinnerung ? new Date(erinnerung).toISOString() : '', erinnertAm: undefined }
       : {}
+    // Wiederholung ebenfalls nur bei Änderung (die Spalte gibt es erst nach der SQL vom 25.11.2026); ohne Erinnerung keine.
+    const wiederholungNeu: Wiederholung = erinnerung ? wiederholung : ''
+    if (wiederholungNeu !== wiederholungAnfang) erinnerungFelder.erinnerungWiederholung = wiederholungNeu
     onSubmit({
       ...erinnerungFelder,
       startDatum: startDatum || undefined,
@@ -1364,7 +1373,30 @@ function ToDoModal({
               </button>
             )}
           </div>
-          {erinnerungVorbei && <p className="mt-1 text-xs text-amber-700">Der Zeitpunkt liegt in der Vergangenheit: Bis zwei Tage zurück geht die Erinnerung sofort raus, sonst gar nicht.</p>}
+          <div className="mt-2 flex items-center gap-2">
+            <label htmlFor="todo-wiederholung" className={`text-xs font-medium ${erinnerung ? 'text-slate-500' : 'text-slate-300'}`}>Wiederholen</label>
+            <select
+              id="todo-wiederholung"
+              className={`${inputClass} sm:max-w-[12rem]`}
+              value={erinnerung ? wiederholung : ''}
+              disabled={!erinnerung}
+              title={erinnerung ? undefined : 'Erst eine Erinnerung setzen'}
+              onChange={(e) => setWiederholung(e.target.value as Wiederholung)}
+            >
+              <option value="">einmalig</option>
+              <option value="taeglich">täglich</option>
+              <option value="werktags">werktags (Mo–Fr)</option>
+              <option value="woechentlich">wöchentlich</option>
+            </select>
+          </div>
+          {erinnerung && wiederholung && <p className="mt-1 text-xs text-slate-400">Kommt {WIEDERHOLUNG_TEXT[wiederholung]} zur gleichen Uhrzeit wieder, bis die Aufgabe erledigt ist.</p>}
+          {erinnerungVorbei && (
+            <p className="mt-1 text-xs text-amber-700">
+              {wiederholung
+                ? 'Der Zeitpunkt liegt in der Vergangenheit: Bis zwei Tage zurück geht die Erinnerung sofort raus, sonst beim nächsten Vorkommen.'
+                : 'Der Zeitpunkt liegt in der Vergangenheit: Bis zwei Tage zurück geht die Erinnerung sofort raus, sonst gar nicht.'}
+            </p>
+          )}
           {!erinnerungGeaendert && initial?.erinnernUm && initial.erinnertAm && (
             <p className="mt-1 text-xs text-slate-400">Gesendet am {new Date(initial.erinnertAm).toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' })}. Eine neue Zeit verschickt sie noch einmal.</p>
           )}

@@ -19,6 +19,9 @@
 // Nur lesend — es wird nichts geändert, deshalb auch kein protokolliere-Eintrag.
 
 import { alsTsquery, ausschnittText } from '../_shared/sucheAnfrage.ts'
+import { alleZeilen } from '../_shared/alleZeilen.ts'
+import { type DateiKandidat, dateinameAusUrl, findeDateien, guete, inhaltSchluessel, isoTag, suchWoerter, tagVerschieben, zeitraumAusText } from '../_shared/dateiSucheKern.ts'
+import { heuteBerlin } from '../_shared/heuteBerlin.ts'
 import { adresse, darfAkte, darfBereich, darfObjekt, istEigene, type RechteMitarbeiter } from './rechte.ts'
 
 // deno-lint-ignore no-explicit-any
@@ -64,6 +67,26 @@ export const SUCHE_WERKZEUGE = [
         je_art: { type: 'integer', description: 'Höchstens so viele Treffer je Art (Vorgabe 5, höchstens 15).' },
       },
       required: ['suchbegriff'],
+    },
+  },
+  {
+    name: 'datei_finden',
+    description:
+      'Findet hochgeladene Dateien über einen UNGEFÄHREN Namen — in allen Kunden- und Objektakten, in Ungeklärte Eingänge und in Unterlagen des Hauses, soweit der Mitarbeiter sie sehen darf. Verzeiht Tippfehler, Umlaute (ä/ae, ß/ss), Wortteile und zusammengesetzte Wörter („Übersichtsliste“ findet auch „Liste Beträge …“), sucht im Anzeigenamen, im ursprünglichen Dateinamen, im Ordner/der Art und in der Kurzfassung des Inhalts; Wörter wie „Liste“, „Tabelle“, „Foto“ passen auch zur Dateiart. ' +
+      'Nimm es immer, wenn jemand eine Datei sucht, die er oder ein Kollege hochgeladen/geschickt hat („die Übersichtsliste von gestern“, „wo ist die Exceltabelle zu …“, „schick mir nochmal die Datei …“) — auch wenn alles_durchsuchen oder die Akte nichts gefunden hat. Mit Zeitraum („gestern“, „letzte Woche hochgeladen“) über hochgeladen_ab/hochgeladen_bis oder tage_zurueck; ohne Suchbegriff liefert es alle Dateien des Zeitraums. ' +
+      'Liefert je Treffer dokument_id und kunde_id bzw. objekt_id für dokument_inhalt, datei_senden, datei_verschieben, datei_umbenennen. Nenne bei unsicheren Treffern („ähnlich“) die zwei, drei besten und frag, welche gemeint ist.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        suchbegriff: { type: 'string', description: 'Name oder Teile davon, so wie gesagt, z. B. "Übersichtsliste Objekte", "Mitvertrag Teckstr" (Tippfehler sind in Ordnung). Leer = alle Dateien im Zeitraum.' },
+        hochgeladen_ab: { type: 'string', description: 'Optional: frühester Tag des Hochladens, JJJJ-MM-TT (für „gestern“ der gestrige Tag).' },
+        hochgeladen_bis: { type: 'string', description: 'Optional: spätester Tag des Hochladens, JJJJ-MM-TT.' },
+        tage_zurueck: { type: 'integer', description: 'Optional statt ab/bis: nur Dateien der letzten so vielen Tage (1 = heute und gestern).' },
+        wo: { type: 'string', enum: ['alle', 'akten', 'objekte', 'ungeklaert', 'intern'], description: 'Optional: nur Kundenakten, nur Objekte, nur Ungeklärte Eingänge oder nur Unterlagen des Hauses. Vorgabe alle.' },
+        kunde_id: { type: 'string', description: 'Optional: nur in dieser Kundenakte.' },
+        objekt_id: { type: 'string', description: 'Optional: nur in dieser Objektakte.' },
+        anzahl: { type: 'integer', description: 'Höchstens so viele Treffer (Vorgabe 8, höchstens 20).' },
+      },
     },
   },
 ]
@@ -177,7 +200,7 @@ function kuerze(s: string, n: number): string {
 
 /** Die Ergebnis-Zeilen, gruppiert nach Art (exportiert für den Test). */
 export function formatiere(suchbegriff: string, treffer: SuchTreffer[], jeArt: number): string {
-  if (treffer.length === 0) return `Keine Treffer für „${suchbegriff}“ (gesucht in allem, was der Mitarbeiter sehen darf).`
+  if (treffer.length === 0) return `Keine Treffer für „${suchbegriff}“ (gesucht in allem, was der Mitarbeiter sehen darf). Sucht er eine hochgeladene Datei über ihren (ungefähren) Namen, nimm datei_finden.`
   const zeilen: string[] = [`Treffer für „${suchbegriff}“ (nur, was der Mitarbeiter sehen darf):`]
   for (const art of SUCH_ARTEN) {
     const liste = treffer.filter((t) => t.art === art)
@@ -196,6 +219,7 @@ export function formatiere(suchbegriff: string, treffer: SuchTreffer[], jeArt: n
 
 // deno-lint-ignore no-explicit-any
 export async function fuehreSucheWerkzeugAus(name: string, input: any, k: SucheKontext): Promise<string> {
+  if (name === 'datei_finden') return await dateiFinden(input ?? {}, k)
   if (name !== 'alles_durchsuchen') return `Fehler: Unbekanntes Werkzeug ${name}.`
   const suchbegriff = String(input?.suchbegriff ?? '').trim()
   const q = alsTsquery(suchbegriff)
@@ -228,3 +252,141 @@ export async function fuehreSucheWerkzeugAus(name: string, input: any, k: SucheK
   return formatiere(suchbegriff, treffer, jeArt)
 }
 
+
+// ---------- datei_finden ----------
+
+type DokEintrag = { id?: string; name?: string; typ?: string; url?: string; datum?: string; kategorie?: string; art?: string }
+type KundeZeile = { id: string; bereich: string | null; firma: string | null; ansprechpartner: string | null; verantwortlich_email: string | null; dokumente: unknown }
+type ObjektZeile = { id: string; bezeichnung: string | null; adresse: string | null; privat_besitzer: string | null; dokumente: unknown }
+
+const SAMMEL_NAME: Record<string, string> = { k_intern_holding: 'Unterlagen des Hauses', k_eingang_ungeklaert: 'Ungeklärte Eingänge' }
+
+function aktenName(k: KundeZeile): string {
+  if (SAMMEL_NAME[k.id]) return SAMMEL_NAME[k.id]
+  const firma = String(k.firma ?? '').trim()
+  const ap = String(k.ansprechpartner ?? '').trim()
+  return ap && ap !== firma ? `${firma} (${ap})` : firma || ap || k.id
+}
+
+function objektName(o: ObjektZeile): string {
+  return [o.bezeichnung, o.adresse].map((x) => String(x ?? '').trim()).filter(Boolean).join(', ') || o.id
+}
+
+function alsDok(x: unknown): DokEintrag | null {
+  return x && typeof x === 'object' ? (x as DokEintrag) : null
+}
+
+/** Zeitraum aus den Angaben (ab/bis, tage_zurueck) oder aus Wörtern wie „gestern“ im Suchbegriff. */
+export function zeitraumAus(input: Record<string, unknown>, suchbegriff: string, heute: string): { ab: string | null; bis: string | null } {
+  const ab = isoTag(input.hochgeladen_ab)
+  const bis = isoTag(input.hochgeladen_bis)
+  if (ab || bis) return { ab, bis }
+  const tage = Math.round(Number(input.tage_zurueck))
+  if (Number.isFinite(tage) && tage > 0) return { ab: tagVerschieben(heute, -Math.min(tage, 3650)), bis: heute }
+  return zeitraumAusText(suchbegriff, heute) ?? { ab: null, bis: null }
+}
+
+async function dateiFinden(input: Record<string, unknown>, k: SucheKontext): Promise<string> {
+  const m = k.mitarbeiter
+  const heute = k.heute && /^\d{4}-\d{2}-\d{2}$/.test(k.heute) ? k.heute : heuteBerlin()
+  const suchbegriff = String(input.suchbegriff ?? '').trim()
+  const { ab, bis } = zeitraumAus(input, suchbegriff, heute)
+  if (suchWoerter(suchbegriff).length === 0 && !ab && !bis) return 'Fehler: Bitte einen (ungefähren) Dateinamen oder einen Zeitraum angeben.'
+  const wo = String(input.wo ?? 'alle')
+  const nurKunde = String(input.kunde_id ?? '').trim()
+  const nurObjekt = String(input.objekt_id ?? '').trim()
+  const anzahl = Math.min(20, Math.max(1, Math.round(Number(input.anzahl) || 8)))
+
+  const mitAkten = !nurObjekt && wo !== 'objekte'
+  const mitObjekten = !nurKunde && (wo === 'alle' || wo === 'objekte')
+  const [akten, objekte, inhalte] = await Promise.all([
+    mitAkten ? alleZeilen<KundeZeile>(() => k.supabase.from('kunden').select('id, bereich, firma, ansprechpartner, verantwortlich_email, dokumente')) : Promise.resolve({ data: [] as KundeZeile[], error: null }),
+    mitObjekten ? alleZeilen<ObjektZeile>(() => k.supabase.from('objekte').select('id, bezeichnung, adresse, privat_besitzer, dokumente')) : Promise.resolve({ data: [] as ObjektZeile[], error: null }),
+    alleZeilen<{ schluessel: string; zusammenfassung: string | null }>(() => k.supabase.from('dokument_inhalte').select('schluessel, zusammenfassung').eq('status', 'gelesen'), { ordnung: 'schluessel' }),
+  ])
+  if (akten.error) return `Fehler: Die Akten konnten nicht gelesen werden (${akten.error.message}).`
+  if (objekte.error) return `Fehler: Die Objekte konnten nicht gelesen werden (${objekte.error.message}).`
+  // Ohne Kurzfassungen geht die Suche trotzdem (nur über Namen).
+  const kurz = new Map<string, string>()
+  for (const z of inhalte.data ?? []) if (z?.schluessel && z.zusammenfassung) kurz.set(z.schluessel, z.zusammenfassung)
+
+  const kandidaten: DateiKandidat[] = []
+  for (const a of akten.data ?? []) {
+    if (nurKunde && a.id !== nurKunde) continue
+    if (wo === 'ungeklaert' && a.id !== 'k_eingang_ungeklaert') continue
+    if (wo === 'intern' && a.id !== 'k_intern_holding') continue
+    if (!darfAkte(m, a)) continue
+    const doks = Array.isArray(a.dokumente) ? a.dokumente : []
+    for (const x of doks) {
+      const d = alsDok(x)
+      if (!d?.id) continue
+      kandidaten.push({
+        dokument_id: d.id,
+        name: String(d.name ?? ''),
+        dateiname: dateinameAusUrl(d.url),
+        typ: d.typ,
+        ordner: d.kategorie ?? d.art,
+        datum: d.datum ?? null,
+        kurzinhalt: d.url ? kurz.get(inhaltSchluessel(d.url)) ?? null : null,
+        ort_art: 'akte',
+        ort_id: a.id,
+        ort_name: aktenName(a),
+      })
+    }
+  }
+  for (const o of objekte.data ?? []) {
+    if (nurObjekt && o.id !== nurObjekt) continue
+    if (!darfObjekt(m, o)) continue
+    const ordner = o.dokumente && typeof o.dokumente === 'object' && !Array.isArray(o.dokumente) ? (o.dokumente as Record<string, unknown>) : {}
+    for (const [ordnerName, liste] of Object.entries(ordner)) {
+      for (const x of Array.isArray(liste) ? liste : []) {
+        const d = alsDok(x)
+        if (!d?.id) continue
+        kandidaten.push({
+          dokument_id: d.id,
+          name: String(d.name ?? ''),
+          dateiname: dateinameAusUrl(d.url),
+          typ: d.typ,
+          ordner: ordnerName,
+          datum: d.datum ?? null,
+          kurzinhalt: d.url ? kurz.get(inhaltSchluessel(d.url)) ?? null : null,
+          ort_art: 'objekt',
+          ort_id: o.id,
+          ort_name: objektName(o),
+        })
+      }
+    }
+  }
+  if ((nurKunde || nurObjekt) && kandidaten.length === 0) return 'In dieser Akte gibt es keine Dateien, die der Mitarbeiter sehen darf (oder die Kennung stimmt nicht).'
+
+  const zeitraumText = ab || bis ? ` hochgeladen ${ab && bis && ab === bis ? `am ${deDatum(ab)}` : [ab ? `ab ${deDatum(ab)}` : '', bis ? `bis ${deDatum(bis)}` : ''].filter(Boolean).join(' ')}` : ''
+  const treffer = findeDateien(suchbegriff, kandidaten, { ab, bis })
+  if (treffer.length === 0) {
+    const hinweis = [`Keine Datei passt zu „${suchbegriff || '(ohne Namen)'}“${zeitraumText} (gesucht in ${kandidaten.length} Dateien, die der Mitarbeiter sehen darf).`]
+    // Mit Zeitraum: zeigen, was in dem Zeitraum überhaupt hochgeladen wurde — oft ist es doch dabei.
+    if (suchbegriff && (ab || bis)) {
+      const imZeitraum = findeDateien('', kandidaten, { ab, bis }).slice(0, 8)
+      if (imZeitraum.length) hinweis.push('', `Im Zeitraum hochgeladen (${imZeitraum.length}${imZeitraum.length === 8 ? '+' : ''}):`, ...imZeitraum.map(zeile))
+    }
+    hinweis.push('', 'Weitere Wege: ohne Zeitraum noch einmal suchen, alles_durchsuchen für Wörter im Inhalt, unzugeordnete_dateien für Telegram-Dateien, die noch in keiner Akte liegen.')
+    return hinweis.join('\n')
+  }
+  const gezeigt = treffer.slice(0, anzahl)
+  const kopf = suchbegriff ? `Dateien zu „${suchbegriff}“${zeitraumText}` : `Dateien${zeitraumText}`
+  return [
+    `${kopf} (${treffer.length > anzahl ? `${anzahl} von ${treffer.length}` : treffer.length}, beste zuerst; nur, was der Mitarbeiter sehen darf):`,
+    ...gezeigt.map(zeile),
+    '',
+    'Weiter: dokument_inhalt (dokument_id + kunde_id oder objekt_id), datei_senden, datei_verschieben, datei_umbenennen.',
+  ].join('\n')
+}
+
+function zeile(t: ReturnType<typeof findeDateien>[number]): string {
+  const kennung = t.ort_art === 'objekt' ? `objekt_id=${t.ort_id}` : `kunde_id=${t.ort_id}`
+  const tag = isoTag(t.datum)
+  const teile = [tag ? deDatum(tag) : '', t.ordner && t.ort_art === 'objekt' ? `Ordner ${t.ordner}` : ''].filter(Boolean).join(', ')
+  const wie = t.gefunden_in.length ? ` — ${guete(t.punkte)} (${t.gefunden_in.join(', ')})` : ''
+  const knapp = t.knapp_daneben ? ' — Datum knapp außerhalb des Zeitraums' : ''
+  const inhalt = t.kurzinhalt ? `\n  Inhalt: ${kuerze(t.kurzinhalt, 160)}` : ''
+  return `- „${t.name || t.dateiname || 'ohne Namen'}“${teile ? ` (${teile})` : ''} in ${t.ort_art === 'objekt' ? 'Objekt' : 'Akte'} ${t.ort_name} [dokument_id=${t.dokument_id}, ${kennung}]${wie}${knapp}${inhalt}`
+}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { AlertTriangle, ArrowLeft, Check, ExternalLink, Flag, Forward, FolderInput, Inbox, ListChecks, Mail, MailOpen, Paperclip, PenSquare, RefreshCw, Reply, ReplyAll, Search, X } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
@@ -27,6 +27,17 @@ import { SecondaryButton, inputClass } from '../../components/ui'
 import { OutlookSchreiben } from '../../components/OutlookSchreiben'
 
 type Ansicht = { art: 'ordner'; ordner: string } | { art: 'offen' } | { art: 'suche'; begriff: string }
+
+/** Bremst Microsoft (zu viele Anfragen), Wartezeit in ms — sonst null. Gleiche Erkennung wie beim Werbung-Aufräumen. */
+function bremsWartezeit(fehler: string): number | null {
+  if (!/rate limit|bremst|too many requests|throttl|\b429\b|retry after/i.test(fehler)) return null
+  const ms = fehler.match(/retry after\s+(\d+)\s*ms/i)?.[1]
+  const s = fehler.match(/retry after\s+(\d+)\s*s(?:ec|ekunden)?\b/i)?.[1]
+  return Math.min(Math.max(ms ? Number(ms) : s ? Number(s) * 1000 : 30_000, 2_000), 35_000)
+}
+const warte = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+
+type Sammel = { gesamt: number; fertig: number; fehl: number; wartet: number; ziel: string }
 
 /** Bereich Privat → Hotmail: das Outlook-Postfach live (nichts wird kopiert); Mayer-Geschäft ist ausgeblendet. */
 export function PrivatHotmail({ start = 'ordner' }: { start?: 'ordner' | 'offen' }) {
@@ -60,6 +71,11 @@ function Inhalt({ start }: { start: 'ordner' | 'offen' }) {
   const [gewaehlt, setGewaehlt] = useState<string | null>(null)
   const [neueMail, setNeueMail] = useState(false)
   const [gesendet, setGesendet] = useState('')
+  // Mehrfachauswahl per Häkchen: markierte Mails gemeinsam in einen Ordner verschieben (nacheinander).
+  const [markiert, setMarkiert] = useState<Set<string>>(new Set())
+  const [sammel, setSammel] = useState<Sammel | null>(null)
+  const [sammelErgebnis, setSammelErgebnis] = useState('')
+  const anhalten = useRef(false)
 
   useEffect(() => {
     outlookOrdner()
@@ -96,6 +112,8 @@ function Inhalt({ start }: { start: 'ordner' | 'offen' }) {
 
   useEffect(() => {
     setGewaehlt(null)
+    setMarkiert(new Set())
+    setSammelErgebnis('')
     lade(ansicht)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ansicht])
@@ -104,6 +122,69 @@ function Inhalt({ start }: { start: 'ordner' | 'offen' }) {
   const entferne = (id: string) => {
     setMails((ms) => ms.filter((m) => m.id !== id))
     setGewaehlt(null)
+  }
+
+  const umschalten = (id: string) =>
+    setMarkiert((alt) => {
+      const neu = new Set(alt)
+      if (neu.has(id)) neu.delete(id)
+      else neu.add(id)
+      return neu
+    })
+  const alleMarkiert = mails.length > 0 && mails.every((m) => markiert.has(m.id))
+
+  async function verschiebeMarkierte(zielId: string) {
+    const ids = mails.filter((m) => markiert.has(m.id)).map((m) => m.id)
+    if (!ids.length || sammel) return
+    const zielName = ordner.find((o) => o.id === zielId)?.pfad ?? 'Ordner'
+    anhalten.current = false
+    setSammelErgebnis('')
+    let fertig = 0
+    let fehl = 0
+    const fehler: string[] = []
+    setSammel({ gesamt: ids.length, fertig, fehl, wartet: 0, ziel: zielName })
+    for (const id of ids) {
+      if (anhalten.current) break
+      // Bremst Microsoft, die verlangte Zeit warten und dieselbe Mail erneut versuchen (höchstens 3-mal).
+      for (let versuch = 0; ; versuch++) {
+        try {
+          await outlookVerschieben(id, zielId)
+          fertig++
+          setMails((ms) => ms.filter((m) => m.id !== id))
+          setMarkiert((alt) => {
+            const neu = new Set(alt)
+            neu.delete(id)
+            return neu
+          })
+          setGewaehlt((g) => (g === id ? null : g))
+          break
+        } catch (e) {
+          const text = e instanceof Error ? e.message : String(e)
+          const pause = bremsWartezeit(text)
+          if (pause !== null && versuch < 3 && !anhalten.current) {
+            setSammel({ gesamt: ids.length, fertig, fehl, wartet: Math.round(pause / 1000), ziel: zielName })
+            await warte(pause)
+            continue
+          }
+          fehl++
+          if (fehler.length < 2 && !fehler.includes(text)) fehler.push(text)
+          break
+        }
+      }
+      setSammel({ gesamt: ids.length, fertig, fehl, wartet: 0, ziel: zielName })
+      await warte(250)
+    }
+    const rest = ids.length - fertig - fehl
+    setSammel(null)
+    setSammelErgebnis(
+      [
+        `${fertig} von ${ids.length} Mails nach „${zielName}“ verschoben.`,
+        fehl ? `${fehl} nicht verschoben (${fehler.join(' | ')}) — sie bleiben markiert.` : '',
+        rest ? `${rest} wegen Anhalten nicht verschoben — sie bleiben markiert.` : '',
+      ]
+        .filter(Boolean)
+        .join(' '),
+    )
   }
 
   const titel = ansicht.art === 'offen' ? 'Offene Punkte' : ansicht.art === 'suche' ? `Suche: „${ansicht.begriff}“` : ordner.find((o) => o.id === ansicht.ordner)?.pfad ?? 'Posteingang'
@@ -169,15 +250,68 @@ function Inhalt({ start }: { start: 'ordner' | 'offen' }) {
       <div className="flex flex-col gap-4 xl:flex-row">
         <div className={`min-w-0 xl:w-[26rem] xl:flex-shrink-0 ${gewaehlt ? 'hidden xl:block' : ''}`}>
           <div className="mb-2 flex items-center justify-between text-xs text-slate-500">
-            <span>
-              {titel} · {mails.length} Mails
-            </span>
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded border-slate-300"
+                checked={alleMarkiert}
+                disabled={!mails.length || !!sammel}
+                onChange={() => setMarkiert(alleMarkiert ? new Set() : new Set(mails.map((m) => m.id)))}
+                title={alleMarkiert ? 'Auswahl aufheben' : 'Alle geladenen Mails markieren'}
+              />
+              <span>
+                {titel} · {mails.length} Mails
+              </span>
+            </label>
             {ausgeblendet > 0 && <span title="Mails von/an Mayer-Adressen und an Mayer weitergeleitete Unterhaltungen">{ausgeblendet} Mayer-Mails ausgeblendet</span>}
           </div>
+          {(markiert.size > 0 || sammel) && (
+            <div className="mb-2 flex flex-wrap items-center gap-2 rounded-xl border border-accent-200 bg-accent-50 px-3 py-2 text-sm text-slate-700">
+              {sammel ? (
+                <>
+                  <RefreshCw size={14} className="animate-spin text-accent-700" />
+                  <span>
+                    {sammel.fertig + sammel.fehl} von {sammel.gesamt} nach „{sammel.ziel}“ …{sammel.fehl ? ` (${sammel.fehl} fehlgeschlagen)` : ''}
+                    {sammel.wartet ? ` Microsoft bremst, warte ${sammel.wartet} Sekunden …` : ''}
+                  </span>
+                  <button className="ml-auto text-xs text-slate-500 hover:text-slate-700" onClick={() => (anhalten.current = true)}>
+                    Anhalten
+                  </button>
+                </>
+              ) : (
+                <>
+                  <span className="font-medium">{markiert.size} markiert</span>
+                  <select
+                    className={`${inputClass} w-auto py-1 text-sm`}
+                    value=""
+                    onChange={(e) => e.target.value && verschiebeMarkierte(e.target.value)}
+                    title="Markierte Mails in Ordner verschieben"
+                  >
+                    <option value="">Verschieben nach …</option>
+                    {ordner
+                      .filter((o) => !/gelöscht|deleted|papierkorb/i.test(o.name))
+                      .filter((o) => !(ansicht.art === 'ordner' && o.id === ansicht.ordner))
+                      .map((o) => (
+                        <option key={o.id} value={o.id}>
+                          {o.pfad}
+                        </option>
+                      ))}
+                  </select>
+                  <button className="ml-auto text-xs text-slate-500 hover:text-slate-700" onClick={() => setMarkiert(new Set())}>
+                    Auswahl aufheben
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+          {sammelErgebnis && !sammel && <p className="mb-2 text-sm text-emerald-700">{sammelErgebnis}</p>}
           <ul className="divide-y divide-slate-100 overflow-hidden rounded-xl border border-slate-200 bg-white">
             {mails.map((m) => (
-              <li key={m.id}>
-                <button className={`w-full px-3 py-2.5 text-left hover:bg-slate-50 ${gewaehlt === m.id ? 'bg-accent-50' : ''}`} onClick={() => setGewaehlt(m.id)}>
+              <li key={m.id} className={`flex items-stretch ${markiert.has(m.id) ? 'bg-accent-50/60' : ''}`}>
+                <label className="flex cursor-pointer items-start pl-3 pt-3" title="Für Verschieben markieren">
+                  <input type="checkbox" className="h-4 w-4 rounded border-slate-300" checked={markiert.has(m.id)} disabled={!!sammel} onChange={() => umschalten(m.id)} />
+                </label>
+                <button className={`min-w-0 flex-1 px-3 py-2.5 text-left hover:bg-slate-50 ${gewaehlt === m.id ? 'bg-accent-50' : ''}`} onClick={() => setGewaehlt(m.id)}>
                   <div className="flex items-center justify-between gap-2">
                     <span className={`truncate text-sm ${m.gelesen ? 'text-slate-700' : 'font-semibold text-slate-900'}`}>{m.von.name || m.von.adresse || 'Unbekannt'}</span>
                     <span className="shrink-0 text-xs text-slate-400">{m.datum ? fmtDateTime(m.datum) : ''}</span>

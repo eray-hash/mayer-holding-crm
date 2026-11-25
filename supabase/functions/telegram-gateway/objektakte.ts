@@ -314,7 +314,8 @@ export function objektakteText(
   if (abr && euro(abr.daten.provision)) z.push(`Erwartete Provision laut Abrechnung: ${euro(abr.daten.provision)}`)
 
   z.push('', 'AKTIVITÄTEN/NOTIZEN (neueste zuerst):')
-  const akt = (o.activities ?? []) as { date?: string; user?: string; text?: string }[]
-  z.push(...(akt.length ? akt.slice(0, 25).map((a) => `- ${deDatum(a.date)} ${a.user || ''}: ${a.text}`) : ['(keine)']))
+  const akt = (o.activities ?? []) as { id?: string; date?: string; user?: string; text?: string }[]
+  // aktivitaet_id: zum Korrigieren/Löschen einzelner Einträge mit aktivitaet_aendern (objekt_id).
+  z.push(...(akt.length ? akt.slice(0, 25).map((a) => `- ${deDatum(a.date)} ${a.user || ''}: ${a.text}${a.id ? ` [aktivitaet_id=${a.id}]` : ''}`) : ['(keine)']))
   return kuerze(z.join('\n'), 26000)
 }
