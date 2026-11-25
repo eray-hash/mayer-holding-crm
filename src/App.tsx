@@ -64,6 +64,7 @@ import { PartnerSeite } from './pages/partner/Partner'
 import { PostfachEinrichtenHinweis } from './components/PostfachEinstellungen'
 import { ToDoListe, BereichToDoListe } from './pages/todo/ToDoListe'
 import { HeuteScreen } from './pages/heute/HeuteScreen'
+import { ErinnerungenSeite } from './components/MeineErinnerungen'
 import { Postfach } from './pages/postfach/Postfach'
 import { UngeklaerteEingaenge } from './pages/eingang/UngeklaerteEingaenge'
 import { Ablegen } from './pages/ablegen/Ablegen'
@@ -120,6 +121,7 @@ function AdminRoutesContent() {
       <Routes>
         <Route path="/" element={<RootRedirect />} />
         <Route path="/heute" element={<HeuteScreen />} />
+        <Route path="/erinnerungen" element={<ErinnerungenSeite />} />
         <Route path="/postfach" element={<Postfach />} />
         <Route path="/eingaenge" element={<UngeklaerteEingaenge />} />
         <Route path="/ablegen" element={<Ablegen />} />

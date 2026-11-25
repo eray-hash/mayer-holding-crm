@@ -91,6 +91,11 @@ export const KERN: readonly string[] = [
   'todo_aendern',
   // 24.11.2026: endgültig löschen statt nur abhaken — gehört zu den To-do-Werkzeugen, kommt oft ohne Stichwort („nimm X raus“).
   'todo_loeschen',
+  // 25.11.2026: Erinnerungen statt To-dos („erinnere mich/ihn …“) — kommen oft ohne Stichwort, deshalb im Kern.
+  'erinnerung_anlegen',
+  'erinnerungen_zeigen',
+  'erinnerung_verschieben',
+  'erinnerung_loeschen',
   'dokument_erstellen',
   'datei_senden',
   'alles_durchsuchen',

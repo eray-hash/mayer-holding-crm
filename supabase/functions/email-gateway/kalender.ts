@@ -82,7 +82,8 @@ async function ladeTeam(admin: Db): Promise<Map<string, Person>> {
  * `ohneInhalt`: nur DASS die Nachricht ging, nicht ihr Text — für Inhalte nur für Superuser (das Protokoll lesen auch
  * Geschäftsführer, die keine Superuser sind).
  */
-export async function sendeTelegram(chat: number | string | null, text: string, art = 'telegram', ohneInhalt = false): Promise<boolean> {
+// extra: weitere Felder für sendMessage, z. B. reply_markup (Knöpfe unter der Erinnerung, erinnerungVersand.ts).
+export async function sendeTelegram(chat: number | string | null, text: string, art = 'telegram', ohneInhalt = false, extra: Record<string, unknown> = {}): Promise<boolean> {
   const token = Deno.env.get('TELEGRAM_BOT_TOKEN')
   if (!token || !chat) return false
   let ok = false
@@ -90,7 +91,7 @@ export async function sendeTelegram(chat: number | string | null, text: string, 
     const antwort = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ chat_id: chat, text }),
+      body: JSON.stringify({ chat_id: chat, text, ...extra }),
     })
     if (!antwort.ok) console.error('Telegram-Nachricht zum Termin fehlgeschlagen:', antwort.status)
     ok = antwort.ok

@@ -293,6 +293,7 @@ AUSFUEHRER.crm_termin_absagen = async (admin, ich, p) => {
 }
 import { BUCHUNGS_AKTIONEN, buchungAktion } from './buchung.ts'
 import { sendeTodoErinnerungen } from './todoErinnerung.ts'
+import { sendeFaelligeErinnerungen } from './erinnerungVersand.ts'
 import { pruefeTodoAufraeumHinweise } from './todoAufraeumenHinweis.ts'
 import { pruefeNeuigkeitenTipps } from './neuigkeitenTipp.ts'
 import { holeGesendeteMails } from './gesendetAbruf.ts'
@@ -3595,6 +3596,9 @@ Deno.serve((req: Request) => mitAnlass(async () => {
         return { gesendet: 0 }
       })
       if (todoErinnerung.gesendet > 0) console.log(`To-do-Erinnerungen: ${todoErinnerung.gesendet} gesendet.`)
+      // Erinnerungen (Tabelle erinnerungen, erinnerungVersand.ts, 25.11.2026): „erinnere mich/ihn um …“ — kein To-do. Telegram an
+      // fuer_email mit Knöpfen „✓ Erledigt“ / „⏰ In 1 Stunde nochmal“; doppelt-sicher beansprucht; wirft nie.
+      await sendeFaelligeErinnerungen(admin).catch((err) => console.error('Erinnerungen fehlgeschlagen:', err))
       // Termin-Briefing vor Kundenterminen und wahlweise Morgenübersicht ab 7:30 (terminBriefing.ts) — nur Telegram an
       // Mitarbeiter, einmal je Termin und Empfänger. Im Hintergrund (Gesprächspunkte per KI), eigener Rahmen für die
       // Kostenzuordnung; wirft nie.

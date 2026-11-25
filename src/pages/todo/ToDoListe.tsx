@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Plus, Check, RotateCcw, Trash2, Share2, Upload, Download, ChevronDown, ArrowRightLeft, Bell, X, ListOrdered, Wand2, Sparkles, EyeOff, CalendarClock, Merge } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { Plus, Check, RotateCcw, Trash2, Share2, Upload, Download, ChevronDown, ArrowRightLeft, Bell, X, ListOrdered, Wand2, Sparkles, EyeOff, CalendarClock, Merge, AlarmClock } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 import { useAuth } from '../../context/AuthContext'
 import { supabase, isSupabaseConfigured } from '../../lib/supabaseClient'
@@ -317,6 +318,12 @@ function ToDoListeKern({ scope }: { scope: Scope }) {
               </select>
               <ChevronDown size={14} className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
             </div>
+          )}
+          {/* Erinnerungen stehen bewusst NICHT in der To-do-Liste (25.11.2026), sondern auf einer eigenen Seite. */}
+          {scope.kind === 'privat' && isSupabaseConfigured && (
+            <Link to="/erinnerungen" className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm text-slate-600 hover:bg-slate-50">
+              <AlarmClock size={14} className="text-amber-500" /> Erinnerungen
+            </Link>
           )}
           <select value={sortierung} onChange={(e) => setSortierung(e.target.value as Sortierung)} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm">
             <option value="reihenfolge">Reihenfolge (wie Excel)</option>

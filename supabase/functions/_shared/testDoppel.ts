@@ -64,6 +64,11 @@ function filterAus(spalte: string, op: string, wert: unknown): Filter {
       if (w === 'false') return (z) => z[spalte] === false
       throw new Error(`Testdatenbank: is.${w} wird nicht unterstützt`)
     }
+    case 'ilike': {
+      // PostgREST-ilike: % = beliebig viele Zeichen, _ = genau eins, ohne Groß/klein.
+      const muster = new RegExp(`^${String(wert).replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/%/g, '.*').replace(/_/g, '.')}$`, 'i')
+      return (z) => !leer(z[spalte]) && muster.test(String(z[spalte]))
+    }
     case 'in': {
       const liste = Array.isArray(wert) ? wert : String(wert).replace(/^\(|\)$/g, '').split(',').map((s) => s.trim())
       return (z) => liste.some((w) => gleich(z[spalte], w))
