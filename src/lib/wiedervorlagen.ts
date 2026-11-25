@@ -20,6 +20,8 @@ export type Wiedervorlage = {
   notiz?: string
   /** JJJJ-MM-TT */
   faellig: string
+  /** HH:MM (deutsche Ortszeit); dann kommt zur Zeit eine Erinnerung per Telegram */
+  uhrzeit?: string
   verantwortlich?: string
   quelle: 'hand' | 'regel'
   erledigtAm?: string
@@ -55,6 +57,7 @@ function ausZeile(z: any): Wiedervorlage {
     titel: z.titel,
     notiz: z.notiz ?? undefined,
     faellig: String(z.faellig).slice(0, 10),
+    uhrzeit: z.uhrzeit ?? undefined,
     verantwortlich: z.verantwortlich ?? undefined,
     quelle: z.quelle === 'regel' ? 'regel' : 'hand',
     erledigtAm: z.erledigt_am ?? undefined,

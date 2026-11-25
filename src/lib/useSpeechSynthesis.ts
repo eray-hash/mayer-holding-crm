@@ -5,7 +5,8 @@ export function speak(text: string, enabled: boolean, amEnde?: () => void) {
   const synth = window.speechSynthesis
   if (!synth) return
   synth.cancel() // vorherige Ausgabe abbrechen statt zu überlappen
-  const utterance = new SpeechSynthesisUtterance(text)
+  // **…** (Hervorhebung des Assistenten) und die farbigen Marken nicht mitsprechen.
+  const utterance = new SpeechSynthesisUtterance(text.replace(/\*\*/g, '').replace(/[🟢🟡🔴]\s?/gu, ''))
   utterance.lang = 'de-DE'
   if (amEnde) {
     utterance.onend = amEnde

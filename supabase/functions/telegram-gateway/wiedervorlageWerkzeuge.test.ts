@@ -1,7 +1,7 @@
 // Prüft die Wiedervorlage-Werkzeuge mit einer nachgebauten Datenbank (ohne Netz): Rechte je Bereich,
 // private Akten, Filter und Sortierung der Liste, Felder beim Anlegen, Erledigen und Verschieben.
 import { assert, assertEquals, assertMatch, assertStringIncludes } from 'jsr:@std/assert@1'
-import { darfWv, fuehreWvWerkzeugAus, pruefeDatum, type WvKontext } from './wiedervorlageWerkzeuge.ts'
+import { darfWv, fuehreWvWerkzeugAus, pruefeDatum, pruefeUhrzeit, type WvKontext } from './wiedervorlageWerkzeuge.ts'
 import { aufgabenUebersicht } from './aufgaben.ts'
 
 // deno-lint-ignore no-explicit-any
@@ -158,8 +158,35 @@ Deno.test('anlegen: Felder aus der Akte, quelle hand, erstellt_von', async () =>
     verantwortlich: 'Quirin Lang',
     quelle: 'hand',
     erstellt_von: 'MA Test',
+    uhrzeit: null,
   })
   assertEquals(protokoll.length, 1)
+  assertEquals(db.geschrieben.some((g) => g.tabelle === 'erinnerungen'), false)
+})
+
+Deno.test('anlegen mit Uhrzeit: Erinnerung an den Anlegenden, mit der Wiedervorlage verknüpft', async () => {
+  const { k, db } = kontext(ma)
+  const text = await fuehreWvWerkzeugAus('wiedervorlage_anlegen', { kunde_id: 'k_erb', titel: 'Kennenlernen nachfassen', faellig: '2026-11-27', uhrzeit: '12 Uhr' }, k)
+  assertStringIncludes(text, '27.11.2026, 12:00 Uhr')
+  assertStringIncludes(text, 'Erinnerung per Telegram')
+  const wv = db.geschrieben.find((g) => g.tabelle === 'wiedervorlagen' && g.art === 'insert')!.werte
+  assertEquals(wv.uhrzeit, '12:00')
+  const er = db.geschrieben.find((g) => g.tabelle === 'erinnerungen')!.werte
+  assertEquals(er.fuer_email, 'ma@x.de')
+  assertEquals(er.faellig_um, '2026-11-27T11:00:00.000Z') // 12:00 Berlin im Winter
+  assertEquals(er.kunde_id, 'k_erb')
+  assertEquals(er.quelle, 'wiedervorlage')
+  const verknuepft = db.geschrieben.find((g) => g.tabelle === 'wiedervorlagen' && g.art === 'update')!
+  assertEquals(typeof verknuepft.werte.erinnerung_id, 'string')
+})
+
+Deno.test('pruefeUhrzeit', () => {
+  assertEquals(pruefeUhrzeit('12'), '12:00')
+  assertEquals(pruefeUhrzeit('9.30'), '09:30')
+  assertEquals(pruefeUhrzeit('12 Uhr'), '12:00')
+  assertEquals(pruefeUhrzeit(''), null)
+  assertEquals(pruefeUhrzeit('25:00'), undefined)
+  assertEquals(pruefeUhrzeit('mittags'), undefined)
 })
 
 Deno.test('anlegen: abgelehnt bei fremdem Bereich, privat, Sammelakte, falschem Datum', async () => {

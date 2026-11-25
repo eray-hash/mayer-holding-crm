@@ -46,6 +46,8 @@ import { fuehreVertragWerkzeugAus, istVertragWerkzeug, VERTRAG_WERKZEUGE } from 
 import { fuehrePlanKnopfAus, istPlanKnopf } from '../email-gateway/privatTagesplan.ts'
 import { kvAkteHinweisNachAnlegen } from './kvAkteVorschlag.ts'
 import { fuehreWvWerkzeugAus, istWvWerkzeug, WV_WERKZEUGE } from './wiedervorlageWerkzeuge.ts'
+import { fettMarken } from '../_shared/fettMarken.ts'
+import { behaeltMailEntwurf } from './mailEntwurf.ts'
 import { fuehreTagesplanWerkzeugAus, istTagesplanWerkzeug, TAGESPLAN_WERKZEUGE } from './tagesplanWerkzeuge.ts'
 import { fuehreProfilWerkzeugAus, istProfilWerkzeug, nachfrageAnhaengen, PROFIL_WERKZEUGE, profilNachfrage } from './profilWerkzeuge.ts'
 import { DUBLETTEN_WERKZEUGE, fuehreDublettenWerkzeugAus, istDublettenWerkzeug } from './dublettenWerkzeug.ts'
@@ -178,7 +180,8 @@ async function sendTelegramMessage(chatId: number, text: string): Promise<void> 
   }
   // Telegram erlaubt höchstens 4096 Zeichen pro Nachricht.
   for (let i = 0; i < text.length; i += 4000) {
-    const teil = text.slice(i, i + 4000)
+    // **…** aus der Antwort wird fett (fettMarken.ts) — als entities, ohne parse_mode.
+    const { text: teil, entities } = fettMarken(text.slice(i, i + 4000))
     // Einmal nachfassen; bleibt es erfolglos, landet der Grund in app_fehler (Abendbericht), damit eine
     // verlorene Antwort auffällt (20.11.2026: zwei Antworten des privaten Bots kamen nie an).
     let grund = ''
@@ -187,7 +190,7 @@ async function sendTelegramMessage(chatId: number, text: string): Promise<void> 
         const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ chat_id: chatId, text: teil }),
+          body: JSON.stringify({ chat_id: chatId, text: teil, ...(entities.length > 0 ? { entities } : {}) }),
         })
         if (res.ok) { grund = ''; break }
         grund = `${res.status} ${(await res.text().catch(() => '')).slice(0, 300)}`
@@ -3867,7 +3870,7 @@ So arbeitest du:
 - Stammdaten aus E-Mail-Signaturen: Das CRM liest die Signaturen in den Mails der Kunden und trägt fehlende Telefonnummern, Anschriften und E-Mail-Adressen selbst in die Akte ein (Verlaufseintrag „… aus E-Mail-Signatur vom … ergänzt“). Vorhandene Angaben überschreibt es nie; nennt eine Signatur etwas anderes, entsteht ein Vorschlag. Mit stammdaten_vorschlaege (aktion „auflisten“) zeigst du die offenen Vorschläge, mit „uebernehmen“ trägst du den neuen Wert ein — nur, wenn der Mitarbeiter das ausdrücklich will, und nenne vorher neuen und bisherigen Wert —, mit „verwerfen“ lehnst du ihn ab.
 - Doppelte Akten: Fragt jemand, ob es Akten doppelt gibt oder einen Kunden zweimal, nimm dubletten_finden (nur lesen) und zeig die Gruppen mit Gründen. Zusammenführen weiterhin nur mit kunden_zusammenfuehren und erst nach ausdrücklicher Bestätigung. Liegen die Akten in verschiedenen Bereichen, frag zuerst, ob die Person bewusst in beiden Bereichen geführt wird; sonst erst kunde_bereich_wechseln. Nebeneinander vergleichen und „keine Dublette“ merken kann die Geschäftsführung auf der Seite Dubletten im CRM.
 - Fehlende Kontaktdaten: Für „Wo fehlen Telefonnummern?“ oder „Welche Akten kann ich nicht erreichen?“ nimm kontakt_luecken. Das CRM fragt außerdem werktags über dich nach („Kurze Frage zu deinen Akten – hier fehlen Kontaktdaten“); im Verlauf steht davor eine Systemmeldung „Im Auftrag von Kontakt-Nachfrage k_… k_…“ mit den Kennungen der Akten. Nennt der Mitarbeiter darauf eine Nummer oder Adresse (Text oder Sprachnachricht), trag sie sofort mit kunde_aendern (telefon bzw. email) in die passende dieser Akten ein und bestätige in einer Zeile; bei Hörfehlern in Zahlen oder Adressen lies sie zur Sicherheit noch einmal vor. Weiß er es nicht, ist das in Ordnung — dann nichts eintragen und nicht nachbohren. Mit nachfrage=false/true schaltet er die Nachfrage für sich ab oder an („Kontakt-Nachfrage aus“).
-- Wiedervorlagen: Jede Kundenakte hat im CRM einen Reiter „Wiedervorlagen“ (wann muss bei wem nachgefasst werden). Viele davon legt das CRM selbst an und hakt sie selbst ab, z. B. bei einem Statuswechsel der Akte, wenn ein Kostenvoranschlag erstellt oder angenommen wird, Unterlagen angefordert oder eingegangen sind, eine Rechnung verschickt oder bezahlt ist, ein Termin eingetragen oder etwas unterschrieben wurde — die musst du nicht anlegen. Fragt jemand „Was ist heute fällig?“, „Welche Wiedervorlagen habe ich diese Woche?“ oder „Was liegt bei Akte X noch an?“, nimm wiedervorlagen_auflisten (für „heute“ nur_faellig=true, für „ich“ zustaendig="ich"). Sagt er „Leg mir eine Wiedervorlage an …“ oder „bei Kunde X am Freitag nachfassen“ (ohne Uhrzeit, als Wiedervorlage der Akte), nimm wiedervorlage_anlegen mit kunde_id und Datum. Will er zu einer Uhrzeit erinnert werden („erinnere mich um 10, Kunde X anzurufen“), nimm erinnerung_anlegen mit kunde_id. Sagt er, eine Wiedervorlage ist „erledigt“, hak sie mit wiedervorlage_erledigen ab; will er sie auf später legen, nimm wiedervorlage_verschieben. Die id holst du vorher mit wiedervorlagen_auflisten; passen mehrere, frag nach. Private Kontakte haben keine Wiedervorlagen (dafür todo_anlegen). Für die Gesamtsicht über alle Aufgaben bleibt aufgaben_uebersicht; dort stehen die Wiedervorlagen mit drin.
+- Wiedervorlagen: Jede Kundenakte hat im CRM einen Reiter „Wiedervorlagen“ (wann muss bei wem nachgefasst werden). Viele davon legt das CRM selbst an und hakt sie selbst ab, z. B. bei einem Statuswechsel der Akte, wenn ein Kostenvoranschlag erstellt oder angenommen wird, Unterlagen angefordert oder eingegangen sind, eine Rechnung verschickt oder bezahlt ist, ein Termin eingetragen oder etwas unterschrieben wurde — die musst du nicht anlegen. Fragt jemand „Was ist heute fällig?“, „Welche Wiedervorlagen habe ich diese Woche?“ oder „Was liegt bei Akte X noch an?“, nimm wiedervorlagen_auflisten (für „heute“ nur_faellig=true, für „ich“ zustaendig="ich"). Sagt er „Leg mir eine Wiedervorlage an …“ oder „bei Kunde X am Freitag nachfassen“ (ohne Uhrzeit, als Wiedervorlage der Akte), nimm wiedervorlage_anlegen mit kunde_id und Datum. Nennt er dazu eine Uhrzeit („Wiedervorlage Freitag 12 Uhr“), gib sie als uhrzeit mit — dann kommt die Erinnerung zu dieser Zeit automatisch, ohne Rückfrage und ohne extra erinnerung_anlegen. Will er nur zu einer Uhrzeit erinnert werden, ohne Wiedervorlage („erinnere mich um 10, Kunde X anzurufen“), nimm erinnerung_anlegen mit kunde_id. Sagt er, eine Wiedervorlage ist „erledigt“, hak sie mit wiedervorlage_erledigen ab; will er sie auf später legen, nimm wiedervorlage_verschieben. Die id holst du vorher mit wiedervorlagen_auflisten; passen mehrere, frag nach. Private Kontakte haben keine Wiedervorlagen (dafür todo_anlegen). Für die Gesamtsicht über alle Aufgaben bleibt aufgaben_uebersicht; dort stehen die Wiedervorlagen mit drin.
 - Neuanfragen einstufen: Für jede Neuanfrage der Unternehmensberatung legt das CRM nach zwei Tagen die Wiedervorlage „Neuanfrage prüfen“ an. Antwortet der Mitarbeiter dazu kurz mit „qualifiziert“ / „passt“, „passt nicht“ oder „später“ (auch „in zwei Wochen nochmal“), nimm lead_einstufen mit der Akte (ergebnis qualifiziert, passt_nicht oder spaeter; bei „später“ mit tage, falls er eine Frist nennt) — ohne Rückfrage, wenn klar ist, welche Akte gemeint ist; sonst kurz nachfragen. Nur Status, die es gibt: Erstkontakt, Nicht qualifiziert, Wiedervorlage.
 - Statusbericht an den Kunden: Mit statusbericht_entwurf (kunde_id, optional seit) zeigst du den Entwurf des Berichts „Stand Ihres Projekts“ — was seit dem letzten Bericht passiert ist, die nächsten Schritte, was wir noch vom Kunden brauchen, Ampel. Gib den Entwurf so wieder und nenne den Link aus der Antwort: Prüfen, ändern und senden (E-Mail mit PDF oder nur PDF) geht nur im CRM, du selbst sendest den Bericht nie. Hinweise „nur für den Mitarbeiter“ sind für ihn, nicht für den Kunden. Die wöchentliche Erinnerung stellt man im CRM im Fenster „Statusbericht an Kunden“ ein.
 - Termin ↔ Akte: Das CRM ordnet Termine selbst einer Akte zu, wenn die E-Mail-Adresse eines Gastes bei genau einer Akte steht. Steht nur ein Name im Titel, zeigt termine_zeigen einen Vorschlag (akte_vorschlag). Sagt der Mitarbeiter, zu welcher Akte ein Termin gehört, oder bestätigt er einen Vorschlag, ordne ihn mit termin_zuordnen zu (ohne kunde_id = Vorschlag übernehmen; sonst kunde_id vorher mit kunden_suchen ermitteln). loesen=true entfernt eine falsche Verknüpfung, vorschlag_ablehnen=true verwirft einen falschen Vorschlag — beides kommt für diesen Termin nicht wieder. gleiche_titel=true nur, wenn er ausdrücklich alle seine Termine mit diesem Titel meint (Serientermine). Weise auf offene Vorschläge höchstens einmal je Gespräch hin.
@@ -3882,7 +3885,7 @@ So arbeitest du:
 Ton und Form:
 - KURZ (Wunsch der Geschäftsführung, Andreas Mayer hat lange Texte ausdrücklich bemängelt): in der Regel 1–3 kurze Sätze, wie eine SMS unter Kollegen. Zuerst das Ergebnis oder die Antwort, dann höchstens EINE Frage. Keine Aufzählung von Angeboten („Soll ich noch … oder … ?“) — höchstens ein Angebot, und nur, wenn es wirklich naheliegt. Keine Zusammenfassung dessen, was der Mitarbeiter gerade selbst geschrieben hat. Länger nur, wenn er ausdrücklich eine Übersicht, Einzelheiten oder einen Text zum Verschicken will.
 - Deutsch, per Du, knapp und konkret wie ein guter Kollege. Keine Floskeln, keine englischen Begriffe.
-- Reiner Text ohne Markdown: keine Sternchen, keine Rauten, keine Tabellen. Aufzählungen als einfache Zeilen mit "- ".
+- Reiner Text ohne Markdown: keine Rauten, keine Tabellen, keine sonstigen Sternchen. Aufzählungen als einfache Zeilen mit "- ". Einzige Ausnahme, damit das Wesentliche sofort auffällt: Hat die Antwort mehr als zwei Zeilen, setzt du das Wichtigste (das Ergebnis oder die Frage, auf die du eine Antwort brauchst; ein Satz, höchstens zwei Stellen je Antwort) zwischen doppelte Sternchen **so** und stellst eine farbige Marke davor: 🟢 erledigt/gut, 🟡 wartet auf seine Antwort oder Entscheidung, 🔴 hat nicht geklappt/Problem. Das System macht daraus Fettdruck. Kurze Antworten (ein, zwei Zeilen) ohne Marke und ohne Sternchen. In Texten, die an andere gehen (Mails, Nachrichten an Kollegen, Dokumente), nie.
 - Zähle nicht auf, was du alles nicht getan oder nicht gespeichert hast, solange niemand danach fragt.
 - Nenne bei jeder Änderung, bei welchem Kunden du was genau getan hast. Nenne keine internen IDs oder Dateipfade, außer der Mitarbeiter fragt danach.
 - Sprich nie über deine Werkzeuge und nenne nie ihre Namen. Sag einfach, was du tust oder nicht tust.`
@@ -4087,11 +4090,34 @@ export async function agentAntwort(supabase: Supa, mitarbeiterRoh: Mitarbeiter, 
         : 'Ich bin damit nicht fertig geworden. Sag mir bitte noch einmal in einem Satz, was ich tun soll.'
   }
 
+  // Eine Zwischenfrage („Welche Adresse hat Uwe?“) oder eine Datei verwirft die gezeigte Mail nicht mehr
+  // (Andreas 25.11.2026: „Ja“ nach einer Rückfrage → „keine vorbereitete Mail“). Sie bleibt freigebbar,
+  // solange in diesem Zug weder neu vorbereitet noch gesendet wurde und er nicht ablehnt; mail_senden
+  // prüft weiterhin die 30 Minuten seit dem Vorbereiten.
+  if (behaeltMailEntwurf(eingang, !!ctx.vorherigeMailAnfrage, !!state.mail_anfrage, !!state.mail_start)) state.mail_anfrage = ctx.vorherigeMailAnfrage
+
   neu.push({ role: 'assistant', content: antwort })
   state.zuege = [...state.zuege, { z: new Date().toISOString(), msgs: fuerVerlauf(neu) }].slice(-10)
   while (state.zuege.length > 1 && JSON.stringify(state.zuege).length > 60000) state.zuege.shift()
   state.aktionen = state.aktionen.slice(-12)
   return antwort
+}
+
+// Läuft für den Mitarbeiter gerade die Auswertung einer Datei (Foto kurz vorher geschickt), wartet eine Text-
+// oder Sprachnachricht, bis sie fertig ist — sonst kennt der Assistent die Datei noch nicht (Hasan 25.11.2026:
+// Visitenkarte und 5 s später die Sprachnachricht dazu; die Antwort bezog sich auf die vorige Karte).
+// Höchstens 90 s; liefert true, wenn gewartet wurde (dann den Gesprächsstand neu laden).
+async function warteAufDateiLauf(supabase: Supa, mitarbeiterId: string): Promise<boolean> {
+  const ende = Date.now() + 90_000
+  let gewartet = false
+  while (Date.now() < ende) {
+    const { data } = await supabase.from('mitarbeiter').select('datei_lauf_seit').eq('id', mitarbeiterId).maybeSingle()
+    const seit = data?.datei_lauf_seit ? Date.parse(data.datei_lauf_seit) : 0
+    if (!seit || Date.now() - seit > LAUF_VERWAIST_MS) return gewartet
+    gewartet = true
+    await new Promise((r) => setTimeout(r, 1500))
+  }
+  return gewartet
 }
 
 // Sicherheitsnetz hinter dem Assistenten: Alles, was in diesem Eingang gespeichert wurde und danach
@@ -4357,7 +4383,7 @@ async function webAnfrage(req: Request, body: any, headers: Record<string, strin
   const getippt = typeof body.text === 'string' ? body.text.trim() : ''
   if (!getippt && !bild) return json({ error: 'Unbekannte Anfrage.' }, 400)
 
-  const state = ladeState(mitarbeiter.telegram_pending)
+  const state = ladeState((await warteAufDateiLauf(supabase, mitarbeiter.id)) ? await ladeZustandRoh(supabase, mitarbeiter.id) : mitarbeiter.telegram_pending)
   const letzteAktion = state.aktionen.length > 0 ? state.aktionen[state.aktionen.length - 1].z : ''
   // Was im CRM gerade offen ist, damit „diese Mail" / „dieser Kunde" verstanden wird. Nur die Kennung,
   // streng geprüft — kein Text aus einer Mail gelangt so in die Anweisung.
@@ -4859,7 +4885,9 @@ async function verarbeiteNachricht(supabase: Supa, message: any, chatId: number,
   }
 
   try {
-  const state = ladeState(privatBot ? await ladeZustandRoh(supabase, mitarbeiter.id) : mitarbeiter.telegram_pending)
+  const gewartet = !istDatei && (await warteAufDateiLauf(supabase, mitarbeiter.id))
+  if (gewartet) await sendeTippen(chatId)
+  const state = ladeState(privatBot || gewartet ? await ladeZustandRoh(supabase, mitarbeiter.id) : mitarbeiter.telegram_pending)
   let antwort: string
   try {
     antwort = await agentAntwort(supabase, mitarbeiter, state, eingang)

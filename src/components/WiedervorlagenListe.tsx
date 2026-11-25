@@ -136,6 +136,7 @@ export function WiedervorlagenListe({
                     </span>
                   )}
                 </p>
+                {w.uhrzeit && <p className="text-xs font-medium text-accent-700">um {w.uhrzeit} Uhr (Erinnerung per Telegram)</p>}
                 {w.notiz && <p className="text-xs text-slate-500">{w.notiz}</p>}
                 {w.verantwortlich && <p className="text-xs text-slate-400">{w.verantwortlich}</p>}
               </div>

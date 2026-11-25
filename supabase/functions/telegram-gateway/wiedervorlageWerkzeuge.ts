@@ -13,6 +13,7 @@
 import { alsIso, ordneZu, personenNamen } from '../_shared/aufgabenKern.ts'
 import { darfAkte, darfBereich, istEigene, istPrivat, nichtFreigegeben, type RechteMitarbeiter, SAMMELAKTEN } from './rechte.ts'
 import { alleZeilen } from '../_shared/alleZeilen.ts'
+import { berlinZeitZuUtc } from '../_shared/erinnerungKern.ts'
 
 // deno-lint-ignore no-explicit-any
 type Supa = any
@@ -42,13 +43,14 @@ export const WV_WERKZEUGE = [
   {
     name: 'wiedervorlage_anlegen',
     description:
-      'Legt von Hand eine Wiedervorlage in einer Kundenakte an („Leg mir eine Wiedervorlage an: Akte X am Freitag nachfassen“). Bereich und Zuständiger kommen aus der Akte. Nicht für private Kontakte. Viele Wiedervorlagen legt das CRM selbst an — vorher mit wiedervorlagen_auflisten (kunde_id) prüfen, ob es schon eine passende gibt.',
+      'Legt von Hand eine Wiedervorlage in einer Kundenakte an („Leg mir eine Wiedervorlage an: Akte X am Freitag nachfassen“, auch mit Uhrzeit: „Wiedervorlage Freitag 12 Uhr“ → uhrzeit). Bereich und Zuständiger kommen aus der Akte. Nicht für private Kontakte. Viele Wiedervorlagen legt das CRM selbst an — vorher mit wiedervorlagen_auflisten (kunde_id) prüfen, ob es schon eine passende gibt.',
     input_schema: {
       type: 'object',
       properties: {
         kunde_id: { type: 'string', description: 'Die Akte (mit kunden_suchen ermitteln).' },
         titel: { type: 'string', description: 'Was zu tun ist, kurz, z. B. "Wegen Unterlagen nachfassen".' },
         faellig: { type: 'string', description: 'Fälligkeit als JJJJ-MM-TT (z. B. 2026-11-27).' },
+        uhrzeit: { type: 'string', description: 'Optional: Uhrzeit HH:MM deutscher Ortszeit („Freitag 12 Uhr“ → "12:00"). Dann bekommt der Mitarbeiter zu dieser Zeit automatisch eine Erinnerung per Telegram; sie zieht beim Verschieben/Erledigen der Wiedervorlage mit.' },
         notiz: { type: 'string', description: 'Optional: Zusatz.' },
       },
       required: ['kunde_id', 'titel', 'faellig'],
@@ -71,6 +73,7 @@ export const WV_WERKZEUGE = [
       properties: {
         id: { type: 'string', description: 'ID der Wiedervorlage.' },
         faellig: { type: 'string', description: 'Neue Fälligkeit als JJJJ-MM-TT.' },
+        uhrzeit: { type: 'string', description: 'Optional: neue Uhrzeit HH:MM (dann mit Erinnerung zu dieser Zeit).' },
       },
       required: ['id', 'faellig'],
     },
@@ -92,9 +95,38 @@ export type WvZeile = {
   verantwortlich: string | null
   quelle: string
   erledigt_am: string | null
+  uhrzeit?: string | null
+  erinnerung_id?: string | null
 }
 
-const WV_SPALTEN = 'id, kunde_id, bereich, regel, titel, notiz, faellig, verantwortlich, quelle, erledigt_am'
+const WV_SPALTEN = 'id, kunde_id, bereich, regel, titel, notiz, faellig, verantwortlich, quelle, erledigt_am, uhrzeit, erinnerung_id'
+
+/** „12“, „12:00“, „12.30“, „12 Uhr“ → „12:00“/„12:30“; leer → null; Unsinn → undefined. */
+export function pruefeUhrzeit(v: unknown): string | null | undefined {
+  const s = String(v ?? '').trim()
+  if (!s) return null
+  const m = s.match(/^(\d{1,2})(?:[:.](\d{2}))?(?:\s*Uhr)?$/i)
+  if (!m) return undefined
+  const h = Number(m[1]), mi = Number(m[2] ?? '0')
+  if (h > 23 || mi > 59) return undefined
+  return `${String(h).padStart(2, '0')}:${String(mi).padStart(2, '0')}`
+}
+
+// Erinnerung zur Wiedervorlage (Tabelle erinnerungen): an den Mitarbeiter, der sie anlegt. Liefert die id oder null.
+async function legeWvErinnerungAn(supabase: Supa, mitarbeiter: WvKontext['mitarbeiter'], akte: { id: string; bereich: string | null; firma: string | null; ansprechpartner: string | null }, titel: string, faellig: string, uhrzeit: string): Promise<string | null> {
+  const email = String(mitarbeiter.email ?? '').trim().toLowerCase()
+  const faelligUm = berlinZeitZuUtc(`${faellig}T${uhrzeit}`)
+  if (!email || !faelligUm) return null
+  const { data, error } = await supabase.from('erinnerungen').insert({
+    fuer_email: email, von_email: email, von_name: mitarbeiter.name, text: `Wiedervorlage: ${titel}`.slice(0, 500), faellig_um: faelligUm,
+    kunde_id: akte.id, kunde_bereich: akte.bereich, wiederholung: '', privat: false, quelle: 'wiedervorlage',
+  }).select('id').single()
+  if (error) {
+    console.error('Erinnerung zur Wiedervorlage nicht angelegt:', error.message)
+    return null
+  }
+  return data?.id ?? null
+}
 
 /** Darf der Mitarbeiter diese Wiedervorlage sehen und ändern? Wie die Zeilenregel darf_bereich(bereich); privat nie. */
 export function darfWv(m: RechteMitarbeiter, wv: { bereich?: string | null }): boolean {
@@ -139,7 +171,7 @@ async function aktenNamen(supabase: Supa, ids: string[]): Promise<Map<string, st
 
 function zeileText(w: WvZeile, akten: Map<string, string>, heute: string): string {
   const lage = w.faellig < heute ? ' (überfällig)' : w.faellig === heute ? ' (heute)' : ''
-  const teile = [`${deDatum(w.faellig)}${lage}`, w.titel, `Akte: ${akten.get(w.kunde_id) ?? w.kunde_id}`, w.quelle === 'regel' ? 'automatisch' : 'von Hand']
+  const teile = [`${deDatum(w.faellig)}${w.uhrzeit ? `, ${w.uhrzeit} Uhr` : ''}${lage}`, w.titel, `Akte: ${akten.get(w.kunde_id) ?? w.kunde_id}`, w.quelle === 'regel' ? 'automatisch' : 'von Hand']
   if (w.verantwortlich) teile.push(`zuständig: ${w.verantwortlich}`)
   if (w.notiz) teile.push(`Notiz: ${w.notiz.slice(0, 200)}`)
   return `- ${teile.join(' | ')} (id=${w.id})`
@@ -227,6 +259,8 @@ export async function fuehreWvWerkzeugAus(name: string, input: any, k: WvKontext
     if (!titel) return 'Fehler: titel fehlt.'
     const faellig = pruefeDatum(input?.faellig)
     if (!faellig) return 'Fehler: faellig ist kein gültiges Datum (JJJJ-MM-TT).'
+    const uhrzeit = pruefeUhrzeit(input?.uhrzeit)
+    if (uhrzeit === undefined) return 'Fehler: uhrzeit ist keine gültige Uhrzeit (HH:MM).'
     const { data: akte, error: akteFehler } = await supabase.from('kunden').select('id, bereich, firma, ansprechpartner, verantwortlich, verantwortlich_email').eq('id', kundeId).maybeSingle()
     if (akteFehler) return `Fehler beim Laden der Akte: ${akteFehler.message}`
     if (!akte) return 'Fehler: Es gibt keine Akte mit dieser kunde_id. Ermittle sie mit kunden_suchen.'
@@ -244,12 +278,22 @@ export async function fuehreWvWerkzeugAus(name: string, input: any, k: WvKontext
       verantwortlich: String(akte.verantwortlich ?? '').trim() || null,
       quelle: 'hand',
       erstellt_von: mitarbeiter.name,
+      uhrzeit,
     }
     const { data, error } = await supabase.from('wiedervorlagen').insert(zeile).select('id').single()
     if (error) return `Fehler beim Speichern: ${error.message}. Nichts wurde angelegt.`
-    protokolliere(`Wiedervorlage „${zeile.titel}“ zum ${deDatum(faellig)} in der Akte von ${akteName(akte)} angelegt`)
+    let erinnerungText = ''
+    if (uhrzeit && faellig >= heute) {
+      const erinnerungId = await legeWvErinnerungAn(supabase, mitarbeiter, akte, zeile.titel, faellig, uhrzeit)
+      if (erinnerungId) {
+        await supabase.from('wiedervorlagen').update({ erinnerung_id: erinnerungId }).eq('id', data.id)
+        erinnerungText = ` Um ${uhrzeit} Uhr kommt dazu eine Erinnerung per Telegram an ${mitarbeiter.name}.`
+      } else erinnerungText = ' Die Erinnerung zur Uhrzeit ließ sich nicht anlegen — die Wiedervorlage selbst steht.'
+    }
+    const zeitText = uhrzeit ? `, ${uhrzeit} Uhr` : ''
+    protokolliere(`Wiedervorlage „${zeile.titel}“ zum ${deDatum(faellig)}${zeitText} in der Akte von ${akteName(akte)} angelegt`)
     const hinweis = faellig < heute ? ' Achtung: Das Datum liegt in der Vergangenheit, sie ist damit schon überfällig.' : ''
-    return `Angelegt: Wiedervorlage „${zeile.titel}“ zum ${deDatum(faellig)} in der Akte von ${akteName(akte)}${zeile.verantwortlich ? `, zuständig ${zeile.verantwortlich}` : ', ohne Zuständigen (in der Akte ist keiner eingetragen)'}. Im CRM im Reiter „Wiedervorlagen“ der Akte.${hinweis} id=${data?.id ?? ''}`
+    return `Angelegt: Wiedervorlage „${zeile.titel}“ zum ${deDatum(faellig)}${zeitText} in der Akte von ${akteName(akte)}${zeile.verantwortlich ? `, zuständig ${zeile.verantwortlich}` : ', ohne Zuständigen (in der Akte ist keiner eingetragen)'}. Im CRM im Reiter „Wiedervorlagen“ der Akte.${erinnerungText}${hinweis} id=${data?.id ?? ''}`
   }
 
   if (name === 'wiedervorlage_erledigen' || name === 'wiedervorlage_verschieben') {
@@ -269,11 +313,25 @@ export async function fuehreWvWerkzeugAus(name: string, input: any, k: WvKontext
 
     const faellig = pruefeDatum(input?.faellig)
     if (!faellig) return 'Fehler: faellig ist kein gültiges Datum (JJJJ-MM-TT).'
-    if (faellig === wv.faellig) return `„${wv.titel}“ ist schon zum ${deDatum(faellig)} fällig.`
-    const { error } = await supabase.from('wiedervorlagen').update({ faellig }).eq('id', wv.id)
+    const neueUhrzeit = pruefeUhrzeit(input?.uhrzeit)
+    if (neueUhrzeit === undefined) return 'Fehler: uhrzeit ist keine gültige Uhrzeit (HH:MM).'
+    const uhrzeit = neueUhrzeit ?? wv.uhrzeit ?? null
+    if (faellig === wv.faellig && uhrzeit === (wv.uhrzeit ?? null)) return `„${wv.titel}“ ist schon zum ${deDatum(faellig)}${uhrzeit ? `, ${uhrzeit} Uhr` : ''} fällig.`
+    // Die verknüpfte Erinnerung zieht der Datenbank-Auslöser wv_erinnerung_nachziehen mit.
+    const { error } = await supabase.from('wiedervorlagen').update({ faellig, uhrzeit }).eq('id', wv.id)
     if (error) return `Fehler beim Speichern: ${error.message}`
-    protokolliere(`Wiedervorlage „${wv.titel}“ (Akte ${akte}) auf ${deDatum(faellig)} verschoben`)
-    return `Verschoben: „${wv.titel}“ in der Akte von ${akte} vom ${deDatum(wv.faellig)} auf den ${deDatum(faellig)}.${faellig < heute ? ' Achtung: Das Datum liegt in der Vergangenheit.' : ''}`
+    let erinnerungText = wv.erinnerung_id && uhrzeit ? ` Die Erinnerung kommt jetzt um ${uhrzeit} Uhr an diesem Tag.` : ''
+    if (!wv.erinnerung_id && uhrzeit && faellig >= heute) {
+      const { data: akteZeile } = await supabase.from('kunden').select('id, bereich, firma, ansprechpartner').eq('id', wv.kunde_id).maybeSingle()
+      const erinnerungId = akteZeile ? await legeWvErinnerungAn(supabase, mitarbeiter, akteZeile, wv.titel, faellig, uhrzeit) : null
+      if (erinnerungId) {
+        await supabase.from('wiedervorlagen').update({ erinnerung_id: erinnerungId }).eq('id', wv.id)
+        erinnerungText = ` Um ${uhrzeit} Uhr kommt dazu eine Erinnerung per Telegram an ${mitarbeiter.name}.`
+      }
+    }
+    const zeitText = uhrzeit ? `, ${uhrzeit} Uhr` : ''
+    protokolliere(`Wiedervorlage „${wv.titel}“ (Akte ${akte}) auf ${deDatum(faellig)}${zeitText} verschoben`)
+    return `Verschoben: „${wv.titel}“ in der Akte von ${akte} vom ${deDatum(wv.faellig)} auf den ${deDatum(faellig)}${zeitText}.${erinnerungText}${faellig < heute ? ' Achtung: Das Datum liegt in der Vergangenheit.' : ''}`
   }
 
   return `Fehler: unbekanntes Werkzeug ${name}.`

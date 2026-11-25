@@ -7,6 +7,7 @@ import { isSupabaseConfigured } from '../lib/supabaseClient'
 import { useSpeechRecognition } from '../lib/useSpeechRecognition'
 import { speak, stopSpeaking, isSpeechSynthesisSupported } from '../lib/useSpeechSynthesis'
 import { offenerKontext } from '../lib/assistentKontext'
+import MitHervorhebung from './MitHervorhebung'
 import {
   isEmailGatewayConfigured,
   classifyAssistantInput,
@@ -699,7 +700,7 @@ export function KiAssistentPanel({ open, onToggle }: { open: boolean; onToggle: 
                 }`}
               >
                 {m.imageDataUrl && <img src={m.imageDataUrl} alt="Angehängtes Bild" className="mb-2 max-h-40 rounded-lg" />}
-                {m.text}
+                {m.role === 'assistant' ? <MitHervorhebung text={m.text} /> : m.text}
                 {m.role === 'assistant' && isSpeechSynthesisSupported && (
                   <button
                     onClick={() => leseVor(m.id, m.text)}
