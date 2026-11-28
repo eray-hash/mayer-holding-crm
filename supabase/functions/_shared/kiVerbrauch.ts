@@ -4,6 +4,7 @@
 // Die Tabelle hat keine Lese- oder Schreibregel für angemeldete Nutzer; nur der Server schreibt sie.
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { createClient } from 'npm:@supabase/supabase-js@2.119.1'
+import { SPAR_VON, ladeSparEinstellung, sparenFuer, sparKoerper } from './kiSparmodus.ts'
 
 const ANLASS = new AsyncLocalStorage<{ anlass: string; person: string; privat: boolean }>()
 
@@ -55,7 +56,28 @@ function db(): any {
 
 /** Wie `fetch` an die Messages-Schnittstelle, schreibt danach den gemeldeten Verbrauch mit. Die Antwort bleibt unverändert lesbar. */
 export async function kiAufruf(funktion: string, url: string, init: RequestInit): Promise<Response> {
-  const antwort = await fetch(url, init)
+  // Sparschalter (kiSparmodus.ts): Sonnet-Aufrufe laufen auf Haiku 5.5, wenn das für diesen Anlass bzw. diese Person
+  // eingeschaltet ist. Lehnt Haiku die Anfrage ab (400, nicht wegen Guthaben), geht sie unverändert an Sonnet.
+  let anfrage = init
+  let gespart = false
+  if (typeof init.body === 'string' && init.body.includes(SPAR_VON)) {
+    const rahmen = ANLASS.getStore()
+    const einstellung = await ladeSparEinstellung(db)
+    const ersatz = sparenFuer(einstellung, { anlass: rahmen?.anlass ?? '', person: rahmen?.person ?? '' }) ? sparKoerper(init.body) : null
+    if (ersatz) {
+      anfrage = { ...init, body: ersatz }
+      gespart = true
+    }
+  }
+  let antwort = await fetch(url, anfrage)
+  if (gespart && antwort.status === 400) {
+    const text = await antwort.clone().text().catch(() => '')
+    if (!/credit balance/i.test(text)) {
+      console.warn('Haiku 5.5 hat die Anfrage abgelehnt — Wiederholung mit Sonnet:', text.slice(0, 200))
+      anfrage = init
+      antwort = await fetch(url, init)
+    }
+  }
   try {
     const kopie = antwort.clone()
     // Im Hintergrund auswerten, damit der eigentliche Ablauf nicht wartet.
@@ -64,7 +86,7 @@ export async function kiAufruf(funktion: string, url: string, init: RequestInit)
     const privat = ANLASS.getStore()?.privat ?? false
     const modell = (() => {
       try {
-        return String(JSON.parse(String(init.body ?? '{}')).model ?? '')
+        return String(JSON.parse(String(anfrage.body ?? '{}')).model ?? '')
       } catch {
         return ''
       }
